@@ -91,7 +91,7 @@ if (has('help') || has('h')) {
   --force-layout       подавить отказ по несовпадению кода и раскладки данных
 
   --host=${C.host}   --port=${C.port}   --user=${C.user}
-  --key=<путь к ключу>          по умолчанию ~/.ssh/xgate2
+  --key=<путь к ключу>          по умолчанию берётся из LEAGUE_SSH_KEY
   --alias=ch                    ходить через алиас ssh вместо host/port/key
   --remote=${C.remote}
   --data=${C.data}          каталог данных (сверяется с юнитом)

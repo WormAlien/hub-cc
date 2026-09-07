@@ -19023,7 +19023,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'DELETE' && req.url.startsWith('/__switch/api/league/chat')) return handleLeagueChatDelete(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/chat/att/')) return handleLeagueAtt(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league/chat')) return handleLeagueChatGet(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/league/chat') return handleLeagueChatPost(req, res);
+    // 🪤 Сверять БЕЗ query, как у DELETE и GET выше. Точное равенство `=== '…/chat'` держалось
+    // здесь до 07.09 и ломало отправку начиная с перехода на группы: фронт дописывает `?gid=`,
+    // строка перестаёт совпадать, запрос падает в общий 404, тот ставит `not_found: true`, а
+    // вкладка переводит флаг в «ручки нет — нужен рестарт». Рестарты не помогали, потому что
+    // процесс был не при чём. Хвост пути отсекаем: `/chat/foo` по-прежнему не наш роут.
+    if (req.method === 'POST' && req.url.split('?')[0] === '/__switch/api/league/chat') return handleLeagueChatPost(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/league/avatar') return handleLeagueAvatar(req, res);
     // Снятие лица. Путь сверяется ЦЕЛИКОМ, как у постановки: `startsWith` тут ни к чему,
     // подпутей у аватарки нет, а строгое равенство не даст запросу с хвостом молча

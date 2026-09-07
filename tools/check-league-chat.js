@@ -260,7 +260,11 @@ async function main() {
     // иначе `startsWith` съест `/chat/att/…`. DELETE тут ничего не перехватывает.
     get: SRC.indexOf("req.method === 'GET'  && req.url.startsWith('/__switch/api/league/chat')"),
     del: SRC.indexOf("req.method === 'DELETE' && req.url.startsWith('/__switch/api/league/chat')"),
-    post: SRC.indexOf("req.url === '/__switch/api/league/chat'"),
+    // 🪤 Сверка БЕЗ query, а не `=== '…/chat'`. Точное равенство держалось здесь до 07.09 и
+    // закрепляло баг: фронт с переходом на группы дописывает `?gid=`, роут перестаёт совпадать,
+    // POST падает в общий 404 с `not_found: true`, а вкладка переводит флаг в «ручки нет —
+    // нужен рестарт». Регресс тогда проверял ровно ту строку, которая ломала отправку.
+    post: SRC.indexOf("req.url.split('?')[0] === '/__switch/api/league/chat'"),
     ava: SRC.indexOf("req.url === '/__switch/api/league/avatar'"),
     all: SRC.indexOf("req.url.startsWith('/__switch/api/league')) return handleLeague("),
   };

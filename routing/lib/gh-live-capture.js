@@ -121,7 +121,7 @@ function makeCapture({ label, moduleDir, poolFile }) {
         return true;
     }
 
-    // Под каким id ложится общий снимок. Привязка `gh_…` в пуле — прямой ответ; маркер
+// Под каким id ложится общий снимок. Привязка `gh_…` в пуле — прямой ответ; маркер
     // `personal` и пустая привязка — через логин из живых кук. Если логин не сошёлся ни
     // с одной записью хранилища (или сошёлся с двумя), снимок не пишем вообще: пусть
     // лучше не будет, чем встанет под чужой id.
@@ -129,6 +129,27 @@ function makeCapture({ label, moduleDir, poolFile }) {
         const fromPool = poolFile ? ghIdForLabel(poolFile, label) : null;
         if (fromPool) return fromPool;
         return ghIdByLogin(accountsFile, login);
+    }
+
+    // Оживить запись менеджера если она была dead. Вызывается после успешного writeShared:
+    // только что сняли живую user_session — значит аккаунт живой, каким бы ни был статус.
+    // Перезаписываем минимально: только status и harvestedAt — не трогаем пароли и коды.
+    function reviveIfDead(ghId) {
+        if (!ghId || !accountsFile) return;
+        try {
+            const raw = fs.readFileSync(accountsFile, 'utf8');
+            const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            if (!Array.isArray(arr)) return;
+            const rec = arr.find(a => a.id === ghId);
+            if (!rec || rec.status === 'live') return;
+            const old = rec.status;
+            rec.status = 'live';
+            rec.revivedAt = new Date().toISOString();
+            fs.writeFileSync(accountsFile, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+            console.log(`🟢 GitHub-менеджер: ${ghId} (${rec.nickname || rec.login || '?'}) был ${old} — оживлён по свежей сессии`);
+        } catch (e) {
+            console.log(`⚠️  не удалось оживить ${ghId} в менеджере: ${e.message}`);
+        }
     }
 
     // Один замер. Возвращает true, если сессия оказалась новой и копия обновлена.
@@ -144,6 +165,7 @@ function makeCapture({ label, moduleDir, poolFile }) {
             const ghId = resolveGhId(login);
             if (ghId && await writeShared(context, ghId, cookies)) {
                 if (!quiet) console.log(`   общий снимок ${ghId}${login ? ` (${login})` : ''} обновлён — новые профили заселятся этой сессией`);
+                reviveIfDead(ghId);
             }
             return true;
         } catch (e) {

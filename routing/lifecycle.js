@@ -118,6 +118,7 @@ const SERVICES = [
     // ГРОМКО сообщает (лог + pool-alert.json), сам НЕ переключает. Стоит после
     // дашборда: без активного бэкенда ему нечего мерить. Разбор — pool-watchdog.js.
     { port: 20134, name: 'Вотчдог пулов', script: 'pool-watchdog.js', ready: '/__watchdog/api/status' },
+    { port: 20164, name: 'JustWoker OpenAI конвертер', script: 'jw-openai-proxy.js', provider: 'jw_gpt' },
 ];
 
 
@@ -147,6 +148,7 @@ function children() {
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
         { port: 20162, name: 'HCNsec keepalive', respawn: false },
+        { port: 20163, name: 'AIPM keepalive', respawn: false },
         { port: 8300, name: 'Дашборд (легаси)', respawn: false },
     ];
 }

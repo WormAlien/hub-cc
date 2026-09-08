@@ -32,6 +32,7 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
     // 🪤 SeekAi — ЛЕГАСИ с 2026-08-24, в день заведения вкладки (решение владельца).
     // Причина не в регистрации, а в самом шлюзе: `seekai.cc` — реселл веб-Клода под
     // видом Anthropic API. Свой системный промпт (~200 токенов, набор инструментов

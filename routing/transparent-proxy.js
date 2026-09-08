@@ -196,6 +196,13 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    aipm: {
+        label: 'AIPM',
+        base_url: 'http://localhost:20163',
+        api_key: 'dummy',
+        model: null,
+        clear_helper: true,
+    },
     hcnsec: {
         label: 'HCNsec',
         base_url: 'http://localhost:20162',
@@ -229,6 +236,15 @@ const BACKENDS = {
         // Активация через handleJwActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
         // ключ живёт в justwoker-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 22.08).
+    },
+    jw_gpt: {
+        label: 'JustWoker GPT',
+        base_url: 'http://localhost:20164/v1',
+        api_key: 'dummy',           // real key конвертер читает из justwoker-sessions.json
+        model: 'gpt-5.6-sol',
+        clear_helper: true,
+        // Anthropic→OpenAI конвертер (jw-openai-proxy.js :20164) → api.justwoker.icu.
+        // Ключ читается из justwoker-sessions.json (active: true) на каждый запрос.
     },
     seekai: {
         label: 'SeekAi',
@@ -333,6 +349,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    aipm: 'aipm',
     hcnsec: 'hcnsec',
     ourtoken: 'ot',
     cun: 'cun',
@@ -1032,6 +1049,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveAp = makeKeepaliveHandlers(Number(process.env.AP_KEEPALIVE_PORT || 20163));
 const keepaliveHn = makeKeepaliveHandlers(Number(process.env.HN_KEEPALIVE_PORT || 20162));
 
 
@@ -4508,6 +4526,52 @@ async function handleCustomModelMap(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// POST /__switch/api/custom/set-model { providerId, model } → прописать модель провайдера
+// в settings.json (model; [1m] дотянет чокпоинт writeSettings). Это «один клик» по чипу
+// модели на вкладке кастом-провайдеров: владелец выбирает модель → открывает новый
+// терминал → сессия CC поднимается уже на ней. Раньше чип только копировал id в буфер, и
+// модель после активации сбрасывалась (handleCustomActivate делает delete settings.model),
+// поэтому CC резолвил дефолт и /model врал. Конвертер мапит модель по тирам (mapModel),
+// так что суффикс окна апстриму не мешает; в direct-режиме он уедет апстриму как есть —
+// предупреждаем в ответе, а не молчим.
+async function handleCustomSetModel(req, res) {
+    try {
+        const { providerId, model } = await readJsonBody(req);
+        const { data, provider } = customFind(String(providerId || '').trim());
+        if (!provider) return jsonRes(res, 404, { error: 'провайдер не найден' });
+        const m = String(model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const active = customReadActiveProvider();
+        if (!active || active.id !== provider.id) {
+            return jsonRes(res, 400, { error: 'провайдер не активен — сначала кликни по ключу' });
+        }
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-custom-model');
+            settings.model = m;
+            settings.env = settings.env || {};
+            if (customNeedProxy(provider)) {
+                // Конвертер мапит по тирам сам — DEFAULT_* здесь только конкурируют
+                // с model за приоритет, сносим (тот же список, что в activate).
+                for (const k of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME']) delete settings.env[k];
+            }
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`custom set-model: settings.json FAILED: ${e.message}`);
+        }
+        const warn = customNeedProxy(provider) ? undefined
+            : 'прямой режим: суффикс [1m] уедет апстриму вместе с именем модели';
+        logLine(`custom set-model: ${provider.name} → ${m}${settingsOk ? '' : ' (settings.json FAILED)'}`);
+        jsonRes(res, 200, {
+            ok: true, model: m, settingsModel: normalizeCcModel(m), settingsUpdated: settingsOk, needRestart: true, warn,
+            message: 'Модель прописана в settings.json — новая сессия Claude Code поднимется на ней.',
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
 // POST /__switch/api/custom/scan { providerId, apiKey } → повторный скан типа провайдера
 async function handleCustomScan(req, res) {
     try {
@@ -5866,12 +5930,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -6271,6 +6335,9 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleApAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'aipm', host: 'emtf.aipm9527.online', prefix: 'ap_', load: apLoad, save: apSave, sessionsDir: AP_SESSIONS_DIR });
 }
 function handleTbAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'tabi', host: 'tabitoken.com', prefix: 'tb_', load: tbLoad, save: tbSave, sessionsDir: TB_SESSIONS_DIR });
@@ -7594,6 +7661,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'emtf.aipm9527.online': path.join(__dirname, '..', 'aipm', 'profiles'),
     // HCNsec: ключ — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn`. GitHub-входа у шлюза нет,
     // но профиль и куки нужны: точный остаток даёт /api/user/self куками профиля.
     'api.hcnsec.cn':   path.join(__dirname, '..', 'hcnsec', 'profiles'),
@@ -10842,6 +10910,9 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleApMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'aipm', host: 'emtf.aipm9527.online', load: apLoad, save: apSave });
+}
 function handleTbMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'tabi', host: 'tabitoken.com', load: tbLoad, save: tbSave });
 }
@@ -10912,6 +10983,9 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleApSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'aipm', load: apLoad, save: apSave });
 }
 
 // POST /__switch/api/{hn}/set-outlook { api_key|id, olId } → привязать / сменить / отвязать
@@ -12643,6 +12717,41 @@ const KK_CC_HEADERS = {
     'x-app': 'cli',
 };
 
+// ── AIPM — New API поверх emtf.aipm9527.online, SSE keepalive :20163 ──
+const AP_SESSIONS_FILE = path.join(__dirname, 'aipm-sessions.json');
+const AP_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'aipm-active-key.txt');
+const AP_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'aipm-active-model.txt');
+const AP_BASE_URL = 'https://emtf.aipm9527.online/v1';
+// SSE keepalive proxy для kktoken (как у tabi :20155): форвардит напрямую в
+// emtf.aipm9527.online, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у kktoken КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const AP_UPSTREAM = 'https://emtf.aipm9527.online';
+const AP_KEEPALIVE_PORT = 20163;
+const AP_KEEPALIVE_URL = `http://localhost:${AP_KEEPALIVE_PORT}`;
+const AP_MODELMAP_FILE = path.join(__dirname, 'aipm-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У kktoken гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const AP_GRANT_STEP = 5;
+const AP_DEFAULT_GRANT = 5;
+const AP_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const AP_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
 function kkLoad() {
     try {
         const raw = fs.readFileSync(KK_SESSIONS_FILE, 'utf8');
@@ -12748,6 +12857,113 @@ async function kkBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+
+// ── AIPM util functions ──
+function apLoad() {
+    try {
+        const raw = fs.readFileSync(AP_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'kk_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { apSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function apSave(arr) {
+    fs.writeFileSync(AP_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function apReadActiveModel() {
+    try { return fs.readFileSync(AP_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function apReadActiveKey() {
+    try { return fs.readFileSync(AP_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для kktoken: второй экземпляр keepalive-proxy.js на :20163.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function apKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(AP_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(AP_KEEPALIVE_PORT),
+                UPSTREAM: AP_UPSTREAM,
+                KEY_FILE: AP_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: AP_MODELMAP_FILE,
+                ...(process.env.KK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KK_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive AIPM', AP_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`kktoken keepalive proxy spawn: :${AP_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+// ✅ Проверено 31.08: пустой 403 kktoken на ЭТОТ путь не приходит — 16/16 отдали 200,
+// а битый ключ 8/8 отдал честный 401. То есть живой ключ мёртвым здесь не пометим.
+async function apProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${AP_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...AP_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint у kktoken живёт ПОД /v1 (проверено 31.08:
+// `GET /v1/dashboard/billing/usage` → `{"total_usage": 181.0114}`, центы), в отличие
+// от gorouter, где он на корне. Это только РАСХОД — остатка ключом не отдают вовсе
+// (`/api/user/self` с Bearer от sk → 401, `/v1/credits` → 404). Точная цифра — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function apBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'emtf.aipm9527.online',
+        ccHeaders: AP_CC_HEADERS,
+        usageUrl: 'https://emtf.aipm9527.online/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(AP_DEFAULT_GRANT, Math.ceil(spent / AP_GRANT_STEP) * AP_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function apApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'aipm' }); }
 
 async function handleKkSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
@@ -13250,6 +13466,512 @@ async function handleKkModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
+// ═══════════════════════════════════ AIPM HANDLERS ═══════════════════════════════════
+async function handleApSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = apLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await apProbe(s.api_key); }));
+            }
+            apSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => apApplyBalance(s, await apBalance(s))));
+            }
+            apSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: apReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleApPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await apProbe(api_key);
+        const sessions = apLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; apSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleApBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = apLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await apBalance(target || { api_key }, { force });
+            if (target) { apApplyBalance(target, bal); apSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleApSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'aipm', load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance });
+}
+
+const apLkPids = new Map();
+
+
+
+
+
+async function handleApSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = apLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = apLkPids.get(label);
+        if (kkPidAlive(prevPid)) {
+            logLine(`aipm session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'aipm', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('emtf.aipm9527.online', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`aipm session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`aipm session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`aipm session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            apLkPids.delete(label);
+            logLine(`aipm session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('ap', id);
+        });
+        proc.unref();
+        apLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            apLkPids.delete(label);
+            logLine(`aipm session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`aipm session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── AIPM: share/import (передать аккаунт другу и принять чужой) ────────
+// Формат: base64url(JSON { v:1, provider:'aipm', email, name, api_key,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть (GitHub + kktoken) — storageState
+// из kktoken/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
+
+const AP_SHARE_SCRIPT = path.join(__dirname, '..', 'aipm', 'share-session.js');
+const AP_SESSIONS_DIR = path.join(__dirname, '..', 'aipm', 'sessions');
+
+function apB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function apB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/kk/share { id } → снять storageState профиля и собрать строку.
+async function handleApShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = apLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = apLkPids.get(label);
+        if (kkPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(AP_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [AP_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`kktoken share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'aipm',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = apB64UrlEncode(JSON.stringify(payload));
+        logLine(`kktoken share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/kk/import { share } → разобрать строку и добавить аккаунт.
+async function handleApImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(apB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'aipm' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не kktoken-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = apLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ap_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        apSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(AP_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(AP_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleApAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = apLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ap_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        apSave(sessions);
+        logLine(`kktoken add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли kktoken). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleApSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = apLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(AP_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        apSave(sessions);
+        logLine(`kktoken set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleApRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = apLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        apSave(sessions);
+        logLine(`kktoken rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleApDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = apLoad();
+        const target = sessions.find(s => s.id === idKey);
+        apSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === apReadActiveKey()) {
+            try { fs.rmSync(AP_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(AP_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`kktoken delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20163, а не прямым baseUrl: шлюз Anthropic-совместим
+// нативно, но каждый четвёртый его ответ — пустой 403, и без ретраев keepalive это
+// доехало бы до Claude Code как отказ. `/v1` дописывает сам keepalive.
+async function handleApActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в aipm-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = apLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(AP_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        apSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kk');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AP_KEEPALIVE_URL;   // keepalive :20163 → emtf.aipm9527.online напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — aipm-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const kkCurModel = apReadActiveModel() || '';
+            if (kkCurModel) settings.model = kkCurModel;
+            else { delete settings.model; logLine('aipm activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из aipm-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`aipm activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20163, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const kkKa = await keepaliveBring(AP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kkKa.ok) logLine(`aipm activate: keepalive :${AP_KEEPALIVE_PORT} НЕ поднялся — ${kkKa.error || '?'}`);
+        logLine(`aipm activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${AP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: kkKa.ok, port: AP_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleApModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (AP_MODELS_CACHE.data && Date.now() - AP_MODELS_CACHE.ts < AP_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: AP_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${AP_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...AP_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        AP_MODELS_CACHE.data = models;
+        AP_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (AP_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: AP_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет aipm-active-model.txt + settings.model (+ env модели).
+async function handleApSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(AP_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kk-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AP_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`aipm set-model: settings.json FAILED: ${e.message}`);
+        }
+        const kkKaM = await keepaliveBring(AP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kkKaM.ok) logLine(`aipm set-model: keepalive :${AP_KEEPALIVE_PORT} НЕ поднялся — ${kkKaM.error || '?'}`);
+        logLine(`aipm set-model: ${m} (base ${AP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: AP_ACTIVE_MODEL_FILE, base: AP_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: AP_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → kktoken-модели (как в Custom). Живёт в сессиях.
+// 🪤 Единственный писатель тир-карты — эта ручка. Файл руками не править.
+async function handleApModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = {
+            opus: String(body.opus || '').trim() || null,
+            sonnet: String(body.sonnet || '').trim() || null,
+            haiku: String(body.haiku || '').trim() || null,
+        };
+        fs.writeFileSync(AP_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+        logLine(`kktoken modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function apReadModelMap() {
+    try {
+        const raw = fs.readFileSync(AP_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -13987,6 +14709,8 @@ const JW_BASE_URL = 'https://api.justwoker.icu/v1';
 const JW_UPSTREAM = 'https://api.justwoker.icu';
 const JW_KEEPALIVE_PORT = 20158;
 const JW_KEEPALIVE_URL = `http://localhost:${JW_KEEPALIVE_PORT}`;
+const JW_GPT_PORT = 20164;
+const JW_GPT_URL = `http://localhost:${JW_GPT_PORT}/v1`;
 const JW_MODELMAP_FILE = path.join(__dirname, 'justwoker-modelmap.json');
 // Резерв «угадать грант» (см. newapiBalance). Выдача ИЗМЕРЕНА 2026-08-22 на двух
 // свежих аккаунтах через `/api/user/self` (Bearer из `/api/user/auth/refresh` в
@@ -14760,6 +15484,40 @@ async function handleJwActivate(req, res) {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: jwKa.ok, port: JW_KEEPALIVE_PORT, error: jwKa.ok ? null : (jwKa.error || null) },
         });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переключить CC на JustWoker GPT-конвертер (:20164) с выбранной моделью.
+// Аналог handleArSetModel: пишет settings.json + поднимает конвертер.
+async function handleJwGptSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-jw-gpt');
+            settings.model = m;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = JW_GPT_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`jw-gpt set-model: settings.json FAILED: ${e.message}`);
+        }
+        // Поднять конвертер если не запущен
+        const r = await lifecycleLib().ensureProviderService(JW_GPT_PORT);
+        if (r.ok && !r.already) logLine(`jw-gpt set-model: поднял конвертер :${JW_GPT_PORT} (pid ${r.pid})`);
+        else if (!r.ok) logLine(`jw-gpt set-model: конвертер :${JW_GPT_PORT} НЕ поднялся — ${r.error}`);
+        logLine(`jw-gpt set-model: ${m} (base ${JW_GPT_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, base: JW_GPT_URL, needRestart: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -16469,6 +17227,7 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [AP_KEEPALIVE_PORT]: { name: 'AIPM', spawn: apKeepaliveSpawn },
         [HN_KEEPALIVE_PORT]: { name: 'HCNsec', spawn: hnKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
@@ -17852,6 +18611,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    ap: { tag: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online', keyFile: AP_ACTIVE_KEY_FILE, load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance },
     // 🪤 У hcnsec host — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn` (поддомен обязателен).
     // Эту же строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима — байт в байт.
     hn: { tag: 'hcnsec',      label: 'HCNsec',      host: 'api.hcnsec.cn', keyFile: HN_ACTIVE_KEY_FILE, load: hnLoad, save: hnSave, balanceFn: hnBalance, applyFn: hnApplyBalance },
@@ -18995,9 +19755,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/set-github') return handleApSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/set-github') return handleJwSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/jw/set-model-gpt') return handleJwGptSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/set-github') return handleSkSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ts/set-github') return handleTsSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);
@@ -19049,7 +19811,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/keepalive/config') return keepaliveAp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/hn/keepalive/state')  return keepaliveHn.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/hn/keepalive/config') return keepaliveHn.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
@@ -19065,6 +19829,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/keepalive/latency')) return keepaliveAp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/keepalive/latency')) return keepaliveHn.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
@@ -19109,6 +19874,25 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    // ── AIPM (десятая вкладка) — те же 22 роута, что у kk ───────────────
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/sessions')) return handleApSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/ping'))     return handleApPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/balance'))  return handleApBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/models'))   return handleApModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ap/active-model') return jsonRes(res, 200, { model: apReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ap/modelmap') return jsonRes(res, 200, { ok: true, modelMap: apReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/add')       return handleApAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/key')       return handleApSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/rename')    return handleApRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/delete')    return handleApDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/activate')  return handleApActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/set-model') return handleApSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/set-balance') return handleApSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/map-profiles') return handleApMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/modelmap')  return handleApModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/session/open') return handleApSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/share')    return handleApShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/import')   return handleApImport(req, res);
     // ── HCNsec (девятая вкладка) — 19 роутов из 22 у go: GitHub-входа у шлюза нет,
     // поэтому map-profiles / set-github / add-github здесь отсутствуют намеренно.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/sessions')) return handleHnSessions(req, res);
@@ -19278,6 +20062,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ap/add-github')       return handleApAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/add-github')       return handleXpAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/add-github')       return handleJwAddGithub(req, res);
@@ -19343,6 +20128,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/ping'))             return handleCustomPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/custom/models'))           return handleCustomModels(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/modelmap')                 return handleCustomModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/custom/set-model')                return handleCustomSetModel(req, res);
 if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')                   return handleCustomScan(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/mode')                   return handleCustomMode(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/custom/activate')               return handleCustomActivate(req, res);

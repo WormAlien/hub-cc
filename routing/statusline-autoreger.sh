@@ -274,11 +274,20 @@ if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; the
                 if [[ "$mm_raw" =~ \"$mm_tier\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
                     mm_val="${BASH_REMATCH[1]}"
                 fi
-                # показываем стрелку только если карта подменяет модель
-                if [ -n "$mm_val" ] && [ "$mm_val" != "$model_id" ]; then
+                # показываем стрелку только если карта подменяет модель (без учёта [1m])
+                mm_bare="${model_id%\[1m\]}"
+                if [ -n "$mm_val" ] && [ "$mm_val" != "$mm_bare" ]; then
                     # сокращаем: claude-opus-5 → opus-5, gpt-5.6-sol → gpt-5.6-sol
                     mm_short="$mm_val"
                     mm_short="${mm_short#claude-}"
+                    # дописываем [1m] если исходная модель пришла с ним И цель — claude
+                    case "$model_id" in
+                        *'[1m]')
+                            case "$mm_val" in
+                                claude-*|*opus*|*sonnet*|*haiku*|*fable*) mm_short="${mm_short}[1m]" ;;
+                            esac
+                            ;;
+                    esac
                     map_target="$mm_short"
                 fi
             fi

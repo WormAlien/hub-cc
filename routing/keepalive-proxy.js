@@ -1196,8 +1196,11 @@ function remapHaiku(method, reqPath, body) {
   let label = null;
 
   // Маппинг из ar-modelmap.json (вкладка AgentRouter) — приоритетнее env.
+  // Суффикс `[1m]` ПРИНУДИТЕЛЬНО переносится на целевую модель: CC без него
+  // получает 200k-окно, что ломает длинные сессии. GPT-моделям суффикс не нужен.
+  const ctxSuffix = /\[1m\]$/.test(model) ? '[1m]' : '';
   const tm = tierTargetFor(model);
-  if (tm && tm.target && tm.target !== model) {
+  if (tm && tm.target && tm.target !== bare) {
     const target = tm.target;
     if (isGptLike(target)) {
       newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
@@ -1212,10 +1215,12 @@ function remapHaiku(method, reqPath, body) {
       log(`${method} ${reqPath} ${label} via ${HAIKU_GPT_PROXY}`);
       return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
     }
-    newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+    // claude-модель: дописываем [1m] если исходная пришла с ним
+    const finalTarget = target + ctxSuffix;
+    newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
     label = tm.substituted
-      ? `${tm.tier}→${target} (map, claude; ПОДМЕНА: ${tm.from} нет у шлюза)`
-      : `${tm.tier}→${target} (map, claude)`;
+      ? `${tm.tier}→${finalTarget} (map, claude; ПОДМЕНА: ${tm.from} нет у шлюза)`
+      : `${tm.tier}→${finalTarget} (map, claude)`;
     log(`${method} ${reqPath} ${label} via ${upstream.host}`);
     return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
   }

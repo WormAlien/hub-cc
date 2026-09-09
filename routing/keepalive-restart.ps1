@@ -62,9 +62,11 @@ $perPort = @{
   # putting it here would send /v1/v1/messages and the gateway answers 404.
   20162 = @{ UPSTREAM = 'https://api.hcnsec.cn'; KEY_FILE = "$profileDir\.claude\hcnsec-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'hcnsec-modelmap.json') }
+  20163 = @{ UPSTREAM = 'https://emtf.aipm9527.xyz'; KEY_FILE = "$profileDir.claude\aipm-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'aipm-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163)"; exit 1
 }
 
 # Kill the current listener

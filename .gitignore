@@ -450,3 +450,9 @@ routing/league-data/
 routing/league-peers.json
 routing/league-e2e-key.json
 routing/archive/
+
+# AIPM
+aipm/profiles/
+aipm/sessions/
+aipm/gh-sessions/
+routing/aipm-sessions.json

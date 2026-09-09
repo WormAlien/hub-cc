@@ -476,7 +476,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1059,6 +1059,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'emtf.aipm9527.online': 'ap',
   // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
   // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
   // авторотация: прокси просто не знает, в какой пул звонить, и ошибки в логе нет.

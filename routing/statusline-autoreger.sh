@@ -164,6 +164,7 @@ case "$helper" in
     *truesota-active-key.txt*)       raw_target="truesota" ;;
     *kktoken-active-key.txt*)        raw_target="kktoken" ;;
     *hcnsec-active-key.txt*)         raw_target="hcnsec" ;;
+    *aipm-active-key.txt*)           raw_target="aipm" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -194,6 +195,8 @@ if [ -z "$raw_target" ]; then
         # пары строк шлюз показывался бы как `Custom🧪`.
         *localhost:20162*)        raw_target="hcnsec" ;;
         *127.0.0.1:20162*)        raw_target="hcnsec" ;;
+        *localhost:20163*)        raw_target="aipm" ;;
+        *127.0.0.1:20163*)        raw_target="aipm" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
@@ -202,6 +205,7 @@ if [ -z "$raw_target" ]; then
         *true-sota.com*)          raw_target="truesota" ;;
         *kktoken.cc*)             raw_target="kktoken" ;;
         *api.hcnsec.cn*)          raw_target="hcnsec" ;;
+        *aipm9527.online*)        raw_target="aipm" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -230,6 +234,7 @@ case "$raw_target" in
     truesota)                    provider="truesota" ;;
     kktoken)                     provider="kktoken" ;;
     hcnsec)                      provider="hcnsec" ;;
+    aipm)                        provider="aipm" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -500,6 +505,8 @@ elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; the
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
 elif [ "$provider" = "hcnsec" ] && [ -f "$ROUTING/hcnsec-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/hcnsec-sessions.json" "$PROF/.claude/hcnsec-active-key.txt" "hn/balance" 90
+elif [ "$provider" = "aipm" ] && [ -f "$ROUTING/aipm-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/aipm-sessions.json" "$PROF/.claude/aipm-active-key.txt" "ap/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------
@@ -724,7 +731,7 @@ fi
 # ложной тревогой. Это отличает блок от 🎁, который считается всегда намеренно
 # (бонус лежит на пуле и важен, даже когда сидишь на другом провайдере).
 case "$provider" in
-    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken|hcnsec)
+    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken|hcnsec|aipm)
         rot_raw=""
         [ -f "$LOGS/.money_autorotate.json" ] && rot_raw="$(<"$LOGS/.money_autorotate.json")"
         if [[ "$rot_raw" =~ \"enabled\"[[:space:]]*:[[:space:]]*true ]]; then

@@ -5372,6 +5372,24 @@ function ghLoad() {
 function ghSave(arr) {
     fs.writeFileSync(GH_ACCOUNTS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
 }
+// Оживить запись менеджера GitHub если она не live. Вызывается из handleXxxActivate
+// когда аккаунт провайдера привязан к ghId — раз ключ работает, значит GitHub жив.
+function ghReviveIfNeeded(ghId) {
+    if (!ghId || !/^gh_/.test(ghId)) return;
+    try {
+        const arr = ghLoad();
+        const rec = arr.find(a => a.id === ghId);
+        if (!rec || rec.status === 'live') return;
+        const old = rec.status;
+        rec.status = 'live';
+        rec.revivedAt = new Date().toISOString();
+        ghSave(arr);
+        logLine(`GitHub-менеджер: ${ghId} (${rec.nickname || rec.login || '?'}) был ${old} → оживлён по активации провайдера`);
+    } catch (e) {
+        logLine(`GitHub-менеджер: не удалось оживить ${ghId}: ${e.message}`);
+    }
+}
+
 function ghSanitize(acc) {
     // Отдаём аккаунты в дашборд как есть (пароль/секрет нужны для копирования и TOTP).
     // Маскируем только в логах, ниже.
@@ -7782,11 +7800,31 @@ function newapiLkOpenedAt(label) {
 // *SessionOpen-хендлер, поэтому карты pid'ов — достоверный ответ; ключ карты и есть
 // метка профиля (label = 'acct_' + id). Нужно перед записью в БД куки: Chromium
 // держит куки в памяти и на выходе перезапишет файл своим состоянием.
+// 🪤 Карты перечисляются ЛЕНИВО, через globalThis, а не литералом со ссылками на
+// переменные: `const xxLkPids` объявлены НИЖЕ этой функции (12–18 тыс. строк), и прямая
+// ссылка в момент её вызова работает только потому, что вызов происходит позже
+// инициализации. Стоило добавить шлюз — и список молча отставал: до 09.09 здесь были
+// перечислены четыре пула из десяти, а kk/ap/hn/sk/ts/xp не проверялись вообще.
+// Следствие для денег: открытый браузер профиля не детектился, точный чек уходил в
+// запрос с погашенной refresh-кукой, получал 401 — и баланс падал в прикидку
+// `ceil(spent/step)*step`. На AIPM это дало $8.37 выдумки при живом кабинете.
+// Новый шлюз теперь добавляется ОДНОЙ строкой в NEWAPI_LK_POOLS ниже.
+// 🪤 Через globalThis эти карты НЕ достать: top-level `const` в CommonJS-модуле живёт в
+// области видимости модульной обёртки, а не на глобальном объекте, и `globalThis.arLkPids`
+// вернул бы undefined — то есть «браузер закрыт» на открытом окне. Поэтому список —
+// прямые идентификаторы, собранные ВНУТРИ тела функции: карты объявлены ниже (11–18 тыс.
+// строк), и к моменту первого вызова уже инициализированы.
 function newapiLkBusy(profileLabel) {
     const label = String(profileLabel || '');
     if (!label) return false;
-    for (const [pids, alive] of [[arLkPids, arPidAlive], [goLkPids, goPidAlive], [tbLkPids, tbPidAlive], [jwLkPids, jwPidAlive]]) {
-        try { if (alive(pids.get(label))) return true; } catch {}
+    // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
+    // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, apLkPids, hnLkPids, skLkPids, tsLkPids, xpLkPids];
+    for (const pids of pools) {
+        if (!pids || typeof pids.get !== 'function') continue;
+        const pid = pids.get(label);
+        if (!pid) continue;
+        try { process.kill(pid, 0); return true; } catch {}
     }
     return false;
 }
@@ -11839,6 +11877,7 @@ async function handleArActivate(req, res) {
         } catch (e) {
             logLine(`agentrouter activate: settings.json FAILED: ${e.message}`);
         }
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`agentrouter activate: ${target.email} → ***${key.slice(-6)} (token, base ${arTargetFor(arReadActiveModel() || '').base})`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -12566,6 +12605,7 @@ async function handleGoActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const goKa = await keepaliveBring(GO_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!goKa.ok) logLine(`gorouter activate: keepalive :${GO_KEEPALIVE_PORT} НЕ поднялся — ${goKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`gorouter activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${GO_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -13369,6 +13409,7 @@ async function handleKkActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const kkKa = await keepaliveBring(KK_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!kkKa.ok) logLine(`kktoken activate: keepalive :${KK_KEEPALIVE_PORT} НЕ поднялся — ${kkKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`kktoken activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${KK_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -13523,7 +13564,10 @@ async function handleApBalance(req, res) {
         // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
-            const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            // Тег пула в ключе дедупа обязан быть СВОИМ: множество BALANCE_NUDGE_INFLIGHT
+            // одно на все шлюзы, и с чужим префиксом фоновый пересчёт AIPM и KKtoken
+            // глушили бы друг друга на общем api_key (клон оставил здесь 'kk:').
+            const queued = nudgeBalanceOnce('ap:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -13536,9 +13580,13 @@ function handleApSetBalance(req, res) {
 }
 
 const apLkPids = new Map();
-
-
-
+// Свой предикат, а не заимствованный `kkPidAlive`: клон оставил вызовы чужой функции, и
+// пул жил на том, что KKtoken объявлен выше в этом же файле. Пропади он — AIPM молча
+// перестал бы видеть открытые браузеры.
+function apPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
 
 
 async function handleApSessionOpen(req, res) {
@@ -13555,7 +13603,7 @@ async function handleApSessionOpen(req, res) {
         const label = 'acct_' + id;
 
         const prevPid = apLkPids.get(label);
-        if (kkPidAlive(prevPid)) {
+        if (apPidAlive(prevPid)) {
             logLine(`aipm session/open: ${label} — уже открыт (pid ${prevPid})`);
             return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
         }
@@ -13624,7 +13672,7 @@ async function handleApShare(req, res) {
         const label = 'acct_' + id;
 
         const prevPid = apLkPids.get(label);
-        if (kkPidAlive(prevPid)) {
+        if (apPidAlive(prevPid)) {
             return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
         }
 
@@ -13875,6 +13923,9 @@ async function handleApActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const kkKa = await keepaliveBring(AP_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!kkKa.ok) logLine(`aipm activate: keepalive :${AP_KEEPALIVE_PORT} НЕ поднялся — ${kkKa.error || '?'}`);
+        // Если у аккаунта привязан GitHub — оживить запись менеджера: ключ работает,
+        // значит GitHub жив, каким бы ни был статус в менеджере (dead/cooldown).
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`aipm activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${AP_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -14579,6 +14630,7 @@ async function handleHnActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const hnKa = await keepaliveBring(HN_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!hnKa.ok) logLine(`hcnsec activate: keepalive :${HN_KEEPALIVE_PORT} НЕ поднялся — ${hnKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`hcnsec activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${HN_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -15479,6 +15531,7 @@ async function handleJwActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const jwKa = await keepaliveBring(JW_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!jwKa.ok) logLine(`justwoker activate: keepalive :${JW_KEEPALIVE_PORT} НЕ поднялся — ${jwKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`justwoker activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${JW_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -16168,6 +16221,7 @@ async function handleSkActivate(req, res) {
         // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
         const skKa = await keepaliveBring(SK_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!skKa.ok) logLine(`seekai activate: keepalive :${SK_KEEPALIVE_PORT} НЕ поднялся — ${skKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`seekai activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${SK_KEEPALIVE_URL})`);
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
@@ -17668,6 +17722,7 @@ async function handleTbActivate(req, res) {
         }
         const tbKa = await keepaliveBring(TB_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!tbKa.ok) logLine(`tabi activate: keepalive :${TB_KEEPALIVE_PORT} НЕ поднялся — ${tbKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`tabi activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${TB_KEEPALIVE_URL})`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, keepalive: { up: tbKa.ok, port: TB_KEEPALIVE_PORT, error: tbKa.ok ? null : (tbKa.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -18289,6 +18344,7 @@ async function handleXpActivate(req, res) {
         }
         const xpKa = await keepaliveBring(XP_KEEPALIVE_PORT, { waitMs: 8000 });
         if (!xpKa.ok) logLine(`xpeach activate: keepalive :${XP_KEEPALIVE_PORT} НЕ поднялся — ${xpKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
         logLine(`xpeach activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${XP_KEEPALIVE_URL})`);
         jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, keepalive: { up: xpKa.ok, port: XP_KEEPALIVE_PORT, error: xpKa.ok ? null : (xpKa.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }

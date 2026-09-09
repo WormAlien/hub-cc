@@ -156,7 +156,16 @@ function makeCapture({ label, moduleDir, poolFile }) {
     async function captureOnce(context, { quiet = false } = {}) {
         const cookies = await context.cookies('https://github.com').catch(() => []);
         const live = userSessionOf(cookies);
-        if (!live || live === savedUserSession()) return false;
+        if (!live) return false;
+        // Сессия не изменилась — копию не пишем, но менеджер всё равно оживляем:
+        // человек мог зайти через провайдера с тем же user_session, а запись в
+        // менеджере при этом dead/cooldown.
+        if (live === savedUserSession()) {
+            const login = ((cookies || []).find(c => c.name === 'dotcom_user') || {}).value || null;
+            const ghId = resolveGhId(login);
+            if (ghId) reviveIfDead(ghId);
+            return false;
+        }
         try {
             const n = writeBackup(cookies);
             if (!n) return false;

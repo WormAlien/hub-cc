@@ -4624,7 +4624,7 @@ window.finNavCount = async () => {
       #leagueTab .lggap code{font:11.5px var(--lg-mono);color:var(--lg-amber)}
       #leagueTab .lgcomp .lgtgl{padding:13px 27px;font-size:14px}
       #leagueTab .lgcomp .lgtgl svg{width:32px;height:32px}
-      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:16px 16px;
+      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:16px 16px 20px;
         display:flex;align-items:center;gap:14px;border-radius:0 0 16px 16px;
         transition:background .16s var(--lg-spring)}
       #leagueTab .lgcomp.drop{background:color-mix(in oklab,var(--lg-azure) 12%,transparent)}
@@ -6309,19 +6309,6 @@ window.finNavCount = async () => {
           </div>
         </div>
 
-        <!-- GPT-модели через конвертер :20164 -->
-        <div class="rounded-xl bg-surface border border-line-soft p-4">
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-sm font-semibold tracking-tight">GPT-модели — через конвертер <code class="font-mono text-amber text-xs">:20164</code> · клик = переключить CC</h2>
-          </div>
-          <div class="flex flex-wrap gap-1.5">
-            <span onclick='jwGptSelectModel("gpt-5.6-sol")' class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer bg-amber/10 border border-amber/30 text-amber hover:border-amber/60">gpt-5.6-sol</span>
-            <span onclick='jwGptSelectModel("gpt-5.6-luna")' class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer bg-amber/10 border border-amber/30 text-amber hover:border-amber/60">gpt-5.6-luna</span>
-            <span onclick='jwGptSelectModel("gpt-5.6-terra")' class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer bg-amber/10 border border-amber/30 text-amber hover:border-amber/60">gpt-5.6-terra</span>
-            <span onclick='jwGptSelectModel("gpt-5.5")' class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer bg-amber/10 border border-amber/30 text-amber hover:border-amber/60">gpt-5.5</span>
-            <span onclick='jwGptSelectModel("gpt-5.5-pro")' class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer bg-amber/10 border border-amber/30 text-amber hover:border-amber/60">gpt-5.5-pro</span>
-          </div>
-        </div>
 
         <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
         <div class="flex gap-2 items-center flex-wrap">
@@ -8561,9 +8548,9 @@ function jumpTo(id) {
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
 const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken',
-      aipm: 'AIPM', hcnsec: 'HCNsec', xpeach: 'XPeach', jw_gpt: 'JustWoker GPT', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+      aipm: 'AIPM', hcnsec: 'HCNsec', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
 const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald',
-      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', xpeach: 'text-rose bg-rose', jw_gpt: 'text-amber bg-amber', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -16606,21 +16593,6 @@ async function jwSelectModel(id) {
       + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
     renderJwModels(state.jwModels);
   } catch (e) { toast('jwSelectModel: ' + e.message, 'error'); }
-}
-
-async function jwGptSelectModel(id) {
-  if (!id) return toast('нет model id', 'warn');
-  try {
-    toast('⏳ применяю GPT ' + id + '…', 'info', 2000);
-    const res = await fetch('/__switch/api/jw/set-model-gpt', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: id }),
-    });
-    const data = await res.json();
-    if (!data.ok) return toast('GPT модель: ' + (data.error || '?'), 'error', 5000);
-    state.current = 'jw_gpt'; paintStatus();
-    toast('✓ ' + id + ' → JustWoker GPT :20164. ПЕРЕЗАПУСТИ Claude Code (или /model ' + id + ' внутри сессии)', 'success', 9000);
-  } catch (e) { toast('jwGptSelectModel: ' + e.message, 'error'); }
 }
 
 function renderJw() {

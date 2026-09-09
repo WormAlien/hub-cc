@@ -118,7 +118,6 @@ const SERVICES = [
     // ГРОМКО сообщает (лог + pool-alert.json), сам НЕ переключает. Стоит после
     // дашборда: без активного бэкенда ему нечего мерить. Разбор — pool-watchdog.js.
     { port: 20134, name: 'Вотчдог пулов', script: 'pool-watchdog.js', ready: '/__watchdog/api/status' },
-    { port: 20164, name: 'JustWoker OpenAI конвертер', script: 'jw-openai-proxy.js', provider: 'jw_gpt' },
 ];
 
 

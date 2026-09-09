@@ -237,15 +237,6 @@ const BACKENDS = {
         // ключ живёт в justwoker-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Корень без /v1 обязателен: `/v1/v1/messages` отдаёт 404 (замер 22.08).
     },
-    jw_gpt: {
-        label: 'JustWoker GPT',
-        base_url: 'http://localhost:20164/v1',
-        api_key: 'dummy',           // real key конвертер читает из justwoker-sessions.json
-        model: 'gpt-5.6-sol',
-        clear_helper: true,
-        // Anthropic→OpenAI конвертер (jw-openai-proxy.js :20164) → api.justwoker.icu.
-        // Ключ читается из justwoker-sessions.json (active: true) на каждый запрос.
-    },
     seekai: {
         label: 'SeekAi',
         base_url: 'http://localhost:20159',
@@ -14761,8 +14752,6 @@ const JW_BASE_URL = 'https://api.justwoker.icu/v1';
 const JW_UPSTREAM = 'https://api.justwoker.icu';
 const JW_KEEPALIVE_PORT = 20158;
 const JW_KEEPALIVE_URL = `http://localhost:${JW_KEEPALIVE_PORT}`;
-const JW_GPT_PORT = 20164;
-const JW_GPT_URL = `http://localhost:${JW_GPT_PORT}/v1`;
 const JW_MODELMAP_FILE = path.join(__dirname, 'justwoker-modelmap.json');
 // Резерв «угадать грант» (см. newapiBalance). Выдача ИЗМЕРЕНА 2026-08-22 на двух
 // свежих аккаунтах через `/api/user/self` (Bearer из `/api/user/auth/refresh` в
@@ -15537,40 +15526,6 @@ async function handleJwActivate(req, res) {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: jwKa.ok, port: JW_KEEPALIVE_PORT, error: jwKa.ok ? null : (jwKa.error || null) },
         });
-    } catch (e) { jsonRes(res, 500, { error: e.message }); }
-}
-
-// Переключить CC на JustWoker GPT-конвертер (:20164) с выбранной моделью.
-// Аналог handleArSetModel: пишет settings.json + поднимает конвертер.
-async function handleJwGptSetModel(req, res) {
-    try {
-        const body = await readJsonBody(req);
-        const m = String(body.model || '').trim();
-        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
-        let settingsOk = false;
-        try {
-            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
-            makeSettingsBackup('settings-jw-gpt');
-            settings.model = m;
-            settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = JW_GPT_URL;
-            delete settings.apiKeyHelper;
-            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
-            delete settings.env.ANTHROPIC_API_KEY;
-            clearOtEnv(settings);
-            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
-            writeSettings(settings);
-            settingsOk = true;
-        } catch (e) {
-            logLine(`jw-gpt set-model: settings.json FAILED: ${e.message}`);
-        }
-        // Поднять конвертер если не запущен
-        const r = await lifecycleLib().ensureProviderService(JW_GPT_PORT);
-        if (r.ok && !r.already) logLine(`jw-gpt set-model: поднял конвертер :${JW_GPT_PORT} (pid ${r.pid})`);
-        else if (!r.ok) logLine(`jw-gpt set-model: конвертер :${JW_GPT_PORT} НЕ поднялся — ${r.error}`);
-        logLine(`jw-gpt set-model: ${m} (base ${JW_GPT_URL})`);
-        jsonRes(res, 200, { ok: true, model: m, settingsUpdated: settingsOk, base: JW_GPT_URL, needRestart: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -19819,7 +19774,6 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/set-github') return handleXpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/jw/set-github') return handleJwSetGithub(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/jw/set-model-gpt') return handleJwGptSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/sk/set-github') return handleSkSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ts/set-github') return handleTsSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/session/open') return handleArSessionOpen(req, res);

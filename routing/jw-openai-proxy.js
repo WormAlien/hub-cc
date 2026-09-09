@@ -36,6 +36,18 @@ function resolveKey(req) {
     return '';
 }
 
+// ── WAF-санитайзер (по образцу agentrouter-proxy.js) ─────────────────────────
+// JustWoker тоже режет billing-заголовок CC и generic system prompt.
+const WAF_PHRASES = [
+    { re: /you are a helpful assistant\./gi, to: 'You are a helpful AI assistant.' },
+    { re: /x-anthropic-billing-header:[^"\\]*(?:\\n)?/gi, to: '' },
+];
+function wafSanitize(jsonStr) {
+    let text = String(jsonStr);
+    for (const { re, to } of WAF_PHRASES) text = text.replace(re, () => to);
+    return text;
+}
+
 // ── Утилиты ───────────────────────────────────────────────────────────────────
 function log(msg) {
     process.stderr.write(`[${new Date().toISOString()}] ${msg}\n`);
@@ -270,7 +282,7 @@ function handleMessages(req, res, body) {
     if (!apiKey) return claudeError(res, 401, 'Нет активного ключа JustWoker (justwoker-sessions.json)', 'authentication_error');
 
     const openaiReq = convertClaudeToOpenAI(claudeReq);
-    const bodyStr = JSON.stringify(openaiReq);
+    const bodyStr = wafSanitize(JSON.stringify(openaiReq));
     log(`${claudeReq.model} stream=${!!claudeReq.stream}`);
 
     sendUpstream(bodyStr, apiKey, (upRes) => {

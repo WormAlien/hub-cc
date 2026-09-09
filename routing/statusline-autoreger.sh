@@ -235,6 +235,57 @@ case "$raw_target" in
     *)                           provider="$raw_target" ;;
 esac
 
+# ---- modelmap: показать фактическую модель, если тир-карта переписывает ----
+# Читаем <prefix>-modelmap.json (тот же файл, что keepalive-proxy), матчим тир
+# модели из payload, и если карта подменяет имя — дописываем →target в рендер.
+# БЕЗ форков: jq/python не зовём, разбираем JSON двумя regex.
+map_target=""
+if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; then
+    # CC_MODEL_PREFIX из transparent-proxy.js (урезанная копия — только провайдеры
+    # с keepalive, у которых маппинг работает).
+    map_prefix=""
+    case "$provider" in
+        agentrouter) map_prefix="ar" ;;
+        gorouter)    map_prefix="gorouter" ;;
+        tabi)        map_prefix="tabi" ;;
+        xpeach)      map_prefix="xpeach" ;;
+        justwoker)   map_prefix="justwoker" ;;
+        seekai)      map_prefix="seekai" ;;
+        truesota)    map_prefix="truesota" ;;
+        kktoken)     map_prefix="kktoken" ;;
+        hcnsec)      map_prefix="hcnsec" ;;
+        aipm)        map_prefix="aipm" ;;
+        Custom*)     map_prefix="custom" ;;
+    esac
+    if [ -n "$map_prefix" ]; then
+        mmf="$ROUTING/${map_prefix}-modelmap.json"
+        if [ -f "$mmf" ]; then
+            mm_raw="$(<"$mmf")"
+            # определяем тир модели (зеркало TIER_RE из keepalive-proxy.js)
+            mm_tier=""
+            case "$model_id" in
+                *[Oo]pus*)   mm_tier="opus" ;;
+                *[Ss]onnet*) mm_tier="sonnet" ;;
+                *[Hh]aiku*)  mm_tier="haiku" ;;
+            esac
+            if [ -n "$mm_tier" ]; then
+                # извлекаем значение тира из JSON ("opus": "claude-opus-5")
+                mm_val=""
+                if [[ "$mm_raw" =~ \"$mm_tier\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
+                    mm_val="${BASH_REMATCH[1]}"
+                fi
+                # показываем стрелку только если карта подменяет модель
+                if [ -n "$mm_val" ] && [ "$mm_val" != "$model_id" ]; then
+                    # сокращаем: claude-opus-5 → opus-5, gpt-5.6-sol → gpt-5.6-sol
+                    mm_short="$mm_val"
+                    mm_short="${mm_short#claude-}"
+                    map_target="$mm_short"
+                fi
+            fi
+        fi
+    fi
+fi
+
 # ---- balance/quota gauge (mirrors dashboard) -------------------------------
 pct=0
 avail_sum=0
@@ -449,7 +500,13 @@ MODEL_COL=$'\033[38;5;180m'
 SEP=$'\033[38;5;240m'
 MONEY=$'\033[38;5;42m'
 
-printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
+if [ -n "$map_target" ]; then
+    MAP_ARROW=$'\033[38;5;243m'
+    MAP_VAL=$'\033[38;5;114m'
+    printf '%s%s/%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+else
+    printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
+fi
 
 # ---- /effort: тем же цветом, каким уровень подсвечен в самом Claude Code -----
 # Цвета не выдуманы, а сняты из бандла CC (2.1.220), чтобы бар и его собственный

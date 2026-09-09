@@ -4512,7 +4512,7 @@ window.finNavCount = async () => {
          не отдельное приложение, поэтому ни своей палитры, ни своих кеглей у него нет.
          Все величины взяты у соседей по вкладке: радиусы 12/16/999, кегли 17/14/13/11.5/11,
          отступы 14×16 и 11×15 — как у .lgtile и .lgrow. */
-      #leagueTab #lg-chat{margin-top:16px}
+      #leagueTab #lg-chat{margin-top:16px;min-height:320px}
       #leagueTab .lgchead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         padding:14px 16px 8px}
       #leagueTab .lgchead h2{font:600 17px/1.2 inherit;letter-spacing:-.01em;color:var(--lg-ink)}
@@ -4622,13 +4622,15 @@ window.finNavCount = async () => {
         color:var(--lg-ink2);background:color-mix(in oklab,var(--lg-amber) 10%,transparent);
         border:1px solid color-mix(in oklab,var(--lg-amber) 34%,transparent)}
       #leagueTab .lggap code{font:11.5px var(--lg-mono);color:var(--lg-amber)}
-      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:11px 15px;
-        display:flex;align-items:flex-end;gap:10px;border-radius:0 0 16px 16px;
+      #leagueTab .lgcomp .lgtgl{padding:13px 27px;font-size:14px}
+      #leagueTab .lgcomp .lgtgl svg{width:32px;height:32px}
+      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:16px 16px;
+        display:flex;align-items:center;gap:14px;border-radius:0 0 16px 16px;
         transition:background .16s var(--lg-spring)}
       #leagueTab .lgcomp.drop{background:color-mix(in oklab,var(--lg-azure) 12%,transparent)}
       #leagueTab #lg-inp{flex:1 1 auto;min-width:0;resize:none;appearance:none;
-        border:1px solid var(--lg-line-soft);border-radius:12px;padding:10px 12px;
-        font:400 14px/1.45 inherit;color:var(--lg-ink);max-height:120px;overflow-y:auto;
+        border:1px solid var(--lg-line-soft);border-radius:12px;padding:21px 25px;
+        font:400 15px/1.45 inherit;color:var(--lg-ink);max-height:160px;overflow-y:auto;
         background:color-mix(in oklab,var(--lg-bg) 55%,transparent);outline:none;
         transition:border-color .16s var(--lg-spring)}
       #leagueTab #lg-inp:focus{border-color:color-mix(in oklab,var(--lg-azure) 60%,transparent)}
@@ -12768,8 +12770,10 @@ function balanceDenom(s, base) {
 }
 
 // Пороги абсолютные: при точном балансе никакого «гранта» нет, брать долю не от чего.
-function balanceColor(v) {
-  return v >= 20 ? 'text-emerald' : v >= 5 ? 'text-amber' : 'text-crimson';
+function balanceColor(v, minBal) {
+  const lo = typeof minBal === 'number' ? minBal : 2;
+  const hi = lo * 10;
+  return v >= hi ? 'text-emerald' : v >= lo * 2.5 ? 'text-amber' : 'text-crimson';
 }
 
 // ══ купюра на вкладку «Финансы»: сторож движения денег ═════════════════════
@@ -12862,7 +12866,8 @@ function newapiBalanceCell(s, kJ, prov, sym = '$') {
     // Показываем 0.00 и объясняем в подсказке, а не рисуем минус как раньше.
     const raw = s.balance;
     const shown = Math.max(0, raw);
-    const color = balanceColor(shown);
+    const mpEntry = Object.values(MONEY_PROVIDERS).find(m => m.p === prov);
+    const color = balanceColor(shown, mpEntry && mpEntry.minBal);
     const spentTip = typeof s.spent === 'number' ? ` · потрачено ${sym}${s.spent.toFixed(2)}` : '';
     const negTip = raw < 0 ? ` · расчёт дал −${sym}${Math.abs(raw).toFixed(2)}: привязка устарела, впиши баланс заново` : '';
     // Панель, которая показывает не в долларах (api.hcnsec.cn — юани, курс из
@@ -22410,7 +22415,7 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
-  aipm: { id: 'aipm', p: 'ap', stateKey: 'aipm', base: 5, sym: '$', label: 'AIPM', icon: '🔷', color: 'indigo', reload: () => loadApSessionsLight() },
+  aipm: { id: 'aipm', p: 'ap', stateKey: 'aipm', base: 5, sym: '$', label: 'AIPM', icon: '🔷', color: 'indigo', minBal: 0.10, reload: () => loadApSessionsLight() },
   // base: 0 — про выдачу HCNsec ничего не известно: панель платная, гранта не заявлено,
   // а живая проба показала только каталог и ответы моделей. Ноль здесь значит «делить не
   // на что»: процент запаса считается по live/total, пока балансы не приедут из ЛК. Любое
@@ -22484,7 +22489,7 @@ function paintSideBalance() {
   const numEl = $('side-bal-num'), freshEl = $('side-bal-fresh'), poolEl = $('side-bal-pool'), barEl = $('side-bal-bar');
   if (numEl) {
     numEl.textContent = num;
-    numEl.className = `font-semibold ${usable ? balanceColor(shown) : 'text-crimson'}`;
+    numEl.className = `font-semibold ${usable ? balanceColor(shown, mp.minBal) : 'text-crimson'}`;
   }
   if (freshEl) freshEl.innerHTML = balanceFreshMark(act);
   if (poolEl) poolEl.textContent = pool;

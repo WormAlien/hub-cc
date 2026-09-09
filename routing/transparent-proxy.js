@@ -18667,7 +18667,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
-    ap: { tag: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online', keyFile: AP_ACTIVE_KEY_FILE, load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance },
+    ap: { tag: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online', keyFile: AP_ACTIVE_KEY_FILE, load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance, minBal: 0.10 },
     // 🪤 У hcnsec host — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn` (поддомен обязателен).
     // Эту же строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима — байт в байт.
     hn: { tag: 'hcnsec',      label: 'HCNsec',      host: 'api.hcnsec.cn', keyFile: HN_ACTIVE_KEY_FILE, load: hnLoad, save: hnSave, balanceFn: hnBalance, applyFn: hnApplyBalance },
@@ -18686,6 +18686,10 @@ const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.js
 // доедены. На плоском тарифе (~50¢ за запрос) это 2–4 потерянных запроса на аккаунт;
 // владелец выбрал устойчивость подмены, а не выскабливание огрызков.
 const MONEY_MIN_BAL = 2.0;
+function moneyMinBal(p) {
+    const custom = MONEY_GW[p] && MONEY_GW[p].minBal;
+    return typeof custom === 'number' ? custom : MONEY_MIN_BAL;
+}
 // Сколько кандидатов проверяем живым чеком за одну ротацию. Чек ~1.5с, а на другом
 // конце ждёт запрос Claude Code — обход всего пула превратился бы в таймаут.
 const MONEY_MAX_PROBES = 3;
@@ -18757,8 +18761,8 @@ function moneyUsable(s) {
 // Ставка на «кеш врёт в минус» без проверки — не страховка, а трата ротации и времени
 // человека. Кеш трёх самых вероятных кандидатов и так обновляется живым чеком; если после
 // этого не годится никто, честный ответ — `pool-dry`, чтобы владелец увидел «пополни».
-function moneyRank(list, need) {
-    const bar = Math.max(MONEY_MIN_BAL, Number(need) || 0);
+function moneyRank(list, need, p) {
+    const bar = Math.max(moneyMinBal(p), Number(need) || 0);
     return list.filter(s => s.balance >= bar).sort((a, b) => a.balance - b.balance);
 }
 
@@ -18805,7 +18809,7 @@ async function moneyRotate(p, opts = {}) {
             else if (opts.reason === 'out-of-balance' && typeof from.balance === 'number' && from.balance > 0) from.balance = 0;
         }
         const need = Number(opts.needUsd) || 0;
-        const queue = moneyRank(sessions.filter(s => moneyUsable(s) && s.api_key !== cur && s.api_key !== opts.fromKey), need);
+        const queue = moneyRank(sessions.filter(s => moneyUsable(s) && s.api_key !== cur && s.api_key !== opts.fromKey), need, p);
         if (!queue.length) {
             gw.save(sessions);
             logLine(`money auto ${p}: замены нет — в пуле ни одного живого аккаунта с балансом`);
@@ -18821,7 +18825,7 @@ async function moneyRotate(p, opts = {}) {
                     const bal = await gw.balanceFn(cand, { force: true });
                     gw.applyFn(cand, bal);
                 } catch (e) { logLine(`money auto ${p}: чек ${cand.email || cand.name} не прошёл (${e.message}) — беру по кешу`); }
-                if (!moneyUsable(cand) || cand.balance < Math.max(MONEY_MIN_BAL, need)) {
+                if (!moneyUsable(cand) || cand.balance < Math.max(moneyMinBal(p), need)) {
                     logLine(`money auto ${p}: ${cand.email || cand.name} на самом деле $${typeof cand.balance === 'number' ? cand.balance.toFixed(2) : '—'}${need ? ` (нужно $${need.toFixed(2)})` : ''} — следующий`);
                     continue;
                 }
@@ -18840,7 +18844,7 @@ async function moneyRotate(p, opts = {}) {
             return { ok: true, email: cand.email || cand.name, mask: '***' + cand.api_key.slice(-6), balance: cand.balance };
         }
         gw.save(sessions);
-        logLine(`money auto ${p}: проверено ${probes} кандидатов, ни у кого нет ${need ? `$${need.toFixed(2)}` : `$${MONEY_MIN_BAL.toFixed(2)}`}`);
+        logLine(`money auto ${p}: проверено ${probes} кандидатов, ни у кого нет ${need ? `$${need.toFixed(2)}` : `$${moneyMinBal(p).toFixed(2)}`}`);
         return { ok: false, error: 'pool-dry' };
     })();
     st.rotating = run;
@@ -18883,8 +18887,8 @@ function moneyAutoStatus(p) {
         // на шлюзе, где включено не было.
         shared: true,
         lastSwitch: st.lastAt, rotating: !!st.rotating,
-        active, minBal: MONEY_MIN_BAL,
-        poolReady: pool.filter(s => s.balance >= MONEY_MIN_BAL).length,
+        active, minBal: moneyMinBal(p),
+        poolReady: pool.filter(s => s.balance >= moneyMinBal(p)).length,
         poolBalance: round2(pool.reduce((a, s) => a + Math.max(0, s.balance), 0)),
         recent: st.recent,
     };
@@ -20213,7 +20217,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|hn)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

@@ -26393,7 +26393,18 @@ setInterval(() => {
   if (el && el.classList.contains('active') && !document.hidden) loadHealth();
 }, 15000);
 // Keepalive-статы — живые цифры на AR/GoRouter/Tabi (только активная вкладка).
-setInterval(pollKeepaliveStats, 3000);
+// Перевели на setTimeout-chain: setInterval на 3с копил тики в фоне и стрелял
+// пачкой при возврате на вкладку — та же проблема, что была у autoRefreshTick.
+let _kaTimer = null;
+function scheduleKeepalive() {
+  clearTimeout(_kaTimer);
+  if (document.hidden) return;
+  _kaTimer = setTimeout(async () => {
+    try { await pollKeepaliveStats(); } catch (e) { console.warn('[ka] tick fail', e); }
+    scheduleKeepalive();
+  }, 3000);
+}
+scheduleKeepalive();
 
 // Тик перезапускается сам после каждого прохода, а не висит на setInterval:
 // в фоне браузер душит таймеры (до ~1/мин), и накопленные тики после возврата
@@ -26409,11 +26420,12 @@ function scheduleAutoRefresh() {
   }, TAB_POLL_MS);
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { clearTimeout(_autoRefTimer); return; }
+  if (document.hidden) { clearTimeout(_autoRefTimer); clearTimeout(_kaTimer); return; }
   autoRefreshTick();        // сразу после возврата в браузер
   refreshNavCounts(false);  // и счётчики: пока браузер был свёрнут, тик не шёл
   sideBalanceTick();        // и баланс в сайдбаре — он тоже стоял на паузе
   scheduleAutoRefresh();
+  scheduleKeepalive();      // и keepalive-статы — они тоже стояли на паузе
 });
 scheduleAutoRefresh();
 // Восстановить состояние тумблера + wire up change handler.
@@ -28826,6 +28838,9 @@ function lgRender() {
     lgChatBoot();
   }
   const rows = lgRows(), me = LG.data.me, m = LG_M[LG.metric];
+  const _rh = LG.metric + '|' + LG.range + '|' + LG.cum + '|' + (me.stamp || 0) + '|' + rows.length + '|' + (me.nick || '') + '|' + (me.avatar || '');
+  if (_rh === LG._lastHash) return;
+  LG._lastHash = _rh;
   const top = rows.slice(0, 3), solo = rows.length < 2;
   const mi = rows.findIndex(p => p.isMe);
   const cumBtn = document.getElementById('lg-cum');
@@ -31026,15 +31041,16 @@ async function lgLoad(force = false) {
   if (document.querySelector('[data-tab-content="league"]')?.classList.contains('active')
       || LG.err) lgRender();
 }
+let _lgResizeRaf = 0;
 addEventListener('resize', () => {
   if (!LG.plot) return;
-  // 🪤 То же, что у графиков задержки: на скрытой вкладке хост не измерим, `lgDrawPlot`
-  // возьмёт фолбэк 1000px и пересоберёт весь холст под чужую ширину — с осью, подписями
-  // и легендой не на своих местах. Молча, потому что график при этом не пустой.
-  // Показ «Лиги» перерисовывает сам (lgRender), так что пропуск ничего не теряет.
-  const host = document.getElementById('lg-plot');
-  if (!host || !host.clientWidth) return;
-  lgDrawPlot(LG.plot.top);
+  if (_lgResizeRaf) return;
+  _lgResizeRaf = requestAnimationFrame(() => {
+    _lgResizeRaf = 0;
+    const host = document.getElementById('lg-plot');
+    if (!host || !host.clientWidth) return;
+    lgDrawPlot(LG.plot.top);
+  });
 });
 
 // Вкладка активного провайдера — для карточки ACTIVE в сайдбаре. Ключи MONEY_PROVIDERS

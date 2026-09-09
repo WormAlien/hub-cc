@@ -43,11 +43,14 @@ const PROVIDER_NAME = config.providerName || 'Custom';
 const upstream = new URL(UPSTREAM_BASE);
 
 function mapModel(claudeModel) {
-    const m = String(claudeModel || '').toLowerCase();
-    if (m.includes('opus')) return MODEL_MAP.opus || claudeModel;
-    if (m.includes('sonnet')) return MODEL_MAP.sonnet || claudeModel;
-    if (m.includes('haiku')) return MODEL_MAP.haiku || claudeModel;
-    return claudeModel; // прочие — как есть
+    // [1m] — метка окна Claude Code, апстриму она не нужна: срезаем ДО тиров,
+    // иначе claude-opus-4-6-thinking[1m] с пустой картой уезжает апстриму как есть
+    // и тот отвечает model_not_found. Суффикс режут прокси — канон 1M-context-pin.
+    const m = String(claudeModel || '').replace(/\[1m\]$/, '').toLowerCase();
+    if (m.includes('opus')) return MODEL_MAP.opus || m;
+    if (m.includes('sonnet')) return MODEL_MAP.sonnet || m;
+    if (m.includes('haiku')) return MODEL_MAP.haiku || m;
+    return m; // прочие — как есть (уже без [1m])
 }
 
 function resolveKey(req) {

@@ -4566,7 +4566,7 @@ window.finNavCount = async () => {
       #leagueTab .lginvl .lgcap{margin-right:auto}
       /* Лента прокручивается сама, а не тянет страницу: overscroll-behavior:contain
          не даёт прокрутке «пробить» ленту и уехать в документ на последней строке. */
-      #leagueTab .lgfeed{max-height:360px;overflow-y:auto;overscroll-behavior:contain;
+      #leagueTab .lgfeed{min-height:140px;max-height:360px;overflow-y:auto;overscroll-behavior:contain;
         padding:4px 16px 11px;display:flex;flex-direction:column;gap:11px}
       /* Третья колонка — место кнопки удаления. Оно занято ВСЕГДА, даже когда кнопка
          невидима: появись она только на наведении, текст каждого сообщения при заходе
@@ -30650,6 +30650,7 @@ async function lgVoiceStart() {
     return lgChatErr('голосовое не записать: рекордер не стартовал (' + (e.message || '') + ')');
   }
   lgChatErr('');
+  rec.tick = setInterval(lgVoiceTick, 250);
   lgVoiceBar(); lgVoiceBtn();
 }
 function lgVoiceToggle() {
@@ -30809,6 +30810,7 @@ async function lgChatDelOne(btn) {
   const rule = LGC.ident === true
     ? 'снести чужое может автор или создатель группы'
     : 'пока лига живёт на одном ключе на всех, снести может любой её участник';
+  if (mine && !confirm(`Удалить своё сообщение #${seq} из ${lgChatWhere()}?`)) return;
   if (!mine && !confirm(`Удалить чужое сообщение #${seq} из ${lgChatWhere()}?\n\n`
     + `Право на чужое решает приёмник по своей записи, а не эта страница: ${rule}. `
     + 'Есть право — запись пропадёт у всех, кто читает эту ленту, и вернуть её нечем; '

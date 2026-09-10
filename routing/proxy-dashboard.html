@@ -576,6 +576,15 @@ function randomThemeId() {
         <span class="lgunread" id="nav-unread-league" title="непрочитанные в чате лиги"></span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-league">—</span>
       </button>
+      <!-- Админка лиги. Скрыта КЛАССОМ по умолчанию и открывается только тогда, когда
+           приёмник подтвердил роль (`GET /league/me` → role: 'admin'). Показывать её всем
+           нельзя не из вежливости: все ручки за ней отвечают 403 не-админу, то есть кнопки
+           были бы заведомо нерабочими — а нерабочая кнопка хуже отсутствующей. -->
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition hidden" data-tab="ladmin" id="nav-btn-ladmin" title="Админка лиги: заявки на вступление, права участников, приглашения">
+        <span class="w-5 text-center text-[14px]">🛡️</span>
+        <span class="flex-1">Админка</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-ladmin">—</span>
+      </button>
       <!-- LEAGUE-TAB:NAV:END -->
       <!-- FIN-TAB:NAV:BEGIN -->
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="fin">
@@ -4770,6 +4779,22 @@ window.finNavCount = async () => {
       <div id="leagueTab"></div>
     </div>
     <!-- LEAGUE-TAB:END -->
+    <!-- LADMIN-TAB:BEGIN -->
+    <!-- Админка лиги. Разметку целиком рисует JS (`ladRender`), здесь только контейнер —
+         тот же приём, что у вкладки «Лига» выше: она перерисовывается целиком по данным
+         приёмника, и держать её скелет в HTML значит держать его в двух местах. -->
+    <div data-tab-content="ladmin">
+      <div class="max-w-5xl mx-auto px-6 py-8">
+        <header class="mb-5">
+          <h1 class="text-2xl font-semibold tracking-tight">Админка лиги</h1>
+          <p class="text-sm text-muted mt-1">Заявки на вступление, права участников и приглашения.
+            Всё решает приёмник по записи в <code class="font-mono text-xs">members.json</code> —
+            дашборд только показывает и передаёт.</p>
+        </header>
+        <div id="ladminTab"></div>
+      </div>
+    </div>
+    <!-- LADMIN-TAB:END -->
     <div data-tab-content="claude" class="active">
       <div class="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
@@ -8528,6 +8553,11 @@ function showTab(name) {
     // Вкладку открыли — непрочитанные в чате прочитаны. Тот же гвард по typeof и по той
     // же причине: код чата живёт в последнем блоке скриптов, ниже этой функции.
     if (typeof lgChatSeen === 'function') lgChatSeen();
+  }
+  // Админка лиги — тот же гвард и по той же причине: её код лежит рядом с кодом лиги,
+  // в последнем блоке скриптов.
+  if (name === 'ladmin' && typeof ladRender === 'function') {
+    ladRender(); ladLoad(); state.loaded.ladmin = true;
   }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -31014,6 +31044,9 @@ async function lgLoad(force = false) {
   }
   // Мини-блок красим всегда, даже когда «Лига» не открыта: он и есть быстрый взгляд.
   if (LG.data) { const rows = lgRows(); lgPaintMini(rows, rows.findIndex(p => p.isMe)); }
+  // Заодно уточняем свою роль: её могли выдать или снять, пока дашборд открыт, и узнать
+  // об этом иначе неоткуда — кнопка «Админка» появляется и исчезает по этому ответу.
+  if (typeof ladProbeRole === 'function') ladProbeRole();
   // Чат опрашивается НЕ из вкладки: бейдж непрочитанных обязан появляться, пока человек
   // сидит на другой вкладке дашборда, а там DOM'а чата ещё нет. Отсюда — только пуск.
   if (LG.data) lgChatStart();
@@ -31073,6 +31106,188 @@ function sideOpenCurrentTab(ev) {
 }
 
 
+</script>
+
+<!-- ═══════════════ АДМИНКА ЛИГИ ═══════════════════════════════════════════════
+     Заявки, права участников, приглашения. Прав тут не проверяем: всё решает приёмник
+     по записи в `members.json`, а вкладка живёт по его ответу. Своя проверка была бы
+     вторым источником правды — разъедется в тот день, когда права поменяются. -->
+<script>
+const LAD = { rows: [], admins: 0, err: '', loading: false, me: null };
+
+function ladEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+// Причина отказа человеческим языком. 403 здесь значит ровно одно — роль сняли, пока
+// вкладка была открыта; говорить об этом прямо честнее, чем показывать голый код.
+function ladWhy(st, j, what) {
+  if (st === 403) return 'нет прав ' + what + ': роль админа снята';
+  if (st === 503) return 'приёмник недоступен — проверь настройки лиги';
+  if (st === 409) return (j && j.error) || 'так нельзя';
+  return (j && j.error) || `не удалось ${what} (HTTP ${st})`;
+}
+// Кнопка «Админка» в сайдбаре появляется ТОЛЬКО когда приёмник подтвердил роль.
+// `flex` добавляем явно, а не полагаемся на порядок правил Tailwind: `hidden` и `flex`
+// управляют одним свойством, и кто из них победит — зависит от сборки CSS, а не от нас.
+function ladNavShow(on) {
+  const b = document.getElementById('nav-btn-ladmin');
+  if (!b) return;
+  b.classList.toggle('hidden', !on);
+  b.classList.toggle('flex', !!on);
+}
+// Зовётся и из вкладки «Лига» при каждой её загрузке: роль могли выдать или отобрать,
+// пока дашборд открыт, и узнать об этом иначе неоткуда.
+async function ladProbeRole() {
+  try {
+    const r = await fetch('/__switch/api/league/me');
+    const j = await r.json().catch(() => null);
+    LAD.me = (r.ok && j && j.ok) ? j : null;
+    ladNavShow(!!(LAD.me && LAD.me.role === 'admin'));
+  } catch { /* приёмник молчит — кнопку не трогаем, вдруг это сетевой всплеск */ }
+}
+async function ladLoad() {
+  LAD.loading = true; LAD.err = '';
+  ladRender();
+  try {
+    const r = await fetch('/__switch/api/league/admin/members');
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.ok !== true) {
+      LAD.err = ladWhy(r.status, j, 'смотреть участников');
+      LAD.rows = [];
+      if (r.status === 403) ladNavShow(false);
+    } else {
+      LAD.rows = Array.isArray(j.members) ? j.members : [];
+      LAD.admins = Number(j.admins) || 0;
+    }
+  } catch (e) { LAD.err = 'список не загрузился: ' + (e.message || 'запрос не ушёл'); }
+  LAD.loading = false;
+  ladRender();
+}
+// Общий путь всех действий: POST → на успехе перечитать список целиком. Локально
+// править строку не пытаемся: одобрение меняет ещё и группы, а роль — счётчик админов,
+// и «подкрутить на месте» означало бы повторить логику приёмника на клиенте.
+async function ladAct(action, body, what) {
+  try {
+    const r = await fetch(`/__switch/api/league/admin/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.ok !== true) {
+      toast(ladWhy(r.status, j, what), 'error', 6000);
+      return false;
+    }
+    toast('✓ ' + what, 'success');
+    await ladLoad();
+    // Себя же можно разжаловать — тогда вкладка обязана исчезнуть сразу.
+    if (action === 'role') await ladProbeRole();
+    return true;
+  } catch (e) { toast('не отправлено: ' + (e.message || 'запрос не ушёл'), 'error'); return false; }
+}
+const LAD_SHELL = `
+  <div class="flex items-center gap-2 mb-4">
+    <button id="lad-reload" type="button"
+      class="text-xs px-2.5 py-1 rounded border border-line-soft text-muted hover:text-ink hover:border-line transition">обновить</button>
+    <span id="lad-note" class="text-[11px] text-faint"></span>
+  </div>
+  <div id="lad-err" class="hidden mb-4 text-xs rounded-lg border border-crimson/40 bg-crimson/10 text-crimson px-3 py-2"></div>
+  <section class="mb-6">
+    <h2 class="text-sm font-semibold tracking-tight mb-2">Заявки</h2>
+    <div id="lad-pending" class="space-y-1.5"></div>
+  </section>
+  <section>
+    <h2 class="text-sm font-semibold tracking-tight mb-2">Участники</h2>
+    <div id="lad-members" class="space-y-1.5"></div>
+  </section>`;
+
+function ladRowPending(x) {
+  const mid = ladEsc(x.memberId);
+  return `<div class="rounded-lg border border-line-soft bg-surface px-3 py-2 flex items-center gap-3">
+    <span class="text-sm text-ink flex-1 truncate">${ladEsc(x.nick || '(без ника)')}
+      ${x.about ? `<span class="text-[11px] text-faint ml-2">${ladEsc(x.about)}</span>` : ''}</span>
+    <code class="font-mono text-[10px] text-faint">${mid.slice(0, 8)}</code>
+    <button type="button" data-lad-ok="${mid}"
+      class="text-xs px-2 py-1 rounded border border-emerald/40 text-emerald hover:bg-emerald/10 transition">принять</button>
+    <button type="button" data-lad-no="${mid}"
+      class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-crimson hover:border-crimson/40 transition">отклонить</button>
+  </div>`;
+}
+function ladRowMember(x) {
+  const mid = ladEsc(x.memberId);
+  const admin = x.role === 'admin';
+  const badge = admin
+    ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber/15 text-amber border border-amber/40">админ</span>'
+    : '';
+  const dead = x.status !== 'active';
+  return `<div class="rounded-lg border border-line-soft bg-surface px-3 py-2 flex items-center gap-3 ${dead ? 'opacity-50' : ''}">
+    <span class="text-sm text-ink flex-1 truncate">${ladEsc(x.nick || '(без ника)')} ${badge}
+      ${dead ? `<span class="text-[10px] text-faint ml-1">${ladEsc(x.status)}</span>` : ''}</span>
+    <code class="font-mono text-[10px] text-faint">${mid.slice(0, 8)}</code>
+    <button type="button" data-lad-up="${mid}" data-on="${x.canUpload ? '1' : '0'}"
+      title="файлы и звук: картинки можно всем и без этого права"
+      class="text-xs px-2 py-1 rounded border transition ${x.canUpload
+        ? 'border-emerald/40 text-emerald hover:bg-emerald/10'
+        : 'border-line-soft text-muted hover:text-ink'}">файлы ${x.canUpload ? 'да' : 'нет'}</button>
+    <button type="button" data-lad-role="${mid}" data-on="${admin ? '1' : '0'}"
+      class="text-xs px-2 py-1 rounded border transition ${admin
+        ? 'border-amber/40 text-amber hover:bg-amber/10'
+        : 'border-line-soft text-muted hover:text-ink'}">${admin ? 'разжаловать' : 'сделать админом'}</button>
+  </div>`;
+}
+function ladRender() {
+  const host = document.getElementById('ladminTab');
+  if (!host) return;
+  if (host.dataset.built !== '1') { host.innerHTML = LAD_SHELL; host.dataset.built = '1';
+    const rl = document.getElementById('lad-reload');
+    if (rl) rl.addEventListener('click', () => ladLoad());
+  }
+  const err = document.getElementById('lad-err');
+  if (err) { err.classList.toggle('hidden', !LAD.err); err.textContent = LAD.err || ''; }
+  const note = document.getElementById('lad-note');
+  if (note) {
+    note.textContent = LAD.loading ? 'загружаю…'
+      : `участников ${LAD.rows.length} · админов ${LAD.admins}`;
+  }
+  const pend = LAD.rows.filter(x => x.status === 'pending');
+  const rest = LAD.rows.filter(x => x.status !== 'pending');
+  const pb = document.getElementById('lad-pending');
+  if (pb) {
+    pb.innerHTML = pend.length ? pend.map(ladRowPending).join('')
+      : '<div class="text-xs text-faint px-1">заявок нет</div>';
+    for (const b of pb.querySelectorAll('[data-lad-ok]')) {
+      b.addEventListener('click', () => ladAct('approve',
+        { memberId: b.getAttribute('data-lad-ok') }, 'заявка принята'));
+    }
+    for (const b of pb.querySelectorAll('[data-lad-no]')) {
+      b.addEventListener('click', () => {
+        if (!confirm('Отклонить заявку?\n\nЧеловек останется в реестре со статусом rejected и войти не сможет.')) return;
+        ladAct('reject', { memberId: b.getAttribute('data-lad-no') }, 'заявка отклонена');
+      });
+    }
+  }
+  const mb = document.getElementById('lad-members');
+  if (mb) {
+    mb.innerHTML = rest.length ? rest.map(ladRowMember).join('')
+      : '<div class="text-xs text-faint px-1">пусто</div>';
+    for (const b of mb.querySelectorAll('[data-lad-up]')) {
+      b.addEventListener('click', () => ladAct('grant',
+        { memberId: b.getAttribute('data-lad-up'), canUpload: b.getAttribute('data-on') !== '1' },
+        b.getAttribute('data-on') === '1' ? 'файлы запрещены' : 'файлы разрешены'));
+    }
+    for (const b of mb.querySelectorAll('[data-lad-role]')) {
+      b.addEventListener('click', () => {
+        const on = b.getAttribute('data-on') === '1';
+        if (on && !confirm('Разжаловать админа?\n\nОн потеряет доступ к этой вкладке и не сможет принимать заявки.')) return;
+        ladAct('role', { memberId: b.getAttribute('data-lad-role'), role: on ? 'member' : 'admin' },
+          on ? 'роль снята' : 'теперь админ');
+      });
+    }
+  }
+}
+// Роль спрашиваем на старте: вкладка «Лига» может быть не открыта ни разу, а кнопка
+// должна появиться сама. Задержка — чтобы не толкаться с первой загрузкой дашборда.
+setTimeout(() => { ladProbeRole(); }, 2500);
 </script>
 
 </body>

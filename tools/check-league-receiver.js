@@ -1439,8 +1439,12 @@ async function main() {
   wrJ('groups.json', { [GID_A]: { gid: GID_A, title: 'Общий', createdBy: M0, createdAt: atNow, members: [M0] } });
   wrJ('invites.json', {});
   fs.writeFileSync(IP('addr-salt'), crypto.randomBytes(32).toString('hex') + '\n');
+  // Владелец ноды — админ: после перевода на личности это единственная запись, и роль
+  // ей выдаёт сама миграция (`tools/league-migrate.js`). Без роли ниже покраснеет всё,
+  // что связано с приглашениями: звать в лигу с 09.09 может только админ.
   wrJ('members.json', { [M0]: { memberId: M0, tokenHash: sha(OSEC), installId: OWN, nick: 'worm',
-    groups: [GID_A], status: 'active', createdAt: atNow, invitedBy: null } });
+    groups: [GID_A], status: 'active', createdAt: atNow, invitedBy: null,
+    role: 'admin', canUpload: true } });
   // 🔴 РЕСТАРТА НЕТ. Если приёмник читает реестр только при старте, всё ниже покраснеет —
   // и это ровно то, что делает отзыв настоящим: отзыв, вступающий в силу после
   // `systemctl restart`, отзывом не называется.
@@ -1540,6 +1544,48 @@ async function main() {
     && (grpA2.j.members || []).some(x => x.memberId === M2), me2.j.groups);
   check('его запись создана БЕЗ привязки к установке: её прибьёт первый срез',
     me2.j.installId === null, me2.j.installId);
+  check('приглашённый заводится БЕЗ прав: ни админки, ни файлов, пока их не выдали',
+    me2.j.role === 'member' && me2.j.canUpload === false,
+    { role: me2.j.role, canUpload: me2.j.canUpload });
+  check('звать в лигу он при этом не может — это право админа',
+    (await iq('POST', '/invite', { groups: [GID_A] }, TOK2)).st === 403);
+  // 🪤 Гейт на заливку. Проверяется на ТРЁХ видах вложения сразу, потому что решает ТИП, а
+  // не размер: картинку можно всем, звук и файл — только с `canUpload`. Дыра, которую эти
+  // строки закрывают, была настоящей: 10.09 право забыли вставить в `handleChat`, регресс
+  // молчал (теста не было), и файл прошёл на живом приёмнике от участника без прав.
+  {
+    const capImg = mkWebp(3000).toString('base64');
+    const capFile = Buffer.from('это просто файл').toString('base64');
+    // Настоящий OggS — иначе байты не опознаются как звук и он поедет как файл.
+    const ogg = Buffer.alloc(200); ogg.write('OggS', 0, 'latin1');
+    const capAudio = ogg.toString('base64');
+    check('КАРТИНКУ шлёт и тот, у кого прав на заливку нет: их гейт не касается',
+      (await iq('POST', '/chat', { gid: GID_A, text: 'кар', att: { b64: capImg } }, TOK2)).st === 200);
+    const f = await iq('POST', '/chat', { gid: GID_A, text: 'фай', att: { b64: capFile, name: 'x.bin' } }, TOK2);
+    check('ФАЙЛ без canUpload — 403, и в отказе сказано, что картинки можно',
+      f.st === 403 && /право на заливку/.test(f.j.error || ''), f.j);
+    const a = await iq('POST', '/chat', { gid: GID_A, text: 'зву', att: { b64: capAudio, name: 'x.ogg' } }, TOK2);
+    check('ЗВУК без canUpload — тоже 403', a.st === 403, a.j);
+    // Выдаём право тем же аварийным ходом владельца — правкой файла.
+    const mm = rdJ('members.json');
+    mm[M2] = { ...mm[M2], canUpload: true };
+    wrJ('members.json', mm);
+    check('после выдачи canUpload файл проходит — и БЕЗ рестарта приёмника',
+      (await iq('POST', '/chat', { gid: GID_A, text: 'фай2', att: { b64: capFile, name: 'y.bin' } }, TOK2)).st === 200);
+    const mm2 = rdJ('members.json');
+    mm2[M2] = { ...mm2[M2], canUpload: false };
+    wrJ('members.json', mm2);
+    check('право отзывается так же немедленно: файл снова 403',
+      (await iq('POST', '/chat', { gid: GID_A, text: 'фай3', att: { b64: capFile, name: 'z.bin' } }, TOK2)).st === 403);
+  }
+  // Дальше M2 проверяет МЕХАНИКУ приглашений (срок, размен, гашение отзывом), а не право
+  // на их выдачу — право проверено строкой выше. Поэтому делаем его админом прямо в файле:
+  // это тот же аварийный ход владельца ноды, которым проверяется отзыв ниже.
+  {
+    const m = rdJ('members.json');
+    m[M2] = { ...m[M2], role: 'admin' };
+    wrJ('members.json', m);
+  }
   check('повторный размен одноразового кода посторонним — 409 «уже использовано»',
     (await tryJoin(inv1.j.code)).st === 409);
   const rep = await iq('POST', '/join', { code: inv1.j.code }, TOK2);

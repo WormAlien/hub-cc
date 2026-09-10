@@ -10444,6 +10444,36 @@ async function handleLeagueJoin(req, res) {
     logLine('league размен приглашения: запрос отправлен приёмнику');
     return leagueProxy(res, '/join', 'POST', body, 'размен приглашения', { join: true });
 }
+// POST /__switch/api/league/apply { nick, about? } — подать заявку на вступление.
+// Ключа не требует, как и `/join`: заявку подаёт тот, у кого токена ещё нет. В ответе
+// приходит СВОЙ токен, показанный один раз, — до одобрения админом он не работает нигде,
+// кроме `GET /me`, где виден статус заявки.
+async function handleLeagueApply(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    const body = leagueBodyPick(b.body, ['nick', 'about']);
+    if (!body.nick) return jsonRes(res, 400, { error: 'нужен nick — под каким именем показывать' });
+    logLine('league заявка: запрос отправлен приёмнику');
+    return leagueProxy(res, '/apply', 'POST', body, 'подачу заявки', { join: true });
+}
+// ── Админка лиги ────────────────────────────────────────────────────────────
+// Хаб здесь ТОЛЬКО труба: кто админ и что ему можно, решает приёмник по записи в
+// `members.json`. Своей проверки прав тут нет намеренно — она была бы вторым источником
+// правды, который разъедется с первым ровно в тот день, когда права поменяются.
+async function handleLeagueAdminMembers(req, res) {
+    return leagueProxy(res, '/admin/members', 'GET', null, 'список участников');
+}
+// Одна функция на четыре ручки: они отличаются только хвостом пути и набором полей,
+// а поведение — «прокинь наружу и верни как есть» — общее.
+async function handleLeagueAdminAction(req, res, action, fields, what) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    const body = leagueBodyPick(b.body, ['memberId', ...fields]);
+    if (!body.memberId) return jsonRes(res, 400, { error: 'нужен memberId' });
+    return leagueProxy(res, `/admin/${action}`, 'POST', body, what);
+}
 // ── Маршруты личности, групп и приглашений ──────────────────────────────────
 // Одной функцией, а не десятью строками в общей таблице: у половины путей есть параметр
 // (`<gid>`, `<mid>`, `<id>`), и разбор регуляркой прямо в таблице означал бы десять регулярок
@@ -10475,6 +10505,28 @@ function leagueApiRoute(req, res) {
     }
     if (tail === '/join') {
         if (M === 'POST') { handleLeagueJoin(req, res); return true; }
+        return only('POST');
+    }
+    if (tail === '/apply') {
+        if (M === 'POST') { handleLeagueApply(req, res); return true; }
+        return only('POST');
+    }
+    if (tail === '/admin/members') {
+        if (M === 'GET') { handleLeagueAdminMembers(req, res); return true; }
+        return only('GET');
+    }
+    // Четыре действия админа. Поля у каждого свои: лишнее в теле отсекает `leagueBodyPick`,
+    // поэтому список полей здесь — это и есть контракт ручки, а не украшение.
+    const ADMIN_ACTIONS = {
+        approve: { fields: ['groups'], what: 'одобрение заявки' },
+        reject: { fields: [], what: 'отклонение заявки' },
+        grant: { fields: ['canUpload'], what: 'право на файлы' },
+        role: { fields: ['role'], what: 'смену роли' },
+    };
+    const adm = /^\/admin\/([a-z]{1,16})$/.exec(tail);
+    if (adm && ADMIN_ACTIONS[adm[1]]) {
+        const { fields, what } = ADMIN_ACTIONS[adm[1]];
+        if (M === 'POST') { handleLeagueAdminAction(req, res, adm[1], fields, what); return true; }
         return only('POST');
     }
     if (tail === '/invite') {

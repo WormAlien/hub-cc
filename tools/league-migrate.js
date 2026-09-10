@@ -221,12 +221,26 @@ function detectInstall() {
 // ─── ФОРМА ФАЙЛОВ ЛИЧНОСТИ — единственное место, где она задана ──────────────
 // Поля взяты дословно из дизайна «Лига — друзья, группы и приглашения»:
 //   { memberId, tokenHash, installId, nick, groups, status, createdAt, invitedBy }
+// плюс два поля прав, добавленных 09.09 вместе с админкой:
+//   role: 'member' | 'admin'  — кто принимает заявки, раздаёт права и зовёт в лигу;
+//   canUpload: boolean        — можно ли слать звук и файлы (картинки можно всем).
 // Оба реестра — КАРТЫ по идентификатору (поиск по хешу токена идёт перебором
 // карты участников; групп у нас единицы). Приёмник обязан читать ровно это; если
 // он выберет другую форму, править надо здесь, и это три строки.
-function mkMember(memberId, tokenHash, installId, nick, gid, at) {
+//
+// 🪤 Отсутствие поля прав — это НЕ «права неизвестны», а «прав нет». Записи,
+// заведённые до 09.09, приезжают без `role` и `canUpload`, и читатель обязан
+// трактовать их как `member` без заливки. Проверки поэтому пишутся утвердительно
+// (`role === 'admin'`, `canUpload === true`), а не отрицанием: `!== 'member'` на
+// старой записи вернул бы истину и выдал админку всем, кто был в лиге раньше.
+// 🪤 Миграция заводит ровно одну запись — владельца ноды, и она обязана быть
+// админской: сеть первого админа сделать не может (это была бы дыра размером с
+// лигу), а без него принимать заявки некому.
+function mkMember(memberId, tokenHash, installId, nick, gid, at, role) {
+  const admin = role === 'admin';
   return { memberId, tokenHash, installId, nick, groups: [gid],
-    status: 'active', createdAt: at, invitedBy: null };
+    status: 'active', createdAt: at, invitedBy: null,
+    role: admin ? 'admin' : 'member', canUpload: admin };
 }
 function mkGroup(gid, title, memberId, at) {
   return { gid, title, createdBy: memberId, createdAt: at, members: [memberId] };
@@ -525,8 +539,8 @@ function makeIdentity(gid, installId, nick, memberId) {
   }
   const tokenHash = crypto.createHash('sha256').update(secret).digest('hex');
   if (!exists(P.members)) {
-    writeAtomic(P.members, JSON.stringify({ [memberId]: mkMember(memberId, tokenHash, installId, nick, gid, at) }, null, 2) + '\n', 0o600);
-    okk(`members.json: участник ${memberId}, installId ${installId}, ник ${nick || '(пусто)'}`);
+    writeAtomic(P.members, JSON.stringify({ [memberId]: mkMember(memberId, tokenHash, installId, nick, gid, at, 'admin') }, null, 2) + '\n', 0o600);
+    okk(`members.json: участник ${memberId}, installId ${installId}, ник ${nick || '(пусто)'}, роль admin`);
     say(`токен участника = прежний общий секрет (${mask(secret)}), на диске только его sha256`);
     say('🔴 больше этот секрет никому не давать: теперь это личный токен владельца');
   } else {

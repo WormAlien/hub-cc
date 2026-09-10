@@ -347,6 +347,12 @@ const INVITE_PER_HOUR = 30;          // выдач приглашений в ч�
 // два ведра сразу: на адрес и общее. Иначе перебор кодов ограничен только сетью.
 const JOIN_PER_MIN = 10;
 const JOIN_PER_MIN_ALL = 30;
+// `/apply` — вторая и последняя ручка без секрета, которая создаёт запись на диске.
+// Окно суточное, а не минутное: заявка это не перебор кодов, её подают один раз, и
+// десять штук в сутки с адреса — уже явно не человек. Ник ограничиваем той же длиной,
+// что и везде в чате, иначе список участников можно растянуть до нечитаемого.
+const APPLY_PER_DAY = 10;
+const NICK_MAX = 32;
 // Сколько журналов держим разобранными в памяти. Раньше кеш был ОДИН слот на весь
 // приёмник, и две группы, читаемые по очереди, выбивали друг друга: ответы верные,
 // ошибок нет, только каждый опрос заново разбирает файл целиком — тихая деградация,
@@ -469,12 +475,43 @@ const memberOf = mid => {
     const rec = st.state === 'ok' ? st.map[mid] : null;
     return rec && typeof rec === 'object' ? { ...rec, memberId: rec.memberId || mid } : null;
 };
+// То же самое, но БЕЗ отсечки по статусу. Нужна ровно одной ручке — `GET /me`, чтобы
+// поданная заявка могла узнать свою судьбу. Без неё заявитель получает 401 и не имеет
+// способа выяснить, приняли его или отказали: спросить-то он может только своим токеном.
+// 🔴 Больше нигде её звать нельзя. `authOf` отсекает не-active намеренно — это и есть
+// отзыв; если подменить её здесь, отозванный участник вернёт себе доступ ко всему.
+function authOfAny(req) {
+    const got = String(req.headers['x-league-key'] || '');
+    if (!got) return null;
+    const st = membersState();
+    if (st.state !== 'ok') return null;
+    const h = sha256(got);
+    for (const [mid, rec] of Object.entries(st.map)) {
+        if (!rec || typeof rec !== 'object') continue;
+        if (!hashEq(rec.tokenHash, h)) continue;
+        return { ...rec, memberId: rec.memberId || mid };
+    }
+    return null;
+}
 // Право доступа к группе — ТОЛЬКО список в записи участника. `groups[gid].members` —
 // справочная метка для интерфейса, и писать иначе значит соврать в комментарии, который
 // потом прочтут как гарантию. Два источника правды на одно право = расхождение.
 const inGroup = (me, gid) => !!me && Array.isArray(me.groups) && me.groups.includes(gid);
 const groupOf = gid => (GID_RE.test(String(gid || '')) ? groupsMap()[gid] || null : null);
 const isCreator = (me, gid) => { const g = groupOf(gid); return !!g && !!me && g.createdBy === me.memberId; };
+// 🪤 Оба предиката УТВЕРДИТЕЛЬНЫЕ, и это не стиль, а требование совместимости. Записи,
+// заведённые до 09.09, приезжают вообще без полей прав; `role !== 'member'` на такой
+// записи вернул бы истину и раздал админку всем старожилам разом. Форма записи — в
+// `tools/league-migrate.js` § ФОРМА ФАЙЛОВ ЛИЧНОСТИ, там же разбор этой ловушки.
+const isAdmin = me => !!me && me.role === 'admin';
+const mayUpload = me => !!me && me.canUpload === true;
+// Сколько админов сейчас активно. Нужно там, где админа снимают: лига без единого
+// админа не чинится через сеть вообще — только руками на ноде, `tools/league-admin.js`.
+function adminCount() {
+    const st = membersState();
+    if (st.state !== 'ok') return 0;
+    return Object.values(st.map).filter(r => r && r.role === 'admin' && r.status === 'active').length;
+}
 // Соль хеша адреса и ключа строки рейтинга. Пока файла нет (наследуемая раскладка) —
 // секрет: иначе выкат новой сборки на непереведённые данные обнулил бы живую серию
 // просадок, а это как раз то, чего перевод избегает отдельным шагом.
@@ -1373,6 +1410,8 @@ const attRate = new Map();
 // Ведро размена приглашений — по АДРЕСУ: `/join` единственная ручка без секрета, которая
 // создаёт личность, и перебор кодов иначе ограничен только скоростью сети.
 const joinRate = new Map();
+// То же для заявок: личности у заявителя ещё нет, считать частоту можно только по адресу.
+const addrRate = new Map();
 
 // Абсолютные потолки правдоподобия. Проверяются у КАЖДОГО среза, а не только начиная
 // со второго: `checkMonotone` без предыдущего среза возвращает null, поэтому до этой
@@ -1727,6 +1766,21 @@ function handleChat(req, res, raw, me, u) {
             }
             type = { ext, ...attOctet };
         }
+        // 🔴 Право на заливку — ЗДЕСЬ, после определения типа по байтам и до проверки
+        // размера. Решает тип, а не размер: картинки можно всем (решение владельца 09.09),
+        // звук и произвольные файлы — только с `canUpload`, который выдаёт админ.
+        // Почему после sniff: до него неизвестно, ЧТО приехало, а верить заявленному
+        // `kind` из тела нельзя — тем же приёмом файл выдавал бы себя за картинку.
+        // 🪤 Только в режиме личности (`me` есть). В наследуемом режиме ключ один на всех,
+        // прав по участникам не существует в принципе — и проверка там заблокировала бы
+        // вложения ВСЕМ. Поймано регрессом сразу: `me` там undefined, `mayUpload` вернул
+        // false, и наследуемый чат потерял картинки целиком.
+        if (me && type.kind !== 'image' && !mayUpload(me)) {
+            return json(res, 403, { error: type.kind === 'audio'
+                ? 'голосовые может отправлять не каждый — нужно право на заливку'
+                : 'файлы может отправлять не каждый — нужно право на заливку',
+            hint: 'картинки можно без него; право на файлы и звук выдаёт админ' });
+        }
         const max = attMax(type.kind);
         if (buf.length > max) {
             return json(res, 413, { error: `вложение ${type.ext} больше ${sizeStr(max)}`,
@@ -2024,10 +2078,22 @@ function groupBrief(me, gid) {
         createdAt: g.createdAt || null, mine: g.createdBy === me.memberId,
         members: Array.isArray(g.members) ? g.members.length : 0 };
 }
+// 🪤 Эта ручка — ЕДИНСТВЕННАЯ, что зовётся через `authOfAny`, то есть работает и для
+// заявки со `status: 'pending'`. Иначе поданная заявка упирается в 401 и человеку нечем
+// узнать свою судьбу: спросить он может только своим токеном, а тот до одобрения мёртв.
+// Поданной заявке отвечаем коротко и без чужих данных — ни групп, ни прав у неё ещё нет.
 function handleMe(req, res, me) {
+    if (me.status !== 'active') {
+        return json(res, 200, { ok: true, memberId: me.memberId, status: me.status,
+            nick: me.nick || '', createdAt: me.createdAt || null,
+            note: me.status === 'pending'
+                ? 'заявка подана, ждёт решения админа: до одобрения токен не работает'
+                : 'эта личность не активна' });
+    }
     json(res, 200, { ok: true, memberId: me.memberId, installId: me.installId || null,
         nick: me.nick || '', status: me.status, createdAt: me.createdAt || null,
         invitedBy: me.invitedBy || null,
+        role: isAdmin(me) ? 'admin' : 'member', canUpload: mayUpload(me),
         groups: (Array.isArray(me.groups) ? me.groups : []).map(g => groupBrief(me, g)) });
 }
 // Состав группы — единственное место, где наружу уезжают лицо, `installId`, `ver`, `sha` и
@@ -2146,6 +2212,14 @@ function inviteValidate(inv, memberId, now) {
     return { groups, maxUses, multi, uses };
 }
 function handleInvite(req, res, body, me) {
+    // 🔴 Звать в лигу может только админ (решение владельца 09.09). Раньше это мог любой
+    // член группы, и приглашение было аддитивным правом «позвать своего». Теперь вход
+    // один — заявка с одобрением, а код остаётся быстрым путём для тех, за кого админ
+    // ручается лично. Право звать, розданное всем, обесценивает и заявку, и апрув.
+    if (!isAdmin(me)) {
+        return json(res, 403, { error: 'приглашать может только админ',
+            hint: 'вход в лигу для остальных — заявка (POST /apply), её принимает админ' });
+    }
     if (!rateOk(keyRate, 'invite:' + me.memberId, INVITE_PER_HOUR, 3600_000)) {
         return json(res, 429, { error: `не больше ${INVITE_PER_HOUR} приглашений в час`,
             retryAfterMs: 3600_000 });
@@ -2323,8 +2397,12 @@ function handleJoin(req, res, raw) {
         ? { ...was, groups }
         // Форма записи — ровно та, что создаёт `tools/league-migrate.js`. `installId`
         // намеренно пустой: он прибивается ПЕРВЫМ принятым срезом (см. sliceIdentity).
+        // Права проставляем ЯВНО, хотя дефолт читателей и так «прав нет»: запись, в
+        // которой поле отсутствует, читается одинаково, но глазами по файлу видно
+        // «этому не выдавали», а не «а тут вообще про права ничего».
         : { memberId, tokenHash: sha256(token), installId: '', nick: '', groups,
-            status: 'active', createdAt: new Date(now).toISOString(), invitedBy: invites[id].by };
+            status: 'active', createdAt: new Date(now).toISOString(), invitedBy: invites[id].by,
+            role: 'member', canUpload: false };
     if (!writeState(MEMBERS_FILE, members, 0o600)) {
         return json(res, 507, { error: 'members.json не записался — участник не заведён',
             hint: 'использование приглашения при этом уже сожжено: попроси новое' });
@@ -2357,6 +2435,182 @@ function handleJoin(req, res, raw) {
         ...(token ? { token, note: 'токен показан ОДИН раз: положи его в'
             + ' routing/league-config.json полем key и сохрани копию вне репозитория' } : {}),
         invitedBy: invites[id].by });
+}
+
+// ── Заявка на вступление ─────────────────────────────────────────────────────
+// Вход в лигу для тех, кого некому пригласить. Ручка ОТКРЫТА (роутится до проверки
+// токена) и создаёт запись на диске — значит это единственное место, где посторонний
+// может что-то у нас записать, и обходится с ним соответственно:
+//   · потолок MAX_MEMBERS общий с приглашениями — заявки не отдельная квота;
+//   · частота считается по АДРЕСУ, а не по личности: личности у заявителя ещё нет;
+//   · токен выдаётся сразу, но со `status: 'pending'` он не работает нигде, кроме
+//     `GET /me`. То есть «выдали токен» здесь не означает «впустили».
+// Заявка НЕ кладётся в отдельный файл: `applications.json` был бы вторым реестром
+// личностей, который пришлось бы держать в согласии с первым. Заявка — это запись
+// участника, у которой статус ещё не `active`.
+function handleApply(req, res, raw, addr) {
+    if (!rateOk(addrRate, 'apply:' + addr, APPLY_PER_DAY, 86400_000)) {
+        return json(res, 429, { error: `не больше ${APPLY_PER_DAY} заявок в сутки с одного адреса`,
+            retryAfterMs: 86400_000 });
+    }
+    let b;
+    try { b = JSON.parse(raw); } catch { return json(res, 400, { error: 'тело не JSON' }); }
+    if (!b || typeof b !== 'object') return json(res, 400, { error: 'тело не JSON' });
+    const nick = typeof b.nick === 'string' ? b.nick.trim().slice(0, NICK_MAX) : '';
+    if (!nick) return json(res, 400, { error: 'нужен nick — под каким именем тебя показывать' });
+    const about = typeof b.about === 'string' ? b.about.trim().slice(0, 280) : '';
+    const st = membersState();
+    const members = { ...(st.map || {}) };
+    if (Object.keys(members).length >= MAX_MEMBERS) {
+        return json(res, 507, { error: `участников уже ${Object.keys(members).length}, новые не принимаются` });
+    }
+    // Уже поданная и ещё не рассмотренная заявка с тем же ником — не повод плодить вторую:
+    // админ увидит две одинаковые строки и не поймёт, какая настоящая.
+    const dup = Object.values(members).find(r => r && r.status === 'pending'
+        && String(r.nick || '').toLowerCase() === nick.toLowerCase());
+    if (dup) {
+        return json(res, 409, { error: 'заявка с таким ником уже ждёт решения',
+            hint: 'если это твоя — просто дождись; токен ты уже получил при первой подаче' });
+    }
+    let memberId;
+    do { memberId = crypto.randomBytes(8).toString('hex'); } while (members[memberId]);
+    const token = crypto.randomBytes(24).toString('base64url');
+    const now = new Date().toISOString();
+    members[memberId] = { memberId, tokenHash: sha256(token), installId: '', nick,
+        groups: [], status: 'pending', createdAt: now, invitedBy: null,
+        role: 'member', canUpload: false, ...(about ? { about } : {}) };
+    if (!writeState(MEMBERS_FILE, members, 0o600)) {
+        return json(res, 507, { error: 'members.json не записался — заявка не подана' });
+    }
+    log(`заявка с ${addr}: ${memberId} (${nick})`);
+    json(res, 200, { ok: true, memberId, status: 'pending',
+        token,
+        note: 'токен показан ОДИН раз: положи его в routing/league-config.json полем key.'
+            + ' До одобрения админом он не работает — проверить состояние можно через GET /me' });
+}
+
+// ── Админские ручки ──────────────────────────────────────────────────────────
+// Всё, что раздаёт права, живёт здесь и требует `role: 'admin'`. Первого админа эти
+// ручки создать не могут и не должны: пока админов ноль, подписать запрос некому, а
+// ручка «сделай меня админом, если админов нет» досталась бы первому, кто нашёл адрес.
+// Единственный вход в администрирование офлайновый — `tools/league-admin.js` на ноде.
+function adminGate(res, me) {
+    if (isAdmin(me)) return true;
+    json(res, 403, { error: 'это может только админ' });
+    return false;
+}
+function handleAdminMembers(req, res, me) {
+    if (!adminGate(res, me)) return;
+    const st = membersState();
+    const rows = Object.entries(st.map || {}).map(([mid, r]) => ({
+        memberId: r.memberId || mid,
+        nick: r.nick || '',
+        status: r.status || '?',
+        role: isAdmin(r) ? 'admin' : 'member',
+        canUpload: mayUpload(r),
+        installId: r.installId || null,
+        groups: Array.isArray(r.groups) ? r.groups : [],
+        createdAt: r.createdAt || null,
+        invitedBy: r.invitedBy || null,
+        ...(r.about ? { about: String(r.about).slice(0, 280) } : {}),
+    }));
+    // Ждущие — первыми: ради них эту вкладку и открывают.
+    const rank = s => (s === 'pending' ? 0 : s === 'active' ? 1 : 2);
+    rows.sort((a, b) => rank(a.status) - rank(b.status)
+        || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    json(res, 200, { ok: true, members: rows, admins: adminCount() });
+}
+// Общая часть всех правок: найти запись, применить патч, записать. Отдельной функцией
+// потому, что четыре ручки отличаются только патчем и строкой в журнал.
+function adminPatch(res, me, mid, patch, what) {
+    const st = membersState();
+    if (st.state !== 'ok') return json(res, 503, { error: 'members.json не читается' });
+    const key = String(mid || '').trim();
+    const rec = st.map[key];
+    if (!rec || typeof rec !== 'object') return json(res, 404, { error: 'такого участника нет' });
+    const members = { ...st.map, [key]: { ...rec, ...patch } };
+    if (!writeState(MEMBERS_FILE, members, 0o600)) {
+        return json(res, 507, { error: 'members.json не записался — ничего не изменено' });
+    }
+    log(`админ ${me.memberId}: ${key} (${rec.nick || 'без ника'}) — ${what}`);
+    json(res, 200, { ok: true, memberId: key, ...patch });
+}
+function handleAdminApprove(req, res, body, me) {
+    if (!adminGate(res, me)) return;
+    const mid = String((body || {}).memberId || '').trim();
+    const st = membersState();
+    const rec = (st.map || {})[mid];
+    if (!rec) return json(res, 404, { error: 'такого участника нет' });
+    if (rec.status === 'active') return json(res, 200, { ok: true, memberId: mid, already: true });
+    // В какие группы пускаем. Умолчание — группы самого админа, но только если она одна:
+    // иначе «принять» тихо раздало бы доступ ко всем комнатам сразу.
+    let groups = (body || {}).groups;
+    const mine = Array.isArray(me.groups) ? me.groups.filter(g => GID_RE.test(g)) : [];
+    if (groups === undefined || groups === null) {
+        if (mine.length !== 1) {
+            return json(res, 400, { error: 'у тебя не одна группа — назови явно, куда принимаешь',
+                groups: mine });
+        }
+        groups = [mine[0]];
+    }
+    if (!Array.isArray(groups) || !groups.length || groups.length > 8) {
+        return json(res, 400, { error: 'groups — список из 1..8 идентификаторов групп' });
+    }
+    for (const g of groups) {
+        if (!GID_RE.test(String(g))) return json(res, 400, { error: 'gid — 32 символа [a-f0-9]' });
+        if (!inGroup(me, g)) return json(res, 403, { error: 'ты сам не в этой группе' });
+    }
+    const merged = [...new Set([...(Array.isArray(rec.groups) ? rec.groups : []), ...groups])];
+    adminPatch(res, me, mid, { status: 'active', groups: merged, approvedBy: me.memberId,
+        approvedAt: new Date().toISOString() }, `принят в ${groups.map(g => g.slice(0, 8)).join(',')}`);
+    // Реестр групп справочный, но держать его в согласии обязаны мы — как в размене кода.
+    const gmap = { ...groupsMap() };
+    let dirty = false;
+    for (const g of groups) {
+        const grp = gmap[g];
+        if (!grp) continue;
+        const list = Array.isArray(grp.members) ? grp.members : [];
+        if (list.includes(mid) || list.length >= MAX_GROUP_MEMBERS) continue;
+        gmap[g] = { ...grp, members: [...list, mid] };
+        dirty = true;
+    }
+    if (dirty && !writeState(GROUPS_FILE, gmap)) {
+        log('groups.json не записался при одобрении заявки: состав группы отстал от записи участника');
+    }
+}
+function handleAdminReject(req, res, body, me) {
+    if (!adminGate(res, me)) return;
+    const mid = String((body || {}).memberId || '').trim();
+    adminPatch(res, me, mid, { status: 'rejected', groups: [] }, 'заявка отклонена');
+}
+function handleAdminGrant(req, res, body, me) {
+    if (!adminGate(res, me)) return;
+    const mid = String((body || {}).memberId || '').trim();
+    const on = (body || {}).canUpload === true;
+    adminPatch(res, me, mid, { canUpload: on }, on ? 'файлы и звук разрешены' : 'файлы и звук запрещены');
+}
+function handleAdminRole(req, res, body, me) {
+    if (!adminGate(res, me)) return;
+    const mid = String((body || {}).memberId || '').trim();
+    const role = String((body || {}).role || '').trim();
+    if (role !== 'admin' && role !== 'member') {
+        return json(res, 400, { error: "role — 'admin' или 'member'" });
+    }
+    // 🔴 Последнего активного админа снять нельзя. Лига без админов не принимает заявки и
+    // не раздаёт права, а вернуть управление можно только руками на ноде — то есть по сети
+    // это состояние невосстановимо. Один запрос не должен уметь загонять систему туда.
+    if (role === 'member') {
+        const st = membersState();
+        const rec = (st.map || {})[mid];
+        if (rec && isAdmin(rec) && rec.status === 'active' && adminCount() <= 1) {
+            return json(res, 409, { error: 'это последний активный админ — снять его нельзя',
+                hint: 'сначала назначь админом кого-то ещё' });
+        }
+    }
+    // Право на файлы при повышении выдаётся заодно: админ, который не может послать файл,
+    // выглядит поломкой. При снятии роли — остаётся, отбирается отдельно через /admin/grant.
+    adminPatch(res, me, mid, role === 'admin' ? { role, canUpload: true } : { role },
+        role === 'admin' ? 'теперь админ' : 'больше не админ');
 }
 
 // ── Группы ───────────────────────────────────────────────────────────────────
@@ -2542,14 +2796,50 @@ function handler(req, res) {
     if (req.method === 'POST' && u.pathname === '/join') {
         return readBody(req, res, MAX_BODY, raw => handleJoin(req, res, raw));
     }
+    // Третья публичная ручка: заявка. Токен она выдаёт, но со `status: 'pending'` он не
+    // открывает ничего — проверка ниже пропустит его только в `GET /me`.
+    if (req.method === 'POST' && u.pathname === '/apply') {
+        return readBody(req, res, MAX_BODY, raw => handleApply(req, res, raw, addrOf(req)));
+    }
+    // 🪤 `GET /me` берёт личность через `authOfAny` — БЕЗ отсечки по статусу, иначе
+    // поданная заявка упирается в 401 и человеку нечем узнать свою судьбу.
+    // 🔴 Послабление ровно на ОДИН статус — `pending`. «Ещё не впустили» и «был, но
+    // отозван» это разные вещи: отзыв обязан гасить ВСЕ ручки без исключений, иначе
+    // второй уровень отзыва перестаёт быть отзывом. Отозванный получает здесь 401,
+    // как и на всём остальном.
+    if (req.method === 'GET' && u.pathname === '/me') {
+        const any = authOfAny(req);
+        if (!any) return json(res, 401, { error: 'токен не принят: такой личности у приёмника нет' });
+        if (any.status !== 'active' && any.status !== 'pending') {
+            return json(res, 401, { error: 'эта личность отозвана' });
+        }
+        return handleMe(req, res, any);
+    }
     const me = authOf(req);
     if (!me) {
+        const pend = authOfAny(req);
+        if (pend && pend.status === 'pending') {
+            return json(res, 403, { error: 'заявка ещё не одобрена',
+                hint: 'дождись решения админа; своё состояние видно в GET /me' });
+        }
         return json(res, 401, { error: 'токен не принят: такой личности у приёмника нет'
                 + ' либо она отозвана',
-            hint: 'вход в лигу только по приглашению участника (POST /join)' });
+            hint: 'вход в лигу — заявка (POST /apply) либо приглашение админа (POST /join)' });
     }
-    if (req.method === 'GET' && u.pathname === '/me') return handleMe(req, res, me);
     if (req.method === 'DELETE' && u.pathname === '/me') return handleLeave(req, res, me);
+    if (req.method === 'GET' && u.pathname === '/admin/members') return handleAdminMembers(req, res, me);
+    if (req.method === 'POST' && u.pathname.startsWith('/admin/')) {
+        const tail = u.pathname.slice(7);
+        const fn = tail === 'approve' ? handleAdminApprove
+            : tail === 'reject' ? handleAdminReject
+            : tail === 'grant' ? handleAdminGrant
+            : tail === 'role' ? handleAdminRole : null;
+        if (fn) {
+            return readBody(req, res, MAX_BODY, raw => {
+                const b = jsonBody(raw); return b ? fn(req, res, b, me) : badBody(res);
+            });
+        }
+    }
     if (req.method === 'GET' && u.pathname === '/chat') return handleChatFeed(req, res, u, me);
     if (req.method === 'DELETE' && (u.pathname === '/chat' || /^\/chat\/\d{1,15}$/.test(u.pathname))) {
         return handleChatDelete(req, res, u, me);

@@ -527,7 +527,7 @@ function randomThemeId() {
            и та же функция. Висит всегда, а не только когда активен AR: знать, когда
            у него долив, нужно как раз чтобы решить, переключаться ли на него. -->
       <div id="arq-mini" class="arq hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]"
-           title="Квота AgentRouter льётся двумя партиями: 02:00 и 14:00 МСК (07:00/19:00 Пекина)">
+           title="Квота AgentRouter льётся тремя партиями: 03:00, 11:00 и 19:00 МСК (00/08/16 Пекина)">
         <span class="arq-host shrink-0 leading-none"></span>
         <span class="arq-txt text-dim truncate"></span>
       </div>
@@ -6061,7 +6061,7 @@ window.finNavCount = async () => {
               <button type="button" class="arq-nav arq-next px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Следующий вид">›</button>
             </div>
           </div>
-          <p class="text-xs text-muted mb-2">Две партии в сутки: <span class="font-mono text-ink">02:00</span> и <span class="font-mono text-ink">14:00</span> МСК (07:00/19:00 Пекина). Партия конечная — «用完即止», кончиться может раньше срока.</p>
+          <p class="text-xs text-muted mb-2">Три партии в сутки: <span class="font-mono text-ink">03:00</span>, <span class="font-mono text-ink">11:00</span> и <span class="font-mono text-ink">19:00</span> МСК (00/08/16 Пекина). Партия конечная — «用完即止», кончиться может раньше срока.</p>
           <div class="flex justify-center py-1"><span class="arq-host"></span></div>
           <div class="mt-2 flex flex-col items-center gap-1.5">
             <button id="arq-check" type="button" onclick="arqCheckQuota()" class="text-xs px-3 py-1.5 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить квоту</button>
@@ -31477,7 +31477,7 @@ function sideOpenCurrentTab(ev) {
 </script>
 
 <!-- ═══════════════════ AR-QUOTA-DIAL ═══════════════════
-     Часы до сброса дневной квоты AgentRouter. Отдельным блоком в конце файла, а не
+     Часы до сброса квоты AgentRouter. Отдельным блоком в конце файла, а не
      внутри основного скрипта: модуль самодостаточен — ничего в дашборде не читает и
      не трогает, своё хранилище, свой таймер. Вырезается целиком по трём маркерам
      AR-QUOTA-DIAL:MINI / :BIG / этому. -->
@@ -31531,12 +31531,13 @@ function sideOpenCurrentTab(ev) {
 (() => {
 'use strict';
 /* ── Модель времени ───────────────────────────────────────────────────────
-   Квота льётся двумя партиями в сутки: 07:00 и 19:00 по Пекину = UTC 23:00 и 11:00
-   = 02:00 и 14:00 МСК. Ни Китай, ни Россия часы не переводят, поэтому связка
-   фиксирована навсегда и её можно зашить. Партии разнесены РОВНО на 12 ч, поэтому
-   вся арифметика — одна сетка по модулю от любой из них; опора взята 11:00 UTC. */
-const CYCLE = 12 * 3600 * 1000;
-const ANCHOR = Date.UTC(1970, 0, 1, 11, 0, 0);
+   Квота льётся тремя партиями в сутки: 00:00, 08:00 и 16:00 по Пекину = UTC
+   16:00, 0:00, 8:00 = 03:00, 11:00 и 19:00 МСК (объявление 2026-09-10; до него
+   партий было две — 07:00/19:00 Пекина). Ни Китай, ни Россия часы не переводят,
+   поэтому связку можно зашить. Партии разнесены РОВНО на 8 ч, поэтому вся
+   арифметика — одна сетка по модулю от любой из них; опора взята 16:00 UTC. */
+const CYCLE = 8 * 3600 * 1000;
+const ANCHOR = Date.UTC(1970, 0, 1, 16, 0, 0);
 const KEY = 'ar-quota-dial';
 const R = 84, CIRC = 2 * Math.PI * R;
 
@@ -31617,7 +31618,7 @@ const V = [
     <text class="arq-num hero" x="100" y="108" text-anchor="middle" font-size="30"></text>
     <text class="arq-cap arq-capc at" x="100" y="126" text-anchor="middle" font-size="10"></text>`}
   </svg>`,
-  init(el, m) { const n = m ? 12 : 48, g = el.querySelector('.sg');
+  init(el, m) { const n = m ? 8 : 32, g = el.querySelector('.sg');
     for (let i = 0; i < n; i++) { const a = i * (360/n), long = !m && i % 4 === 0;
       const [x1,y1] = polar(m?94:88, a), [x2,y2] = polar(m?70:(long?72:78), a);
       g.insertAdjacentHTML('beforeend', `<line class="arq-seg" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
@@ -31667,9 +31668,9 @@ const V = [
     el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
     el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск`; } },
 
-/* Круг на 24 часа, а не на 12 — и это не украшение. На 12-часовом циферблате 02:00
-   и 14:00 попадают в ОДНУ точку, дуга между ними вырождается в ноль и не рисуется
-   вообще (проверено на черновике). На суточном они встают друг напротив друга. */
+/* Круг на 24 часа, а не на 12 — и это не украшение. На 12-часовом циферблате партия
+   ложится в одну точку с беспартийным часом (03↔15, 11↔23, 19↔07), и дуги между
+   метками путаются. На суточном 03/11/19 встают через ровные 120°. */
 { id: 'day', label: 'Сутки',
   svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
     <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?13:6}"/>
@@ -31690,7 +31691,7 @@ const V = [
         g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
           stroke-width="${big?2:1}" stroke="color-mix(in oklab, var(--color-ink) ${big?40:22}%, var(--color-surface))"/>`); } }
     const mk = el.querySelector('.mks');
-    [[2,'02'], [14,'14']].forEach(([h, lbl]) => { const a = h * 15, [x,y] = polar(84, a);
+    [[3,'03'], [11,'11'], [19,'19']].forEach(([h, lbl]) => { const a = h * 15, [x,y] = polar(84, a);
       const [lx,ly] = polar(68, a);
       mk.insertAdjacentHTML('beforeend',
         `<circle cx="${x}" cy="${y}" r="${m?10:5.5}" fill="var(--color-surface)"
@@ -31700,7 +31701,7 @@ const V = [
   tick(el, c, m) {
     const d = new Date(c.t);
     const nowA = (d.getHours() + d.getMinutes()/60 + d.getSeconds()/3600) * 15;
-    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15, fromA = (toA + 180) % 360;
+    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15, fromA = (toA + 120) % 360;
     const [hx,hy] = polar(84, fromA), [ehx,ehy] = polar(84, toA);
     el.querySelector('.hf').setAttribute('d', `M ${hx} ${hy} A 84 84 0 0 1 ${ehx} ${ehy}`);
     const sweep = (nowA - fromA + 360) % 360, [ax,ay] = polar(84, nowA);
@@ -31709,9 +31710,14 @@ const V = [
     if (m) return;
     const pt = el.querySelector('.pt'); pt.setAttribute('cx', ax); pt.setAttribute('cy', ay);
     el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
+    const hn = c.next.getHours();
     el.querySelector('.ph').textContent =
-      `${c.next.getHours() < 12 ? 'ночная' : 'дневная'} партия · ${pad(c.next.getHours())}:${pad(c.next.getMinutes())}`; } },
+      `${hn < 7 ? 'ночная' : hn < 15 ? 'дневная' : 'вечерняя'} партия · ${pad(hn)}:${pad(c.next.getMinutes())}`; } },
 ];
+
+/* Вид по умолчанию — «Сутки»: под тройную сетку 03/11/19 суточный круг ложится
+   идеально, метки встают через ровные 120° (решение 2026-09-12). */
+const DAY = V.findIndex(x => x.id === 'day');
 
 /* ── Сборка и тик ─────────────────────────────────────────────────────── */
 const hosts = [];
@@ -31719,7 +31725,7 @@ let idx = 0, timer = null;
 
 function readIdx() { let v = NaN;
   try { v = parseInt(localStorage.getItem(KEY), 10); } catch (e) { /* хранилище закрыто */ }
-  return Number.isInteger(v) && v >= 0 && v < V.length ? v : 0; }
+  return Number.isInteger(v) && v >= 0 && v < V.length ? v : DAY; }
 function saveIdx() { try { localStorage.setItem(KEY, String(idx)); } catch (e) { /* живёт до перезагрузки */ } }
 
 function build() {

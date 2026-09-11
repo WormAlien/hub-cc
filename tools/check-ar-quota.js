@@ -35,6 +35,22 @@ check(html.includes("fetch('/__switch/api/ar/quota-check'"), 'UI calls server ro
 check(html.includes("arqState('burned')"), 'exhausted result marks clocks burned');
 check(html.includes("arqState('fresh')"), 'available result marks clocks fresh');
 
+// ── Quota dial schedule: three batches a day since 2026-09-10 (MSK 03/11/19, 8h step).
+// Статика по HTML: сетку в браузере из регресса не прогонишь, но следы старой
+// двухпартийной сетки ловятся точным вхождением строк.
+check(html.includes('const CYCLE = 8 * 3600 * 1000'), 'dial cycle is 8 hours');
+check(html.includes('Date.UTC(1970, 0, 1, 16, 0, 0)'), 'dial anchor is 16:00 UTC = 19:00 MSK');
+check(!html.includes('const CYCLE = 12 * 3600 * 1000'), 'old 12h cycle is gone');
+check(!html.includes('02:00 и 14:00'), 'old two-batch wording is gone');
+check(!html.includes("[2,'02']") && !html.includes("[14,'14']"), 'old day marks 02/14 are gone');
+check(html.includes("[3,'03']") && html.includes("[11,'11']") && html.includes("[19,'19']"), 'day dial marks 03/11/19');
+check(html.includes('const n = m ? 8 : 32'), 'term dial draws 32 segments (8h × 15m), mini 8');
+check(html.includes('(toA + 120) % 360'), 'day pre-batch highlight is a third of the circle');
+check(html.includes("'вечерняя'"), 'day caption names all three batches');
+check(html.includes("x.id === 'day'"), 'default dial falls back to day');
+check(html.includes('тремя партиями'), 'mini tooltip says three batches');
+check(html.includes('Три партии в сутки'), 'big caption says three batches');
+
 for (const msg of ok) console.log('OK  ' + msg);
 for (const msg of fails) console.error('FAIL ' + msg);
 console.log(`\n${ok.length} passed, ${fails.length} failed`);

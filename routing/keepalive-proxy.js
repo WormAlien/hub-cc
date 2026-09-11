@@ -122,10 +122,10 @@ function readModelMap() {
         if (modelMapCache.data && st.mtimeMs === modelMapCache.mtime) return modelMapCache.data;
         const raw = fs.readFileSync(AR_MODELMAP_FILE, 'utf8');
         const data = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
-        modelMapCache.data = { opus: '', sonnet: '', haiku: '', ...data };
+        modelMapCache.data = { opus: '', sonnet: '', haiku: '', gpt: '', ...data };
         modelMapCache.mtime = st.mtimeMs;
         return modelMapCache.data;
-    } catch { return { opus: '', sonnet: '', haiku: '' }; }
+    } catch { return { opus: '', sonnet: '', haiku: '', gpt: '' }; }
 }
 
 // Маппинг claude-тира → целевая модель (как в agentrouter-proxy.js).
@@ -903,7 +903,7 @@ function availableTarget(tier, target, clientModel, mm) {
 }
 
 function shouldRetryStatus(status) {
-  return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
+  return status === 400 || status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 599);
 }
 
 // 🪤 `required` раньше стоял голым словом — и матчил `owner_action_required` внутри
@@ -989,6 +989,9 @@ function isTransientBody(status, buf) {
   // Промах маршрута — постоянная ошибка, но проверяем ПОСЛЕ структурного вердикта:
   // если шлюз сам сказал `retryable: true`, это его утверждение, а наше — догадка.
   if (ROUTE_MISS_RE.test(s)) return false;
+  // Bedrock-канал AgentRouter прислал свой model identifier — повтор пойдёт на другой канал.
+  // Проверяем ДО RETRY_NO, потому что `bad request` из RETRY_NO ловит и Bedrock-ответ.
+  if (status === 400 && /ValidationException|model identifier|InvokeModel|Bedrock/i.test(s)) return true;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -1064,6 +1067,11 @@ const GW_BY_HOST = {
   // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
   // авторотация: прокси просто не знает, в какой пул звонить, и ошибки в логе нет.
   'api.hcnsec.cn': 'hn',
+  // api.wisdomsatan.club — тоже С ПОДДОМЕНОМ. 🪤 У этой панели есть ВТОРОЙ домен:
+  // `/api/status` объявляет `server_address: https://api.hczhw.com`, но он отдаёт нам
+  // 403 (замер 2026-09-10). Ключ здесь обязан быть ровно тем хостом, на который
+  // реально ходит keepalive, иначе авторотация промолчит.
+  'api.wisdomsatan.club': 'ws',
 };
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
@@ -1185,6 +1193,27 @@ function remapHaiku(method, reqPath, body) {
   // Но только если конвертер наш (см. GPT_PROXY_ENABLED): на tabi/gorouter gpt остаётся
   // на своём шлюзе, иначе запрос уходит чужим ключом на agentrouter.
   if (isGptLike(model)) {
+    // mm.gpt позволяет перенаправить GPT-запросы на произвольную цель через дашборд —
+    // без правки конфига Claude Code. Пустая строка = старое поведение (конвертер).
+    const mmg = readModelMap();
+    if (mmg.gpt) {
+      const target = mmg.gpt;
+      const ctxSuffix = /\[1m\]$/.test(model) ? '[1m]' : '';
+      if (isGptLike(target)) {
+        const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+        if (!GPT_PROXY_ENABLED) {
+          log(`${method} ${reqPath} gpt→${target} (mm.gpt, gpt, без конвертера) via ${upstream.host}`);
+          return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+        }
+        log(`${method} ${reqPath} gpt→${target} (mm.gpt, gpt) via ${HAIKU_GPT_PROXY}`);
+        return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
+      }
+      // claude-цель: убираем чужой суффикс, переносим [1m] от источника
+      const finalTarget = target.replace(/\s*\[[^\]]*\]\s*$/, '') + ctxSuffix;
+      const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
+      log(`${method} ${reqPath} gpt→${finalTarget} (mm.gpt, claude) via ${upstream.host}`);
+      return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+    }
     if (!GPT_PROXY_ENABLED) return null;
     log(`${method} ${reqPath} ${model} via ${HAIKU_GPT_PROXY}`);
     return { body, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
@@ -1340,8 +1369,15 @@ const server = http.createServer((req, res) => {
     if (!contentSent || sawStop) return;
     stats.truncated = (stats.truncated || 0) + 1;
     ev.note('truncated');
-    log(`${req.method} ${reqPath} 🔴 шлюз закрыл поток без message_stop: отдано ${sentBytes}Б — `
-      + `у клиента это «Connection closed mid-response», ответ неполный`);
+    // Досинтез: вписываем пометку и закрываем поток корректно, чтобы сессия CC выжила.
+    // Без этого клиент видит ECONNRESET, а с ним — обрезанный, но живой ответ.
+    try {
+      res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\\n\\n⚠️ ответ обрезан шлюзом"}}\n\n');
+      res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+      res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n');
+      res.write('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    } catch (e) { /* клиент уже ушёл */ }
+    log(`${req.method} ${reqPath} 🔴 шлюз закрыл поток без message_stop: досинтез (отдано ${sentBytes}Б)`);
   };
   let emptyTimer = null;
   let emptyRetries = 0;
@@ -1947,6 +1983,13 @@ const server = http.createServer((req, res) => {
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
     if (hedgesLaunched >= cfg.maxHedges) return;
+    // Авто-отключение: при загрузке пула >75% дубли не летят — они только жгут сокеты.
+    // Типичная ситуация: пачка параллельных агентов. Одинокую сессию не трогает.
+    const ps = poolSnapshot();
+    if (ps.active + ps.queued > ps.max * 0.75) {
+      stats.hedgeSuppressed = (stats.hedgeSuppressed || 0) + 1;
+      return;
+    }
     hedgeTimer = setTimeout(() => {
       hedgeTimer = null;
       if (finished || aborted) return;
@@ -2104,6 +2147,13 @@ const server = http.createServer((req, res) => {
                 makeUpstream('другая модель');
                 return;
               }
+              // Каталог говорит, что модель есть, а шлюз сказал «нет» — ложный отказ,
+              // повторяем как транзиентную ошибку. Бюджет retryBudgetMs ограничит.
+              if (catalogHas(wasModel) === true) {
+                log(`${req.method} ${reqPath} ${wasModel} есть в каталоге, но шлюз отказал — ложный model_not_found, повтор`);
+                attemptDone(upReq, `ложный model_not_found на ${wasModel}`, 1000);
+                return;
+              }
               log(`${req.method} ${reqPath} замены нет: у ${upstream.host} нет ни одной подходящей модели — отдаю ошибку клиенту`);
               forwardBuffered(buf, headers);
             });
@@ -2112,6 +2162,7 @@ const server = http.createServer((req, res) => {
           if (isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
+            log(`${req.method} ${reqPath} -> постоянная ошибка ${status}: ${buf.toString('utf8').slice(0, 200)}`);
             forwardBuffered(buf, headers);
           }
         });

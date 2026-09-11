@@ -146,6 +146,39 @@ case "$base_url" in
         fi
         ;;
 esac
+# ---- Префикс провайдера в имени модели: `aipm/claude-opus-4-6[1m]` ----------
+# Такой запрос уехал НЕ к активному бэкенду, а к названному шлюзу (routeByModel в
+# frontdoor-proxy.js). Бар обязан показать фактический маршрут — иначе получится
+# двойной провайдер `agentrouter/aipm/claude-opus-4-6`, а стрелка маппинга ниже
+# возьмёт тир-карту глобального бэкенда для трафика, ушедшего совсем в другое место.
+#
+# Реестр читаем целиком в память, как settings.json выше: 0 форков, 0 сети. Блокирующий
+# `curl :8200` отсюда убран намеренно (см. коммент на :119) — возвращать его нельзя.
+#
+# 🪤 Имя обязано быть КЛЮЧОМ (`"aipm":`), а не просто подстрокой: в том же файле лежит
+# `"modelmap": "aipm-modelmap.json"`, и поиск по голому `aipm` совпадал бы всегда.
+#
+# Алиас (`ar`) резолвим в полное имя ЗНАЧЕНИЕМ ключа: у провайдера значение — объект
+# (`"aipm": {`), regex на строку не сматчится и останется само имя; у алиаса значение —
+# строка (`"ar": "agentrouter"`), и мы берём её. Это важно: подписи и `map_prefix` ниже
+# знают только полные имена, короткий `ar` провалился бы в catch-all без тир-карты.
+case "$model_id" in
+    */*)
+        mp_head="${model_id%%/*}"
+        if [[ "$mp_head" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            mp_reg=""
+            [ -f "$PROF/.claude/backends.json" ] && mp_reg="$(<"$PROF/.claude/backends.json")"
+            if [ -n "$mp_reg" ] && [[ "$mp_reg" == *"\"$mp_head\":"* ]]; then
+                if [[ "$mp_reg" =~ \"$mp_head\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
+                    raw_target="${BASH_REMATCH[1]}"     # алиас → полное имя
+                else
+                    raw_target="$mp_head"               # сам провайдер
+                fi
+                model_id="${model_id#*/}"
+            fi
+        fi
+        ;;
+esac
 if [ -z "$raw_target" ]; then
 case "$helper" in
     *fm-active-key.txt*|*freemodel*) raw_target="apihelper" ;;
@@ -165,6 +198,7 @@ case "$helper" in
     *kktoken-active-key.txt*)        raw_target="kktoken" ;;
     *hcnsec-active-key.txt*)         raw_target="hcnsec" ;;
     *aipm-active-key.txt*)           raw_target="aipm" ;;
+    *wisdomsatan-active-key.txt*)    raw_target="wisdomsatan" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
 if [ -z "$raw_target" ]; then
@@ -197,6 +231,11 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20162*)        raw_target="hcnsec" ;;
         *localhost:20163*)        raw_target="aipm" ;;
         *127.0.0.1:20163*)        raw_target="aipm" ;;
+        # :20164 (wisdomsatan) — та же причина, что у :20162 выше: без явной пары строк
+        # порт попадает под catch-all `*localhost:201[6-9][0-9]*` и шлюз показывается
+        # как `Custom🧪`.
+        *localhost:20164*)        raw_target="wisdomsatan" ;;
+        *127.0.0.1:20164*)        raw_target="wisdomsatan" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
@@ -206,6 +245,7 @@ if [ -z "$raw_target" ]; then
         *kktoken.cc*)             raw_target="kktoken" ;;
         *api.hcnsec.cn*)          raw_target="hcnsec" ;;
         *aipm9527.online*)        raw_target="aipm" ;;
+        *api.wisdomsatan.club*)   raw_target="wisdomsatan" ;;
         *localhost:8190*)         raw_target="notion" ;;
         *agentrouter.org*)        raw_target="agentrouter" ;;
         *cc.freemodel.dev*)       raw_target="apihelper" ;;
@@ -235,6 +275,7 @@ case "$raw_target" in
     kktoken)                     provider="kktoken" ;;
     hcnsec)                      provider="hcnsec" ;;
     aipm)                        provider="aipm" ;;
+    wisdomsatan)                 provider="wisdomsatan" ;;
     custom)                      provider="Custom🧪" ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
@@ -260,19 +301,37 @@ if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; the
         kktoken)     map_prefix="kktoken" ;;
         hcnsec)      map_prefix="hcnsec" ;;
         aipm)        map_prefix="aipm" ;;
+        wisdomsatan) map_prefix="wisdomsatan" ;;
         Custom*)     map_prefix="custom" ;;
     esac
     if [ -n "$map_prefix" ]; then
         mmf="$ROUTING/${map_prefix}-modelmap.json"
         if [ -f "$mmf" ]; then
             mm_raw="$(<"$mmf")"
-            # определяем тир модели (зеркало TIER_RE из keepalive-proxy.js)
+            # определяем тир модели (зеркало TIER_RE + isGptLike из keepalive-proxy.js)
+            #
+            # 🪤 gpt проверяется ПЕРВЫМ и отдельно от тиров — ровно так же, как в прокси:
+            # ветка isGptLike() там стоит ДО маппинга тиров (keepalive-proxy.js:1192,
+            # «gpt-модели уходят на конвертер всегда — до и независимо от маппинга»),
+            # и `mm.gpt` перебивает всё остальное. Без этой ветки бар печатал
+            # `agentrouter/gpt-5.6-sol[1m]` на запросе, который прокси уже переписал в
+            # `claude-opus-5[1m]` — то есть врал про фактическую модель ровно в том
+            # случае, ради которого стрелка и заведена (поймано владельцем 2026-09-11).
+            #
+            # Классы посимвольно, а не `${model_id,,}`: нижний регистр через `,,` — это
+            # bash 4+, а на macOS bash 3.2, и весь скрипт намеренно держится 3.2 (см.
+            # комментарии про BSD выше). `chatgpt` отдельной альтернативы не требует —
+            # он содержит `gpt` и покрыт первым классом.
             mm_tier=""
-            case "$model_id" in
-                *[Oo]pus*)   mm_tier="opus" ;;
-                *[Ss]onnet*) mm_tier="sonnet" ;;
-                *[Hh]aiku*)  mm_tier="haiku" ;;
-            esac
+            if [[ "$model_id" =~ [Gg][Pp][Tt]|[Oo][0-9]|[Dd][Aa][Vv][Ii][Nn][Cc][Ii] ]]; then
+                mm_tier="gpt"
+            else
+                case "$model_id" in
+                    *[Oo]pus*)   mm_tier="opus" ;;
+                    *[Ss]onnet*) mm_tier="sonnet" ;;
+                    *[Hh]aiku*)  mm_tier="haiku" ;;
+                esac
+            fi
             if [ -n "$mm_tier" ]; then
                 # извлекаем значение тира из JSON ("opus": "claude-opus-5")
                 mm_val=""
@@ -507,6 +566,8 @@ elif [ "$provider" = "hcnsec" ] && [ -f "$ROUTING/hcnsec-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/hcnsec-sessions.json" "$PROF/.claude/hcnsec-active-key.txt" "hn/balance" 90
 elif [ "$provider" = "aipm" ] && [ -f "$ROUTING/aipm-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/aipm-sessions.json" "$PROF/.claude/aipm-active-key.txt" "ap/balance" 90
+elif [ "$provider" = "wisdomsatan" ] && [ -f "$ROUTING/wisdomsatan-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/wisdomsatan-sessions.json" "$PROF/.claude/wisdomsatan-active-key.txt" "ws/balance" 90
 fi
 
 # ---- render ----------------------------------------------------------------

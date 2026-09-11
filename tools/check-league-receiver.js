@@ -1902,6 +1902,22 @@ async function main() {
     { role: ajPrivMe.role, canUpload: ajPrivMe.canUpload, groups: ajPrivMe.groups });
   check('токен новой установки не мелькнул в журнале ноды', !idout.includes(AJ_TOKEN));
 
+  // 🪤 11.09: заявка с битым ником. До санитайза /apply клал в members.json что угодно —
+  // две записи с U+FFFD-кашей висели в админке до ручной чистки. nickClean обязан
+  // фильтровать И здесь, не только в срезах и autojoin.
+  console.log('\nзаявка: ник санируется на входе, а не падает в members.json:');
+  const badNick = await iq('POST', '/apply', { nick: '��-����', about: 'битые байты' }, null);
+  check('заявка с нечитаемым ником отвергнута 400 — битых байтов в реестре не будет',
+    badNick.st === 400 && /nick/i.test(badNick.j.error || ''), badNick.j);
+  const okNick = await iq('POST', '/apply', { nick: '  Честный Друг  ', about: 'нормальная заявка' }, null);
+  const okRec = okNick.st === 200 ? Object.values(rdJ('members.json')).find(r => r && r.status === 'pending') || {} : {};
+  check('заявка с нормальным ником принята, ник обрезан и без краёв',
+    okNick.st === 200 && okRec.nick === 'Честный_Друг', { st: okNick.st, nick: okRec.nick });
+  const badAbout = await iq('POST', '/apply', { nick: 'Ещё Один', about: 'x'.repeat(400) }, null);
+  const aboutRec = badAbout.st === 200 ? Object.values(rdJ('members.json')).find(r => r && r.nick === 'Ещё_Один') || {} : {};
+  check('about пережат потолком 280, а не записан целиком',
+    badAbout.st === 200 && (aboutRec.about || '').length <= 280, (aboutRec.about || '').length);
+
   console.log('\nудаление участника админом: не reject-статус, а настоящая чистка записи:');
   // Зачем ручка: 11.09 у друга после нескольких заявок в members.json остался дубль
   // (look без installId) и rejected-запись с битым ником — reject только меняет статус,

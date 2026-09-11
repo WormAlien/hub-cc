@@ -2456,8 +2456,13 @@ function handleApply(req, res, raw, addr) {
     let b;
     try { b = JSON.parse(raw); } catch { return json(res, 400, { error: 'тело не JSON' }); }
     if (!b || typeof b !== 'object') return json(res, 400, { error: 'тело не JSON' });
-    const nick = typeof b.nick === 'string' ? b.nick.trim().slice(0, NICK_MAX) : '';
-    if (!nick) return json(res, 400, { error: 'нужен nick — под каким именем тебя показывать' });
+    // 🪤 11.09: ник — через nickClean, как везде. Прямой trim().slice() пропускал
+    // ЛЮБЫЕ символы, и заявка от 10.09 легла в members.json с битыми байтами
+    // (U+FFFD-каша в админке). nickClean не только фильтрует алфавит — он
+    // выбрасывает мусор, который не выживает перекодировку.
+    const nick = nickClean(b.nick);
+    if (!nick) return json(res, 400, { error: 'нужен nick (2–20 символов, буквы/цифры/_.-)'
+        + ' — под каким именем тебя показывать' });
     const about = typeof b.about === 'string' ? b.about.trim().slice(0, 280) : '';
     const st = membersState();
     const members = { ...(st.map || {}) };

@@ -11045,13 +11045,14 @@ function leagueApiRoute(req, res) {
         if (M === 'GET') { handleLeagueAdminMembers(req, res); return true; }
         return only('GET');
     }
-    // Четыре действия админа. Поля у каждого свои: лишнее в теле отсекает `leagueBodyPick`,
+    // Действия админа. Поля у каждого свои: лишнее в теле отсекает `leagueBodyPick`,
     // поэтому список полей здесь — это и есть контракт ручки, а не украшение.
     const ADMIN_ACTIONS = {
         approve: { fields: ['groups'], what: 'одобрение заявки' },
         reject: { fields: [], what: 'отклонение заявки' },
         grant: { fields: ['canUpload'], what: 'право на файлы' },
         role: { fields: ['role'], what: 'смену роли' },
+        remove: { fields: [], what: 'удаление участника' },
     };
     const adm = /^\/admin\/([a-z]{1,16})$/.exec(tail);
     if (adm && ADMIN_ACTIONS[adm[1]]) {

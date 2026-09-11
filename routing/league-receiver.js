@@ -2697,6 +2697,57 @@ function handleAdminReject(req, res, body, me) {
     const mid = String((body || {}).memberId || '').trim();
     adminPatch(res, me, mid, { status: 'rejected', groups: [] }, 'заявка отклонена');
 }
+// Удаление записи участника целиком. 11.09: reject меняет только статус, и в members.json
+// навечно копятся дубли (заявка без installId) и rejected-записи с битыми никами — админка
+// показывает их всех, и убрать их нечем. Здесь запись исчезает из members.json, из состава
+// групп и гасит её приглашения (права проверяются в момент размена, но файл чистим сами).
+// Срез slices/<installId>.json не трогаем: рейтинг — история, а не право доступа; удалить
+// его руками на ноде можно всегда, а автоматом сносить накопленное нельзя.
+// 🔴 Нельзя удалить последнего активного админа и самого себя — та же защита, что у role.
+function handleAdminRemove(req, res, body, me) {
+    if (!adminGate(res, me)) return;
+    const mid = String((body || {}).memberId || '').trim();
+    if (!MID_RE.test(mid)) return json(res, 400, { error: 'memberId — 16 символов [a-f0-9]' });
+    if (mid === me.memberId) {
+        return json(res, 409, { error: 'удалить себя нельзя — сначала передай роль или удали участника',
+            hint: 'DELETE /me — если хочешь уйти сам' });
+    }
+    const st = membersState();
+    if (st.state !== 'ok') return json(res, 503, { error: 'members.json не читается' });
+    const rec = (st.map || {})[mid];
+    if (!rec || typeof rec !== 'object') return json(res, 404, { error: 'такого участника нет' });
+    if (isAdmin(rec) && rec.status === 'active' && adminCount() <= 1) {
+        return json(res, 409, { error: 'это последний активный админ — удалить его нельзя',
+            hint: 'сначала назначь админом кого-то ещё' });
+    }
+    const members = { ...st.map };
+    delete members[mid];
+    if (!writeState(MEMBERS_FILE, members, 0o600)) {
+        return json(res, 507, { error: 'members.json не записался — ничего не изменено' });
+    }
+    // Состав групп — согласие реестра с записью обязаны держать мы (см. approve).
+    const gmap = { ...groupsMap() };
+    let dirty = false;
+    for (const [gid, grp] of Object.entries(gmap)) {
+        const list = Array.isArray(grp.members) ? grp.members.filter(x => x !== mid) : [];
+        if (list.length !== (grp.members || []).length) { gmap[gid] = { ...grp, members: list }; dirty = true; }
+    }
+    if (dirty && !writeState(GROUPS_FILE, gmap)) {
+        log(`groups.json не записался при удалении ${mid}: состав групп отстал — почисти руками`);
+    }
+    // Приглашения удалённого гаснут сами (проверка поручителя в момент размена), но
+    // файл чистим: иначе в invites.json копятся коды мёртвых поручителей.
+    try {
+        const inv = JSON.parse(fs.readFileSync(INVITES_FILE, 'utf8') || '{}');
+        let invDirty = false;
+        for (const [code, rec2] of Object.entries(inv)) {
+            if (rec2 && rec2.by === mid) { delete inv[code]; invDirty = true; }
+        }
+        if (invDirty) writeState(INVITES_FILE, inv, 0o600);
+    } catch { /* приглашений нет или не читаются — не повод отказывать в удалении */ }
+    log(`админ ${me.memberId}: запись ${mid} (${rec.nick || 'без ника'}) удалена целиком`);
+    json(res, 200, { ok: true, memberId: mid });
+}
 function handleAdminGrant(req, res, body, me) {
     if (!adminGate(res, me)) return;
     const mid = String((body || {}).memberId || '').trim();
@@ -2952,6 +3003,7 @@ function handler(req, res) {
         const tail = u.pathname.slice(7);
         const fn = tail === 'approve' ? handleAdminApprove
             : tail === 'reject' ? handleAdminReject
+            : tail === 'remove' ? handleAdminRemove
             : tail === 'grant' ? handleAdminGrant
             : tail === 'role' ? handleAdminRole : null;
         if (fn) {

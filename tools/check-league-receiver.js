@@ -1902,6 +1902,57 @@ async function main() {
     { role: ajPrivMe.role, canUpload: ajPrivMe.canUpload, groups: ajPrivMe.groups });
   check('токен новой установки не мелькнул в журнале ноды', !idout.includes(AJ_TOKEN));
 
+  console.log('\nудаление участника админом: не reject-статус, а настоящая чистка записи:');
+  // Зачем ручка: 11.09 у друга после нескольких заявок в members.json остался дубль
+  // (look без installId) и rejected-запись с битым ником — reject только меняет статус,
+  // строки копятся в админке вечно. Удаление убирает запись целиком и вычищает группы.
+  const RM_INST = 'c3'.repeat(8);
+  const rmTok = crypto.randomBytes(24).toString('base64url');
+  const rmj = await iq('POST', '/autojoin', { installId: RM_INST, nick: 'к удалению', token: rmTok }, null);
+  check('жертва удаления заведена и активна', rmj.st === 200 && rmj.j.status === 'active', rmj.j);
+  const rmMe = await iq('GET', '/me', undefined, rmTok);
+  const rmMid = rmMe.j.memberId;
+  // Приглашений у не-админа не бывает (выдаёт только админ), так что гасить нечего —
+  // но проверка поручителя по записи всё равно обязана держать: если удалённый был
+  // админом и успел выдать код, тот обязан умереть. Заведём такой случай ниже на M2.
+  const delSelf = await iq('POST', '/admin/remove', { memberId: rmMid }, rmTok);
+  check('админскую ручку зовёт только админ: сама жертва получить 403, а не удалить себя',
+    delSelf.st === 403, delSelf.j);
+  const delLast = await iq('POST', '/admin/remove', { memberId: M0 });
+  check('🔴 сам себя админ удалить не может: ручка без защиты оставляла лигу без админов',
+    delLast.st === 409 || delLast.st === 400, delLast.j);
+  const rmDone = await iq('POST', '/admin/remove', { memberId: rmMid });
+  const memAfter = rdJ('members.json');
+  check('админ удаляет участника: записи нет вовсе, а не status=rejected',
+    rmDone.st === 200 && !(rmMid in memAfter), { st: rmDone.st, осталась: rmMid in memAfter });
+  check('токен удалённого мёртв немедленно, без рестарта',
+    (await iq('GET', '/me', undefined, rmTok)).st === 401);
+  const gAfter = rdJ('groups.json')[GID_A] || { members: [] };
+  check('из состава групп запись вычищена тоже',
+    !gAfter.members.includes(rmMid), gAfter.members);
+  check('токен удалённого не мелькнул в журнале ноды', !idout.includes(rmTok));
+  const delGhost = await iq('POST', '/admin/remove', { memberId: 'ab'.repeat(8) });
+  check('несуществующего участника удалить нельзя — 404, а не молчаливый ok',
+    delGhost.st === 404, delGhost.j);
+  // Активный ВТОРОЙ админ удаляем, когда админов двое: это законно, защита — только
+  // от потери последнего. Поднимаем M2 админом, он выдаёт приглашение, потом его
+  // удаляем — код обязан умереть вместе с поручителем.
+  const memNow = rdJ('members.json');
+  if (memNow[M2]) {
+    await iq('POST', '/admin/role', { memberId: M2, role: 'admin' });
+    const invAdm = await mkInv({ groups: [GID_A] }, TOK2);
+    const delAdm = await iq('POST', '/admin/remove', { memberId: M2 });
+    check('второго админа удалить можно: защита только от последнего',
+      delAdm.st === 200 && !(M2 in rdJ('members.json')), { st: delAdm.st });
+    const jj = await tryJoin(invAdm.code);
+    // 404 — запись кода вычищена из invites.json самой ручкой удаления;
+    // 410 — код на месте, но валидация отвергла мёртвого поручителя. Оба — смерть
+    // приглашения, разница только в том, кто убил: файл или проверка.
+    check('приглашение удалённого АДМИНА гаснет: чисткой файла или проверкой поручителя',
+      jj.st === 404 || jj.st === 410, { st: jj.st, body: jj.j, код: invAdm.code });
+  }
+
+
   console.log('\nиспорченный реестр участников и уход из лиги:');
   const goodMembers = fs.readFileSync(IP('members.json'));
   fs.writeFileSync(IP('members.json'), 'это не json');
@@ -1912,11 +1963,12 @@ async function main() {
     (await iq('GET', '/health', undefined, null)).st === 200);
   fs.writeFileSync(IP('members.json'), goodMembers);
   check('починили файл — работает снова, и снова без рестарта', (await iq('GET', '/me')).st === 200);
-  const bye = await iq('DELETE', '/me', undefined, TOK2);
+    // Уход из лиги — на живом участнике: M2 уже удалён секцией выше, autojoin-сосед заведён раньше.
+const bye = await iq('DELETE', '/me', undefined, AJ_TOKEN);
   check('уйти из лиги может каждый: DELETE /me, и дальше 401 везде',
     bye.st === 200 && bye.j.status === 'left'
-    && (await iq('GET', '/me', undefined, TOK2)).st === 401, bye.j);
-  check('токен ушедшего не мелькнул в журнале ноды', !idout.includes(TOK2));
+    && (await iq('GET', '/me', undefined, AJ_TOKEN)).st === 401, bye.j);
+  check('токен ушедшего не мелькнул в журнале ноды', !idout.includes(AJ_TOKEN));
   idchild.kill();
 
   child.kill();

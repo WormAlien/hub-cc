@@ -271,6 +271,12 @@ async function main() {
   check('все ручки зарегистрированы', Object.values(R).every(v => v > 0), R);
   check('вложение проверяется РАНЬШЕ чата (в пределах GET)', R.att > 0 && R.att < R.get, { att: R.att, getChat: R.get });
   check('чат проверяется РАНЬШЕ общей ручки лиги', R.get > 0 && R.get < R.all, { chat: R.get, league: R.all });
+  // 11.09: пятое действие админа — remove. Кнопка «✕» в админке зовёт именно его, и
+  // если строки нет в таблице хаба, кнопка получит 404 от самого хаба — при живом
+  // приёмнике. Ровно тот класс «панель врёт», который уже ловили в деньгах.
+  check('ручка удаления участника проведена через хаб (ADMIN_ACTIONS.remove)',
+    /remove:\s*\{\s*fields:\s*\[\]\s*,\s*what:\s*'удаление участника'\s*\}/.test(SRC),
+    SRC.match(/ADMIN_ACTIONS[\s\S]{0,400}/)?.[0]);
 
   console.log('\nчтение чата:');
   fs.rmSync(cfgFile);

@@ -31850,10 +31850,16 @@ function ladRowPending(x) {
 function ladRowMember(x) {
   const mid = ladEsc(x.memberId);
   const admin = x.role === 'admin';
+  const self = LAD.me && LAD.me.memberId === x.memberId;
   const badge = admin
     ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber/15 text-amber border border-amber/40">админ</span>'
     : '';
   const dead = x.status !== 'active';
+  // Крестик удаления: у себя его нет — приёмник и так откажет (409 «себя нельзя»),
+  // а кнопка, которая заведомо не работает, хуже отсутствующей.
+  const delBtn = self ? '' : `<button type="button" data-lad-del="${mid}"
+      title="убрать запись целиком: participants.json, группы, приглашения"
+      class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-crimson hover:border-crimson/40 transition">✕</button>`;
   return `<div class="rounded-lg border border-line-soft bg-surface px-3 py-2 flex items-center gap-3 ${dead ? 'opacity-50' : ''}">
     <span class="text-sm text-ink flex-1 truncate">${ladEsc(x.nick || '(без ника)')} ${badge}
       ${dead ? `<span class="text-[10px] text-faint ml-1">${ladEsc(x.status)}</span>` : ''}</span>
@@ -31867,6 +31873,7 @@ function ladRowMember(x) {
       class="text-xs px-2 py-1 rounded border transition ${admin
         ? 'border-amber/40 text-amber hover:bg-amber/10'
         : 'border-line-soft text-muted hover:text-ink'}">${admin ? 'разжаловать' : 'сделать админом'}</button>
+    ${delBtn}
   </div>`;
 }
 function ladRender() {
@@ -31915,6 +31922,16 @@ function ladRender() {
         if (on && !confirm('Разжаловать админа?\n\nОн потеряет доступ к этой вкладке и не сможет принимать заявки.')) return;
         ladAct('role', { memberId: b.getAttribute('data-lad-role'), role: on ? 'member' : 'admin' },
           on ? 'роль снята' : 'теперь админ');
+      });
+    }
+    for (const b of mb.querySelectorAll('[data-lad-del]')) {
+      b.addEventListener('click', () => {
+        const row = LAD.rows.find(r => r.memberId === b.getAttribute('data-lad-del')) || {};
+        const who = row.nick || '(без ника)';
+        if (!confirm(`Удалить участника «${who}» целиком?\n\n`
+          + 'Исчезнет запись в members.json, состав групп, его приглашения; токен умрёт сразу.\n'
+          + 'Рейтинг (срезы) останется — это история. Отменить нельзя.')) return;
+        ladAct('remove', { memberId: b.getAttribute('data-lad-del') }, 'участник удалён');
       });
     }
   }

@@ -178,17 +178,13 @@ function stripClaudeOnlyFields(body) {
         return Buffer.from(JSON.stringify(j), 'utf8');
     } catch (e) { return null; }
 }
-// 🪤 11.09 (вечер), живой бой: ОДИН image-блок в истории убивает сессию насовсем.
-// Канал glm-5.3 у AgentRouter не принимает картинки — весь запрос отвергается
-// «Upstream rejected the request as invalid». Ночная сессия прожила с картинкой
-// в истории 9 часов (канал её терпел), в 19:42 МСК шлюз сменил канал — и каждый
-// запрос с ней стал умирать. Бисект по реальному телу: без image — 200 за 12с,
-// с ним — 500 на каждом повторе. Картинка модели через этот канал всё равно
-// недоступна, поэтому для не-claude целей заменяем её текстовой меткой — запрос
-// остаётся валидным, сессия жива, модель знает, что картинка была. claude-целям
-// изображения сохраняем (их родной API умеет). Покрыты и картинки в tool_result
-// (скриншоты cdt/playwright) — их ждёт та же смерть.
-const IMAGE_PLACEHOLDER = { type: 'text', text: '[image removed: the model behind this gateway does not accept images]' };
+// 🪤 11–12.09, живой бой: image-блок в истории убивает сессию насовсем — канал
+// отвергает ВЕСЬ запрос «Upstream rejected the request as invalid». По словам
+// владельца, картинки отвергают только эти модели, все остальные принимают.
+// Список явный и точный: новая модель — одна строка, никакой магии масок
+// (маска /^glm-\d/ ловила и vision-варианты — поймано тестом до выката).
+const IMG_REJECTING_MODELS = new Set(['glm-5.3', 'deepseek-v4-flash']);
+const IMAGE_PLACEHOLDER = { type: 'text', text: '[image removed: this model cannot accept images]' };
 function stripImageBlocks(body) {
     try {
         const j = JSON.parse(body.toString('utf8') || '{}');
@@ -2331,15 +2327,18 @@ const server = http.createServer((req, res) => {
     // claude-целей поля сохраняем (это их родной API), прочим моделям они всё равно
     // ничего не значат — срезаем до отправки. Применяется и к ремапнутым телам,
     // и к passthrough (модель может прийти уже конечной, например glm-5.3).
-    // Той же болезнью страдают image-блоки (см. stripImageBlocks) — канал glm их
-    // не принимает, срезаем вместе с полями одним гейтом не-claude цели.
+    // Картинки — отдельная болезнь и ОТДЕЛЬНЫЙ гейт (см. IMG_REJECTING_RE): не по
+    // классу модели, а по доказанной неспособности канала, чтобы не ослеплять
+    // не-claude модели с vision.
     try {
       const outModel = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
       if (outModel && !/^claude[-_]/i.test(outModel)) {
         const stripped = stripClaudeOnlyFields(reqBody);
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
-        const noimg = stripImageBlocks(reqBody);
-        if (noimg) { reqBody = noimg; stats.remaps += 1; }
+        if (IMG_REJECTING_MODELS.has(outModel)) {
+          const noimg = stripImageBlocks(reqBody);
+          if (noimg) { reqBody = noimg; stats.remaps += 1; }
+        }
       }
     } catch (e) { /* не-JSON тело — срезать нечего */ }
     // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.

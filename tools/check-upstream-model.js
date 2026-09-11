@@ -148,6 +148,15 @@ if (!imgMatch) {
 if (!/stripImageBlocks\(reqBody\)/.test(src)) {
   failures.push('обработчик запроса не зовёт stripImageBlocks(reqBody) — срезка картинок не подключена');
 }
+// Гейт срезки — явный список моделей-отвергателей (12.09, слова владельца:
+// картинки не принимают только glm-5.3 и deepseek-v4-flash, остальные — все —
+// принимают). Никаких масок: /^glm-\d/ ловила и vision-варианты — поймано тестом.
+if (!/IMG_REJECTING_MODELS\.has\(outModel\)/.test(src)) {
+  failures.push('срезка картинок не заперта на явный список IMG_REJECTING_MODELS');
+}
+if (!/new Set\(\['glm-5\.3', 'deepseek-v4-flash'\]\)/.test(src)) {
+  failures.push('в IMG_REJECTING_MODELS должны быть glm-5.3 и deepseek-v4-flash (точные id из каталога)');
+}
 
 // ── content-length пересчитывается ВСЕГДА, не только при ремапе ──
 // 11.09, живой бой: срезка context_management/output_config укорачивала passthrough-

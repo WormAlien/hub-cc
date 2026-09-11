@@ -638,7 +638,7 @@ git config core.hooksPath .githooks
 | **HelpCoder** | активна   | аккаунты helpcoder.cc (New-API, OpenAI-совместимый), квоты через cookie-`/api/user/self`, авторег username+password (без email/капчи), активация через API Helper | `/api/helpcoder/{sessions,active-key,refresh-quota,activate,add,autoreg,models}` |
 | **Video API** | активна   | хранилище ключей видео-провайдеров (CRUD), триал-каталог | `/api/video/*` |
 | **Картинки API** | активна | менеджер аккаунтов картинко-провайдеров (NanoBanana/fal/Replicate/Imagen…), email-метка + ключ, триал-каталог | `/api/image/*` |
-| **Плагины / MCP** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json` | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle` |
+| **Плагины / MCP / Скиллы** | активна | слева плагины Claude Code (тоггл `enabledPlugins`, ★ рекомендованные), справа MCP-серверы из `~/.claude.json`, снизу во всю ширину скиллы (тоггл `skillOverrides`) | `/api/plugins/list`, `/api/settings/apply`, `/api/mcp/list`, `/api/mcp/toggle`, `/api/skills/list` |
 | **Настройки** | активна   | **выбор цветовой темы** (22 палитры: 2 под рабочий стол владельца / 4 спокойные / 14 ядрёные / 2 светлые; список свёрнут, активная закреплена; `localStorage: dashboard-theme`), обновление дашборда, OmniRoute env, JSON-редактор `settings.json` + бэкапы (список свёрнут, счётчик в заголовке), **тоггл статус-бара CC** и **автокомпакта** | `/api/settings/*`, `/api/env`, `/api/statusline/default`, `/api/dashboard/update-*` |
 | **TokenRouter** | архив («Чтим память») | аккаунты, usage, health   | `/api/tokenrouter/*` |
 | **Devin**     | архив     | сессии + квоты (daily/weekly %)     | `/api/session/*` |
@@ -2903,7 +2903,7 @@ base32-секрет (`A-Z2-7`, от 10 символов) в пароль и в �
   нормально, не сложилось у читалки. Как у остальных ручек этого файла — фронт разбирает
   тело, а не код.
 
-## Плагины / MCP — вкл/выкл
+## Плагины / MCP / Скиллы — вкл/выкл
 
 `GET /api/plugins/list` отдаёт объединение установленных
 (`~/.claude/plugins/installed_plugins.json`) и включённых
@@ -2918,6 +2918,30 @@ MCP-серверы (правая колонка): `GET /api/mcp/list` читае
 флага «выключен», поэтому `POST /api/mcp/toggle` перекладывает конфиг сервера
 в стэш-ключ `_disabledMcpServers` (Claude Code его игнорирует) и обратно.
 Перед каждой записью — timestamped-бэкап `~/.claude.json.bak-*`.
+
+Скиллы (секция во всю ширину, добавлена 2026-09-11): `GET /api/skills/list` —
+59 записей из трёх источников, потому что списка скиллов не отдаёт ни CLI, ни
+какой-либо файл (`/skills` не показывает встроенные, `/context` интерактивен).
+Личные сканируются из `~/.claude/skills/*/SKILL.md`, плагинные — из
+`installPath` каждого плагина (`skills/*/SKILL.md` **и** `commands/*.md`:
+команды Claude Code отдаёт тем же Skill-тулом), встроенные держатся
+захардкоженным снимком. Тоггл шлёт **весь** `skillOverrides` через
+`/api/settings/apply`, как и плагины.
+
+Три вещи, которые ломают наивную реализацию:
+
+- **Ключ — имя каталога, а не `name` из frontmatter.** У 8 из 14 личных скиллов
+  они расходятся (`taste-brutalist-skill` → `industrial-brutalist-ui`), а CC
+  зовёт их по каталогу. Ключ по frontmatter записался бы молча и не сработал.
+- **Плагинные скиллы `skillOverrides` не управляются вообще** — формы ключа
+  `plugin:skill` нет, выключатель один: весь плагин. Отдаются `controllable:false`.
+- **Проектный scope бьёт пользовательский** (`.claude/settings.json` >
+  `~/.claude/settings.json`), а панель пишет в самый слабый — поэтому список
+  отдаёт `shadowedBy`, иначе он показывал бы «ВКЛ» на выключенном скилле.
+
+Значения `skillOverrides`: `on` / `name-only` / `user-invocable-only` / `off`,
+**отсутствие ключа = `on`** (включение = удаление ключа). Рестарт Claude Code,
+в отличие от плагинов и MCP, не нужен — он следит за файлами настроек.
 
 ---
 

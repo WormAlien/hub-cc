@@ -168,6 +168,45 @@ t('табло хаба не пугает: красное только насто
     return true;
 });
 
+t('«Здоровье» знает КАЖДЫЙ keepalive из реестра — иначе поднятый шлюз зовётся «осиротевшим»', () => {
+    // 🪤 Регресс на 11.09. Таблица handleHealth перечисляет keepalive'ы поимённо, и AIPM
+    // :20163 в неё не попал. Порты шлюзов лежат ВНУТРИ диапазона кастомов 20150–20250,
+    // поэтому промах не выглядит промахом: строка уходит в ветку «осиротевших конвертеров»
+    // и опрашивается чужим путём /__custom/api/status, которого у keepalive нет. Итог —
+    // живой шлюз (200 на /__keepalive/api/status, обслуживает трафик) показан как
+    // «Порт :20163 (осиротел)» и down. С автоподъёмом по префиксу цена выросла: шлюзы
+    // встают сами, а слово «осиротел» подталкивает владельца их убить — то есть оборвать
+    // чужое окно. Источник правды один — keepaliveInstances(), Health обязан его покрывать.
+    const proxy = read('routing/transparent-proxy.js');
+
+    const portOf = new Map();
+    for (const m of proxy.matchAll(/const (\w+_KEEPALIVE_PORT)\s*=\s*(?:Number\(process\.env\.\w+\s*\|\|\s*)?(\d{5})/g)) {
+        portOf.set(m[1], Number(m[2]));
+    }
+    if (!portOf.size) return 'не нашёл ни одной константы *_KEEPALIVE_PORT';
+
+    const instStart = proxy.indexOf('function keepaliveInstances()');
+    if (instStart < 0) return 'keepaliveInstances() не найдена';
+    const instBlock = proxy.slice(instStart, proxy.indexOf('\n}', instStart));
+    const instances = [...instBlock.matchAll(/\[(\w+_KEEPALIVE_PORT)\]:\s*\{\s*name:\s*'([^']+)'/g)]
+        .map(m => ({ name: m[2], port: portOf.get(m[1]), constName: m[1] }));
+    if (instances.length < 8) return `keepaliveInstances() разобрана подозрительно куце: ${instances.length}`;
+
+    const checksStart = proxy.indexOf('const checks = [');
+    if (checksStart < 0) return 'таблица Health (const checks) не найдена';
+    const checksBlock = proxy.slice(checksStart, proxy.indexOf('];', checksStart));
+    const covered = new Set();
+    for (const m of checksBlock.matchAll(/port:\s*(?:Number\(process\.env\.\w+\s*\|\|\s*)?(\d{5})/g)) covered.add(Number(m[1]));
+    for (const m of checksBlock.matchAll(/port:\s*(\w+_KEEPALIVE_PORT)/g)) covered.add(portOf.get(m[1]));
+
+    const missing = instances.filter(i => i.port && !covered.has(i.port));
+    if (missing.length) {
+        return `в таблице Health нет ${missing.map(i => `${i.name} :${i.port}`).join(', ')} — `
+            + 'поднятый шлюз покажется «осиротевшим» и down';
+    }
+    return true;
+});
+
 t('логи разведены по файлу на сервис', () => {
     // Один общий лог не работает на Windows физически: cmd-редирект `>>` не может
     // открыть файл, который держат живые процессы стека, — старт падает молча.

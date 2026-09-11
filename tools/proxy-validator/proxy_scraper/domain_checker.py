@@ -9,6 +9,8 @@ from typing import List, Sequence, Tuple
 
 from .models import DomainCheckResult, DomainTarget, ProxyRecord
 from .strict_checker import StrictProxyChecker, UA_POOL
+import socket
+from typing import Optional
 
 
 STATUS_RE = re.compile(r"^HTTP/\d(?:\.\d)?\s+(\d{3})\b")
@@ -130,6 +132,123 @@ class DomainProxyChecker(StrictProxyChecker):
             return False
         return isinstance(payload.get("data"), dict)
 
+    @staticmethod
+    def _decode_chunked_bytes(payload: bytes) -> bytes:
+        """De-chunk НА БАЙТАХ. Размер куска задан в байтах, и резать по символам нельзя.
+
+        🔴 Именно здесь ломалась проверка живых прокси: панель agentrouter.org китайская,
+        тело приходит chunked, иероглиф занимает 3 байта. Строковый вариант отсчитывал
+        символы — из полного ответа в 6869 байт выходило 1111–3850 байт мусора, `json.loads`
+        падал, и годный адрес объявлялся мёртвым.
+        """
+        out = bytearray()
+        rest = payload
+        sep = b"\r\n"
+        while rest:
+            line, found, rest = rest.partition(sep)
+            if not found:
+                break
+            token = line.split(b";", 1)[0].strip()
+            try:
+                size = int(token, 16)
+            except ValueError:
+                break
+            if size <= 0:
+                break
+            out.extend(rest[:size])
+            rest = rest[size:]
+            if rest.startswith(sep):
+                rest = rest[2:]
+        return bytes(out)
+
+    def read_http_message(self, conn, max_bytes: int = 262144) -> Tuple[int, str]:
+        """Прочитать ответ целиком и вернуть (status, тело). Вся работа — на байтах.
+
+        Раньше путь был «прочитать в str → разобрать str», и на нём тело портилось дважды:
+        `recv` обрывался по первому таймауту, а chunked резался по символам.
+        """
+        raw = self._read_raw_response(conn, max_bytes=max_bytes)
+        head, sep, body = raw.partition(b"\r\n\r\n")
+        if not sep:
+            head, sep, body = raw.partition(b"\n\n")
+        if not sep:
+            head, body = raw, b""
+
+        lines = head.split(b"\r\n") if b"\r\n" in head else head.split(b"\n")
+        status = self._extract_status_code(lines[0].decode("latin-1") if lines else "")
+
+        headers = {}
+        for line in lines[1:]:
+            key, delim, value = line.decode("latin-1").partition(":")
+            if delim:
+                headers[key.strip().lower()] = value.strip()
+
+        if "chunked" in headers.get("transfer-encoding", "").lower():
+            body = self._decode_chunked_bytes(body)
+        else:
+            length = headers.get("content-length", "")
+            if length.isdigit():
+                body = body[: int(length)]
+
+        return status, body.decode("utf-8", errors="replace")[:MAX_BODY_CHARS]
+
+    def read_http_response(self, conn, max_bytes: int = 262144) -> str:
+        """Совместимость: тот же ответ строкой, без разбора тела."""
+        return self._read_raw_response(conn, max_bytes=max_bytes).decode("utf-8", errors="ignore")
+
+    def _read_raw_response(self, conn, max_bytes: int = 262144) -> bytes:
+        """Дочитать ответ ЦЕЛИКОМ: до Content-Length, до конца chunked или до закрытия.
+
+        🔴 Почему не `_recv_text`. Тот выходит из цикла на первом же `socket.timeout`, и на
+        медленном прокси возвращает КУСОК тела. Один таймаут `recv` на медленном канале —
+        это норма, а не конец ответа.
+        """
+        data = bytearray()
+        header_end = -1
+        content_length: Optional[int] = None
+        chunked = False
+        idle = 0
+        deadline = time.monotonic() + max(self.timeout, 5) * 3
+
+        while len(data) < max_bytes and time.monotonic() < deadline:
+            try:
+                chunk = conn.recv(min(8192, max_bytes - len(data)))
+            except socket.timeout:
+                idle += 1
+                # Два молчания подряд считаем концом: дальше ждать смысла нет, но один
+                # таймаут посреди медленной передачи ответ больше не обрубает.
+                if idle >= 2:
+                    break
+                continue
+            except OSError:
+                break
+            if not chunk:
+                break                     # сервер закрыл соединение — тело кончилось
+            idle = 0
+            data.extend(chunk)
+
+            if header_end < 0:
+                marker = data.find(b"\r\n\r\n")
+                if marker >= 0:
+                    header_end = marker + 4
+                    head = bytes(data[:marker]).decode("latin-1").lower()
+                    for line in head.split("\r\n")[1:]:
+                        if line.startswith("content-length:"):
+                            try:
+                                content_length = int(line.split(":", 1)[1].strip())
+                            except ValueError:
+                                content_length = None
+                        elif line.startswith("transfer-encoding:") and "chunked" in line:
+                            chunked = True
+
+            if header_end >= 0:
+                if content_length is not None and len(data) - header_end >= content_length:
+                    break
+                if chunked and data.find(b"0\r\n\r\n", header_end) >= 0:
+                    break
+
+        return bytes(data)
+
     def _request_target(self, record: ProxyRecord, target: DomainTarget) -> int:
         sock = None
         conn = None
@@ -151,8 +270,7 @@ class DomainProxyChecker(StrictProxyChecker):
                 "Connection: close\r\n\r\n"
             )
             conn.sendall(request.encode("ascii", errors="ignore"))
-            text = self._recv_text(conn)
-            status_code, body = self.parse_http_response(text)
+            status_code, body = self.read_http_message(conn)
             if not self.is_success_response(status_code, body, getattr(target, "response", "html")):
                 raise OSError(f"status {status_code or 'unknown'} body-check failed")
             return status_code

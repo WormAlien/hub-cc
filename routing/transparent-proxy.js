@@ -4253,6 +4253,12 @@ async function handleHealth(res) {
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive HCNsec',   port: Number(process.env.HN_KEEPALIVE_PORT || 20162), path: '/__keepalive/api/status', keepalive: true },
+        // 🪤 AIPM :20163 сидит ВНУТРИ диапазона кастомов 20150–20250, и без этой строки
+        // промах по таблице уводил его в ветку «осиротевших конвертеров» ниже — шлюз,
+        // поднятый автоподъёмом по префиксу (`ap/…`), отвечал 200 на /__keepalive/api/status,
+        // а Health рисовал «Порт :20163 (осиротел)» и опрашивал чужим путём /__custom/api/status.
+        // С автоподъёмом цена выросла: шлюзы встают сами, «осиротел» подталкивал их убить.
+        { name: 'Keepalive AIPM',     port: AP_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 

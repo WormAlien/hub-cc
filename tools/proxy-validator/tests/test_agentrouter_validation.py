@@ -9,6 +9,7 @@ Runner: stdlib unittest, no third-party dependency.
 from __future__ import annotations
 
 import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -422,6 +423,104 @@ class ServicesConfigTest(unittest.TestCase):
         self.assertIn("SOCKS4|203.0.113.12:1080", found)
         self.assertIn("HTTPS|203.0.113.13:443", found)
         self.assertIn("HTTP|203.0.113.14:3128", found)
+
+
+
+class ResponseReadingTest(unittest.TestCase):
+    """Тело ответа обязано дочитываться до конца.
+
+    🔴 Замер 11.09: agentrouter.org отвечал 200 и валидным JSON через ВСЕ восемь живых
+    прокси, а проверка объявляла их мёртвыми. Причина в чтении: recv отваливался по
+    таймауту, тело приезжало куском (2491 / 6462 / 3850 / 1593 / 1111 байт на один и тот
+    же ответ), json.loads падал. То есть строгий критерий рубил ГОДНЫЕ адреса.
+    """
+
+    CRLF = "\r\n"
+
+    class FakeSocket:
+        """Отдаёт ответ порциями, изображая медленный прокси."""
+
+        def __init__(self, pieces, timeouts_before=()):
+            self.pieces = list(pieces)
+            self.timeouts_before = set(timeouts_before)
+            self.calls = 0
+
+        def recv(self, _size):
+            self.calls += 1
+            if self.calls in self.timeouts_before:
+                raise socket.timeout("timed out")
+            return self.pieces.pop(0) if self.pieces else b""
+
+    def _checker(self):
+        return DomainProxyChecker(workers=1, timeout=1, retries=0)
+
+    def test_body_split_across_reads_is_assembled(self) -> None:
+        crlf = self.CRLF
+        payload = json.dumps({"success": True, "data": {"quota_per_unit": 500000}}).encode()
+        head = (
+            "HTTP/1.1 200 OK" + crlf
+            + "Content-Type: application/json" + crlf
+            + "Content-Length: " + str(len(payload)) + crlf + crlf
+        ).encode()
+        sock = self.FakeSocket([head, payload[:10], payload[10:]], timeouts_before={3})
+
+        checker = self._checker()
+        status, body = checker.parse_http_response(checker.read_http_response(sock))
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["data"]["quota_per_unit"], 500000)
+        self.assertTrue(checker.is_success_response(status, body, "newapi_status"))
+
+    def test_chunked_body_split_across_reads(self) -> None:
+        crlf = self.CRLF
+        payload = json.dumps({"success": True, "data": {"x": 1}})
+        chunked = (format(len(payload), "x") + crlf + payload + crlf + "0" + crlf + crlf).encode()
+        head = ("HTTP/1.1 200 OK" + crlf + "Transfer-Encoding: chunked" + crlf + crlf).encode()
+        sock = self.FakeSocket([head, chunked[:6], chunked[6:]])
+
+        checker = self._checker()
+        status, body = checker.parse_http_response(checker.read_http_response(sock))
+
+        self.assertEqual(status, 200)
+        self.assertTrue(checker.is_success_response(status, body, "newapi_status"))
+
+
+    def test_chunked_body_with_multibyte_utf8(self) -> None:
+        """Размер chunk задан в БАЙТАХ, а не в символах.
+
+        🔴 Ровно на этом валидатор объявлял мёртвыми живые адреса: панель agentrouter.org
+        китайская и отдаёт тело chunked, один иероглиф занимает 3 байта. Декодер резал уже
+        декодированную строку по символам — из 6869 байт сырого ответа получалось 1111–3850
+        байт мусора, json.loads падал, прокси уходил в отказ.
+        """
+        crlf = self.CRLF
+        payload = json.dumps({"success": True, "data": {"msg": "为保障服务长期运行" * 40}}, ensure_ascii=False)
+        raw_bytes = payload.encode("utf-8")
+        chunked = (
+            format(len(raw_bytes), "x").encode() + crlf.encode()
+            + raw_bytes + crlf.encode()
+            + b"0" + crlf.encode() + crlf.encode()
+        )
+        head = ("HTTP/1.1 200 OK" + crlf + "Transfer-Encoding: chunked" + crlf + crlf).encode()
+        sock = self.FakeSocket([head, chunked[:1500], chunked[1500:]])
+
+        checker = self._checker()
+        status, body = checker.read_http_message(sock)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["data"]["msg"], "为保障服务长期运行" * 40)
+        self.assertTrue(checker.is_success_response(status, body, "newapi_status"))
+
+    def test_stops_once_content_length_is_satisfied(self) -> None:
+        crlf = self.CRLF
+        payload = json.dumps({"success": True, "data": {}}).encode()
+        head = ("HTTP/1.1 200 OK" + crlf + "Content-Length: " + str(len(payload)) + crlf + crlf).encode()
+        sock = self.FakeSocket([head, payload, bytes([255]) * 1024])
+
+        checker = self._checker()
+        checker.read_http_response(sock)
+
+        self.assertLessEqual(sock.calls, 2, "лишние recv после полного тела — ожидание впустую")
 
 
 if __name__ == "__main__":

@@ -361,7 +361,14 @@ function createTap(meta, write = appendRecord) {
             }
           }
           if (!state.usage) return;                                     // нечего писать
-          write({
+          // `m` — имя, которое видел КЛИЕНТ; `am` — модель, реально исполнявшая запрос.
+          // Разойтись они могут на любом шлюзе с тир-картой: keepalive отправляет
+          // наверх цель карты, а в ответе возвращает клиентское имя (MODEL_ECHO), и по
+          // телу отличить их невозможно. Реальную отдаёт заголовком `x-actual-model`.
+          // Пишем `am` только при расхождении: на прямом шлюзе это был бы дубль `m`
+          // в каждой из десятков тысяч строк журнала.
+          const actual = String(h['x-actual-model'] || '').trim();
+          const rec = {
             t: new Date().toISOString(),
             m: state.model || '',
             bk: meta.backend || '',
@@ -369,7 +376,9 @@ function createTap(meta, write = appendRecord) {
             st: sse ? 1 : 0,
             ms: Date.now() - state.started,
             ...state.usage,
-          });
+          };
+          if (actual && actual !== rec.m) rec.am = actual;
+          write(rec);
         } catch (e) { /* молча: счётчик */ }
       },
     };

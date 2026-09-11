@@ -25,10 +25,21 @@
 //
 // Коды возврата: 0 = готово (оба чек-ин-режима печатают маркер AUTOCHECKIN_RESULT {...}),
 //   2 = таймаут ожидания GitHub-логина, 3 = GitHub-сессия в профиле мертва (нужен
-//   ручной вход, пароль и 2FA автоматика не вводит), 4 = не нашёл, чем начать
-//   GitHub-вход, 5 = шлюз отверг OAuth (state/код), 1 = прочая ошибка.
+//   ручной вход, пароль и 2FA автоматика не вводит), 5 = шлюз отверг OAuth (state/код),
+//   1 = прочая ошибка. Про вход через GitHub кодов ДВА, и путать их нельзя:
+//   4 = страница входа действительно переделана: кнопки GitHub нет, а живой /api/status
+//       ОТВЕТИЛ — просто без github_client_id (или /api/oauth/state отказал словами).
+//       Тут чинить нечего до тех пор, пока не посмотришь вёрстку глазами;
+//   6 = край не ответил вовсе: публичная /api/status вернула пусто / не-JSON. Это
+//       рейт-лимит или WAF по IP, вёрстка ни при чём — лечится паузой, а не разбором
+//       страницы. Разведено 10.09: до этого ЛЮБОЙ отказ печатался как «шлюз переделал
+//       страницу входа», и владельца посылали чинить то, чего не ломали.
+//       🪤 Таблица сообщений дашборда (AR_AUTO_CHECKIN_FAIL в routing/transparent-proxy.js)
+//       про код 6 ещё не знает и покажет «скрипт завершился с кодом 6». Это честнее
+//       неверного диагноза, но строку туда добавить надо — задача в трекере ABUSE HUB.
 
 const { chromium } = require('playwright');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -55,10 +66,98 @@ const LOGOUT_MENU_RE = /退出|登出|注销|logout|log ?out|sign ?out|выйт�
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
+// ───── Прокси аккаунта: приезжает файлом, живёт один запуск ───────────────
+//
+// Адрес выбирает РОДИТЕЛЬ (routing/transparent-proxy.js) по id записи пула и кладёт сюда
+// разовым файлом. Почему не аргументом и не переменной среды: и то, и другое видно в
+// списке процессов машины владельца вместе с логином и паролем прокси.
+//
+// 🪤 Отсутствие файла — это НЕ ошибка: значит пул выключен, и браузер идёт как раньше.
+// Отказ «прокси нужен, но не дан» ловится раньше, в родителе: он просто не спавнит нас.
+const PROXY_SEED_DIR = path.join(__dirname, '..', 'routing', 'runtime', 'ar-proxy');
+
+function readProxySeed(label, dir = PROXY_SEED_DIR) {
+    const file = path.join(dir, `${String(label || '')}.json`);
+    let raw = null;
+    try { raw = fs.readFileSync(file, 'utf8'); }
+    catch { return null; }
+    // Удаляем СРАЗУ: файл одноразовый и содержит креды. Он создан текущим прогоном и
+    // пересоздаётся родителем на каждый запуск, поэтому прямое удаление здесь уместно.
+    try { fs.unlinkSync(file); } catch { /* переживём: следующий запуск перезапишет */ }
+    try {
+        const doc = JSON.parse(raw);
+        return (doc && doc.proxy) ? doc.proxy : null;
+    } catch { return null; }
+}
+
+// Прокси → опции launchPersistentContext. Отдельной чистой функцией, чтобы регресс
+// проверял правила БЕЗ запуска браузера.
+//
+// 🔴 Chromium умеет не всё, и умалчивает об этом по-разному: socks4 он не поддерживает
+// вовсе, а SOCKS с логином/паролем ИГНОРИРУЕТ — запрос спокойно уходит напрямую. Второе
+// опаснее первого: тихий уход с домашнего IP под живой GitHub-сессией это ровно тот
+// провал, ради которого пул и написан. Поэтому оба случая — явный отказ до запуска.
+function proxyLaunchOptions(proxy) {
+    if (!proxy) return { ok: true, options: {} };
+    const scheme = String(proxy.scheme || '').toLowerCase();
+    const hostname = String(proxy.hostname || '').trim();
+    const port = Number(proxy.port);
+    if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) {
+        return { ok: false, error: `прокси без адреса или порта (${hostname || '—'}:${proxy.port || '—'})` };
+    }
+    const hasAuth = !!(proxy.user || proxy.pass);
+    if (scheme === 'socks4') {
+        return { ok: false, error: 'socks4 браузер не поддерживает — нужен http/https или socks5 без логина' };
+    }
+    if ((scheme === 'socks' || scheme === 'socks5') && hasAuth) {
+        return { ok: false, error: 'SOCKS с логином и паролем Chromium молча игнорирует (ушёл бы напрямую) — нужен http/https' };
+    }
+    if (!['http', 'https', 'socks', 'socks5'].includes(scheme)) {
+        return { ok: false, error: `неизвестная схема прокси: ${scheme || '—'}` };
+    }
+    const server = `${scheme === 'socks' ? 'socks5' : scheme}://${hostname}:${port}`;
+    return {
+        ok: true,
+        options: {
+            proxy: {
+                server,
+                ...(proxy.user ? { username: proxy.user } : {}),
+                ...(proxy.pass ? { password: proxy.pass } : {}),
+            },
+        },
+    };
+}
+
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
 // Автоподарку человек не нужен: клик, редиректы GitHub-а и колбэк укладываются
 // в считанные секунды. Полторы минуты — с запасом на медленный WAF.
 const AUTO_LOGIN_TIMEOUT_MS = 90 * 1000;
+
+// ───── Пороги ожиданий автоподарка (пересмотрены 10.09) ───────────────────
+// Замер первого инструментированного прогона: Chromium поднимается за 0.8 с, удачный
+// прогон ~19 с, а НЕудачный целиком состоит из фиксированных таймаутов — 22 с, из них
+// 15 с ожидание попапа, которого не будет, и 4.7 с попытка снять эталон. Второй случай
+// (сессия уже мертва на сервере) дал 57 с против 19 с: код искал аватар в шапке
+// страницы /login с потолком 15 с.
+//
+// Общий принцип правки: ждать не «сколько не жалко», а до появления ПРИЗНАКА, что ждать
+// больше нечего. Голые потолки оставлены только там, где признака нет, и они короткие.
+//
+// Кнопки входа SPA дорисовывает после #root, поэтому ждать её надо; но ДВА кандидата
+// ждались последовательно по 10 с — на странице без кнопки это 20 с. Теперь оба ждут
+// одновременно с общим бюджетом.
+const GH_BTN_WAIT_MS = 8000;
+// Попап открывается не по клику, а ПОСЛЕ ответа /api/oauth/state (см. разбор v7 ниже),
+// то есть цена ожидания = один round-trip к шлюзу. 6 с хватает даже медленному WAF, а
+// раньше выхода из ожидания добивается watchOauthState: пришёл отказ — попапа не будет.
+const GH_POPUP_WAIT_MS = 6000;
+// Живы мы или нет, решается гонкой «аватар в шапке / SPA увела на /login» (см. consoleGate).
+// Потолок нужен только на третий случай — белый экран, когда не случилось ни того, ни другого.
+const CONSOLE_GATE_MS = 8000;
+// Эталон «до подарка» своим fetch'ем: живой кабинет отвечает за доли секунды (страница
+// делает тот же запрос на каждой загрузке). Если не ответил за 3 с — это заглушка WAF
+// или мёртвая сессия, и ждать дольше значит просто удлинять прогон.
+const BASELINE_SELF_MS = 3000;
 
 const labelArg = process.argv[2];
 const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
@@ -71,6 +170,13 @@ const profileDir = path.join(PROFILES_DIR, label);
 // моменту разбора от прогона не остаётся НИЧЕГО — 24.08 так и вышло: «автоподарок берёт
 // кэш» проверить было не по чему. Поэтому оба режима чек-ина дублируют вывод в файл.
 // Только они: обычный визит в ЛК живёт минутами и мусорил бы каталогом.
+//
+// Каждая строка ФАЙЛА помечена временем от старта скрипта — иначе «долго» невозможно
+// разобрать: до 10.09 в логе не было ни одной отметки времени, и на вопрос «где ушли
+// 57 секунд» приходилось гадать по порядку строк. В stdout префикс НЕ идёт намеренно:
+// его разбирает бэкенд (маркер AUTOCHECKIN_RESULT), формат там менять незачем.
+const T0 = Date.now();
+const elapsed = () => `[+${((Date.now() - T0) / 1000).toFixed(1)}s]`.padEnd(9);
 const RUN_LOG = (mode === 'checkin' || mode === 'autocheckin') ? (() => {
   try {
     const dir = path.join(__dirname, '..', 'logs');
@@ -82,7 +188,7 @@ const RUN_LOG = (mode === 'checkin' || mode === 'autocheckin') ? (() => {
       const orig = console[kind].bind(console);
       console[kind] = (...args) => {
         orig(...args);
-        try { fs.writeSync(fd, args.map(a => typeof a === 'string' ? a : String(a)).join(' ') + '\n'); } catch {}
+        try { fs.writeSync(fd, elapsed() + ' ' + args.map(a => typeof a === 'string' ? a : String(a)).join(' ') + '\n'); } catch {}
       };
     }
     return file;
@@ -354,30 +460,110 @@ function watchOauthResult(context) {
 // OAuth, поэтому negative lookahead обязателен.
 const GH_AUTH_WALL_RE = /github\.com\/(login(?!\/oauth)|session\b|sessions\/)/i;
 
+// Почему начать GitHub-вход не удалось. Заполняется clickGithubLogin/buildAuthorizeUrl,
+// читается в main — от этого зависит, каким кодом выходить (4 «вёрстку переделали» или
+// 6 «край не ответил») и что владелец прочтёт в тосте. Раньше причина не хранилась
+// вообще: любой отказ печатался одним текстом про переделанную страницу входа.
+//   edge-silent — /api/status или /api/oauth/state ответили пусто/не-JSON: рейт-лимит,
+//                 WAF по IP, обрыв. Вёрстка ни при чём;
+//   no-client-id — край ОТВЕТИЛ json'ом, но github_client_id в нём нет: вход через
+//                 GitHub у шлюза выключен или переехал;
+//   no-state    — /api/oauth/state отказал словами (success:false);
+//   error       — запрос из страницы вообще не состоялся. Считаем краем: до вёрстки
+//                 дело не дошло.
+const loginStart = { why: null, detail: '', hadButton: false };
+
 // Фолбэк на случай, если кнопки на странице нет или попап не открылся: собираем тот
 // же authorize-URL руками. client_id читаем из живого /api/status (хардкодить нельзя —
 // шлюз может пересоздать OAuth-приложение), `aff` подставляем как сайт, иначе
 // регистрация нового аккаунта потеряла бы реф-кредит.
+//
+// Возвращает { url } либо { why, detail } — см. loginStart. 🪤 Тело читаем ТЕКСТОМ и
+// парсим сами: прежняя версия звала resp.json() и на пустом ответе края улетала в
+// исключение, а исключение снаружи выглядело так же, как «кнопки нет» — отсюда и
+// неверный диагноз в отказе.
 async function buildAuthorizeUrl(page) {
   try {
-    return await page.evaluate(async () => {
-      const get = async (u) => (await fetch(u, { credentials: 'include' })).json();
+    const r = await page.evaluate(async () => {
+      const get = async (u) => {
+        const resp = await fetch(u, { credentials: 'include' });
+        const body = await resp.text();
+        let json = null;
+        try { json = JSON.parse(body); } catch { /* пусто или HTML-челлендж WAF */ }
+        return { status: resp.status, len: body.length, json };
+      };
       const st = await get('/api/status');
-      const cid = st && st.data && st.data.github_client_id;
-      if (!cid) return null;
+      if (!st.json) return { why: 'edge-silent', detail: `/api/status → HTTP ${st.status}, тело ${st.len} Б, не JSON` };
+      const cid = st.json.data && st.json.data.github_client_id;
+      if (!cid) return { why: 'no-client-id', detail: '/api/status ответил, но github_client_id в нём нет' };
       let q = '/api/oauth/state?mode=login';
       const aff = localStorage.getItem('aff');
       if (aff) q += '&aff=' + encodeURIComponent(aff);
       const s = await get(q);
-      const state = s && s.success && s.data;
-      if (!state) return null;
+      if (!s.json) return { why: 'edge-silent', detail: `/api/oauth/state → HTTP ${s.status}, тело ${s.len} Б, не JSON` };
+      const state = s.json.success && s.json.data;
+      if (!state) return { why: 'no-state', detail: `/api/oauth/state отказал: ${s.json.message || 'без причины'}` };
       localStorage.setItem('oauth_mode', 'login');
-      return `https://github.com/login/oauth/authorize?client_id=${cid}&state=${state}&scope=user:email`;
+      return { url: `https://github.com/login/oauth/authorize?client_id=${cid}&state=${state}&scope=user:email` };
     });
+    return r && (r.url || r.why) ? r : { why: 'error', detail: 'страница не вернула ни URL, ни причины' };
   } catch (e) {
-    console.log(`⚠️  authorize-URL собрать не удалось: ${e.message}`);
-    return null;
+    return { why: 'error', detail: e.message };
   }
+}
+
+// Признак «попапа не будет» вместо слепого потолка. Обработчик кнопки (см. разбор v7
+// выше) СНАЧАЛА спрашивает /api/oauth/state и только при годном ответе зовёт
+// window.open. Значит отказ на этом запросе — приговор: ждать попап дальше бессмысленно.
+// Ровно так сгорели 15 с в замере 10.09 (край был под рейт-лимитом и молчал всем, чем мог).
+const OAUTH_STATE_RE = /\/api\/oauth\/state/i;
+function watchOauthState(page) {
+  const out = { seen: false, done: false, ok: false, note: '' };
+  const onResp = async (r) => {
+    if (out.done || !OAUTH_STATE_RE.test(r.url())) return;
+    let body;
+    try {
+      body = await r.text();
+    } catch (e) {
+      // 🪤 Тело не прочиталось — это НЕ приговор. Вердикт обрывает вход, и выносить его
+      // на СВОЕЙ ошибке чтения нельзя: попап в этот момент может уже открываться.
+      // Без `done` дальше работает обычный потолок, то есть худший случай = как раньше.
+      out.note = `тело /api/oauth/state не прочиталось (${e.message})`;
+      return;
+    }
+    out.seen = true;
+    try {
+      const j = JSON.parse(body);
+      out.ok = !!(j && j.success && j.data);
+      out.note = out.ok ? 'state получен' : `шлюз отказал: ${(j && j.message) || 'без причины'}`;
+    } catch {
+      out.ok = false;
+      out.note = `HTTP ${r.status()}, тело не JSON (пусто или заглушка WAF)`;
+    }
+    out.done = true; // приговор выносит ПЕРВЫЙ прочитанный ответ, второй его не перебивает
+  };
+  page.on('response', onResp);
+  return { out, off: () => page.off('response', onResp) };
+}
+
+// Ждём попап, но не вслепую: выходим сразу, как только watchOauthState вынес отказ.
+// Потолок остаётся на случай, когда ответа нет вообще (запрос повис) — он короткий,
+// потому что после годного state window.open зовётся в том же обработчике, без сети.
+async function awaitGithubPopup(context, page, stateWatch) {
+  let popup = null;
+  const popupP = context.waitForEvent('page', { timeout: GH_POPUP_WAIT_MS })
+    .then(p => { popup = p; return p; })
+    .catch(() => null);
+  const deadline = Date.now() + GH_POPUP_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (popup) return popup;
+    if (stateWatch.out.done && !stateWatch.out.ok) {
+      console.log(`⏱️  попапа не будет: сайт спросил /api/oauth/state и получил — ${stateWatch.out.note}`);
+      return null;
+    }
+    await page.waitForTimeout(100).catch(() => {});
+  }
+  return await popupP;
 }
 
 // Шлюз встречает модалкой «系统公告» (14 объявлений) поверх формы входа. Playwright
@@ -399,37 +585,52 @@ async function dismissModals(page) {
 }
 
 // Возвращает страницу, на которой пойдёт GitHub-часть (попап или та же вкладка),
-// либо null — значит начать вход нечем.
+// либо null — значит начать вход нечем (причина остаётся в loginStart).
 async function clickGithubLogin(context, page) {
+  loginStart.why = null; loginStart.detail = ''; loginStart.hadButton = false;
   await dismissModals(page);
   const byIcon = page.locator('button:has(.semi-icon-github_logo)').first();
   const byText = page.locator('button').filter({ hasText: /github/i }).first();
-  let target = null;
   // Ждать обязательно: reportRender возвращается, как только #root не пуст, а кнопки
   // сторонних входов SPA дорисовывает позже — в первом прогоне их «не было».
-  for (const cand of [byIcon, byText]) {
-    const ok = await cand.waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false);
-    if (ok) { target = cand; break; }
-  }
+  // 🪤 Но ждать кандидатов ПО ОЧЕРЕДИ нельзя: на странице без кнопки это два потолка
+  // подряд, то есть 20 с в пустоту. Ждём оба разом — Promise.any берёт первого
+  // появившегося и не падает из-за того, что второй не пришёл.
+  const target = await Promise.any([
+    byIcon.waitFor({ state: 'visible', timeout: GH_BTN_WAIT_MS }).then(() => byIcon),
+    byText.waitFor({ state: 'visible', timeout: GH_BTN_WAIT_MS }).then(() => byText),
+  ]).catch(() => null);
 
   if (target) {
-    const popupP = context.waitForEvent('page', { timeout: 15000 }).catch(() => null);
-    await target.click({ timeout: 5000 }).catch(e => console.log(`⚠️  клик по кнопке GitHub не прошёл: ${e.message}`));
-    const popup = await popupP;
-    if (popup) {
-      console.log('🪟 попап GitHub-входа открылся');
-      await popup.waitForLoadState('domcontentloaded').catch(() => {});
-      return popup;
+    loginStart.hadButton = true;
+    // Слушаем ответ на /api/oauth/state ДО клика: сайт зовёт его первым делом, и именно
+    // он решает, откроется попап или нет.
+    const stateWatch = watchOauthState(page);
+    try {
+      await target.click({ timeout: 5000 }).catch(e => console.log(`⚠️  клик по кнопке GitHub не прошёл: ${e.message}`));
+      const popup = await awaitGithubPopup(context, page, stateWatch);
+      if (popup) {
+        console.log('🪟 попап GitHub-входа открылся');
+        await popup.waitForLoadState('domcontentloaded').catch(() => {});
+        return popup;
+      }
+    } finally {
+      stateWatch.off();
     }
     console.log('⚠️  попап не появился — собираю authorize-URL сам');
   } else {
     console.log('⚠️  кнопки входа через GitHub на странице нет — собираю authorize-URL сам');
   }
 
-  const url = await buildAuthorizeUrl(page);
-  if (!url) return null;
+  const built = await buildAuthorizeUrl(page);
+  if (!built.url) {
+    loginStart.why = built.why || 'error';
+    loginStart.detail = built.detail || '';
+    console.log(`⚠️  authorize-URL собрать не удалось (${loginStart.why}): ${loginStart.detail}`);
+    return null;
+  }
   console.log('↪️  иду на GitHub authorize в этой же вкладке');
-  await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.goto(built.url, { waitUntil: 'domcontentloaded' }).catch(() => {});
   return page;
 }
 
@@ -469,14 +670,24 @@ async function passGithubGate(gh) {
 // ходит наш точный чек, см. newapi-account.js). id лежит в localStorage['user'],
 // который колбэк-компонент пишет после успешного входа — а localStorage у попапа и
 // исходной вкладки общий, домен один.
-async function siteSelfOk(page, userId = null) {
+// `timeoutMs > 0` ограничивает ОДИН запрос из страницы. Нужен там, где ответ может не
+// прийти вовсе (мёртвая сессия, заглушка WAF): без сигнала fetch висит до потолка
+// page.evaluate, и прогон растёт на ровном месте. По умолчанию 0 — прежнее поведение,
+// чтобы у остальных вызовов ничего не поменялось.
+async function siteSelfOk(page, userId = null, timeoutMs = 0) {
   if (page.isClosed()) return null;
-  return await page.evaluate(async (uidArg) => {
+  return await page.evaluate(async ({ uidArg, ms }) => {
     try {
       let uid = uidArg;
       if (!uid) { try { uid = (JSON.parse(localStorage.getItem('user') || 'null') || {}).id; } catch {} }
       if (!uid) return null;
-      const r = await fetch('/api/user/self', { credentials: 'include', headers: { 'New-Api-User': String(uid) } });
+      const ac = ms > 0 && typeof AbortController === 'function' ? new AbortController() : null;
+      if (ac) setTimeout(() => ac.abort(), ms);
+      const r = await fetch('/api/user/self', {
+        credentials: 'include',
+        headers: { 'New-Api-User': String(uid) },
+        signal: ac ? ac.signal : undefined,
+      });
       const j = await r.json();
       if (!j || !j.success || !j.data) return null;
       // Отдаём СЫРЫЕ поля шлюза: их же читает дашборд с диска (selfToBalance в
@@ -484,7 +695,7 @@ async function siteSelfOk(page, userId = null) {
       // в /api/status и у разных инстансов New-API отличается.
       return { quota: j.data.quota, used: j.data.used_quota, id: j.data.id, username: j.data.username };
     } catch { return null; }
-  }, userId).catch(() => null);
+  }, { uidArg: userId, ms: Number(timeoutMs) || 0 }).catch(() => null);
 }
 
 // Объект пользователя, который SPA кладёт в localStorage после входа. Ноль запросов к
@@ -560,11 +771,15 @@ function selfIsPreGift(s, baseline, expectGrowth) {
 
 // Цифра «до подарка», снятая НАМЕРЕННО, а не по случаю. Сначала localStorage (ноль
 // запросов — кабинет уже всё получил), потом свой fetch из страницы. Оба источника
-// работают только при живой сессии, поэтому зовётся до разлогина.
+// работают только при живой сессии, поэтому зовётся до разлогина — и ТОЛЬКО когда
+// сессия точно жива (см. consoleGate): на мёртвой оба обречены, а стоят они 4.7 с
+// впустую — ровно столько показал замер 10.09.
 async function readBaselineSelf(page) {
   const ls = await readStoredUser(page);
   if (selfSnapshotUsable(ls)) return { quota: ls.quota, used: ls.used || 0, id: ls.id, username: ls.username, from: 'localStorage' };
-  const own = await siteSelfOk(page);
+  // Своим запросом — с поводком: живой кабинет отвечает мгновенно, а заглушка WAF не
+  // ответит никогда, и без сигнала мы ждали бы её до потолка page.evaluate.
+  const own = await siteSelfOk(page, null, BASELINE_SELF_MS);
   if (selfSnapshotUsable(own)) return { ...own, from: 'self-fetch' };
   return null;
 }
@@ -818,6 +1033,79 @@ function loadGhBackup(lbl) {
   } catch { return null; }
 }
 
+// ───── Общий снимок сессии: github/sessions/<ghId>.json ──────────────────
+// Копия выше — СВОЯ, на каждую запись пула отдельная, и появляется она только после того,
+// как этот скрипт хоть раз отработал под живой сессией. Общий снимок — другой слой: он
+// на GitHub-АККАУНТ, его наполняет харвест из любого профиля любого шлюза и живой захват
+// кук (routing/lib/gh-live-capture.js → writeShared) прямо во время наших окон.
+//
+// 🪤 Запись сюда была двусторонней с самого начала, а чтения не было вовсе. Из-за этого
+// автоподарок выходил с кодом 3 «GitHub-сессия мертва, возьми готовый GitHub заново» —
+// хотя годная сессия ЭТОГО ЖЕ аккаунта лежала на диске рядом. Замер 10.09: общий снимок
+// был у всех 20 привязанных записей AR, 16 из них моложе суток.
+//
+// По TTL 7 суток НЕ отсекаем (решение владельца): это наша осторожная оценка, а не срок
+// от GitHub — кука `user_session` живёт дольше. Цена лишней попытки — одно окно, цена
+// отказа — гарантированно не забранный подарок. Возраст просто честно пишем в лог.
+const AR_POOL_FILE = path.join(__dirname, '..', 'routing', 'agentrouter-sessions.json');
+const GH_SHARED_DIR = path.join(__dirname, '..', 'github', 'sessions');
+
+function sharedGhPath(ghId) {
+  return path.join(GH_SHARED_DIR, String(ghId).replace(/[^\w-]/g, '_') + '.json');
+}
+
+// ghId записи пула по её label. Резолвер уже написан и экспортирован живым захватом —
+// второй копии тут не заводим.
+function ghIdForThisLabel() {
+  try {
+    return require('../routing/lib/gh-live-capture.js').ghIdForLabel(AR_POOL_FILE, label) || null;
+  } catch { return null; }
+}
+
+// Снимок для этого аккаунта или null. Куки — формат storageState, `context.addCookies()`
+// принимает их как есть; сессионные (`expires: -1`) отбрасываем, как и в локальной копии:
+// они всё равно умирают вместе с браузером.
+function loadSharedGhSnapshot() {
+  const ghId = ghIdForThisLabel();
+  if (!ghId) return null;
+  try {
+    const j = JSON.parse(fs.readFileSync(sharedGhPath(ghId), 'utf8'));
+    const now = Date.now() / 1000;
+    const cookies = (j.cookies || []).filter(c => c.expires > now || c.expires === -1);
+    if (!cookies.length) return null;
+    const ms = j.harvestedAt ? Date.now() - Date.parse(j.harvestedAt) : NaN;
+    return {
+      ghId,
+      ghLogin: j.ghLogin || null,
+      harvestedAt: j.harvestedAt || null,
+      ageDays: Number.isFinite(ms) ? +(ms / 86400000).toFixed(1) : null,
+      cookies,
+    };
+  } catch { return null; }
+}
+
+// Влить общий снимок в открытый контекст. Возвращает описание попытки для лога и маркера.
+async function seedFromSharedSnapshot(context, why) {
+  const snap = loadSharedGhSnapshot();
+  if (!snap) {
+    console.log(`🐙 общего снимка сессии для этого аккаунта нет (${why})`);
+    return null;
+  }
+  const age = snap.ageDays === null ? 'возраст неизвестен'
+    : `возраст ${snap.ageDays} дн${snap.ageDays > 7 ? ', старше TTL 7 сут — пробуем всё равно' : ''}`;
+  try {
+    await context.addCookies(snap.cookies);
+    const after = await context.cookies('https://github.com').catch(() => []);
+    const ok = after.some(c => c.name === 'user_session' && c.value);
+    console.log(`🐙 поднял сессию из общего снимка ${snap.ghLogin || snap.ghId} (${age}): ${snap.cookies.length} кук`
+      + `${ok ? ' — user_session на месте' : ' — ⚠️ user_session не появилась'}`);
+    return { ...snap, ok };
+  } catch (e) {
+    console.log(`⚠️  общий снимок ${snap.ghLogin || snap.ghId} влить не удалось: ${e.message}`);
+    return { ...snap, ok: false };
+  }
+}
+
 // Копия свежей GitHub-сессии после успешного входа/открытия ЛК. Именно этот снимок
 // потом вернёт чек-ин, если GitHub погасит сессию сам. Пустую копию не пишем — иначе
 // один заход с уже мёртвым GitHub затёр бы годную.
@@ -843,6 +1131,21 @@ async function harvestCookiesToJar(context) {
   } catch (e) {
     console.log(`⚠️  куки в jar не уехали: ${e.message}`);
   }
+}
+// Как назвать сессию в тексте ошибки. Раньше здесь было безымянное «GitHub-сессия
+// аккаунта мертва» — по такому сообщению владелец не знал, какой именно GitHub чинить,
+// а их в менеджере три десятка. Ник берём из менеджера, ghId — запасной вариант.
+function ghNameForError(seeded) {
+  const ghId = (seeded && seeded.ghId) || ghIdForThisLabel();
+  const login = seeded && seeded.ghLogin;
+  if (login) return `«${login}»`;
+  if (!ghId) return 'этого аккаунта';
+  try {
+    const arr = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'routing', 'github-accounts.json'), 'utf8'));
+    const rec = (Array.isArray(arr) ? arr : []).find(a => a.id === ghId);
+    if (rec) return `«${rec.nickname || rec.login || ghId}»`;
+  } catch { /* менеджер недоступен — обойдёмся ghId */ }
+  return `«${ghId}»`;
 }
 
 async function backupGhAfterLogin(context) {
@@ -922,6 +1225,31 @@ async function purgeSiteCookies(context, page) {
   return n;
 }
 
+// Куда сайт уводит разлогиненного. Отдельная константа, а не выражение по месту:
+// проверка нужна и в гонке ниже, и в doCheckinLogout.
+const AUTH_PAGE_RE = /agentrouter\.org\/(login|register|sign-in|sign-up)\b/i;
+
+// Жива сессия или нет — решает ОДНА гонка: либо в шапке появился аватар (есть из чего
+// выходить), либо SPA увела на /login (сервер сессию уже не принимает).
+//
+// 🪤 По куке это НЕ определяется. Шлюз гасит сессию, не отзывая `session` в браузере
+// (замер 22.08, см. разбор в uiLogout), поэтому на протухшей сессии hasSessionCookie
+// честно отвечает «есть» — и код шёл дальше искать аватар на странице входа с потолком
+// 15 с. Замер 10.09: такой прогон стоил 57 с против 19 с у нормального.
+//
+// 🪤 И сразу после goto смотреть page.url() тоже бесполезно: /console/topup отдаёт тот
+// же index.html, а на /login уводит уже поднявшийся бандл — редирект клиентский.
+// Поэтому гонка, а не одна проверка: кто первый, тот и ответ.
+async function consoleGate(page, avatar, ms = CONSOLE_GATE_MS) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (AUTH_PAGE_RE.test(page.url())) return 'login';
+    if (await avatar.isVisible().catch(() => false)) return 'live';
+    await page.waitForTimeout(150).catch(() => {});
+  }
+  return 'unknown';
+}
+
 // Выход через меню профиля — основной путь с 2026-08-22 (просьба владельца).
 // Раньше скрипт сразу удалял куки домена, и в окне это выглядело так: белая страница
 // JSON-роута, потом сайт с руганью «не авторизован», и только потом форма входа. Клик по
@@ -950,8 +1278,29 @@ async function uiLogout(context, page, out = null) {
   await dismissModals(page);
   await waitSpaReady(page, 25000);
   await dismissModals(page);
-  // Эталон «до подарка» снимаем ЗДЕСЬ — пока сессия жива и кабинет открыт.
-  // Раньше он брался из случайно перехваченного ответа страницы, и в обоих живых
+
+  const avatar = page.locator('button:has(.semi-avatar)').first();
+  const gate = await consoleGate(page, avatar);
+  if (gate === 'login') {
+    // Кука в профиле есть, но сервер её уже не принимает — кабинет сам увёл на вход.
+    // Дальше идти НЕКУДА: ни аватара, ни роута разлогина не будет, а эталон снимать
+    // бессмысленно (оба его источника живут только при живой сессии — см.
+    // readBaselineSelf). Мёртвую куку с диска убираем, чтобы точный баланс не принял её
+    // за живую сессию: это тот же ложный позитив, что после UI-выхода.
+    const purged = await purgeSiteCookies(context, page);
+    console.log(`🚪 сессия сайта уже мертва — кабинет увёл на страницу входа, выходить не из чего`
+      + `${purged ? `; мёртвых кук убрано ${purged}` : ''}`);
+    return true;
+  }
+  if (gate === 'unknown') {
+    console.log(`⚠️  ни аватара, ни страницы входа за ${CONSOLE_GATE_MS / 1000} с`
+      + ` (url=${page.url()}, кнопок с аватаром ${await page.locator('button:has(.semi-avatar)').count().catch(() => '?')})`
+      + ' — похоже на белый экран или заглушку WAF');
+    return false;
+  }
+
+  // Эталон «до подарка» снимаем ЗДЕСЬ — сессия точно жива (gate === 'live') и кабинет
+  // открыт. Раньше он брался из случайно перехваченного ответа страницы, и в обоих живых
   // прогонах 25.08 в логе стояло «предподарочную цифру снять не удалось»: логаут
   // уводит страницу и обрывает летящий запрос self, так что перехвату ловить нечего.
   // Без эталона проверка роста вырождается — принимается ЛЮБАЯ цифра, в том числе
@@ -961,13 +1310,6 @@ async function uiLogout(context, page, out = null) {
     console.log(out.baseline
       ? `📌 эталон до подарка: $${(out.baseline.quota / 500000).toFixed(2)} (снят в кабинете до разлогина, источник ${out.baseline.from})`
       : '📌 эталон до подарка снять не удалось даже прямым запросом — рост проверить будет нечем');
-  }
-
-  const avatar = page.locator('button:has(.semi-avatar)').first();
-  const shown = await avatar.waitFor({ state: 'visible', timeout: 15000 }).then(() => true).catch(() => false);
-  if (!shown) {
-    console.log(`⚠️  аватара в шапке не нашёл (url=${page.url()}, кнопок с аватаром ${await page.locator('button:has(.semi-avatar)').count().catch(() => '?')})`);
-    return false;
   }
 
   const ack = watchLogoutAck(page);
@@ -1052,7 +1394,9 @@ async function doCheckinLogout(context, page) {
 
 // Страховка: сверяем GitHub-куки по ИМЕНАМ (а не по количеству — так видно, что именно
 // пропало) и возвращаем недостающие. Сначала из снимка «до», потом из копии на диске:
-// второй случай — когда GitHub погасил сессию сам, ещё до нашего разлогина.
+// второй случай — когда GitHub погасил сессию сам, ещё до нашего разлогина. Третьим
+// номером — общий снимок github/sessions/<ghId>.json: своей копии может не быть вовсе
+// (аккаунт заселили готовой сессией и он ни разу тут не отрабатывал).
 async function restoreGithubIfLost(context, ghBefore) {
   const after = await context.cookies('https://github.com').catch(() => []);
   const have = new Set(after.map(c => c.name));
@@ -1063,6 +1407,13 @@ async function restoreGithubIfLost(context, ghBefore) {
     if (!after.length && bk && bk.cookies.length) {
       console.log(`🐙 GitHub-кук в профиле нет — восстанавливаю из копии от ${bk.savedAt}`);
       missing = bk.cookies;
+    } else if (!after.length) {
+      // Ни кук, ни своей копии — последняя надежда на общий снимок.
+      const seeded = await seedFromSharedSnapshot(context, 'ни кук в профиле, ни своей копии');
+      if (!seeded || !seeded.ok) {
+        console.log('🐙 GitHub-сессию вернуть нечем — вход попросит пароль/2FA');
+      }
+      return;
     } else {
       console.log(`🐙 GitHub-куки: ${after.length}/${ghBefore.length} на месте — вход одним кликом`);
       return;
@@ -1093,14 +1444,29 @@ async function main() {
   console.log(`🚀 Запускаю Chromium (видимый режим)…`);
   console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен GitHub-логин)' : 'уже есть (сохранённый)'}`);
 
+  // Прокси аккаунта: выбран родителем, приехал разовым файлом. Нет файла — пул выключен,
+  // и запуск идёт ровно как до правки.
+  const proxySeed = readProxySeed(label);
+  const launchProxy = proxyLaunchOptions(proxySeed);
+  if (!launchProxy.ok) {
+    // 🔴 Напрямую НЕ идём: у аккаунта живая GitHub-сессия, и подмена IP под ней заметнее
+    // антифроду, чем пропущенный подарок. Родитель покажет это отдельной причиной.
+    console.error(`❌ Прокси аккаунта непригоден: ${launchProxy.error}. Напрямую НЕ пойду.`);
+    process.exit(7);
+  }
+  if (proxySeed) console.log(`🌐 выход через прокси ${proxySeed.scheme}://${proxySeed.hostname}:${proxySeed.port}`);
+
   // launchPersistentContext держит профиль открытым и пишет на диск всё сам.
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
-    viewport: { width: 1280, height: 800 },
-    args: ['--disable-blink-features=AutomationControlled'],
+    viewport: null,
+    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
+    ...launchProxy.options,
   });
 
   const page = context.pages()[0] || await context.newPage();
+  await page.bringToFront();
+  raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
   await disableHttpCache(context, page);
 
   // Чек-ин идёт раньше всего остального: импортированные куки и рефка тут не при чём,
@@ -1133,28 +1499,62 @@ async function main() {
         // Живость GitHub-сессии смотрим ПО КУКАМ ПРОФИЛЯ. Сырой пробник на github.com
         // запрещён: фейковый UA GitHub считает угоном и гасит сессию (три штуки уже
         // так потеряли, см. routing/lib/github-session.js).
-        const gh = await context.cookies('https://github.com').catch(() => []);
+        let gh = await context.cookies('https://github.com').catch(() => []);
         if (!gh.some(c => c.name === 'user_session' && c.value)) {
-          console.error('❌ GitHub-сессия в профиле мертва (нет user_session).');
-          console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
-          await context.close().catch(() => {});
-          process.exit(3);
+          // Прежде чем сдаться — общий снимок. Сюда попадали аккаунты, у которых живая
+          // сессия ЛЕЖАЛА НА ДИСКЕ в github/sessions/<ghId>.json, но читать её было
+          // некому: скрипт знал только свою локальную копию.
+          const seeded = await seedFromSharedSnapshot(context, 'в профиле нет user_session');
+          if (seeded) gh = await context.cookies('https://github.com').catch(() => []);
+          if (!gh.some(c => c.name === 'user_session' && c.value)) {
+            console.error(`❌ GitHub-сессия ${ghNameForError(seeded)} мертва (нет user_session).`);
+            console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+            await context.close().catch(() => {});
+            process.exit(3);
+          }
         }
 
         const target = await clickGithubLogin(context, page);
         if (!target) {
-          console.error('❌ Не нашёл, чем начать GitHub-вход: кнопки нет, authorize-URL не собрался.');
-          console.error('   Похоже, шлюз переделал страницу входа. Добери бонус кнопкой 🎁 — там вход жмёт человек.');
+          // 🪤 Диагноза здесь ДВА, и лечатся они противоположно. Молчащий край — это
+          // рейт-лимит/WAF по нашему IP, лечится паузой; переделанный вход — руками и
+          // глазами. Раньше на оба случая печаталось «шлюз переделал страницу входа»,
+          // и владельца отправляли изучать вёрстку, которой никто не касался
+          // (замер 10.09: /api/status вернула пустое тело — это ответ ПУБЛИЧНОГО роута,
+          // он не зависит ни от сессии, ни от разметки).
+          const edgeSilent = loginStart.why === 'edge-silent' || loginStart.why === 'error';
+          if (edgeSilent) {
+            console.error(`❌ Край не ответил: ${loginStart.detail || 'публичная /api/status вернула пусто'}.`);
+            console.error('   Это рейт-лимит или WAF по IP, а не изменённая вёрстка: страница входа тут ни при чём.');
+            console.error('   Подожди несколько минут и повтори ⚡ — или добери бонус кнопкой 🎁.');
+            await context.close().catch(() => {});
+            process.exit(6);
+          }
+          console.error(`❌ Начать GitHub-вход нечем: ${loginStart.detail || 'кнопки нет, authorize-URL не собрался'}.`);
+          console.error(`   Край при этом ОТВЕЧАЕТ${loginStart.hadButton ? ', и кнопка на странице есть' : ', но кнопки GitHub на странице нет'}`
+            + ' — похоже, шлюз переделал вход.');
+          console.error('   Добери бонус кнопкой 🎁 — там вход жмёт человек.');
           await context.close().catch(() => {});
           process.exit(4);
         }
 
-        const gate = await passGithubGate(target);
+        let gate = await passGithubGate(target);
         if (gate === 'dead') {
-          console.error('❌ GitHub попросил пароль/2FA — сессия в профиле уже не годится.');
-          console.error('   Возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
-          await context.close().catch(() => {});
-          process.exit(3);
+          // Кука в профиле была, но GitHub её уже не принял. Ровно ОДНА повторная попытка
+          // с общим снимком: он мог обновиться после того, как профиль в последний раз
+          // логинился. Больше одной — цикл, поэтому попытка помечается и не повторяется.
+          const seeded = await seedFromSharedSnapshot(context, 'GitHub попросил пароль/2FA');
+          if (seeded && seeded.ok) {
+            console.log('🔁 повторяю вход после подъёма сессии из общего снимка');
+            const again = await clickGithubLogin(context, page);
+            gate = again ? await passGithubGate(again) : 'dead';
+          }
+          if (gate === 'dead') {
+            console.error(`❌ GitHub попросил пароль/2FA — сессия ${ghNameForError(seeded)} уже не годится.`);
+            console.error('   Возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+            await context.close().catch(() => {});
+            process.exit(3);
+          }
         }
         console.log(`🔄 GitHub-часть: ${gate}`);
 
@@ -1377,7 +1777,13 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('❌ Ошибка:', err.message);
-  process.exit(1);
-});
+// Запуск только как скрипт. Регресс подключает файл как модуль ради чистых функций
+// разбора прокси — без этой охраны `require` поднимал бы браузер и создавал профиль.
+if (require.main === module) {
+  main().catch(err => {
+    console.error('❌ Ошибка:', err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = { readProxySeed, proxyLaunchOptions, PROXY_SEED_DIR };

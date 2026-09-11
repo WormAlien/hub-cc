@@ -1,0 +1,643 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   models-tab.css — вкладка «Модели» дашборда ABUSE HUB
+   ────────────────────────────────────────────────────────────────────────────
+   🪤 ЭТОТ ФАЙЛ TAILWIND НЕ ОБРАБАТЫВАЕТ.
+   Дашборд собирает утилиты browser-build'ом из блока <style type="text/tailwindcss">
+   в самом proxy-dashboard.html. Наш файл подключён обычным <link>, то есть доезжает
+   до браузера как есть. Отсюда два следствия, которые ломали бы всё молча:
+
+     ❌ утилиты Tailwind (bg-surface, text-ink, border-line-soft …) здесь НЕ работают —
+        это не плоский CSS, их генерирует компилятор из содержимого DOM;
+     ✅ CSS-переменные темы работают — applyTheme() вешает их инлайном на <html>,
+        значит var(--color-surface) наследуется сюда и перекрашивается сам.
+
+   Разрешённый словарь переменных (других НЕТ ни в одной из 22 тем):
+     --color-bg  --color-surface  --color-elevated
+     --color-line  --color-line-soft
+     --color-ink  --color-muted  --color-dim  --color-faint
+     --color-emerald  --color-amber  --color-azure  --color-violet  --color-crimson
+
+   🪤 sky / teal / cyan не объявлены нигде. В дашборде 261 такой класс, и все они
+      не красят ничего. Не повторять.
+   🪤 --color-faint и --color-dim не проходят WCAG AA ни в одной из 22 тем. Читаемый
+      мелкий текст — только --color-muted; faint/dim остаются на декор (рамки, точки,
+      неактивные глифы), но не на буквы, которые надо прочесть.
+   🪤 --color-bg НЕ обязан быть темнее --color-surface: на светлой daylight bg = 0.985,
+      surface = 1.000, порядок инвертирован. Поэтому «своя» подложка здесь всегда
+      surface/elevated, а не догадки про светлее/темнее.
+   🪤 Полупрозрачность — только color-mix(in oklab, …). Именно oklab: у oklch hue идёт
+      по кругу и на промежуточных значениях даёт грязь. Ни хексов, ни sRGB-функций
+      в файле нет — ни одной.
+   🪤 Переменная rose НЕ используется. Замер по теме zen: crimson и rose различаются на
+      ΔE 5.1 при норме 15 (дейтеранопия 4.7, тританопия 1.3) — для глаза это один цвет.
+      Отказ несёт только crimson; парного «розового» состояния не существует.
+
+   Состояния различаются НЕ ТОЛЬКО цветом, но и формой — заливка / контур / пунктир,
+   круг / ромб / квадрат / кольцо. Так «жив ↔ мёртв» читается и при дальтонизме, и на
+   ядрёных темах, где акценты выкручены до гамута и сближаются.
+
+   Анимируем только transform и opacity (правило дашборда: background-position стоил
+   175 Paint/с). Все @keyframes с префиксом mh-, чтобы не столкнуться с pulse-ring
+   и прочими из основного файла.
+
+   Область: селекторы либо начинаются с .mh-, либо лежат внутри #models-kpi /
+   #models-cards / #models-table. Голых table/tr/td/button тут быть не может —
+   они бы разъехались по всем 12 вкладкам дашборда.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+
+/* ═══════════ 1. Таблица ═══════════
+   Плотность как у New API: строка ≈ 26 px, отступы скупые, числа моноширинные.
+   Шапка липнет к верху окна (top: 0) — на странице нет фиксированной панели,
+   а main скроллится вместе с документом, так что обёртка для этого не нужна. */
+
+/* Необязательная рамка-карточка вокруг таблицы. Если A7 обернёт таблицу
+   тайлвиндовым `overflow-x-auto`, липкость шапки пропадёт: горизонтальный
+   overflow делает элемент скролл-контейнером и по вертикали тоже. Это не
+   поломка, просто шапка перестаёт всплывать — терпимо. */
+.mh-table-wrap {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 10px;
+  background: var(--color-surface);
+  overflow-x: auto;
+}
+
+.mh-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--color-muted);
+  text-align: left;
+}
+
+/* :where() держит нулевую специфичность у имён тегов — точечные .mh-num / .mh-th
+   ниже перебивают базу порядком, а утилиты Tailwind на самом узле перебивают нас
+   (их <style> идёт после нашего <link>). */
+.mh-table :where(th, td) {
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.mh-table :where(thead th) {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 8px;
+  background: var(--color-elevated);     /* непрозрачно — иначе строки просвечивают сквозь шапку */
+  border-bottom: 1px solid var(--color-line);
+  color: var(--color-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+/* Подсветка строки под курсором. Переход по background-color — не нарушение правила
+   «двигать только transform/opacity»: правило про НЕПРЕРЫВНЫЕ анимации, которые жгут
+   Paint/с в покое, а это разовый paint по наведению. Ровно так же сделан .jump-pill
+   в основном файле. */
+.mh-table :where(tbody tr) {
+  transition: background-color 0.12s linear;
+}
+
+.mh-table :where(tbody tr):hover {
+  background: var(--color-elevated);
+}
+
+.mh-table :where(tbody tr):last-child :where(td) {
+  border-bottom: 0;
+}
+
+/* Ряд-подытог / выделенная модель. */
+.mh-table :where(tbody tr).mh-row--muted :where(td) {
+  color: var(--color-dim);
+}
+
+
+/* ═══════════ 2. Заголовок-сортировка ═══════════
+   Работает и на <th class="mh-th">, и на <button class="mh-th"> внутри ячейки.
+   Индикатор — ::after, inline: с text-align ячейки он сам встаёт с нужной стороны,
+   поэтому flex на th не ставим (он снял бы display: table-cell и развалил колонки). */
+.mh-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.12s linear;
+}
+
+.mh-th:hover {
+  color: var(--color-ink);
+}
+
+/* Сброс, когда .mh-th навешан на настоящую кнопку. :is(button) даёт (0,1,1) —
+   бьёт базовый .mh-th, но не мешает утилитам на том же узле. */
+.mh-th:is(button) {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+/* Нейтральный намёк «колонку можно сортировать» — тусклый, не отвлекает. */
+.mh-th::after {
+  content: '↕';
+  margin-left: 0.3em;
+  font-size: 0.9em;
+  color: var(--color-faint);
+  opacity: 0.7;
+}
+
+.mh-th:hover::after {
+  opacity: 1;
+}
+
+/* Активное направление. Поддержаны оба контракта: модификатор класса и
+   стандартный aria-sort на <th> — какой бы ни выбрал models-tab.js. */
+.mh-th--asc::after,
+.mh-th[aria-sort="ascending"]::after {
+  content: '↑';
+  color: var(--color-azure);
+  opacity: 1;
+}
+
+.mh-th--desc::after,
+.mh-th[aria-sort="descending"]::after {
+  content: '↓';
+  color: var(--color-azure);
+  opacity: 1;
+}
+
+.mh-th--asc,
+.mh-th--desc,
+.mh-th[aria-sort="ascending"],
+.mh-th[aria-sort="descending"] {
+  color: var(--color-ink);
+}
+
+
+/* ═══════════ 3. Числа и счётчики выборки ═══════════ */
+
+.mh-num {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  text-align: right;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+
+/* Числовая колонка — заголовок тоже вправо, иначе шапка и цифры не совпадают. */
+.mh-th.mh-num,
+.mh-table :where(th).mh-num {
+  text-align: right;
+}
+
+/* n=1402 рядом с метрикой: мельче родителя, приглушённо, но читаемо (muted, не dim). */
+.mh-n {
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.82em;
+  font-weight: 400;
+  color: var(--color-muted);
+  margin-left: 0.32em;
+  white-space: nowrap;
+}
+
+/* Выборка настолько мала, что метрике верить нельзя. */
+.mh-n--thin {
+  color: var(--color-amber);
+}
+
+
+/* ═══════════ 4. Бейдж состояния ═══════════
+   Форма несёт столько же смысла, сколько цвет:
+     ok       — заливка + сплошной контур + круг
+     warn     — заливка + сплошной контур + ромб
+     fail     — плотная заливка + утолщённый контур + крестик
+     idle     — БЕЗ заливки (полая) + сплошной контур + кольцо
+     unknown  — без заливки + ПУНКТИР + «?»
+   Пары «залито/полое» и «сплошное/пунктир» различимы, даже когда акценты слились. */
+
+.mh-badge {
+  --mh-accent: var(--color-muted);
+  --mh-glyph: none;   /* `none` в content = псевдоэлемент вообще не создаётся; '' создал бы
+                         пустой инлайн-бокс, и flex-gap отбил бы 0.3em пустоты перед текстом */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  padding: 1px 6px;
+  min-height: 18px;
+  border: 1px solid color-mix(in oklab, var(--mh-accent) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--mh-accent) 12%, transparent);
+  color: var(--mh-accent);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* Глиф-маркер слева. Если разметка кладёт в бейдж собственный .mh-dot —
+   глиф гасим, иначе получилось бы два маркера подряд. */
+.mh-badge::before {
+  content: var(--mh-glyph);
+  font-size: 0.92em;
+  line-height: 1;
+}
+
+.mh-badge:has(.mh-dot)::before {
+  content: none;
+}
+
+.mh-badge--ok {
+  --mh-accent: var(--color-emerald);
+  --mh-glyph: '●';
+}
+
+.mh-badge--warn {
+  --mh-accent: var(--color-amber);
+  --mh-glyph: '◆';
+}
+
+.mh-badge--fail {
+  --mh-accent: var(--color-crimson);
+  --mh-glyph: '✕';
+  border-width: 1.5px;
+  background: color-mix(in oklab, var(--color-crimson) 18%, transparent);
+}
+
+/* Полая: заливки нет вообще — это и есть главное отличие от --ok/--warn. */
+.mh-badge--idle {
+  --mh-accent: var(--color-muted);
+  --mh-glyph: '○';
+  background: transparent;
+  font-weight: 500;
+}
+
+/* Пунктир + вопрос. Контур красим в dim (декор), но буквы держим на muted:
+   dim не проходит AA ни в одной теме, а текст бейджа надо читать. */
+.mh-badge--unknown {
+  --mh-accent: var(--color-dim);
+  --mh-glyph: '?';
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+
+/* ═══════════ 5. Точка состояния ═══════════
+   var(--mh-accent, currentColor) без переобъявления: внутри бейджа точка
+   наследует его акцент, отдельно — берёт цвет текста. Формы разные, см. § 4. */
+
+.mh-dot {
+  display: inline-block;
+  flex: none;
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mh-accent, currentColor);
+  vertical-align: middle;
+}
+
+.mh-dot--ok {
+  --mh-accent: var(--color-emerald);
+}
+
+/* Ромб — квадрат, повёрнутый трансформом (transform компоновщик делает бесплатно). */
+.mh-dot--warn {
+  --mh-accent: var(--color-amber);
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.mh-dot--fail {
+  --mh-accent: var(--color-crimson);
+  border-radius: 1px;
+}
+
+/* Кольцо: заливки нет. */
+.mh-dot--idle {
+  --mh-accent: var(--color-muted);
+  background: transparent;
+  border: 1.5px solid var(--color-muted);
+}
+
+.mh-dot--unknown {
+  --mh-accent: var(--color-dim);
+  width: 7px;
+  height: 7px;
+  background: transparent;
+  border: 1px solid var(--color-dim);
+  opacity: 0.85;
+}
+
+/* Расходящееся кольцо. Анимируются только transform и opacity. */
+.mh-dot--pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--mh-accent, currentColor);
+  opacity: 0.5;
+  animation: mh-pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+@keyframes mh-pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.5; }
+  70%  { transform: scale(2.4); opacity: 0;   }
+  100% { transform: scale(2.4); opacity: 0;   }
+}
+
+
+/* ═══════════ 6. Пустое состояние ═══════════ */
+
+.mh-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 22px 14px;
+  border: 1px dashed var(--color-line-soft);
+  border-radius: 10px;
+  color: var(--color-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* Пояснение под основной строкой — тут faint уместен, это декор, а не смысл. */
+.mh-empty > .mh-empty-hint {
+  color: var(--color-faint);
+  font-size: 10.5px;
+}
+
+/* Прочерк внутри ячейки таблицы: рамки нет, место не занимает. */
+.mh-empty--inline {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-dim);
+  font-size: inherit;
+}
+
+
+/* ═══════════ 7. Сворачиваемая группа каталожных моделей ═══════════
+   Поддержаны три способа сообщить «открыто»: .is-open на группе,
+   aria-expanded на шапке и нативный <details open> — что бы ни выбрал A7. */
+
+.mh-group {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 10px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.mh-group + .mh-group {
+  margin-top: 6px;
+}
+
+.mh-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 6px 10px;
+  background: color-mix(in oklab, var(--color-elevated) 55%, transparent);
+  color: var(--color-ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s linear;
+}
+
+.mh-group-head:hover {
+  background: var(--color-elevated);
+}
+
+.mh-group-head:is(button) {
+  border: 0;
+  font-family: inherit;
+}
+
+/* <summary> рисует свой треугольник — он бы дублировал наш шеврон. */
+.mh-group-head:is(summary) {
+  list-style: none;
+}
+
+.mh-group-head:is(summary)::-webkit-details-marker {
+  display: none;
+}
+
+.mh-group-head::before {
+  content: '▸';
+  flex: none;
+  color: var(--color-dim);
+  font-size: 0.95em;
+  line-height: 1;
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mh-group.is-open > .mh-group-head::before,
+.mh-group[open] > .mh-group-head::before,
+.mh-group-head[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+/* Тело группы: таблица внутри уже несёт свои рамки, лишний паддинг не нужен. */
+.mh-group-body {
+  border-top: 1px solid var(--color-line-soft);
+}
+
+
+/* ═══════════ 8. Полоса прогона проверки ═══════════
+   Ширину .mh-bar-fill выставляет JS инлайном (как #models-progress-bar в html).
+   Перехода по width намеренно НЕТ: width гонит layout каждый кадр, а правило
+   дашборда — двигать только transform/opacity. Скачок раз в пару секунд глазу
+   безразличен, а Paint/с не растёт. */
+
+.mh-bar {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--color-line) 55%, transparent);
+  overflow: hidden;
+}
+
+.mh-bar-fill {
+  --mh-accent: var(--color-azure);
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--mh-accent);
+  transition: opacity 0.15s linear;
+}
+
+.mh-bar-fill--ok   { --mh-accent: var(--color-emerald); }
+.mh-bar-fill--warn { --mh-accent: var(--color-amber); }
+.mh-bar-fill--fail { --mh-accent: var(--color-crimson); }
+
+/* Прогон идёт, процент неизвестен: бегунок ездит трансформом, ширина не трогается. */
+.mh-bar--run::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  border-radius: inherit;
+  background: var(--color-azure);
+  opacity: 0.75;
+  animation: mh-bar-run 1.15s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: transform;
+  pointer-events: none;
+}
+
+@keyframes mh-bar-run {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(295%); }
+}
+
+
+/* ═══════════ 9. Плашка типа тарифа ═══════════
+   «плоско за запрос» ↔ «по токенам». Прямоугольная и моноширинная — форма сама
+   отличает её от круглого .mh-badge, даже если цвета в теме сблизились. */
+
+.mh-tariff {
+  --mh-accent: var(--color-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28em;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in oklab, var(--mh-accent) 45%, transparent);
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--mh-accent) 10%, transparent);
+  color: var(--mh-accent);
+  font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.mh-tariff--flat {
+  --mh-accent: var(--color-violet);
+}
+
+.mh-tariff--tokens {
+  --mh-accent: var(--color-azure);
+}
+
+/* Тариф неизвестен — пунктир, как у .mh-badge--unknown; текст на muted ради AA. */
+.mh-tariff--unknown {
+  --mh-accent: var(--color-dim);
+  background: transparent;
+  border-style: dashed;
+  color: var(--color-muted);
+}
+
+
+/* ═══════════ 10. Предупреждение на карточке шлюза ═══════════ */
+
+.mh-note {
+  --mh-accent: var(--color-amber);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border-left: 2px solid var(--mh-accent);
+  background: color-mix(in oklab, var(--mh-accent) 11%, transparent);
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.mh-note + .mh-note {
+  margin-top: 4px;
+}
+
+/* Значок слева — цветной, в акценте: это единственное место, где цвет обязателен,
+   и оно продублировано текстом самой заметки. */
+.mh-note::before {
+  content: var(--mh-glyph, '!');
+  flex: none;
+  color: var(--mh-accent);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.mh-note--warn {
+  --mh-accent: var(--color-amber);
+  --mh-glyph: '!';
+}
+
+.mh-note--fail {
+  --mh-accent: var(--color-crimson);
+  --mh-glyph: '✕';
+}
+
+.mh-note--info {
+  --mh-accent: var(--color-azure);
+  --mh-glyph: 'i';
+}
+
+
+/* ═══════════ 11. Контейнеры вкладки ═══════════
+   Только то, что нельзя выразить утилитой на самом узле. */
+
+/* Страховка от «раздувания» широкой таблицей, если контейнер когда-нибудь окажется
+   grid/flex-элементом: без min-width: 0 такой элемент не даёт себя ужать и вылезает
+   за колонку. Overflow тут НЕ ставим намеренно — он сделал бы #models-table
+   скролл-контейнером и убил липкую шапку (см. § 1). */
+#models-table {
+  min-width: 0;
+}
+
+#models-kpi > .mh-empty,
+#models-cards > .mh-empty {
+  grid-column: 1 / -1;
+}
+
+
+/* ═══════════ 12. prefers-reduced-motion ═══════════
+   Гасим всё непрерывное. Шеврон группы оставляем мгновенным, а не дёрганым:
+   transition: none вместо анимации. */
+
+@media (prefers-reduced-motion: reduce) {
+  .mh-dot--pulse::after,
+  .mh-bar--run::after {
+    animation: none !important;
+  }
+
+  .mh-bar--run::after {
+    opacity: 0;
+  }
+
+  .mh-group-head::before,
+  .mh-bar-fill,
+  .mh-table :where(tbody tr),
+  .mh-th,
+  .mh-group-head {
+    transition: none !important;
+  }
+}

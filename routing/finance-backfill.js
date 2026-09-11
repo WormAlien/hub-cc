@@ -24,6 +24,7 @@ const POOLS = {
     // а не префикс вкладки: там `justwoker`, а не `jw`.
     justwoker: 'justwoker-sessions.json',
     kktoken: 'kktoken-sessions.json',
+    wisdomsatan: 'wisdomsatan-sessions.json',
 };
 const dry = process.argv.includes('--dry-run');
 const midnight = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };

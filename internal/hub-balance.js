@@ -32,6 +32,11 @@ const POOLS = [
     // 🪤 Складывается ТОЛЬКО поле `balance` — оно в долларах. Юаневая цифра панели живёт
     // отдельным `balanceLocal`, иначе ¥ попали бы в долларовую сумму с ошибкой ×7.3.
     { id: 'hn', file: 'hcnsec-sessions.json', name: 'HCNsec' },
+    // WisdomSatan (2026-09-10) — десятый шлюз. Та же связка, что у hcnsec: New API,
+    // тариф токенный, панель показывает остаток в ЮАНЯХ (`quota_display_type: CNY`,
+    // курс 7.3 живьём из /api/status). Поэтому та же оговорка про `balance` в долларах
+    // против `balanceLocal` в ¥ действует и здесь — ×7.3 иначе.
+    { id: 'ws', file: 'wisdomsatan-sessions.json', name: 'WisdomSatan' },
 ];
 
 function readPool(p) {

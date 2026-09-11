@@ -59,9 +59,15 @@ function log(msg) {
 const stateCache = { mtime: 0, state: null, error: 'state ещё не читался' };
 
 function parseState(raw) {
-    const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    return parseStateDoc(JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw));
+}
+
+// Разбор одной записи бэкенда. Вынесен из parseState, чтобы ТЕМ ЖЕ кодом читались
+// записи реестра backends.json: у них та же форма, и расхождение разборов означало бы
+// «через префикс работает, а через активный нет» — самый неотлаживаемый класс багов.
+function parseStateDoc(doc) {
     const upstream = String(doc.upstream || '').trim();
-    if (!upstream) throw new Error('в active-backend.json нет upstream');
+    if (!upstream) throw new Error('в записи бэкенда нет upstream');
     const u = new URL(upstream);        // бросит на мусоре — поймает вызывающий
     if (!/^https?:$/.test(u.protocol)) throw new Error(`upstream не http(s): ${upstream}`);
     return {
@@ -98,6 +104,69 @@ const UPSTREAM_DOWN = new Set([
     'ECONNREFUSED', 'ECONNRESET', 'EACCES', 'EHOSTUNREACH', 'ENETUNREACH', 'ETIMEDOUT', 'EADDRNOTAVAIL',
 ]);
 
+// ── Подъём keepalive по требованию (только для префиксного роутинга) ──────────
+//
+// Префиксный роутинг ввёл второй путь к шлюзу: раньше к провайдеру попадали ТОЛЬКО через
+// активацию в дашборде, и она же поднимала его keepalive. Запрос вида `aipm/claude-opus-5`
+// активацию обходит — и уезжает на порт, который никто не поднимал. Замер 11.09: из 15
+// портов реестра жив был один, то есть префиксом работал только agentrouter.
+//
+// Спавнить сами не можем и не должны: env каждого инстанса (UPSTREAM, KEY_FILE,
+// MODELMAP_FILE) знает дашборд, а он же умеет отличать зомби от живого по /status.
+// Поэтому просим его, а не дублируем таблицу портов третьей копией.
+const SWITCH_PORT = Number(process.env.SWITCH_PORT || 8200);
+const ENSURE_TIMEOUT_MS = Number(process.env.ENSURE_TIMEOUT_MS || 15000);
+
+// Дедуп: пачка запросов на один мёртвый порт обязана разделить ОДИН подъём. Дашборд
+// сериализует и у себя, но без этого мы бы всё равно слали пачку HTTP-запросов и
+// зависели от его дедупа — а держать одно обещание тут дешевле и честнее.
+const ensureInflight = new Map();
+// Отбойник: мёртвый наглухо шлюз (нет ключа, порт съеден файрволом) не должен получать
+// подъём на КАЖДЫЙ запрос — иначе на каждый 502 сверху ложится 8 секунд ожидания.
+const ensureFailedAt = new Map();
+const ENSURE_COOLDOWN_MS = Number(process.env.ENSURE_COOLDOWN_MS || 30000);
+
+function upstreamPortOf(state) {
+    const p = Number(state && state.url && state.url.port);
+    return Number.isInteger(p) && p > 0 ? p : 0;
+}
+
+function ensureKeepalive(port) {
+    const running = ensureInflight.get(port);
+    if (running) return running;
+    const failed = ensureFailedAt.get(port) || 0;
+    if (Date.now() - failed < ENSURE_COOLDOWN_MS) {
+        return Promise.resolve({ ok: false, error: 'подъём уже не удался, отбойник', cooldown: true });
+    }
+    const p = new Promise((resolve) => {
+        const payload = JSON.stringify({ port });
+        const rq = http.request({
+            host: '127.0.0.1', port: SWITCH_PORT, method: 'POST',
+            path: '/__switch/api/keepalive/ensure',
+            headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) },
+            timeout: ENSURE_TIMEOUT_MS,
+        }, (r) => {
+            const buf = [];
+            r.on('data', c => buf.push(c));
+            r.on('end', () => {
+                let j = {};
+                try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
+                resolve(r.statusCode === 200 && j.ok !== false ? { ok: true, ...j } : { ok: false, error: j.error || `дашборд ответил ${r.statusCode}` });
+            });
+        });
+        rq.on('timeout', () => { rq.destroy(new Error(`дашборд :${SWITCH_PORT} не ответил за ${ENSURE_TIMEOUT_MS}мс`)); });
+        rq.on('error', e => resolve({ ok: false, error: e.code || e.message }));
+        rq.end(payload);
+    }).then((r) => {
+        if (r.ok) ensureFailedAt.delete(port);
+        else ensureFailedAt.set(port, Date.now());
+        ensureInflight.delete(port);
+        return r;
+    });
+    ensureInflight.set(port, p);
+    return p;
+}
+
 // Читаем по mtime: кеш не длиннее одного запроса по смыслу — иначе теряется
 // бесшовность свича, ради которой всё и делается.
 function readState() {
@@ -126,6 +195,58 @@ function readState() {
     }
 }
 
+// ── Реестр провайдеров: роутинг по префиксу модели ───────────────────────────
+// Зачем. Активный бэкенд один на всю машину, поэтому два окна Claude Code не могли
+// сидеть на разных шлюзах, а свич провайдера ронял живую сессию, поднятую на модели,
+// которой у нового шлюза нет (замер 04.09: kktoken отдал 403 на glm-5.3, удержание
+// приняло это за «путь лежит» и держало ~90 с до ECONNRESET).
+//
+// Решение — как в OmniRoute: `aipm/claude-opus-4-6[1m]` уводит ЭТОТ запрос на aipm,
+// независимо от активного. Без префикса поведение прежнее, байт в байт.
+//
+// 🪤 Таблицы провайдеров и портов здесь по-прежнему НЕТ (это правило из шапки файла):
+// имена и апстримы приходят файлом от дашборда, который их и так разрешает. Нет файла
+// или он битый → ноль известных префиксов → всё работает как до правки, никогда 5xx.
+const REGISTRY_FILE = process.env.BACKENDS_FILE || path.join(CLAUDE_DIR, 'backends.json');
+const regCache = { mtime: 0, map: null, error: 'реестр ещё не читался' };
+
+function readRegistry() {
+    let st;
+    try {
+        st = fs.statSync(REGISTRY_FILE);
+    } catch {
+        regCache.map = null;
+        regCache.mtime = 0;
+        regCache.error = `нет ${REGISTRY_FILE} — дашборд ещё не писал реестр, префиксы не работают`;
+        return null;
+    }
+    if (regCache.map && st.mtimeMs === regCache.mtime) return regCache.map;
+    try {
+        const raw = fs.readFileSync(REGISTRY_FILE, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        const map = new Map();
+        for (const [name, e] of Object.entries(doc.providers || {})) {
+            // Битая запись роняет ТОЛЬКО себя: остальные провайдеры обязаны работать.
+            try { map.set(name.toLowerCase(), parseStateDoc(Object.assign({}, e, { backend: name }))); }
+            catch (err) { log(`реестр: запись ${name} пропущена (${err.message})`); }
+        }
+        for (const [a, target] of Object.entries(doc.aliases || {})) {
+            const k = String(a).toLowerCase(), t = String(target).toLowerCase();
+            if (!map.has(k) && map.has(t)) map.set(k, map.get(t));   // алиас не смеет заслонять имя
+        }
+        regCache.map = map;
+        regCache.mtime = st.mtimeMs;
+        regCache.error = null;
+        log(`реестр провайдеров: ${map.size} имён (${[...map.keys()].join(', ')})`);
+        return map;
+    } catch (e) {
+        regCache.map = null;
+        regCache.mtime = st.mtimeMs;
+        regCache.error = `backends.json битый: ${e.message}`;
+        return null;
+    }
+}
+
 // ── Маппинг тиров для удалённых апстримов ────────────────────────────────────
 // Те же правила, что у keepalive-proxy.js (:92) и agentrouter-proxy.js: держим
 // формат файла одинаковым, чтобы вкладки дашборда правили его без переучивания.
@@ -134,20 +255,23 @@ const TIER_RE = [
     { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i },
     { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i },
 ];
-const mapCache = { file: '', mtime: 0, data: null };
+// 🪤 Кеш на КАЖДЫЙ файл, а не один слот. С префиксным роутингом два окна ходят на
+// двух разных remote-провайдеров одновременно, и одиночный слот промахивался бы на
+// каждом чередующемся запросе — то есть читал бы карту с диска всегда.
+const mapCache = new Map();     // абсолютный путь → { mtime, data }
 
 function readModelMap(file) {
     if (!file) return null;
     const p = path.isAbsolute(file) ? file : path.join(__dirname, file);
     try {
         const st = fs.statSync(p);
-        if (mapCache.data && mapCache.file === p && st.mtimeMs === mapCache.mtime) return mapCache.data;
+        const hit = mapCache.get(p);
+        if (hit && hit.mtime === st.mtimeMs) return hit.data;
         const raw = fs.readFileSync(p, 'utf8');
         const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
-        mapCache.data = { opus: '', sonnet: '', haiku: '', ...doc };
-        mapCache.file = p;
-        mapCache.mtime = st.mtimeMs;
-        return mapCache.data;
+        const data = { opus: '', sonnet: '', haiku: '', ...doc };
+        mapCache.set(p, { mtime: st.mtimeMs, data });
+        return data;
     } catch { return null; }
 }
 
@@ -174,9 +298,9 @@ function joinUpstreamPath(basePath, reqPath) {
 
 // Что сделать с телом запроса перед удалённым шлюзом.
 // Возвращает { body, from, to } либо null (тело не меняем).
-// Суффикс окна ([1m], [200k]) — метка Claude Code, у шлюзов таких id нет: не срезать
-// = 503/404 на первом же запросе. Маппинг тира приоритетнее среза суффикса.
-function remapForRemote(method, reqPath, body, mm) {
+// Cun принимает три GPT 5.6 именно с `[1m]`; для остальных удалённых шлюзов суффикс
+// остаётся клиентской меткой и срезается. Маппинг тира приоритетнее этого решения.
+function remapForRemote(method, reqPath, body, mm, preserveGpt56Suffix) {
     if (method !== 'POST') return null;
     if (reqPath.replace(/\?.*$/, '') !== '/v1/messages') return null;
     let j;
@@ -184,12 +308,52 @@ function remapForRemote(method, reqPath, body, mm) {
     if (typeof j.model !== 'string' || !j.model) return null;
     const model = j.model;
     const tm = tierTargetFor(model, mm);
-    const target = tm && tm.target ? tm.target : model.replace(/\s*\[[^\]]*\]\s*$/, '');
+    const mapped = tm && tm.target ? tm.target : model;
+    const target = preserveGpt56Suffix && /^gpt-5\.6-(sol|luna|terra)\[1m\]$/.test(mapped)
+        ? mapped
+        : mapped.replace(/\s*\[[^\]]*\]\s*$/, '');
     if (target === model) return null;
     return {
         body: Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8'),
         from: model,
         to: target,
+    };
+}
+
+// Выбор бэкенда по префиксу модели: `aipm/claude-opus-4-6[1m]` → провайдер aipm,
+// наверх уходит `claude-opus-4-6[1m]`. Возвращает { state, prefix, from, to, body }
+// либо null (префикса нет / имя чужое / реестра нет — тогда работает активный бэкенд).
+//
+// 🪤 Незнакомый префикс — это НЕ ошибка и НЕ повод гадать: `anthropic/claude-opus-4-8`
+// и `openai/gpt-4o` — легитимные имена моделей, у нас же они есть у кастом-провайдеров.
+// Не нашли имя в реестре → тело не трогаем вовсе, запрос едет к активному как раньше.
+//
+// 🪤 Пути НЕ фильтруем (в отличие от remapForRemote, где гейт на /v1/messages уместен).
+// Роутить надо и count_tokens, и /v1/chat/completions от opencode: запрос обязан ехать
+// туда, куда его послали, иначе он попадёт на чужой шлюз с неизвестным ему именем.
+// Широкий охват безопасен ровно потому, что чужой префикс — no-op.
+const MODEL_KEY = Buffer.from('"model"');
+
+function routeByModel(method, body, reg) {
+    if (method !== 'POST' || !reg || !reg.size) return null;
+    // Быстрый отсев без JSON.parse: нет байтов `"model"` — нет и поля model.
+    // indexOf по Buffer — нативный memmem, ложных отрицаний не даёт.
+    if (body.indexOf(MODEL_KEY) < 0) return null;
+    let j;
+    try { j = JSON.parse(body.toString('utf8') || '{}'); } catch { return null; }
+    if (typeof j.model !== 'string') return null;
+    const slash = j.model.indexOf('/');
+    if (slash <= 0) return null;                       // нет префикса либо ведущий слэш
+    const state = reg.get(j.model.slice(0, slash).toLowerCase());
+    if (!state) return null;                           // чужое имя — не наше дело
+    const model = j.model.slice(slash + 1);
+    if (!model) return null;                           // `aipm/` без модели
+    return {
+        state,
+        prefix: j.model.slice(0, slash),
+        from: j.model,
+        to: model,
+        body: Buffer.from(JSON.stringify(Object.assign({}, j, { model })), 'utf8'),
     };
 }
 
@@ -208,12 +372,36 @@ function apiError(res, code, message) {
     res.end(body);
 }
 
+// Счётчики префиксного роутинга. Идентификатора окна/сессии в запросе нет (ни хедера,
+// ни отличий в UA между окнами Claude Code), поэтому «кто где сидит» наблюдаемо ровно
+// как «на каком провайдере был последний запрос с таким префиксом».
+const routedCounts = Object.create(null);
+const routedLast = Object.create(null);
+
 function statusPayload() {
     const s = readState();
+    const reg = readRegistry();
+    // Группируем по объекту состояния: алиасы указывают на ту же запись, и показать
+    // их надо как имена одного провайдера, а не как отдельные шлюзы.
+    const groups = [];
+    if (reg) {
+        for (const v of new Set(reg.values())) {
+            groups.push({
+                backend: v.backend,
+                upstream: v.upstream,
+                local: v.local,
+                injectsKey: !v.local && !!v.keyFile,
+                modelmap: v.modelmap,
+                names: [...reg.entries()].filter(([, x]) => x === v).map(([k]) => k),
+            });
+        }
+    }
     return {
         ok: true,
         port: PORT,
         uptime_ms: Date.now() - startedAt,
+        // backend/upstream — по-прежнему ГЛОБАЛЬНЫЙ дефолт: на них смотрят Health и
+        // кнопка статуса в дашборде, менять их смысл нельзя.
         backend: s ? s.backend : null,
         upstream: s ? s.upstream : null,
         local: s ? s.local : null,
@@ -221,6 +409,11 @@ function statusPayload() {
         modelmap: s ? s.modelmap : null,
         state_file: STATE_FILE,
         error: s ? null : stateCache.error,
+        registry_file: REGISTRY_FILE,
+        registry_error: reg ? null : regCache.error,
+        registry: groups,
+        routed: Object.assign({}, routedCounts),
+        routed_last: Object.assign({}, routedLast),
     };
 }
 
@@ -276,20 +469,36 @@ function handle(req, res) {
     req.on('data', (c) => chunks.push(c));
     req.on('error', () => { /* клиент отвалился — апстрим не дёргаем */ });
     req.on('end', () => {
-        const state = readState();
-        if (!state) {
+        let state = readState();
+        let body = Buffer.concat(chunks);
+        const routed = routeByModel(req.method, body, readRegistry());
+        if (routed) {
+            state = routed.state;
+            body = routed.body;
+            routedCounts[state.backend] = (routedCounts[state.backend] || 0) + 1;
+            routedLast[state.backend] = new Date().toISOString();
+            log(`${req.method} ${reqPath} ▸${state.backend} (префикс модели): ${routed.from} → ${routed.to} → ${state.upstream}`);
+        } else if (!state) {
+            // Проверка стоит ПОСЛЕ разбора префикса сознательно: запрос, который сам
+            // назвал провайдера, не должен падать из-за битого active-backend.json —
+            // ему глобальный бэкенд не нужен вовсе.
             log(`${req.method} ${reqPath} → 503: ${stateCache.error}`);
             return apiError(res, 503, `front-door :${PORT}: ${stateCache.error}. Открой дашборд :8200 и выбери провайдера.`);
         }
-        forward(req, res, state, Buffer.concat(chunks), reqPath);
+        forward(req, res, state, body, reqPath, routed);
     });
 }
 
-function forward(req, res, state, reqBody, reqPath) {
+function forward(req, res, state, reqBody, reqPath, routed, retried) {
     const u = state.url;
     const requester = u.protocol === 'https:' ? https.request : http.request;
     const headers = Object.assign({}, req.headers, { host: u.host });
     let body = reqBody;
+
+    // Тело уже переписано разбором префикса — длина обязана совпасть. Раньше эта строка
+    // была только в ветке !state.local: у локальных апстримов тело не трогали вовсе.
+    // 🪤 При transfer-encoding content-length ставить нельзя (RFC 9112 §6.2).
+    if (routed && !headers['transfer-encoding']) headers['content-length'] = String(Buffer.byteLength(body));
 
     if (!state.local) {
         // Ключ читаем на КАЖДЫЙ запрос: на этом стоит смена аккаунта без рестарта CC
@@ -306,7 +515,7 @@ function forward(req, res, state, reqBody, reqPath) {
             headers['x-api-key'] = key;
         }
         const mm = readModelMap(state.modelmap);
-        const remap = remapForRemote(req.method, reqPath, body, mm);
+        const remap = remapForRemote(req.method, reqPath, body, mm, state.backend === 'cun');
         if (remap) {
             body = remap.body;
             headers['content-length'] = String(Buffer.byteLength(body));
@@ -356,11 +565,35 @@ function forward(req, res, state, reqBody, reqPath) {
     });
     upReq.on('error', (e) => {
         // Ретраев тут нет сознательно: они живут в keepalive, дубль = второй платный запрос.
+        //
+        // Единственное исключение — префиксный запрос, чей ЛОКАЛЬНЫЙ keepalive не поднят.
+        // Оно безопасно ровно потому, что платного запроса не было: UPSTREAM_DOWN значит,
+        // что соединение не установилось и до шлюза не доехало ничего. Тело уже забуферено
+        // (`upReq.end(body)`), значит второй forward не требует перечитывания req.
+        // Для глобального бэкенда так НЕ делаем: там порт мог погасить владелец руками, а
+        // за подъём отвечает bootSpawnActiveBackend() — авто-подъём был бы дракой с ним.
+        const port = upstreamPortOf(state);
+        if (routed && state.local && !retried && port && UPSTREAM_DOWN.has(e.code) && !res.headersSent) {
+            log(`${req.method} ${reqPath} ${state.backend}: ${e.code} — поднимаю keepalive :${port} по требованию`);
+            ensureKeepalive(port).then((r) => {
+                if (res.destroyed || res.writableEnded) return;      // клиент уже ушёл
+                if (r.ok) {
+                    log(`${req.method} ${reqPath} ${state.backend}: keepalive :${port} ${r.already ? 'уже жив' : 'поднят'} — повторяю запрос`);
+                    return forward(req, res, state, reqBody, reqPath, routed, true);
+                }
+                log(`${req.method} ${reqPath} ${state.backend}: подъём :${port} не удался — ${r.error || '?'}`);
+                apiError(res, 502, `front-door → ${state.backend}: ${e.code || e.message}. Прокси ${state.upstream} не слушает, автоподъём не удался: ${r.error || '?'} (шлюз выбран префиксом модели \`${routed.prefix}/\`, активный бэкенд ни при чём).`);
+            });
+            return;
+        }
         const hint = state.local && UPSTREAM_DOWN.has(e.code)
             ? ` Прокси ${state.upstream} не слушает — подними его кнопкой в Health или переактивируй провайдера.`
             : '';
-        log(`${req.method} ${reqPath} ${state.backend}: ${e.code || e.message}`);
-        apiError(res, 502, `front-door → ${state.backend}: ${e.code || e.message}.${hint}`);
+        // Без этой приписки владелец идёт чинить активный бэкенд, хотя запрос уехал
+        // совсем не туда — его увёл префикс модели.
+        const via = routed ? ` (шлюз выбран префиксом модели \`${routed.prefix}/\`, активный бэкенд ни при чём)` : '';
+        log(`${req.method} ${reqPath} ${state.backend}: ${e.code || e.message}${retried ? ' (уже после автоподъёма)' : ''}`);
+        apiError(res, 502, `front-door → ${state.backend}: ${e.code || e.message}.${hint}${via}`);
     });
     // ── Клиент ушёл (Ctrl-C, ESC в CC, свой таймаут стрима) ───────────────────
     // 🪤 `req.on('aborted')` СЛОМАН на Node 17+ (deprecated с 16-й) — в обычном пути
@@ -441,6 +674,11 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual(r2.to, 'gpt-5.4', 'карта тиров приоритетнее среза суффикса');
     const r3 = remapForRemote('POST', '/v1/messages', bodyOf({ model: 'claude-sonnet-5[1m]' }), mm);
     assert.strictEqual(r3.to, 'claude-sonnet-5', 'пустой тир в карте = только срез суффикса');
+    const cunGpt = bodyOf({ model: 'gpt-5.6-sol[1m]' });
+    assert.strictEqual(remapForRemote('POST', '/v1/messages', cunGpt, noMap, true), null,
+        'Cun получает GPT 5.6 с [1m] без переписывания тела');
+    assert.strictEqual(remapForRemote('POST', '/v1/messages', cunGpt, noMap, false).to, 'gpt-5.6-sol',
+        'другие удалённые шлюзы по-прежнему получают GPT без клиентского суффикса');
     assert.strictEqual(remapForRemote('GET', '/v1/models', bodyOf({ model: 'claude-opus-5[1m]' }), mm), null, 'не POST — не трогаем');
     assert.strictEqual(remapForRemote('POST', '/v1/messages/count_tokens', bodyOf({ model: 'claude-opus-5[1m]' }), mm), null,
         'count_tokens форвардим как есть, своей оценки не даём');
@@ -451,7 +689,42 @@ if (process.argv[2] === 'selftest') {
     }), noMap);
     assert.strictEqual(probe.to, 'claude-opus-5', 'пробник /model проходит как обычный запрос');
 
-    // 3b. Хост соединения: локальный `localhost` → 127.0.0.1, удалённый не трогаем.
+    // 3c. Роутинг по префиксу модели: выбор бэкенда + срез префикса.
+    const reg = new Map([
+        ['aipm', parseStateDoc({ backend: 'aipm', upstream: 'http://localhost:20163' })],
+        ['conduit', parseStateDoc({
+            backend: 'conduit', upstream: 'https://conduit.ozdoev.net/v1',
+            keyFile: 'cdt-active-key.txt', modelmap: 'cdt-modelmap.json',
+        })],
+    ]);
+    reg.set('ap', reg.get('aipm'));                     // алиас указывает на ТУ ЖЕ запись
+    const rb = (m, meth = 'POST') => routeByModel(meth, bodyOf({ model: m, max_tokens: 1 }), reg);
+    assert.strictEqual(rb('aipm/claude-opus-4-6[1m]').state.backend, 'aipm', 'префикс выбирает провайдера');
+    // Главный инвариант правки: срезается ТОЛЬКО префикс. Суффикс окна остаётся —
+    // его снимет remapForRemote/keepalive, как и для беспрефиксных моделей.
+    assert.strictEqual(rb('aipm/claude-opus-4-6[1m]').to, 'claude-opus-4-6[1m]', 'срезан только префикс, окно [1m] цело');
+    assert.strictEqual(JSON.parse(rb('aipm/claude-opus-4-6').body).max_tokens, 1, 'остальное тело сохранено');
+    assert.strictEqual(rb('ap/claude-opus-4-6').state.backend, 'aipm', 'алиас резолвится');
+    assert.strictEqual(rb('AIPM/claude-opus-4-6').state.backend, 'aipm', 'регистр имени провайдера не важен');
+    assert.strictEqual(rb('anthropic/claude-opus-4-8'), null, 'чужой префикс не трогаем и не гадаем');
+    assert.strictEqual(rb('openai/gpt-4o'), null, 'легитимное имя с / у кастом-провайдера — тоже мимо');
+    assert.strictEqual(rb('claude-opus-5[1m]'), null, 'без префикса — глобальный бэкенд');
+    assert.strictEqual(rb('/claude-opus-5'), null, 'ведущий слэш — не префикс');
+    assert.strictEqual(rb('aipm/'), null, 'префикс без модели');
+    assert.strictEqual(rb('aipm/claude-opus-4-6', 'GET'), null, 'не POST — не трогаем');
+    assert.strictEqual(routeByModel('POST', Buffer.from('не json'), reg), null, 'битое тело не ломает прокси');
+    assert.strictEqual(routeByModel('POST', bodyOf({ max_tokens: 1 }), reg), null, 'нет поля model');
+    assert.strictEqual(routeByModel('POST', bodyOf({ model: 'aipm/x' }), new Map()), null, 'пустой реестр = как до правки');
+    assert.strictEqual(routeByModel('POST', bodyOf({ model: 'aipm/x' }), null), null, 'нет реестра = как до правки');
+    // Путь на роутинг не влияет: count_tokens и /v1/chat/completions от opencode обязаны
+    // ехать туда же, куда их послали, иначе попадут на чужой шлюз с неизвестным именем.
+    assert.ok(rb('aipm/claude-opus-4-6'), 'путь не фильтруется (count_tokens/chat.completions роутятся)');
+    // После среза префикса тир-карта провайдера обязана работать как обычно.
+    assert.strictEqual(
+        remapForRemote('POST', '/v1/messages', rb('conduit/claude-opus-5[1m]').body, { opus: 'gpt-5.4', sonnet: '', haiku: '' }).to,
+        'gpt-5.4', 'после среза префикса карта тиров применяется');
+
+
     assert.strictEqual(connectHost('localhost', true), '127.0.0.1', 'локальный localhost уходит в IPv4');
     assert.strictEqual(connectHost('0.0.0.0', true), '127.0.0.1', '0.0.0.0 тоже (connect в него бессмысленен)');
     assert.strictEqual(connectHost('127.0.0.1', true), '127.0.0.1', 'уже IPv4 — без изменений');
@@ -473,6 +746,20 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual((src.match(/^\s*const upReq = requester\(\{/gm) || []).length, 1,
         'апстрим дёргается ровно из одного места (нет ретраев/хеджей)');
     assert.ok(/server\.listen\(PORT, '127\.0\.0\.1'/.test(src), 'слушаем только 127.0.0.1 (инжектим ключи)');
+    // Правило из шапки файла: провайдеров и портов здесь нет, они приходят файлом от
+    // дашборда. Если кто-то «для удобства» впишет порт — тест обязан упасть.
+    // 🪤 Смотрим ТОЛЬКО боевую часть файла: в самом selftest порты — это фикстуры
+    // (фейковый реестр, адреса шлюзов в проверках склейки пути), и запрещать их там
+    // значило бы запретить тестировать.
+    const srcProd = src.slice(0, src.indexOf("if (process.argv[2] === 'selftest')"))
+        .replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
+    assert.ok(!/2013[0-9]|2015[0-9]|2016[0-9]/.test(srcProd),
+        'в коде front-door нет портов провайдеров (реестр приходит файлом)');
+    assert.ok(/BACKENDS_FILE|backends\.json/.test(src), 'реестр провайдеров читается из файла');
+    // Длину тела после переписывания префиксом обязаны пересчитать и для ЛОКАЛЬНЫХ
+    // апстримов: раньше тело у них не трогалось вовсе, и content-length брался клиентский.
+    assert.ok(/if \(routed && !headers\['transfer-encoding'\]\) headers\['content-length'\]/.test(src),
+        'после среза префикса content-length пересчитан (включая локальные апстримы)');
     // Уход клиента ловится через `close`, а не только через сломанный на Node 17+
     // `aborted`: без этого front-door держал апстрим до своего таймаута (349 висяков
     // за день 25.08) и платил шлюзу за ответы, которые никто не читает.

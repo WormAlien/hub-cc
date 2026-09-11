@@ -160,7 +160,7 @@ function mkServer(hub) {
     if (req.method === 'DELETE' && req.url.startsWith('/__switch/api/league/chat')) return hub.handleLeagueChatDelete(req, res);
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/league/chat/att/')) return hub.handleLeagueAtt(req, res);
     if (req.method === 'GET' && req.url.startsWith('/__switch/api/league/chat')) return hub.handleLeagueChatGet(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/league/chat') return hub.handleLeagueChatPost(req, res);
+    if (req.method === 'POST' && req.url.split('?')[0] === '/__switch/api/league/chat') return hub.handleLeagueChatPost(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/league/avatar') return hub.handleLeagueAvatar(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/league/nick') return hub.handleLeagueNick(req, res);
     jsonRes(res, 404, { error: 'нет такой ручки' });
@@ -2026,6 +2026,88 @@ async function main() {
   check('при заблокированном микрофоне шторка не запрашивается вовсе',
     asked === 0 && v3.log.errs.length === 1 && /адресной строке/.test(v3.log.errs[0]),
     { asked, errs: v3.log.errs });
+
+  console.log('\nавтоподключение: свежая установка без конфига пишет в чат сама:');
+  // Ровно тот случай, который был у друга: он обновился, конфига у него нет, и любая
+  // отправка отвечала «приёмник не настроен». Теперь хаб обязан подключиться сам и
+  // ДОВЕСТИ исходное действие до конца — иначе человек видит ошибку на первом сообщении.
+  // 🪤 Bootstrap-файл коммитимый и БЕЗ секрета: в нём только адрес. Токен хаб придумывает
+  // сам и кладёт в `league-config.json` (тот в .gitignore).
+  {
+    // Приёмник в тесте поднят в НАСЛЕДУЕМОМ режиме (общий ключ), а `/autojoin` живёт только
+    // в режиме личностей — там же, где группы и права. Переводим его ровно так же, как это
+    // делает `tools/league-migrate.js` на ноде: реестр участников, реестр групп и соль.
+    const GID_AUTO = 'e5'.repeat(16);
+    const sha256 = v => crypto.createHash('sha256').update(v).digest('hex');
+    const atNow = new Date().toISOString();
+    const OWNER_MID = '0f'.repeat(8);
+    fs.writeFileSync(path.join(DATA, 'groups.json'), JSON.stringify({
+      [GID_AUTO]: { gid: GID_AUTO, title: 'Общий', createdBy: OWNER_MID,
+        createdAt: atNow, members: [OWNER_MID] } }));
+    fs.writeFileSync(path.join(DATA, 'members.json'), JSON.stringify({
+      [OWNER_MID]: { memberId: OWNER_MID, tokenHash: sha256(SECRET), installId: me.installId,
+        nick: 'worm', groups: [GID_AUTO], status: 'active', createdAt: atNow,
+        invitedBy: null, role: 'admin', canUpload: true } }));
+    fs.writeFileSync(path.join(DATA, 'addr-salt'), crypto.randomBytes(32).toString('hex') + '\n');
+
+    const bootFile = path.join(HUBDIR, 'league-bootstrap.json');
+    const idFile2 = path.join(HUBDIR, 'hub-identity.json');
+    fs.writeFileSync(bootFile, JSON.stringify({ url: `http://127.0.0.1:${RPORT}`, everyMin: 10 }));
+    fs.rmSync(cfgFile, { force: true });
+    fs.writeFileSync(idFile2, JSON.stringify({ installId: 'c3'.repeat(8), nick: 'свежий' }));
+    const hub2 = mkHub(HUBDIR, fs);
+    const srv2 = mkServer(hub2);
+    const P2 = await listen(srv2);
+    const H2 = `http://127.0.0.1:${P2}/__switch/api/league`;
+    const TXT2 = 'альо из свежей установки ' + Date.now();
+    const s2 = await jget(`${H2}/chat?gid=${GID_AUTO}`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: TXT2, gid: GID_AUTO }) });
+    check('первая же отправка проходит: хаб подключился сам и довёл сообщение',
+      s2.r.status === 200 && s2.j.ok === true && Number.isInteger(s2.j.seq), s2.j);
+    const cfg2 = (() => { try { return JSON.parse(fs.readFileSync(cfgFile, 'utf8')); } catch { return null; } })();
+    check('конфиг записан на диск: url из bootstrap и свой токен',
+      !!cfg2 && cfg2.enabled === true && cfg2.url === `http://127.0.0.1:${RPORT}`
+      && typeof cfg2.key === 'string' && cfg2.key.length >= 20, cfg2 && { url: cfg2.url, keyLen: (cfg2.key || '').length });
+    check('токен НЕ уехал в браузер: в ответе его нет',
+      !JSON.stringify(s2.j).includes((cfg2 || {}).key || 'нет-ключа'), s2.j);
+    check('и в лог хаба он тоже не попал', !LOGS.join('\n').includes((cfg2 || {}).key || 'нет-ключа'));
+    // Своя личность у чата и у рейтинга должна быть ОДНА: иначе рейтинг раздвоится.
+    const me2 = await jget(`${H2}/chat?gid=${GID_AUTO}&since=0`);
+    const mine2 = (me2.j.messages || []).find(m => m.text === TXT2) || {};
+    check('сообщение подписано установкой этого хаба, а не выдумкой приёмника',
+      mine2.installId === 'c3'.repeat(8), mine2.installId);
+    // Гонка: два одновременных запроса на пустом конфиге. Две регистрации = две личности.
+    fs.rmSync(cfgFile, { force: true });
+    fs.writeFileSync(idFile2, JSON.stringify({ installId: 'd4'.repeat(8), nick: 'гонка' }));
+    const hub3 = mkHub(HUBDIR, fs);
+    const srv3 = mkServer(hub3);
+    const P3 = await listen(srv3);
+    const H3 = `http://127.0.0.1:${P3}/__switch/api/league`;
+    const both = await Promise.all([
+      jget(`${H3}/chat?gid=${GID_AUTO}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'гонка 1 ' + Date.now(), gid: GID_AUTO }) }),
+      jget(`${H3}/chat?gid=${GID_AUTO}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: 'гонка 2 ' + Date.now(), gid: GID_AUTO }) }),
+    ]);
+    const members = JSON.parse(fs.readFileSync(path.join(DATA, 'members.json'), 'utf8'));
+    const dupes = Object.values(members).filter(r => r && r.installId === 'd4'.repeat(8)).length;
+    check('два одновременных сообщения дают ОДНУ личность, а не две',
+      both.every(x => x.r.status === 200) && dupes === 1,
+      { коды: both.map(x => x.r.status), записей: dupes });
+    // Битый конфиг — это диагностируемая поломка, а не «свежая установка»: перезаписав его,
+    // мы потеряли бы живой токен и завели вторую личность на ту же машину.
+    fs.writeFileSync(cfgFile, 'это не json');
+    const broken2 = await jget(`${H3}/chat?gid=${GID_AUTO}`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'на битом', gid: GID_AUTO }) });
+    check('битый конфиг НЕ затирается автоподключением, ошибка названа',
+      broken2.r.status >= 400 && fs.readFileSync(cfgFile, 'utf8') === 'это не json',
+      { st: broken2.r.status, err: broken2.j && broken2.j.error });
+    srv2.close(); srv3.close();
+    fs.rmSync(bootFile, { force: true });
+    useReceiver();
+  }
 
   console.log('\nсинтаксис страницы (node --check по каждому inline-блоку):');
   const blocksDir = path.join(TMP, 'blocks');

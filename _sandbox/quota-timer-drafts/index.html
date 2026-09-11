@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Черновики — таймер сброса квоты AgentRouter</title>
+<!-- Шрифты дашборда с диска. Если не резолвится — падаем на системные, вёрстка живая. -->
+<link href="../../routing/vendor/fonts.css" rel="stylesheet">
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   ЧЕРНОВИК. Шесть вариантов круглого таймера до сброса дневной квоты.
+   Правила вкладки дашборда соблюдены (см. [[ABUSE HUB]] § «Стиль вкладок»):
+     · ни одного своего hex в ролях фон / линия / текст — только var(--color-*)
+     · смеси только `in oklab` (oklch крутит hue по кругу и уводит цвет)
+     · текстовая лестница считается, а не берётся из токенов
+     · цифры — tabular-nums, иначе тикающий счётчик пляшет по ширине
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Токены дефолтной темы дашборда. Тема переопределяет их инлайном на <html>. */
+:root {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-bg:        oklch(0.135 0.012 245);
+  --color-surface:   oklch(0.175 0.012 245);
+  --color-elevated:  oklch(0.215 0.013 245);
+  --color-line:      oklch(0.30  0.014 245);
+  --color-line-soft: oklch(0.24  0.014 245);
+
+  --color-ink:       oklch(0.96 0.005 245);
+  --color-muted:     oklch(0.66 0.013 245);
+  --color-dim:       oklch(0.48 0.014 245);
+  --color-faint:     oklch(0.36 0.014 245);
+
+  --color-emerald:   oklch(0.78 0.17 155);
+  --color-amber:     oklch(0.82 0.17 80);
+  --color-azure:     oklch(0.72 0.16 240);
+  --color-violet:    oklch(0.74 0.17 295);
+  --color-crimson:   oklch(0.70 0.20 22);
+  --color-rose:      oklch(0.72 0.18 12);
+
+  /* Текстовая лестница. 62 % — минимум, при котором AA держится во всех 22 темах. */
+  --t-1: var(--color-ink);
+  --t-2: color-mix(in oklab, var(--color-ink) 78%, var(--color-surface));
+  --t-3: color-mix(in oklab, var(--color-ink) 62%, var(--color-surface));
+
+  /* Цвет состояния. Меняется на .wrap[data-state]. */
+  --cc: var(--color-azure);
+}
+
+/* Состояния. Статусные цвета зарезервированы и не переиспользуются как «серия N».  */
+.wrap[data-state="live"]   { --cc: var(--color-azure);   }  /* квота есть, ждём долива  */
+.wrap[data-state="burned"] { --cc: var(--color-amber);   }  /* поймали 402, пул выжжен  */
+.wrap[data-state="fresh"]  { --cc: var(--color-emerald); }  /* только что налили        */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 28px 32px 72px;
+  background: var(--color-bg);
+  color: var(--t-1);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Шапка ───────────────────────────────────────────────────────────── */
+header { max-width: 1320px; margin: 0 auto 26px; }
+h1 {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;      /* крупный кегль хочет отрицательный трекинг */
+  line-height: 1.15;
+}
+.sub { margin: 0; color: var(--t-3); max-width: 78ch; }
+.sub b { color: var(--t-2); font-weight: 600; }
+
+.controls {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin-top: 18px; padding: 12px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 14px;
+}
+.controls .lbl {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.13em;  /* мелкий кегль — положительный */
+  text-transform: uppercase; color: var(--t-3);
+  margin-right: 2px;
+}
+.controls select, .controls button {
+  font: inherit; font-size: 13px;
+  color: var(--t-1);
+  background: var(--color-elevated);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 9px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.controls button[aria-pressed="true"] {
+  border-color: var(--cc);
+  color: var(--cc);
+}
+.controls .sep { width: 1px; height: 22px; background: var(--color-line-soft); margin: 0 6px; }
+.controls .clock {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--t-3); font-size: 12px;
+}
+
+/* ── Сетка карточек ──────────────────────────────────────────────────── */
+.grid {
+  max-width: 1320px; margin: 0 auto;
+  display: grid; gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(390px, 1fr));
+}
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 18px;
+  padding: 20px 20px 18px;
+  display: flex; flex-direction: column;
+}
+.card > h2 {
+  margin: 0 0 2px; font-size: 15px; font-weight: 600; letter-spacing: -0.005em;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.card > h2 .n {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--t-3); letter-spacing: 0.06em;
+}
+.card > .why { margin: 0 0 16px; font-size: 12.5px; color: var(--t-3); }
+.stage { display: flex; justify-content: center; align-items: center; padding: 6px 0 4px; flex: 1; }
+.note {
+  margin: 14px 0 0; padding-top: 12px;
+  border-top: 1px solid var(--color-line-soft);
+  font-size: 11.5px; color: var(--t-3);
+}
+.note b { color: var(--t-2); font-weight: 600; }
+
+/* ── Общее для циферблатов ───────────────────────────────────────────── */
+.dial { display: block; }
+.dial .track { fill: none; stroke: var(--color-line-soft); }
+.dial .arc {
+  fill: none; stroke: var(--cc); stroke-linecap: round;
+  transition: stroke-dasharray .9s linear, stroke .4s ease;
+}
+.hand {
+  transform-origin: 100px 100px;
+  /* Тик с лёгким перелётом — как у механической стрелки. Только transform: дёшево. */
+  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.big {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;   /* без этого счётчик дёргает ширину каждую секунду */
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  fill: var(--t-1);
+}
+.cap {
+  font-family: var(--font-sans); font-size: 9px; font-weight: 600;
+  letter-spacing: 0.13em; text-transform: uppercase;
+  fill: color-mix(in oklab, var(--color-ink) 62%, var(--color-surface));
+}
+.capc { fill: var(--cc); }
+
+/* Подпись под циферблатом, общая для всех вариантов */
+.meta {
+  margin-top: 12px; text-align: center;
+  font-size: 11.5px; color: var(--t-3);
+}
+.meta .drop {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  color: var(--t-2);
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 999px;
+  background: color-mix(in oklab, var(--cc) 14%, var(--color-surface));
+  border: 1px solid color-mix(in oklab, var(--cc) 34%, var(--color-surface));
+  color: var(--cc);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+}
+.chip .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* ── V5: стекло ──────────────────────────────────────────────────────── */
+.glass {
+  position: relative; width: 240px; height: 240px;
+  display: grid; place-items: center; border-radius: 50%;
+}
+.glass::before {                       /* цветное свечение под стеклом */
+  content: ""; position: absolute; inset: 12%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%,
+    color-mix(in oklab, var(--cc) 55%, transparent),
+    transparent 68%);
+  filter: blur(26px);
+  opacity: .85;
+}
+.glass::after {                        /* сама пластина: материал, не заливка */
+  content: ""; position: absolute; inset: 0;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--color-elevated) 55%, transparent);
+  backdrop-filter: blur(14px) saturate(150%);
+  border: 1px solid color-mix(in oklab, var(--color-ink) 16%, transparent);
+  box-shadow: 0 18px 40px -18px color-mix(in oklab, var(--color-bg) 90%, transparent);
+}
+.glass > * { position: relative; z-index: 1; }
+.glass .head {                          /* блик на голове дуги */
+  filter: drop-shadow(0 0 6px color-mix(in oklab, var(--cc) 80%, transparent));
+}
+
+/* ── V3: терминал ────────────────────────────────────────────────────── */
+.term { font-family: var(--font-mono); }
+.term .tick     { stroke: color-mix(in oklab, var(--color-ink) 22%, var(--color-surface)); }
+.term .tick.on  { stroke: var(--cc); }
+.term .tick.now { stroke: var(--t-1); }
+.term text { font-family: var(--font-mono); }
+
+/* ── Доступность ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .hand, .arc { transition: none !important; }
+  .pulse { animation: none !important; }
+}
+/* Перемотка: доводка длиннее шага тика — стрелки начали бы «плыть» и отставать. */
+body.fast .hand, body.fast .arc { transition: none !important; }
+.pulse { animation: pulse 4.5s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: 1 } }
+
+footer {
+  max-width: 1320px; margin: 34px auto 0; padding-top: 18px;
+  border-top: 1px solid var(--color-line-soft);
+  color: var(--t-3); font-size: 12.5px;
+}
+footer h3 { margin: 0 0 8px; font-size: 13px; color: var(--t-2); font-weight: 600; }
+footer ul { margin: 0 0 14px; padding-left: 18px; }
+footer li { margin-bottom: 5px; }
+footer code {
+  font-family: var(--font-mono); font-size: 11.5px;
+  background: var(--color-elevated); padding: 1px 5px; border-radius: 5px;
+  color: var(--t-2);
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Таймер сброса квоты AgentRouter — шесть черновиков</h1>
+  <p class="sub">
+    Квота льётся <b>двумя партиями в сутки</b>: 07:00 и 19:00 по Пекину = UTC 23:00 / 11:00 =
+    <b>02:00 и 14:00 МСК</b>. Ни Китай, ни Россия часы не переводят, поэтому связка фиксирована —
+    сетка ровно 12 ч, и её можно считать одним <code>%</code>. Отсюда же главный ход:
+    <b>12-часовой цикл ложится на обычный циферблат один в один</b>, оба сброса попадают на «2 часа».
+  </p>
+
+  <div class="controls">
+    <span class="lbl">Тема</span>
+    <select id="theme"></select>
+    <span class="sep"></span>
+    <span class="lbl">Состояние</span>
+    <select id="state">
+      <option value="live">live — квота есть</option>
+      <option value="burned">burned — поймали 402</option>
+      <option value="fresh">fresh — только что налили</option>
+    </select>
+    <span class="sep"></span>
+    <span class="lbl">Время</span>
+    <button id="spd" aria-pressed="false" title="Прокрутить цикл быстро, чтобы увидеть движение">×1 · реальное</button>
+    <span class="clock" id="clk"></span>
+  </div>
+</header>
+
+<main class="grid" id="grid"></main>
+
+<footer>
+  <h3>Что здесь важно помимо картинки</h3>
+  <ul>
+    <li><b>Цифры моноширинные и <code>tabular-nums</code></b> — без этого счётчик каждую секунду
+      меняет ширину и «пляшет». Это первое, что выдаёт самодельный таймер.</li>
+    <li><b>Ни одного своего hex.</b> Всё через <code>var(--color-*)</code>, смеси
+      <code>in oklab</code> — переключи тему в шапке, все шесть переживают и светлые.</li>
+    <li><b>Цена отрисовки.</b> Дашборд открыт постоянно, поэтому текст тикает 1 раз в секунду,
+      а не по <code>requestAnimationFrame</code>; движется только <code>transform</code>
+      (композитор, без перерисовки). В бою добавить паузу по <code>document.hidden</code>.</li>
+    <li><b>Три состояния, а не одно.</b> Таймер честно отвечает «когда следующая партия», но не
+      «когда у меня будет квота»: партия конечная, <code>用完即止</code>. Поэтому есть
+      <code>burned</code> — его включает пойманный <code>402 Budget pool quota has been
+      exhausted</code>, и тогда таймер из справки превращается в ожидание.</li>
+    <li><b>Направление дуги — «набирается», а не «тает».</b> Растёт к моменту долива; убывающее
+      время и так написано цифрами в центре, два встречных кодирования одного и того же путали бы.</li>
+  </ul>
+</footer>
+
+<script>
+/* ═════════ Темы дашборда: те же функции, что в proxy-dashboard.html ═════════ */
+function _surf(h, c, lift = 0) {
+  const L = v => Math.max(0.02, Math.min(0.99, v + lift)).toFixed(3);
+  const tc = Math.min(c * 0.35, 0.030).toFixed(3);
+  return {
+    '--color-bg':        `oklch(${L(0.135)} ${c} ${h})`,
+    '--color-surface':   `oklch(${L(0.175)} ${c} ${h})`,
+    '--color-elevated':  `oklch(${L(0.215)} ${c} ${h})`,
+    '--color-line':      `oklch(${L(0.300)} ${c} ${h})`,
+    '--color-line-soft': `oklch(${L(0.240)} ${c} ${h})`,
+    '--color-ink':       `oklch(${L(0.960)} ${(c * 0.12).toFixed(3)} ${h})`,
+    '--color-muted':     `oklch(${L(0.660)} ${tc} ${h})`,
+    '--color-dim':       `oklch(${L(0.480)} ${tc} ${h})`,
+    '--color-faint':     `oklch(${L(0.360)} ${tc} ${h})`,
+  };
+}
+function _acc(L, c, h = {}) {
+  const H = { em: 155, am: 80, az: 240, vi: 295, cr: 22, ro: 12, ...h };
+  return {
+    '--color-emerald': `oklch(${L} ${c} ${H.em})`,
+    '--color-amber':   `oklch(${L} ${c} ${H.am})`,
+    '--color-azure':   `oklch(${L} ${c} ${H.az})`,
+    '--color-violet':  `oklch(${L} ${c} ${H.vi})`,
+    '--color-crimson': `oklch(${L} ${c} ${H.cr})`,
+    '--color-rose':    `oklch(${L} ${c} ${H.ro})`,
+  };
+}
+const THEMES = {
+  zen: { label: 'Zen (дефолт)', vars: {
+    '--color-bg':'oklch(0.252 0.058 253.9)', '--color-surface':'oklch(0.332 0.064 253.9)',
+    '--color-elevated':'oklch(0.385 0.062 253.9)', '--color-line-soft':'oklch(0.408 0.060 253.9)',
+    '--color-line':'oklch(0.495 0.052 253.9)', '--color-faint':'oklch(0.575 0.034 253.9)',
+    '--color-dim':'oklch(0.678 0.028 253.9)', '--color-muted':'oklch(0.792 0.022 253.9)',
+    '--color-ink':'oklch(0.965 0.012 253.9)', ..._acc(0.840, 0.22, { em: 158, am: 82, ro: 10 }) } },
+  midnight: { label: 'Midnight', vars: _surf(245, 0.012) },
+  abyss:    { label: 'Abyss (OLED)', vars: _surf(245, 0.008, -0.048) },
+  matrix:   { label: 'Matrix', vars: { ..._surf(148, 0.050, -0.045), ..._acc(0.88, 0.32, { em: 142, am: 108, az: 185, vi: 265, cr: 28, ro: 15 }) } },
+  synthwave:{ label: 'Synthwave', vars: { ..._surf(292, 0.100, 0.005), ..._acc(0.82, 0.32, { em: 168, am: 70, az: 250, vi: 320, cr: 18, ro: 355 }) } },
+  daylight: { label: 'Daylight (светлая)', vars: {
+    '--color-bg':'oklch(0.985 0.003 250)', '--color-surface':'oklch(1.000 0.000 250)',
+    '--color-elevated':'oklch(0.960 0.005 250)', '--color-line':'oklch(0.820 0.010 250)',
+    '--color-line-soft':'oklch(0.895 0.008 250)', '--color-ink':'oklch(0.235 0.012 250)',
+    '--color-muted':'oklch(0.470 0.014 250)', '--color-dim':'oklch(0.580 0.014 250)',
+    '--color-faint':'oklch(0.680 0.012 250)', ..._acc(0.550, 0.20, { am: 68 }) } },
+  paper: { label: 'Paper (светлая)', vars: {
+    '--color-bg':'oklch(0.960 0.014 85)', '--color-surface':'oklch(0.985 0.010 85)',
+    '--color-elevated':'oklch(0.930 0.016 85)', '--color-line':'oklch(0.790 0.022 85)',
+    '--color-line-soft':'oklch(0.870 0.018 85)', '--color-ink':'oklch(0.230 0.020 60)',
+    '--color-muted':'oklch(0.455 0.022 60)', '--color-dim':'oklch(0.565 0.022 60)',
+    '--color-faint':'oklch(0.665 0.020 60)', ..._acc(0.530, 0.21, { am: 62 }) } },
+};
+const THEME_VARS = [...new Set(Object.values(THEMES).flatMap(t => Object.keys(t.vars)))];
+function applyTheme(id) {
+  const st = document.documentElement.style;
+  THEME_VARS.forEach(v => st.removeProperty(v));
+  Object.entries(THEMES[id].vars).forEach(([k, v]) => st.setProperty(k, v));
+}
+
+/* ═════════ Модель времени ═════════
+   Оба сброса разнесены ровно на 12 ч, поэтому вся арифметика — одна сетка по модулю.
+   Опора: 1970-01-01 11:00 UTC (это и есть 19:00 Пекина / 14:00 МСК). */
+const CYCLE = 12 * 3600 * 1000;
+const ANCHOR = Date.UTC(1970, 0, 1, 11, 0, 0);
+
+function cycle(t) {
+  const el = ((t - ANCHOR) % CYCLE + CYCLE) % CYCLE;
+  return { elapsed: el, remain: CYCLE - el, p: el / CYCLE, next: new Date(t + (CYCLE - el)) };
+}
+const pad = n => String(n).padStart(2, '0');
+function hms(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return { h: pad(Math.floor(s / 3600)), m: pad(Math.floor(s / 60) % 60), s: pad(s % 60) };
+}
+/* Угол на 12-часовом циферблате для момента времени (0° = 12 часов, по часовой). */
+const angleOf = d => ((d.getHours() % 12) + d.getMinutes() / 60) * 30;
+
+/* Виртуальные часы: множитель, чтобы посмотреть движение не дожидаясь полусуток.
+   🪤 Возврат на ×1 обязан СНАПНУТЬСЯ к реальному времени, а не продолжить с виртуальной
+   позиции. Иначе после перемотки часы навсегда остаются в будущем (замерено: два нажатия
+   дали уход на 4,2 суток) и черновики молча показывают выдумку — ровно то, ради оценки
+   чего страница и сделана. */
+let speed = 1, vBase = Date.now(), rBase = Date.now();
+const now = () => vBase + (Date.now() - rBase) * speed;
+function setSpeed(k) {
+  vBase = k === 1 ? Date.now() : now();
+  rBase = Date.now(); speed = k;
+  const b = document.getElementById('spd');
+  b.textContent = k === 1 ? '×1 · реальное' : '×1800 · перемотка';
+  b.setAttribute('aria-pressed', k !== 1);
+  document.body.classList.toggle('fast', k !== 1);
+}
+
+/* ═════════ Геометрия ═════════ */
+const R = 84, C = 2 * Math.PI * R;
+const polar = (cx, cy, r, deg) => {
+  const a = (deg - 90) * Math.PI / 180;
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+};
+
+/* ═════════ Шесть вариантов ═════════
+   Каждый — объект { id, title, why, note, svg(), tick(el, ctx) }. */
+
+const VARIANTS = [
+
+/* ── 1 ─ Циферблат ─────────────────────────────────────────────────────
+   Настоящие часы: цикл квоты и есть 12 часов, поэтому сброс — не абстрактный
+   прогресс, а постоянная метка на циферблате, в нашем поясе ровно «2 часа».
+   Читается тем же навыком, которым человек читает часы. */
+{
+  id: 'clockface', title: 'Циферблат', why: 'Цикл квоты = 12 ч = один оборот. Сброс — постоянная метка «2 часа».',
+  note: '<b>Сильная сторона:</b> учить нечему, читается стрелками. Метка сброса стоит на месте всегда, к ней привыкаешь глазом.',
+  svg: `<svg class="dial" width="240" height="240" viewBox="0 0 200 200">
+    <circle class="track" cx="100" cy="100" r="84" stroke-width="1"/>
+    <g class="ticks"></g>
+    <path class="arc" d="" stroke-width="4"/>
+    <g class="mark"></g>
+    <line class="hand hh" x1="100" y1="100" x2="100" y2="52" stroke-width="4.5"
+          stroke-linecap="round" stroke="var(--t-1)"/>
+    <line class="hand mh" x1="100" y1="100" x2="100" y2="34" stroke-width="2.5"
+          stroke-linecap="round" stroke="color-mix(in oklab, var(--color-ink) 62%, var(--color-surface))"/>
+    <circle cx="100" cy="100" r="3.5" fill="var(--t-1)"/>
+    <text class="big" x="100" y="146" text-anchor="middle" font-size="19"></text>
+    <text class="cap" x="100" y="160" text-anchor="middle">до сброса</text>
+  </svg>`,
+  init(el) {
+    const g = el.querySelector('.ticks');
+    for (let i = 0; i < 12; i++) {
+      const [x1, y1] = polar(100, 100, 76, i * 30), [x2, y2] = polar(100, 100, i % 3 ? 71 : 68, i * 30);
+      g.insertAdjacentHTML('beforeend',
+        `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="${i % 3 ? 1 : 2}"
+               stroke="color-mix(in oklab, var(--color-ink) ${i % 3 ? 24 : 44}%, var(--color-surface))"/>`);
+    }
+  },
+  tick(el, c) {
+    const d = new Date(c.t), a = angleOf(c.next);
+    el.querySelector('.hh').style.transform = `rotate(${((d.getHours() % 12) + d.getMinutes() / 60) * 30}deg)`;
+    el.querySelector('.mh').style.transform = `rotate(${(d.getMinutes() + d.getSeconds() / 60) * 6}deg)`;
+    // Дуга от текущего часового угла до метки сброса — «сколько циферблата осталось».
+    const from = ((d.getHours() % 12) + d.getMinutes() / 60 + d.getSeconds() / 3600) * 30;
+    const sweep = (a - from + 360) % 360;
+    const [sx, sy] = polar(100, 100, 84, from), [ex, ey] = polar(100, 100, 84, a);
+    el.querySelector('.arc').setAttribute('d',
+      `M ${sx} ${sy} A 84 84 0 ${sweep > 180 ? 1 : 0} 1 ${ex} ${ey}`);
+    const [mx, my] = polar(100, 100, 84, a);
+    el.querySelector('.mark').innerHTML =
+      `<circle cx="${mx}" cy="${my}" r="5" fill="var(--color-surface)" stroke="var(--cc)" stroke-width="2.5"/>`;
+    el.querySelector('.big').textContent = `${c.h}:${c.m}:${c.s}`;
+  }
+},
+
+/* ── 2 ─ Кольцо ────────────────────────────────────────────────────────
+   Строгий радиальный метр по правилам dataviz: тонкий трек, толстая дуга
+   с округлённым концом, деления по часам, герой-число в центре, чип статуса.
+   Ничего лишнего — это версия «для работы», а не «для красоты». */
+{
+  id: 'ring', title: 'Кольцо', why: 'Радиальный метр: 12 делений по часам, дуга набирается к доливу.',
+  note: '<b>Сильная сторона:</b> самая честная и плотная. Герой-число крупное, дуга даёт «сколько ещё» одним взглядом, без чтения цифр.',
+  svg: `<svg class="dial" width="240" height="240" viewBox="0 0 200 200">
+    <g class="ticks"></g>
+    <circle class="track" cx="100" cy="100" r="84" stroke-width="8"/>
+    <circle class="arc" cx="100" cy="100" r="84" stroke-width="8"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    <text class="big hero" x="100" y="98"  text-anchor="middle" font-size="38"></text>
+    <text class="cap"      x="100" y="116" text-anchor="middle">до следующей партии</text>
+    <text class="cap capc" x="100" y="134" text-anchor="middle" font-size="10.5"></text>
+  </svg>`,
+  init(el) {
+    const g = el.querySelector('.ticks');
+    for (let i = 0; i < 12; i++) {
+      const [x1, y1] = polar(100, 100, 95, i * 30), [x2, y2] = polar(100, 100, 91, i * 30);
+      g.insertAdjacentHTML('beforeend',
+        `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="1.5"
+               stroke="color-mix(in oklab, var(--color-ink) 26%, var(--color-surface))"/>`);
+    }
+  },
+  tick(el, c) {
+    el.querySelector('.arc').setAttribute('stroke-dasharray', `${(C * c.p).toFixed(1)} ${C}`);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.capc').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск · ${c.s} с`;
+  }
+},
+
+/* ── 3 ─ Терминал ──────────────────────────────────────────────────────
+   Брутализм: кольцо разобрано на 48 сегментов по 15 минут, они загораются
+   один за другим. Моноширинный верхний регистр, жёсткий контраст кеглей.
+   Ближе всего к характеру самого ABUSE HUB. */
+{
+  id: 'terminal', title: 'Терминал', why: '48 сегментов по 15 минут гаснут/зажигаются. Моно, капсы, нулевая декорация.',
+  note: '<b>Сильная сторона:</b> дискретность честнее градиента — видно, что осталось «столько-то четвертей часа», а не абстрактную долю.',
+  svg: `<svg class="dial term" width="240" height="240" viewBox="0 0 200 200">
+    <g class="segs"></g>
+    <text class="cap" x="100" y="80" text-anchor="middle">next drop</text>
+    <text class="big hero" x="100" y="108" text-anchor="middle" font-size="30"></text>
+    <text class="cap capc at" x="100" y="126" text-anchor="middle" font-size="10"></text>
+  </svg>`,
+  init(el) {
+    const g = el.querySelector('.segs');
+    for (let i = 0; i < 48; i++) {
+      const a = i * 7.5, long = i % 4 === 0;
+      const [x1, y1] = polar(100, 100, 88, a), [x2, y2] = polar(100, 100, long ? 72 : 78, a);
+      g.insertAdjacentHTML('beforeend',
+        `<line class="tick" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="${long ? 3 : 2}"/>`);
+    }
+  },
+  tick(el, c) {
+    const done = Math.floor(c.p * 48);
+    el.querySelectorAll('.tick').forEach((t, i) => {
+      t.classList.toggle('on', i < done);
+      t.classList.toggle('now', i === done);
+    });
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} MSK`;
+  }
+},
+
+/* ── 4 ─ Минимал ───────────────────────────────────────────────────────
+   Почти ничего: волосяная окружность, одна точка по ней и крупные лёгкие
+   цифры. Расчёт на то, что виджет висит в углу и не должен отвлекать. */
+{
+  id: 'minimal', title: 'Минимал', why: 'Волосяной круг, одна бегущая точка, крупные лёгкие цифры. Больше ничего.',
+  note: '<b>Сильная сторона:</b> не отвлекает. Если виджет висит в шапке постоянно, любой «сочный» вариант через неделю начнёт раздражать, а этот — нет.',
+  svg: `<svg class="dial" width="240" height="240" viewBox="0 0 200 200">
+    <circle class="track" cx="100" cy="100" r="84" stroke-width="1"/>
+    <circle class="arc" cx="100" cy="100" r="84" stroke-width="1.5"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    <circle class="pt" r="5" fill="var(--cc)"/>
+    <text class="big hero" x="100" y="99" text-anchor="middle" font-size="34"
+          font-weight="300" letter-spacing="-0.04em"></text>
+    <text class="cap" x="100" y="120" text-anchor="middle"></text>
+  </svg>`,
+  tick(el, c) {
+    el.querySelector('.arc').setAttribute('stroke-dasharray', `${(C * c.p).toFixed(1)} ${C}`);
+    const [x, y] = polar(100, 100, 84, c.p * 360);
+    const pt = el.querySelector('.pt'); pt.setAttribute('cx', x); pt.setAttribute('cy', y);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.cap').textContent = `сброс в ${pad(c.next.getHours())}:${pad(c.next.getMinutes())}`;
+  }
+},
+
+/* ── 5 ─ Стекло ────────────────────────────────────────────────────────
+   Материал, а не заливка: backdrop-filter, цветное свечение под пластиной,
+   блик на голове дуги. Толщина материала кодирует, что это отдельный слой. */
+{
+  id: 'glass', title: 'Стекло', why: 'Материал с backdrop-filter, свечение под пластиной, блик на голове дуги.',
+  note: '<b>Сильная сторона:</b> выглядит дороже остальных и хорошо ложится на обои. <b>Цена:</b> <code>backdrop-filter</code> — самый дорогой из шести по отрисовке.',
+  wrapClass: 'glass',
+  svg: `<svg class="dial" width="210" height="210" viewBox="0 0 200 200">
+    <circle class="track" cx="100" cy="100" r="84" stroke-width="6"
+            stroke="color-mix(in oklab, var(--color-ink) 12%, transparent)"/>
+    <circle class="arc" cx="100" cy="100" r="84" stroke-width="6"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    <circle class="head" r="6" fill="var(--cc)"/>
+    <text class="big hero" x="100" y="97" text-anchor="middle" font-size="34"></text>
+    <text class="cap" x="100" y="117" text-anchor="middle">до сброса квоты</text>
+    <text class="cap capc at" x="100" y="135" text-anchor="middle" font-size="10.5"></text>
+  </svg>`,
+  tick(el, c) {
+    el.querySelector('.arc').setAttribute('stroke-dasharray', `${(C * c.p).toFixed(1)} ${C}`);
+    const [x, y] = polar(100, 100, 84, c.p * 360);
+    const h = el.querySelector('.head'); h.setAttribute('cx', x); h.setAttribute('cy', y);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск`;
+  }
+},
+
+/* ── 6 ─ Сутки ─────────────────────────────────────────────────────────
+   Круг на 24 часа, а не на 12. Это принципиально: на 12-часовом циферблате
+   02:00 и 14:00 попадают в ОДНУ точку, и «показать оба сброса» там физически
+   нельзя — дуга между ними вырождается в ноль. На суточном круге они встают
+   друг напротив друга, полуцикл читается как половина круга, и виджет
+   отвечает на вопрос, которого нет у остальных пяти: ночная партия или дневная. */
+{
+  id: 'day', title: 'Сутки', why: 'Круг на 24 ч: 02 и 14 друг напротив друга, горит текущий полуцикл.',
+  note: '<b>Сильная сторона:</b> единственный, который отвечает «ждать долива или идти спать» — видно, в какой половине суток мы и куда идёт стрелка. <b>Цена:</b> суточный циферблат непривычен, первые дни надо привыкать.',
+  svg: `<svg class="dial" width="240" height="240" viewBox="0 0 200 200">
+    <circle class="track" cx="100" cy="100" r="84" stroke-width="6"/>
+    <path class="half" fill="none" stroke-width="6"
+          stroke="color-mix(in oklab, var(--cc) 30%, var(--color-surface))"/>
+    <path class="arc"  fill="none" stroke-width="6" stroke-linecap="round"/>
+    <g class="ticks"></g>
+    <g class="marks"></g>
+    <circle class="pt" r="4.5" fill="var(--t-1)"/>
+    <text class="big hero" x="100" y="94"  text-anchor="middle" font-size="29"></text>
+    <text class="cap"      x="100" y="112" text-anchor="middle">до сброса</text>
+    <text class="cap capc phase" x="100" y="131" text-anchor="middle" font-size="10.5"></text>
+  </svg>`,
+  init(el) {
+    const g = el.querySelector('.ticks');
+    for (let h = 0; h < 24; h += 2) {                       // деления через 2 часа
+      const a = h * 15, big = h % 6 === 0;
+      const [x1, y1] = polar(100, 100, 95, a), [x2, y2] = polar(100, 100, big ? 89 : 92, a);
+      g.insertAdjacentHTML('beforeend',
+        `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="${big ? 2 : 1}"
+               stroke="color-mix(in oklab, var(--color-ink) ${big ? 40 : 22}%, var(--color-surface))"/>`);
+    }
+    const m = el.querySelector('.marks');
+    [[2, '02'], [14, '14']].forEach(([h, lbl]) => {          // две метки, ровно напротив
+      const a = h * 15;
+      const [x, y] = polar(100, 100, 84, a);
+      const [lx, ly] = polar(100, 100, 68, a);
+      m.insertAdjacentHTML('beforeend',
+        `<circle cx="${x}" cy="${y}" r="5.5" fill="var(--color-surface)" stroke="var(--cc)" stroke-width="2.5"/>
+         <text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle"
+               class="cap" font-size="9">${lbl}</text>`);
+    });
+  },
+  tick(el, c) {
+    const d = new Date(c.t);
+    const nowA  = (d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600) * 15;
+    const toA   = (c.next.getHours() + c.next.getMinutes() / 60) * 15;
+    const fromA = (toA + 180) % 360;                        // предыдущий сброс — ровно напротив
+    // Тусклая половина — текущее окно целиком; яркая дуга — сколько его уже прошло.
+    const [hx, hy] = polar(100, 100, 84, fromA), [hex, hey] = polar(100, 100, 84, toA);
+    el.querySelector('.half').setAttribute('d', `M ${hx} ${hy} A 84 84 0 0 1 ${hex} ${hey}`);
+    const sweep = (nowA - fromA + 360) % 360;
+    const [ax, ay] = polar(100, 100, 84, nowA);
+    el.querySelector('.arc').setAttribute('d',
+      sweep < 0.4 ? '' : `M ${hx} ${hy} A 84 84 0 ${sweep > 180 ? 1 : 0} 1 ${ax} ${ay}`);
+    const pt = el.querySelector('.pt'); pt.setAttribute('cx', ax); pt.setAttribute('cy', ay);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
+    const night = c.next.getHours() < 12;
+    el.querySelector('.phase').textContent =
+      `${night ? 'ночная' : 'дневная'} партия · ${pad(c.next.getHours())}:${pad(c.next.getMinutes())}`;
+  }
+},
+];
+
+/* ═════════ Сборка ═════════ */
+const grid = document.getElementById('grid');
+const mounted = [];
+VARIANTS.forEach((v, i) => {
+  const card = document.createElement('section');
+  card.className = 'card';
+  card.innerHTML = `
+    <h2><span class="n">0${i + 1}</span>${v.title}</h2>
+    <p class="why">${v.why}</p>
+    <div class="stage">
+      <div class="wrap ${v.wrapClass || ''}" data-state="live">${v.svg}</div>
+    </div>
+    <div class="meta">
+      <span class="chip"><span class="dot"></span><span class="st">квота есть</span></span>
+    </div>
+    <p class="note">${v.note}</p>`;
+  grid.appendChild(card);
+  const el = card.querySelector('.wrap');
+  if (v.init) v.init(el);
+  mounted.push({ v, el });
+});
+
+const STATE_LABEL = { live: 'квота есть', burned: 'пул выжжен · 402', fresh: 'только что налили' };
+let state = 'live';
+
+function render() {
+  const t = now(), c = cycle(t), r = hms(c.remain);
+  const ctx = { t, ...c, ...r };
+  mounted.forEach(({ v, el }) => {
+    el.dataset.state = state;
+    v.tick(el, ctx);
+    const st = el.closest('.card').querySelector('.st');
+    if (st) st.textContent = STATE_LABEL[state];
+  });
+  const d = new Date(t);
+  document.getElementById('clk').textContent =
+    `сейчас ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} · прошло ${(c.p * 100).toFixed(1)} % цикла`;
+}
+
+/* Тик раз в секунду, а не по rAF: дашборд открыт постоянно, платить кадрами не за что.
+   Пауза на скрытой вкладке — то же правило. */
+let timer = null;
+const start = () => { if (!timer) { render(); timer = setInterval(render, speed === 1 ? 1000 : 60); } };
+const stop  = () => { clearInterval(timer); timer = null; };
+document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
+
+/* Контролы */
+const sel = document.getElementById('theme');
+Object.entries(THEMES).forEach(([id, t]) =>
+  sel.insertAdjacentHTML('beforeend', `<option value="${id}">${t.label}</option>`));
+sel.onchange = () => applyTheme(sel.value);
+applyTheme('zen');
+
+document.getElementById('state').onchange = e => { state = e.target.value; render(); };
+document.getElementById('spd').onclick = () => { setSpeed(speed === 1 ? 1800 : 1); stop(); start(); };
+
+start();
+</script>
+</body>
+</html>

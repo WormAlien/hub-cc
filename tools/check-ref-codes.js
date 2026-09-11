@@ -38,7 +38,7 @@ let rc = null;
 try { rc = require(path.join(ROOT, 'routing', 'lib', 'ref-codes.js')); } catch (e) { /* ниже */ }
 chk(!!rc, 'модуль загружается', rc ? '' : 'require упал');
 if (rc) {
-    chk(rc.PROVIDERS.length === 9, 'провайдеров девять', 'нашлось ' + rc.PROVIDERS.length);
+    chk(rc.PROVIDERS.length === 11, 'провайдеров одиннадцать', 'нашлось ' + rc.PROVIDERS.length);
     for (const p of Object.keys(WAS)) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
@@ -56,8 +56,8 @@ if (rc) {
         'SeekAi НЕ в живом наборе — легаси с 24.08');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('truesota'),
         'TrueSOTA НЕ в живом наборе — легаси с 05.09 (шлюз рабочий, но узкий: opus-only)');
-    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 6,
-        'живых провайдеров шесть (ar/go/jw/tb/kktoken/hcnsec)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
+    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 8,
+        'живых провайдеров восемь (ar/go/jw/tb/kktoken/hcnsec/aipm/wisdomsatan)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
     // TrueSOTA заведён 2026-08-25 БЕЗ дефолтного кода: аккаунта на шлюзе ещё не было.
     // Поэтому url() обязан отдавать корень, а не ссылку с пустым `aff=` — иначе панель
     // примет битый параметр за код, и реф-кредит потеряется вообще (см. ref-codes.js § url).

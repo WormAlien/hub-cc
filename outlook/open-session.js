@@ -30,6 +30,7 @@
 //                2 — таймаут ожидания входа (10 мин), 3 — label не найден в пуле.
 
 const { chromium } = require('playwright');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
 const fs = require('fs');
 const path = require('path');
 const pool = require('../routing/lib/outlook-pool.js');
@@ -278,11 +279,13 @@ async function main() {
   // launchPersistentContext держит профиль открытым и пишет на диск всё сам.
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
-    viewport: { width: 1280, height: 900 },
-    args: ['--disable-blink-features=AutomationControlled'],
+    viewport: null,
+    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
   });
 
   const page = context.pages()[0] || await context.newPage();
+  await page.bringToFront();
+  raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
   await disableHttpCache(context, page);
 
   try {

@@ -219,6 +219,10 @@ section('routing/transparent-proxy.js · реестры');
     check(/\[JW_KEEPALIVE_PORT\]:\s*\{[^}]*spawn: jwKeepaliveSpawn/.test(inst),
         'keepaliveInstances: [JW_KEEPALIVE_PORT] → jwKeepaliveSpawn (иначе кнопка «перезапустить» в Health не знает про :20158)');
 
+    const jwSpawn = block('async function jwKeepaliveSpawn() {');
+    check(/ALLOW_PAID_HEDGE:\s*'1'/.test(jwSpawn),
+        "jwKeepaliveSpawn передаёт ALLOW_PAID_HEDGE='1' — владелец осознанно разрешил один платный дубль");
+
     const money = block('const MONEY_GW = {');
     check(/^\s*jw:/m.test(money), 'MONEY_GW: строка jw есть — иначе авторотация обходит шлюз стороной');
     check(/jw:[^\n]*host: 'api\.justwoker\.icu'/.test(money), "MONEY_GW.jw.host = 'api.justwoker.icu'");

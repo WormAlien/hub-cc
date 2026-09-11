@@ -223,6 +223,42 @@ check('отсеянные дубли наливки не отрицательн�
 check('старое src.topupW совпадает с новым tot.tuW', r2(me.src.topupW) === r2(me.tot.tuW),
   { topupW: me.src.topupW, tuW: me.tot.tuW });
 
+// ── Сшивка источников: журнал НЕ имеет права занижать итог ───────────────────
+// Баг 11.09: с 26.08 журнал front-door ЗАМЕНЯЛ сутки stats-cache (`tokDay.set`),
+// а он неполон — 27,90 млрд превращались в 20,75 (−26%). Замена делалась ради
+// охвата «все харнессы», которого в журнале нет: claude-code 12,99 млрд против
+// 27,6 тыс. у всех остальных вместе.
+// Правило: за сутки берётся БОЛЬШЕЕ из двух измерений claude-code (сложить нельзя
+// — это один харнесс с двух точек наблюдения, вышел бы двойной счёт), а всё
+// не-claude-code из журнала добавляется сверху как отдельная работа.
+console.log('\nсшивка stats-cache и журнала:');
+const scDays = (() => {
+  const m = new Map();
+  try {
+    const raw = fs.readFileSync(path.join(os.homedir(), '.claude', 'stats-cache.json'), 'utf8');
+    const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    for (const rec of doc.dailyModelTokens || []) {
+      if (!rec || !rec.date) continue;
+      let s = 0;
+      for (const k in rec.tokensByModel || {}) s += Number(rec.tokensByModel[k]) || 0;
+      m.set(rec.date, s);
+    }
+  } catch { /* нет файла — установка без Claude Code, проверка вырождается */ }
+  return m;
+})();
+const allAtTok = new Map(me.keys.all.map((k, i) => [k, me.tok.all[i]]));
+// Главный сторож: итог «всё время» не может быть меньше того, что знает сам
+// Claude Code. Меньше — значит журнал снова затёр более полные сутки.
+const scTotalInWindow = [...scDays].filter(([k]) => allAtTok.has(k))
+  .reduce((a, [, v]) => a + v, 0);
+check('«всё время» не меньше суммы stats-cache в том же окне',
+  me.tot.tokA >= scTotalInWindow,
+  { tokA: me.tot.tokA, statsCache: scTotalInWindow, недосчёт: scTotalInWindow - me.tot.tokA });
+// Посуточно: ни один день не смеет опуститься ниже своего значения в stats-cache.
+const sagging = [...scDays].filter(([k, v]) => allAtTok.has(k) && allAtTok.get(k) < v)
+  .map(([k, v]) => ({ день: k, stats: v, лига: allAtTok.get(k) }));
+check('ни одни сутки не ниже stats-cache', sagging.length === 0, sagging.slice(0, 4));
+
 console.log('\nприватность (этот объект уедет на приёмник):');
 const flat = JSON.stringify(me);
 for (const [what, re] of [

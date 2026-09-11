@@ -39,6 +39,7 @@
     "playwright": "1.60.0",
     "telegraf": "^4.16.3",
     "telegram": "^2.26.22",
+    "user-agents": "^2.1.178",
     "utf-8-validate": "^6.0.6"
   },
   "devDependencies": {

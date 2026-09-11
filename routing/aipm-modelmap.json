@@ -1,4 +1,5 @@
 {
-  "claude-opus-5": "claude-opus-5",
-  "claude-opus-5[1m]": "claude-opus-5[1m]"
+  "opus": "claude-opus-4-6",
+  "sonnet": "claude-opus-4-6-thinking",
+  "haiku": "claude-sonnet-4-6"
 }

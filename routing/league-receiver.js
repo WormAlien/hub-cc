@@ -2489,6 +2489,120 @@ function handleApply(req, res, raw, addr) {
             + ' До одобрения админом он не работает — проверить состояние можно через GET /me' });
 }
 
+// ── Авторегистрация установки ────────────────────────────────────────────────
+// Требование владельца 11.09: после `git pull` чат обязан работать у КАЖДОГО, а вложения
+// (файлы и голос) остаются за его тумблером. Прежние два входа этого не давали: приглашение
+// требует админа в момент установки, заявка выдаёт `pending` — то есть у друга «не
+// отправилось: приёмник не настроен» до ручного действия владельца.
+// 🔴 Ручка ОТКРЫТА и создаёт активного участника, поэтому у неё ровно те же ограды, что у
+// `/apply` (частота по адресу, общий потолок MAX_MEMBERS), плюс три жёстких правила:
+//   · токен придумывает КЛИЕНТ, приёмник кладёт только sha256. Это не общий ключ: у каждого
+//     он свой и случайный, а идемпотентность даёт именно он — потерянный ответ повторяется
+//     тем же токеном и не заводит вторую личность;
+//   · права НЕ читаются из тела вообще. `role`, `canUpload`, `status`, `groups` ставит
+//     приёмник, иначе открытая ручка раздавала бы админку по просьбе;
+//   · группа — БАЗОВАЯ (самая старая в реестре), а не присланная: «вступить сразу в чужую
+//     комнату по своей просьбе» — это обход изоляции групп.
+// Занятую установку чужим токеном не перехватить: это 409, тот же отказ, что у среза с
+// чужим `installId`.
+const AUTOJOIN_PER_DAY = 20;
+// Второе ведро — ОБЩЕЕ на приёмник. Без него пул адресов набивает MAX_MEMBERS до 507 и
+// закрывает вход честным: per-addr лимит от пула не защищает, а `installId` клиентский и
+// проверяется только формой. Число щедрое: живая лига это единицы подключений в сутки.
+const AUTOJOIN_PER_DAY_ALL = 60;
+const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
+// Базовая группа — та, что создана раньше всех. Реестр групп справочный, но «куда впускать
+// нового» решение однозначное: общий чат существует с самого перехода на группы.
+function baseGroup() {
+    const rows = Object.values(groupsMap()).filter(g => g && GID_RE.test(String(g.gid || '')));
+    if (!rows.length) return null;
+    rows.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    return rows[0];
+}
+function handleAutojoin(req, res, raw, addr) {
+    if (!rateOk(keyRate, 'autojoin', AUTOJOIN_PER_DAY_ALL, 86400_000)
+        || !rateOk(addrRate, 'autojoin:' + addr, AUTOJOIN_PER_DAY, 86400_000)) {
+        return json(res, 429, { error: `не больше ${AUTOJOIN_PER_DAY} подключений в сутки с одного адреса`
+                + ` и ${AUTOJOIN_PER_DAY_ALL} на приёмник`,
+            retryAfterMs: 86400_000 });
+    }
+    let b;
+    try { b = JSON.parse(raw); } catch { return json(res, 400, { error: 'тело не JSON' }); }
+    if (!b || typeof b !== 'object') return json(res, 400, { error: 'тело не JSON' });
+    const installId = String(b.installId || '');
+    if (!idOk(installId)) return json(res, 400, { error: 'installId не похож на наш' });
+    const token = String(b.token || '');
+    if (!TOKEN_RE.test(token)) {
+        return json(res, 400, { error: 'token — 20–64 символа [A-Za-z0-9_-]',
+            hint: 'его придумывает сам хаб и присылает один раз; приёмник хранит только его хеш' });
+    }
+    const nick = nickClean(b.nick) || 'hub-' + installId.slice(0, 4);
+    const grp = baseGroup();
+    if (!grp) {
+        return json(res, 409, { error: 'на приёмнике нет ни одной группы — впускать некуда',
+            hint: 'владелец создаёт общую группу первой' });
+    }
+    const st = membersState();
+    const members = { ...(st.map || {}) };
+    const h = sha256(token);
+    // Уже есть запись на эту установку? Тогда решает ТОЛЬКО хеш токена: свой — повтор,
+    // чужой — попытка перехвата. Ответ повтора совпадает с первым, чтобы клиент дошёл до
+    // конца даже если первый ответ потерялся в сети.
+    const mine = Object.entries(members).find(([, r]) => r && r.installId === installId);
+    if (mine) {
+        const [mid, rec] = mine;
+        if (!hashEq(rec.tokenHash, h)) {
+            return json(res, 409, { error: 'эта установка уже подключена другим токеном',
+                hint: 'переставить привязку может только владелец ноды — правкой members.json' });
+        }
+        return json(res, 200, { ok: true, repeat: true, memberId: rec.memberId || mid,
+            status: rec.status || 'active', groups: Array.isArray(rec.groups) ? rec.groups : [],
+            role: isAdmin(rec) ? 'admin' : 'member', canUpload: mayUpload(rec) });
+    }
+    if (Object.keys(members).length >= MAX_MEMBERS) {
+        return json(res, 507, { error: `участников уже ${Object.keys(members).length}, новые не принимаются` });
+    }
+    let memberId;
+    do { memberId = crypto.randomBytes(8).toString('hex'); } while (members[memberId]);
+    const now = new Date().toISOString();
+    members[memberId] = { memberId, tokenHash: h, installId, nick, groups: [grp.gid],
+        status: 'active', createdAt: now, invitedBy: null, role: 'member', canUpload: false,
+        joinedBy: 'autojoin' };
+    if (!writeState(MEMBERS_FILE, members, 0o600)) {
+        return json(res, 507, { error: 'members.json не записался — установка не подключена' });
+    }
+    // Реестр групп справочный, но интерфейс читает состав именно из него.
+    // 🪤 Группу перечитываем заново и проверяем НАЛИЧИЕ: между `baseGroup()` и этой строкой
+    // владелец мог править `groups.json` руками, а `.members` у `undefined` — это 500 уже
+    // ПОСЛЕ того, как участник записан.
+    const gmap = { ...groupsMap() };
+    const grpNow = gmap[grp.gid];
+    if (grpNow) {
+        const list = Array.isArray(grpNow.members) ? grpNow.members : [];
+        if (list.includes(memberId)) { /* уже в составе — писать нечего */ }
+        else if (list.length >= MAX_GROUP_MEMBERS) {
+            // Молча пропустить нельзя: доступ у человека есть (он в его записи), а в списке
+            // для интерфейса его не будет — и объяснить это станет нечем. Так же поступает
+            // размен приглашения.
+            log(`группа ${grp.gid.slice(0, 8)} переполнена (${list.length}): участник ${memberId}`
+                + ' доступ получил, но в списке состава его нет');
+        } else {
+            gmap[grp.gid] = { ...grpNow, members: [...list, memberId] };
+            if (!writeState(GROUPS_FILE, gmap)) {
+                log('groups.json не записался при авторегистрации: состав отстал от записи участника');
+            }
+        }
+    } else {
+        log(`группа ${grp.gid.slice(0, 8)} исчезла между проверкой и записью: участник ${memberId}`
+            + ' доступ получил, состав не обновлён');
+    }
+    log(`автоподключение с ${addr}: участник ${memberId} (${nick}), установка ${installId.slice(0, 8)}`);
+    json(res, 200, { ok: true, memberId, status: 'active', groups: [grp.gid],
+        role: 'member', canUpload: false,
+        note: 'текст и картинки доступны сразу; файлы и голосовые — после того как владелец'
+            + ' включит право на заливку' });
+}
+
 // ── Админские ручки ──────────────────────────────────────────────────────────
 // Всё, что раздаёт права, живёт здесь и требует `role: 'admin'`. Первого админа эти
 // ручки создать не могут и не должны: пока админов ноль, подписать запрос некому, а
@@ -2800,6 +2914,12 @@ function handler(req, res) {
     // открывает ничего — проверка ниже пропустит его только в `GET /me`.
     if (req.method === 'POST' && u.pathname === '/apply') {
         return readBody(req, res, MAX_BODY, raw => handleApply(req, res, raw, addrOf(req)));
+    }
+    // Четвёртая: автоподключение свежей установки. Публичная по той же причине, что `/join`
+    // и `/apply` — токена у звонящего ещё нет, — но, в отличие от заявки, впускает СРАЗУ:
+    // текст и картинки работают без владельца, а файлы и голос по-прежнему за его тумблером.
+    if (req.method === 'POST' && u.pathname === '/autojoin') {
+        return readBody(req, res, MAX_BODY, raw => handleAutojoin(req, res, raw, addrOf(req)));
     }
     // 🪤 `GET /me` берёт личность через `authOfAny` — БЕЗ отсечки по статусу, иначе
     // поданная заявка упирается в 401 и человеку нечем узнать свою судьбу.

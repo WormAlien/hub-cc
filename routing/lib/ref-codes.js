@@ -33,6 +33,16 @@ const SHAPES = {
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
     aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
+    // WisdomSatan (2026-09-10) — New API v0.11.5, но форма `/register?aff=`, как у
+    // AgentRouter, а НЕ `/sign-up?aff=` восьми соседей. Не догадка: по ссылке этой формы
+    // заведён живой аккаунт, и в его `/api/user/self` приехал `inviter_id` владельца —
+    // реф-кредит засчитан.
+    // 🪤 Код здесь УЖЕ ВТОРОЙ: первый (`L34l`) умер вместе с аккаунтом владельца в тот же
+    // день. Код привязан к аккаунту, а не к домену — теряется аккаунт, теряется и реф.
+    // Хост С ПОДДОМЕНОМ. 🪤 Панель в `/api/status` объявляет `server_address:
+    // https://api.hczhw.com` — это её ВТОРОЙ домен, он за Cloudflare и отдаёт нам
+    // `error code: 1010` (бан по сигнатуре клиента). Ходить только на wisdomsatan.club.
+    wisdomsatan: { host: 'api.wisdomsatan.club', path: '/register?aff=', label: 'WisdomSatan' },
     // 🪤 SeekAi — ЛЕГАСИ с 2026-08-24, в день заведения вкладки (решение владельца).
     // Причина не в регистрации, а в самом шлюзе: `seekai.cc` — реселл веб-Клода под
     // видом Anthropic API. Свой системный промпт (~200 токенов, набор инструментов

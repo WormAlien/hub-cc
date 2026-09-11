@@ -1,0 +1,8 @@
+[
+  {
+    "name": "agentrouter_status",
+    "url": "https://agentrouter.org/api/status",
+    "enabled": true,
+    "response": "newapi_status"
+  }
+]

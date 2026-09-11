@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { execFileSync } = require('child_process');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
 
 let _freemodel = null;
 function freemodelMod() {
@@ -573,6 +574,7 @@ async function _openOrFocusSession({ kind, name, storageState, gotoUrl, replyUrl
     if (existing && existing.browser.isConnected()) {
         try {
             await existing.page.bringToFront();
+            raiseBrowserWindow(existing.browser.process()?.pid, 4);
             return { ok: true, kind, name, url: replyUrl || gotoUrl, focused: true };
         } catch {
             openedBrowsers.delete(key);
@@ -580,7 +582,7 @@ async function _openOrFocusSession({ kind, name, storageState, gotoUrl, replyUrl
         }
     }
     const { chromium } = require('playwright');
-    const browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+    const browser = await chromium.launch({ headless: false, args: ['--window-size=600,1000'] });
     const context = await browser.newContext({ storageState, viewport: null, ...contextOpts });
     const page = await context.newPage();
     openedBrowsers.set(key, { browser, page });
@@ -588,6 +590,10 @@ async function _openOrFocusSession({ kind, name, storageState, gotoUrl, replyUrl
         if (openedBrowsers.get(key)?.browser === browser) openedBrowsers.delete(key);
     });
     await page.goto(gotoUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    await page.bringToFront();
+    // Окно поднято отдельно от вкладки: bringToFront — это CDP Page.bringToFront,
+    // z-order окон Windows он не трогает (разбор — routing/lib/focus-window.js).
+    raiseBrowserWindow(browser.process()?.pid);
     return { ok: true, kind, name, url: replyUrl || gotoUrl };
 }
 

@@ -1848,6 +1848,60 @@ async function main() {
   check('тот же код при живом поручителе разменивается: гасит именно отзыв, а не срок и не форма',
     rS2.st === 200 && (rS2.j.groups || []).includes(GID_B), rS2.j);
 
+  console.log('\nавторегистрация: свежая установка входит в общий чат сама:');
+  // Зачем ручка вообще: у друга после `git pull` НЕТ `league-config.json`, и до этой ручки
+  // единственными входами были приглашение админа и заявка со статусом `pending` — то есть
+  // чат у него не работал, пока владелец не нажмёт кнопку. Требование владельца 11.09:
+  // текст и картинки сразу, файлы и голос — после `canUpload`.
+  // 🔴 Токен придумывает КЛИЕНТ, и это не возврат общего ключа: у каждого он свой, случайный
+  // и приёмнику доезжает только его sha256. Так делает регистрация идемпотентной — потерянный
+  // ответ повторяется тем же токеном и не заводит вторую личность.
+  const AJ_INSTALL = 'a7'.repeat(8);
+  const AJ_TOKEN = crypto.randomBytes(24).toString('base64url');
+  const aj1 = await iq('POST', '/autojoin',
+    { installId: AJ_INSTALL, nick: 'сосед', token: AJ_TOKEN }, null);
+  check('вход без секрета: новая установка становится АКТИВНОЙ, а не pending',
+    aj1.st === 200 && aj1.j.status === 'active' && MIDre.test(aj1.j.memberId || ''), aj1.j);
+  const ajMe = await iq('GET', '/me', undefined, AJ_TOKEN);
+  check('её токен работает сразу и привязан к присланной установке',
+    ajMe.st === 200 && ajMe.j.status === 'active' && ajMe.j.installId === AJ_INSTALL, ajMe.j);
+  check('она попала в общую группу, а не в пустоту',
+    ((ajMe.j.groups || [])[0] || {}).gid === GID_A, ajMe.j.groups);
+  check('прав ей не выдано: ни админки, ни файлов',
+    ajMe.j.role === 'member' && ajMe.j.canUpload === false,
+    { role: ajMe.j.role, canUpload: ajMe.j.canUpload });
+  const ajText = await iq('POST', '/chat', { gid: GID_A, text: 'альо' }, AJ_TOKEN);
+  check('ТЕКСТ проходит сразу — ровно то, что было сломано у друга', ajText.st === 200, ajText.j);
+  const ajImg = await iq('POST', '/chat',
+    { gid: GID_A, text: 'кар', att: { b64: mkWebp(2500).toString('base64') } }, AJ_TOKEN);
+  check('КАРТИНКА проходит сразу', ajImg.st === 200, ajImg.j);
+  const ajFile = await iq('POST', '/chat',
+    { gid: GID_A, text: 'фай', att: { b64: Buffer.from('файл').toString('base64'), name: 'a.bin' } },
+    AJ_TOKEN);
+  check('ФАЙЛ до выдачи canUpload — 403, право осталось за владельцем',
+    ajFile.st === 403 && /право на заливку/.test(ajFile.j.error || ''), ajFile.j);
+  // Потерянный ответ: тот же запрос повторяется целиком. Вторая личность здесь была бы
+  // раздвоением рейтинга, а 409 — тупиком, из которого клиент не выходит сам.
+  const ajRepeat = await iq('POST', '/autojoin',
+    { installId: AJ_INSTALL, nick: 'сосед', token: AJ_TOKEN }, null);
+  const ajCount = Object.values(rdJ('members.json')).filter(r => r && r.installId === AJ_INSTALL).length;
+  check('повтор тем же токеном идемпотентен: 200 и ровно ОДНА запись участника',
+    ajRepeat.st === 200 && ajRepeat.j.memberId === aj1.j.memberId && ajCount === 1,
+    { st: ajRepeat.st, записей: ajCount });
+  const ajSteal = await iq('POST', '/autojoin',
+    { installId: AJ_INSTALL, nick: 'вор', token: crypto.randomBytes(24).toString('base64url') }, null);
+  check('чужой токен на занятую установку — 409, перехвата личности нет',
+    ajSteal.st === 409, ajSteal.j);
+  const ajPriv = await iq('POST', '/autojoin', { installId: 'b9'.repeat(8), nick: 'наглый',
+    token: crypto.randomBytes(24).toString('base64url'),
+    role: 'admin', canUpload: true, status: 'active', groups: [GID_B] }, null);
+  const ajPrivMe = ajPriv.st === 200 ? rdJ('members.json')[ajPriv.j.memberId] || {} : {};
+  check('присланные role/canUpload/groups игнорируются: их назначает приёмник',
+    ajPriv.st === 200 && ajPrivMe.role === 'member' && ajPrivMe.canUpload === false
+    && JSON.stringify(ajPrivMe.groups) === JSON.stringify([GID_A]),
+    { role: ajPrivMe.role, canUpload: ajPrivMe.canUpload, groups: ajPrivMe.groups });
+  check('токен новой установки не мелькнул в журнале ноды', !idout.includes(AJ_TOKEN));
+
   console.log('\nиспорченный реестр участников и уход из лиги:');
   const goodMembers = fs.readFileSync(IP('members.json'));
   fs.writeFileSync(IP('members.json'), 'это не json');

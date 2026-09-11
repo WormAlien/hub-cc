@@ -294,14 +294,19 @@ function readSettings() {
 // Контекст 1M — свойство ID модели, а не апстрима; прокси суффикс срезают
 // перед форвардом (keepalive-proxy.js:369), поэтому шлюзу он не мешает.
 const CC_DEFAULT_MODEL = 'claude-opus-5[1m]';
-// glm-5.3 — единственная не-claude модель с окном 1M (04.09, владелец): без [1m]
-// CC режет её до 200k так же, как опусы. Прочие glm-* и gpt-* не трогаем: у gpt
-// окно доезжает через model-windows.json, а у старых glm оно не заявлено.
+// glm-5.3 и три GPT 5.6 из вкладки Cun должны доходить до Claude Code и шлюза
+// с `[1m]`. Остальные glm-* и gpt-* не трогаем: их окно может быть меньше 1M.
 // Regex живёт ВНУТРИ функции: check-1m.js исполняет её в песочнице вырезкой.
+// Необязательный префикс провайдера (`aipm/claude-opus-4-6`) обязан проходить: с ним
+// якорь ^ переставал матчиться, и модель, выбранная через `/model aipm/...`, молча
+// теряла [1m] — то есть окно падало до 200k ровно тем способом, который этот
+// чокпоинт и создан ловить. Принимаем ЛЮБОЙ `<имя>/` — `anthropic/claude-opus-4-8`
+// остаётся 1M-моделью, кто бы её ни обслуживал; знать реестр функция не должна
+// (в песочнице check-1m.js нет ни fs, ни реестра).
 function normalizeCcModel(m) {
     const s = String(m || '').trim();
     if (!s) return s;
-    return /^(claude-(opus|sonnet)-|glm-5\.3(?:$|-))/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+    return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
 }
 
 // ---- Отсутствие модели = 200k, поэтому пустой `model` тоже чиним здесь -------
@@ -430,7 +435,10 @@ function modelWindows() {
 // Сколько токенов заявить Claude Code для этой модели. null = не заявлять
 // (claude-* и всё незнакомое: у CC своя таблица, а врать наугад хуже, чем молчать).
 function ccContextTokensFor(model) {
-    const m = String(model || '').trim();
+    // Префикс провайдера (`aipm/glm-5.3`) снимаем ПЕРЕД таблицей окон: иначе
+    // /^claude-/ не матчится, ключа в model-windows.json тоже нет → вернули бы null,
+    // и glm-5.3 молча уехала бы с 1050000 на дефолтные 200k.
+    const m = String(model || '').trim().replace(/^[A-Za-z0-9_.-]+\//, '');
     if (!m || /^claude-/.test(m)) return null;
     const bare = m.replace(/\s*\[[^\]]*\]\s*$/, '');   // на случай чужого суффикса
     const n = modelWindows()[bare];
@@ -581,6 +589,77 @@ function writeActiveBackend(state) {
     fs.renameSync(tmp, ACTIVE_BACKEND_FILE);   // атомарно: прокси читает файл на каждый запрос
 }
 
+// ── Реестр провайдеров для префиксного роутинга ──────────────────────────────
+// Зачем. Front-door умеет уводить запрос на шлюз, названный префиксом модели
+// (`aipm/claude-opus-4-6[1m]`), — так два окна Claude Code сидят на разных шлюзах, а
+// свич провайдера не роняет живую сессию. Но таблицы провайдеров у прокси нет и быть
+// не должно (правило из шапки frontdoor-proxy.js): апстримы разрешает дашборд, значит
+// он же их и перечисляет — файлом, той же формы, что active-backend.json.
+const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json');
+
+// Короткие коды: слева то, что человек наберёт в `/model`, справа полное имя. Взяты из
+// route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
+const BACKEND_ALIASES = {
+    ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', hn: 'hcnsec', ap: 'aipm',
+    om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
+};
+
+// Одна запись реестра из пары «имя → base_url». Для локального апстрима ключ и карта
+// тиров не нужны — их ставит keepalive. Для удалённого нужен файл ключа, и если его
+// на диске нет, запись НЕ создаём: угадывать имя ключа = 503 на первом же запросе.
+function registrySeedEntry(name, base, label) {
+    if (!base) return null;
+    if (isLocalBase(base)) return { upstream: base, keyFile: null, modelmap: null, label, source: 'backends' };
+    const p = CC_MODEL_PREFIX[name] || null;
+    const kf = p ? `${p}-active-key.txt` : null;
+    if (!kf || !fs.existsSync(path.join(os.homedir(), '.claude', kf))) return null;
+    return { upstream: base, keyFile: kf, modelmap: `${p}-modelmap.json`, label, source: 'backends' };
+}
+
+// extra — состояние только что активированного бэкенда (из applyFrontdoor). Через него
+// в реестр попадают helper-режимы (conduit, ourtoken, evomap, svrtr…), которых в
+// BACKENDS нет вовсе: их апстрим известен только в момент активации.
+function writeBackendsRegistry(extra) {
+    try {
+        const doc = { version: 1, providers: {}, aliases: {} };
+        // Выученное прошлыми активациями не теряем: это единственный источник для
+        // helper-режимов, а перечитывать их неоткуда.
+        try {
+            const raw = fs.readFileSync(BACKENDS_REGISTRY_FILE, 'utf8');
+            const old = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+            if (old.providers && typeof old.providers === 'object') doc.providers = old.providers;
+        } catch { /* первая запись файла */ }
+        for (const [name, b] of Object.entries(BACKENDS)) {
+            const e = registrySeedEntry(name, b.base_url, b.label);
+            if (e) doc.providers[name] = e; else delete doc.providers[name];
+        }
+        if (extra && extra.backend && extra.upstream) {
+            doc.providers[extra.backend] = {
+                upstream: extra.upstream,
+                keyFile: extra.keyFile || null,
+                modelmap: extra.modelmap || null,
+                label: extra.backend,
+                source: 'learned',
+            };
+        }
+        for (const [a, target] of Object.entries(BACKEND_ALIASES)) {
+            if (doc.providers[a]) continue;                    // алиас не смеет заслонять имя
+            if (doc.providers[target]) doc.aliases[a] = target;
+        }
+        doc.updatedAt = Date.now();
+        const tmp = BACKENDS_REGISTRY_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+        fs.renameSync(tmp, BACKENDS_REGISTRY_FILE);            // атомарно: прокси читает по mtime
+        return Object.keys(doc.providers).length;
+    } catch (e) {
+        // Реестр — не критичный путь: без него префиксы просто не работают, а обычный
+        // роут через активный бэкенд продолжает жить. Поэтому логируем, но не бросаем.
+        logLine(`backends.json НЕ записан: ${e.message}`);
+        return 0;
+    }
+}
+
 // Имя key-файла из apiKeyHelper-команды (`…/.claude/cdt-active-key.txt`).
 function helperKeyFile(helper) {
     const m = String(helper || '').match(/([A-Za-z0-9_-]+-active-key\.txt)/);
@@ -603,7 +682,10 @@ function frontdoorStateFrom(obj) {
         // Удалённый шлюз: ключ инжектит сам front-door. Локальным ключ не нужен —
         // его ставит keepalive/конвертер (keepalive-proxy.js:771), и второй раз
         // перебивать его нельзя.
-        keyFile = helperKeyFile(obj.apiKeyHelper);
+        // Cun хранит ключ отдельным active-файлом без apiKeyHelper; не оставляем его
+        // общим литералом fd-active-key.txt, иначе реестр и ротация теряют провайдера.
+        if (backend === 'cun') keyFile = path.basename(CUN_ACTIVE_KEY_FILE);
+        else keyFile = helperKeyFile(obj.apiKeyHelper);
         if (!keyFile) {
             // Оба поля перебираем: AUTH_TOKEN может остаться заглушкой 'dummy' от
             // предыдущего бэкенда, пока реальный ключ лежит в ANTHROPIC_API_KEY.
@@ -625,6 +707,183 @@ function frontdoorStateFrom(obj) {
     return { backend, upstream: base, keyFile, modelmap, updatedAt: Date.now() };
 }
 
+// ── Шпаргалка маршрутов для вкладки «🔀 Маршруты» ────────────────────────────
+// Один запрос вместо десяти: реестр префиксов + тир-карта + активная модель каждого
+// шлюза. Всё — локальные файлы, сети ноль.
+//
+// 🪤 Почему НЕ берём это из `/__switch/api/models/health`, хотя `catalog` там есть.
+// Замер 10.09: `catalog` хранит запись на ПАРУ «шлюз|модель» и в `e.tier` кладёт только
+// ПЕРВЫЙ подошедший тир (`health-catalog.js:551`, порядок opus→sonnet→haiku). У шлюза,
+// где одна модель обслуживает несколько тиров, остальные молча пропадают: у justwoker
+// из трёх тиров уцелел бы один. Плюс тира `gpt` там нет вовсе — `TIERS` перечисляет
+// три (`:121`), а пустые значения отсекаются отдельно. Для шпаргалки это ложь, поэтому
+// читаем сами файлы карт.
+//
+// Имя файла карты выводим из CC_MODEL_PREFIX — той же карты, по которой их читают
+// `ccModelMapHasOpus()` и `resolveCcModel()`. Своей таблицы имён здесь нет намеренно:
+// вторая копия рано или поздно разъедется с первой.
+const ROUTE_TIERS = ['opus', 'sonnet', 'haiku', 'gpt'];
+
+// Провайдер → двухбуквенный префикс его эндпоинтов `/__switch/api/<ep>/…`.
+// НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
+// (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
+const ROUTE_EP = {
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', aipm: 'ap', hcnsec: 'hn',
+    tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
+};
+
+function routeTierMap(name) {
+    const prefix = CC_MODEL_PREFIX[name];
+    if (!prefix) return null;
+    try {
+        const raw = fs.readFileSync(path.join(__dirname, `${prefix}-modelmap.json`), 'utf8');
+        const mm = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        const out = {};
+        // Пустой тир отдаём как '' и НЕ выкидываем: пустой `gpt` у agentrouter и
+        // полностью пустая карта xpeach — это факт, который на вкладке надо видеть.
+        for (const t of ROUTE_TIERS) out[t] = String(mm[t] || '').trim();
+        return out;
+    } catch { return null; }
+}
+
+function routeActiveModel(name) {
+    const prefix = CC_MODEL_PREFIX[name];
+    if (!prefix) return null;
+    try {
+        return fs.readFileSync(path.join(os.homedir(), '.claude', `${prefix}-active-model.txt`), 'utf8').trim() || null;
+    } catch { return null; }
+}
+
+// Общая запись тир-карты: слить правку с тем, что УЖЕ лежит в файле.
+//
+// Было: каждая из десяти ручек `<p>/modelmap` собирала объект из тела запроса и писала
+// файл ЦЕЛИКОМ. Девять знают только три тира — значит сохранение с вкладки шлюза стирало
+// `gpt`, который кладёт вкладка «Маршруты» и читает keepalive-proxy для gpt-трафика.
+// Замер 11.09: сегодня это латентно (ключ `gpt` есть ровно в одном `ar-modelmap.json`,
+// а его ручка — единственная, что пишет все четыре), но срабатывает в тот момент, когда
+// gpt появится у остальных. Стёрлось бы молча: ответ `ok`, файл на месте, тира нет.
+//
+// Лечится не четвёртым ключом в каждой ручке, а слиянием: у `handleTsModelMap` список
+// тиров захардкожен ещё в двух местах, и пятый тир сломал бы всё заново. Здесь ключи,
+// которыми ручка не управляет, переживают запись по устройству.
+//
+// `emptyAs` сохраняет историческое расхождение: ar/xp/tb пишут '', остальные null.
+// Читателям всё равно (оба falsy и у `keepalive-proxy`, и у `routeTierMap`), а лишний
+// шум в диффах семи файлов не стоит унификации ради красоты.
+function writeTierMap(file, patch, emptyAs) {
+    let mm = {};
+    try {
+        const raw = fs.readFileSync(file, 'utf8');
+        mm = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { mm = {}; }                                // файла нет или он битый — заводим с нуля
+    if (!mm || typeof mm !== 'object' || Array.isArray(mm)) mm = {};
+    for (const [k, v] of Object.entries(patch)) {
+        const clean = String(v == null ? '' : v).trim();
+        mm[k] = clean || (emptyAs === null ? null : '');
+    }
+    fs.writeFileSync(file, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+    return mm;
+}
+
+// Запись ОДНОГО тира из вкладки «Маршруты».
+//
+// Почему отдельная ручка, а не десять существующих `/__switch/api/<p>/modelmap`:
+// те перезаписывают файл ЦЕЛИКОМ объектом из тела запроса. Чтобы поменять один тир
+// через них, клиент обязан прислать все четыре — а значит и правильно прочитать
+// остальные три. Промах или гонка двух вкладок = молча стёртый соседний тир.
+// Здесь правка точечная: читаем файл, меняем один ключ, пишем назад. Стереть соседа
+// нельзя ПО УСТРОЙСТВУ, а не по внимательности вызывающего.
+//
+// Второго хранилища это не создаёт: файл тот же самый `<prefix>-modelmap.json`, что
+// читает routeTierMap() и keepalive-proxy.js. Карта провайдер→префикс — одна на чтение
+// и запись (CC_MODEL_PREFIX), третьей копии таблицы шлюзов не появляется.
+function routeWriteTier(provider, tier, value) {
+    const prefix = CC_MODEL_PREFIX[provider];
+    if (!prefix) return { ok: false, error: `провайдер '${provider}' не редактируется: тир-карты у него нет` };
+    if (!ROUTE_TIERS.includes(tier)) return { ok: false, error: `тир '${tier}' неизвестен (можно ${ROUTE_TIERS.join(', ')})` };
+    const file = path.join(__dirname, `${prefix}-modelmap.json`);
+    const clean = String(value == null ? '' : value).trim();
+    // 🪤 Пустой тир пишем как '', а не удаляем ключ: `keepalive-proxy` читает `mm[tier]`
+    // и на пустой строке честно не подменяет модель, а отсутствие ключа и пустая строка
+    // для него неотличимы — зато в диффе видно, что тир осознанно пуст.
+    const mm = writeTierMap(file, { [tier]: clean }, '');
+    logLine(`routes modelmap: ${provider}.${tier} → ${clean || '(пусто)'}`);
+    const out = {};
+    for (const t of ROUTE_TIERS) out[t] = String(mm[t] || '').trim();
+    return { ok: true, provider, tier, value: clean, tiers: out };
+}
+
+// Каталог моделей одного провайдера ДЛЯ вкладки «Маршруты».
+//
+// Вкладка провайдера берёт каталог из своего `state.<p>Models`, который наполняется
+// лениво при первом открытии вкладки и требует api_key из сессии этой вкладки. На
+// standalone-вкладке «Маршруты» ни того, ни другого нет — а список моделей нужен для
+// её же `<select>`. Поэтому ключ берём из `<prefix>-active-key.txt` (тот же, что у
+// keepalive), а сам каталог достаём петлёй через СУЩЕСТВУЮЩИЙ `/<ep>/models`: он уже
+// умеет ходить в шлюз напрямую (мимо мёртвого keepalive) и кеширует ответ на 5 минут.
+// Так десять bespoke-фетчеров переиспользуются без единой копии их логики.
+function handleRoutesModels(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const provider = String(url.searchParams.get('provider') || '');
+    const ep = ROUTE_EP[provider];
+    const keyPrefix = CC_MODEL_PREFIX[provider];
+    if (!ep || !keyPrefix) return jsonRes(res, 200, { ok: true, models: [], note: 'провайдер без каталога' });
+    let key = '';
+    try { key = fs.readFileSync(path.join(os.homedir(), '.claude', `${keyPrefix}-active-key.txt`), 'utf8').trim(); } catch { /* ключа нет */ }
+    // Не `isRealKey`: тот требует префикс `sk-`, а у части шлюзов ключи иного вида —
+    // отсеклись бы валидные. Пустой пропускаем, остальное отдаём апстриму: плохой ключ
+    // вернётся пустым каталогом (401 → `models: []`), а не ошибкой вкладки.
+    if (!key) return jsonRes(res, 200, { ok: true, models: [], note: 'нет активного ключа — открой вкладку шлюза и выбери аккаунт' });
+    // Петля на себя же: переиспользуем handleXxModels целиком, включая его кеш и заголовки.
+    const upstream = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`;
+    const rq = http.get(upstream, { timeout: 12000 }, (r) => {
+        const buf = [];
+        r.on('data', c => buf.push(c));
+        r.on('end', () => {
+            let j = {};
+            try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
+            const models = Array.isArray(j.models) ? j.models.map(m => (typeof m === 'string' ? m : m && m.id)).filter(Boolean) : [];
+            jsonRes(res, 200, { ok: true, provider, models, cached: !!j.cached, note: j.note });
+        });
+    });
+    rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
+    rq.on('error', (e) => jsonRes(res, 200, { ok: true, models: [], note: e.code || e.message }));
+}
+
+function handleRoutes(res) {
+    let doc = {};
+    try {
+        const raw = fs.readFileSync(BACKENDS_REGISTRY_FILE, 'utf8');
+        doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch (e) {
+        // 🪤 `e.code`, а не `e.message`: у ENOENT в message лежит полный путь с именем
+        // пользователя, а это ответ, который уедет в браузер и в скриншоты.
+        return jsonRes(res, 200, { ok: false, error: `реестр не прочитан: ${e.code || 'разбор не удался'}`, providers: [] });
+    }
+    const aliasesFor = {};
+    for (const [a, target] of Object.entries(doc.aliases || {})) {
+        (aliasesFor[target] = aliasesFor[target] || []).push(a);
+    }
+    // 🪤 `v = e || {}` обязателен: этот map живёт ВНЕ try выше. Одна запись `null` в
+    // реестре (файл правили руками, а writeBackendsRegistry копирует старые записи
+    // с диска дословно — порча залипает) дала бы TypeError на `e.label`, и запрос
+    // повис бы навсегда: uncaughtException процесс не роняет, но ответ не пишет никто.
+    const providers = Object.entries(doc.providers || {}).map(([name, e]) => {
+        const v = e || {};
+        return {
+            name,
+            label: v.label || name,
+            upstream: v.upstream || '',
+            local: /^https?:\/\/(127\.|localhost|\[::1\])/i.test(String(v.upstream || '')),
+            aliases: (aliasesFor[name] || []).sort(),
+            tiers: routeTierMap(name),
+            activeModel: routeActiveModel(name),
+        };
+    });
+    providers.sort((a, b) => a.name.localeCompare(b.name));
+    jsonRes(res, 200, { ok: true, providers, updatedAt: doc.updatedAt || 0, tiers: ROUTE_TIERS });
+}
+
 // Вызывается ИЗ writeSettings(), до записи файла.
 function applyFrontdoor(obj) {
     if (!frontdoorConfig().enabled) return;
@@ -637,6 +896,11 @@ function applyFrontdoor(obj) {
     const state = frontdoorStateFrom(obj);
     if (!state) return;                 // official и прочее — оставляем как есть
     writeActiveBackend(state);
+    // Тем же движением пополняем реестр префиксов: активированный бэкенд теперь можно
+    // адресовать как `<имя>/<модель>` из любого окна. Литеральный ключ (freemodel_rotator)
+    // живёт в общем fd-active-key.txt — его в реестр нельзя, файл перетрут следующей
+    // активацией, и префикс начал бы ходить с чужим ключом.
+    writeBackendsRegistry(state.keyFile === path.basename(FD_INLINE_KEY_FILE) ? null : state);
     env.ANTHROPIC_BASE_URL = frontdoorUrl();
     env.ANTHROPIC_AUTH_TOKEN = 'dummy';    // реальный ключ ставят front-door/keepalive
     delete obj.apiKeyHelper;               // ключ больше не нужен Claude Code
@@ -3643,8 +3907,12 @@ function customModelsCacheSave() {
 customModelsCacheLoad();
 customSweepOrphanProxyConfigs();
 
-const CUSTOM_PROXY_PORT_MIN = 20150;
-const CUSTOM_PROXY_PORT_MAX = 20250;
+// Диапазон и резерв — один источник, routing/lib/custom-ports.js. Локальные числа здесь
+// были бы второй копией: разъехалась бы она молча, а заметили бы по чужому шлюзу в логе.
+const { PORT_MIN: CUSTOM_PROXY_PORT_MIN, PORT_MAX: CUSTOM_PROXY_PORT_MAX } = (() => {
+    try { return require('./lib/custom-ports'); }
+    catch { return { PORT_MIN: 20150, PORT_MAX: 20250 }; }
+})();
 
 function customLoad() {
     try {
@@ -3676,8 +3944,20 @@ function customReadActiveProvider() {
 function customProxyConfigFile(id) {
     return path.join(os.homedir(), '.claude', `custom-${id}-proxy.json`);
 }
+
+// 🪤 Keepalive шлюзов сидят на 20155–20164 — ВНУТРИ диапазона кастомов 20150–20250.
+// Бинд-проба от этого не спасает: пока keepalive неактивного шлюза не поднят, порт
+// свободен, аллокатор его отдаёт, а потом шлюз стартовать уже не может. Разбор,
+// список и фолбэк — routing/lib/custom-ports.js.
+function customReservedPorts() {
+    try { return require('./lib/custom-ports').reservedPorts(); }
+    catch (e) {
+        logLine(`custom-ports недоступен: ${e.message} — резерв портов НЕ применён`);
+        return new Set();
+    }
+}
 async function customFindFreePort() {
-    const used = new Set();
+    const used = customReservedPorts();
     try {
         for (const p of customLoad().providers) if (p.proxyPort) used.add(p.proxyPort);
     } catch {}
@@ -3699,6 +3979,12 @@ async function customSpawnProxy(provider) {
     try {
         const { spawn } = require('child_process');
         let port = provider.proxyPort;
+        // Записанный порт мог быть выдан ДО резервирования (или руками) — если он чужой,
+        // переселяем, не глядя на бинд-пробу: свободен он ровно потому, что владелец лежит.
+        if (port && customReservedPorts().has(Number(port))) {
+            logLine(`custom proxy: у «${provider.name}» записан :${port} — это порт keepalive шлюза, переселяю`);
+            port = null;
+        }
         if (port) {
             // порт может держать старый/осиротевший прокси после рестарта стека — проверяем
             const free = await new Promise(resolve => {
@@ -4730,7 +5016,7 @@ function cunSave(arr) {
     fs.writeFileSync(CUN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
 }
 function cunReadActiveModel() {
-    try { return fs.readFileSync(CUN_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    try { return normalizeCcModel(fs.readFileSync(CUN_ACTIVE_MODEL_FILE, 'utf8').trim()) || null; }
     catch { return null; }
 }
 function cunReadTiers() {
@@ -4756,9 +5042,16 @@ function cunPickFromPrefs(prefs, availableSet) {
 function cunResolveTiers(availableIds) {
     const set = new Set((availableIds || []).filter(Boolean));
     const saved = cunReadTiers();
-    // если сохранённые тиры всё ещё в каталоге — оставить (ручной override через файл ок)
-    if (saved && set.has(saved.opus) && set.has(saved.sonnet) && set.has(saved.haiku)) {
-        return { ...saved, source: 'saved' };
+    const catalogId = id => String(id || '').replace(/\[1m\]$/, '');
+    // если сохранённые тиры всё ещё в каталоге — оставить ручной выбор, но прогнать
+    // через тот же 1M-нормализатор, что прямой клик по бейджу.
+    if (saved && set.has(catalogId(saved.opus)) && set.has(catalogId(saved.sonnet)) && set.has(catalogId(saved.haiku))) {
+        return {
+            opus: normalizeCcModel(saved.opus),
+            sonnet: normalizeCcModel(saved.sonnet),
+            haiku: normalizeCcModel(saved.haiku),
+            source: 'saved',
+        };
     }
     let opus = cunPickFromPrefs(CUN_TIER_PREFS.opus, set);
     let sonnet = cunPickFromPrefs(CUN_TIER_PREFS.sonnet, set);
@@ -4777,7 +5070,12 @@ function cunResolveTiers(availableIds) {
         const mid = any.find(id => id !== opus && id !== haiku);
         if (mid) sonnet = mid;
     }
-    return { opus, sonnet, haiku, source: 'auto' };
+    return {
+        opus: normalizeCcModel(opus),
+        sonnet: normalizeCcModel(sonnet),
+        haiku: normalizeCcModel(haiku),
+        source: 'auto',
+    };
 }
 
 async function cunFetchModelIds(apiKey) {
@@ -4926,7 +5224,7 @@ async function handleCunActivate(req, res) {
 
         const ids = await cunFetchModelIds(key);
         const tiers = cunResolveTiers(ids);
-        let model = body.model != null ? String(body.model).trim() : cunReadActiveModel();
+        let model = body.model != null ? normalizeCcModel(body.model) : cunReadActiveModel();
         // дефолт старта = mid-tier (sonnet), не opus
         if (!model) model = tiers.sonnet;
         if (model) fs.writeFileSync(CUN_ACTIVE_MODEL_FILE, model, { encoding: 'utf-8', flag: 'w' });
@@ -4969,7 +5267,7 @@ async function handleCunSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
         // model omit / empty / fromFile → взять из cun-active-model.txt
-        let m = body.model != null ? String(body.model).trim() : '';
+        let m = body.model != null ? normalizeCcModel(body.model) : '';
         if (!m || body.fromFile) m = cunReadActiveModel() || m;
         if (!m) return jsonRes(res, 400, { error: 'model обязателен (или заполни cun-active-model.txt)' });
 
@@ -5354,6 +5652,28 @@ async function handleImageTrialStatus(req, res) {
 // Пароль/секрет/коды НИКОГДА не логируем — только маскированный логин/ник.
 const GH_ACCOUNTS_FILE = path.join(__dirname, 'github-accounts.json');
 
+// Сколько рублей владелец потратил на GitHub-аккаунты. Хранится на сервере, а не в
+// разметке: до 11.09.2026 это был литерал `value="1200"` в `proxy-dashboard.html`, то
+// есть цифра, которую никто не вводил и которая возвращалась после каждого F5. С
+// поставки — 0; всё остальное вписывает владелец.
+const GH_SPEND_FILE = path.join(__dirname, 'github-spend.json');
+
+function ghSpendLoad() {
+    try {
+        const raw = fs.readFileSync(GH_SPEND_FILE, 'utf8');
+        const j = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        const n = Number(j && j.rub);
+        return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch { return 0; }
+}
+function ghSpendSave(rub) {
+    // Запись через временный файл: оборванный на половине JSON читался бы как 0, то есть
+    // молча терял бы сумму — ровно тот дефект, который эта ручка и закрывает.
+    const tmp = GH_SPEND_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify({ rub, updatedAt: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+    fs.renameSync(tmp, GH_SPEND_FILE);
+}
+
 function ghLoad() {
     try {
         const raw = fs.readFileSync(GH_ACCOUNTS_FILE, 'utf8');
@@ -5391,8 +5711,31 @@ function ghSanitize(acc) {
 // Плашки «где уже используется» едут вместе со списком аккаунтов, отдельного роута нет:
 // один запрос = карточки и плашки физически не могут разойтись. ghUsageMap читает пять
 // маленьких JSON-пулов, сети и профилей браузера не касается (см. ghUsageMap ниже).
+// Здоровье общего снимка сессии — ровно то, что уже считает handleGhAvailable для пикера
+// заселения. Нужно колонке GitHub в таблицах шлюзов: бейдж 🐙 показывал ник, но про
+// живость молчал, и «сессия протухла» владелец узнавал только по коду 3 после неудачного
+// автоподарка — причём без имени аккаунта. Считаем на том же роуте, что уже грузит фронт:
+// отдельный запрос ради трёх полей был бы лишним.
+function ghSnapHealth(gsl, ghId) {
+    if (!gsl) return { hasSnap: null, snapAgeDays: null, snapStale: null };
+    const snap = gsl.readCache(ghId);
+    if (!snap) return { hasSnap: false, snapAgeDays: null, snapStale: null };
+    const ms = gsl.cacheAgeMs(snap);
+    return {
+        hasSnap: true,
+        snapAgeDays: Number.isFinite(ms) ? +(ms / 86400000).toFixed(1) : null,
+        snapStale: gsl.cacheStale(snap),
+    };
+}
+
 async function handleGhKeys(req, res) {
-    try { jsonRes(res, 200, { keys: ghLoad(), usage: ghUsageMap() }); }
+    try {
+        const gsl = ghSessionLib();
+        jsonRes(res, 200, {
+            keys: ghLoad().map(g => ({ ...g, ...ghSnapHealth(gsl, g.id) })),
+            usage: ghUsageMap(),
+        });
+    }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -6132,6 +6475,22 @@ async function handleGhMark(req, res) {
         ghSave(arr);
         logLine(`gh mark: ${g.nickname || g.login} ${on ? '→ занят на ' : '→ свободен на '}${GH_POOL_LABELS[tag]} (вручную)`);
         jsonRes(res, 200, { ok: true, usage: ghUsageMap() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET  /__switch/api/gh/spend        → { rub }
+// POST /__switch/api/gh/spend { rub } → сохранить сумму трат на GitHub-аккаунты.
+// Отрицательное и нечисловое отвергаем 400: поле правится руками, и опечатка не должна
+// молча записаться и утащить за собой расчёт экономии.
+async function handleGhSpend(req, res) {
+    try {
+        if (req.method === 'GET') return jsonRes(res, 200, { rub: ghSpendLoad() });
+        const body = await readJsonBody(req);
+        const rub = Number(body && body.rub);
+        if (!Number.isFinite(rub) || rub < 0) return jsonRes(res, 400, { error: 'rub должен быть числом ≥ 0' });
+        ghSpendSave(rub);
+        logLine(`gh spend: трат на GitHub-аккаунты — ${rub} ₽`);
+        jsonRes(res, 200, { ok: true, rub });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -7894,21 +8253,42 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     const start = day(Date.now() - 400 * 864e5);   // 400 дней назад
     let usageRes;
     try {
-        usageRes = await gated(() => fetch(`${usageUrl}?start_date=${start}&end_date=${end}`, {
-            method: 'GET',
-            headers: { ...ccHeaders, 'Authorization': `Bearer ${apiKey}` },
-            signal: AbortSignal.timeout(15000),
-        }));
+        const usageFullUrl = `${usageUrl}?start_date=${start}&end_date=${end}`;
+        const usageHeaders = { ...ccHeaders, 'Authorization': `Bearer ${apiKey}` };
+        // 🪤 usage обязан идти ТЕМ ЖЕ прокси, что и self ниже. Пока он ходил голым fetch,
+        // один чек показывал панели два разных адреса у одного аккаунта — сигнал заметнее,
+        // чем общий IP, ради ухода от которого пул и заводили. Пул выключен → accountFetch
+        // сам отвечает обычным fetch, и путь остаётся прежним.
+        usageRes = (lib && lib.accountFetch)
+            ? await gated(() => lib.accountFetch({
+                host,
+                accountId: target.id || null,
+                profileDir: null,
+                url: usageFullUrl,
+                options: { headers: usageHeaders, timeoutMs: 15000 },
+                force,
+            }))
+            : await gated(() => fetch(usageFullUrl, {
+                method: 'GET',
+                headers: usageHeaders,
+                signal: AbortSignal.timeout(15000),
+            }));
     } catch (e) {
         return { status: 'unknown', error: e.message };
     }
+    // Отказ прокси — не «ключ мёртв» и не «шлюз молчит»: идти было НЕ через что. Молчаливое
+    // падение на direct тут запрещено, поэтому и статус отдельный.
+    if (usageRes.proxyError) return { status: 'unknown', error: `прокси: ${usageRes.error}` };
     if (usageRes.status === 401 || usageRes.status === 403) return { status: 'dead' };
     if (usageRes.status !== 200) return { status: 'unknown', error: `usage HTTP ${usageRes.status}` };
 
     let usageSpent;
     try {
-        const data = await usageRes.json();
-        usageSpent = Math.round((Number(data.total_usage) || 0)) / 100;   // центы → доллары
+        // accountFetch уже вычитал тело; у обычного Response его ещё надо прочитать.
+        const data = usageRes.json !== undefined && typeof usageRes.json !== 'function'
+            ? usageRes.json
+            : await usageRes.json();
+        usageSpent = Math.round((Number(data && data.total_usage) || 0)) / 100;   // центы → доллары
     } catch (e) {
         return { status: 'unknown', error: `usage parse: ${e.message}` };
     }
@@ -8044,6 +8424,10 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 profileDir,
                 accessToken: target.accessToken || null,
                 userId: target.newApiUserId || null,
+                // Ключ ЛИПКОЙ привязки к прокси — id записи пула. Без него ключ собрался бы
+                // из профиля или, хуже, из хоста: на `host:agentrouter.org` весь пул снова
+                // ходил бы одним адресом, ровно от чего прокси и заводили.
+                accountId: target.id || null,
                 // Клик владельца по цифре пробивает паузу по частоте ОДНИМ запросом:
                 // бан у WAF короткий, и к моменту клика он обычно уже снят. Автоматические
                 // тики (force=false) паузу соблюдают — они её и вызывают.
@@ -8877,6 +9261,7 @@ function financeAggregate(keys, hour) {
 // вкладка показывает первое, сшивка окон в `leagueSelf` считает по второму.
 let TOK_LOG = { mtime: 0, size: 0, ino: 0, tail: '', rest: '', day: new Map(), hour: new Map(),
     cday: new Map(), chour: new Map(), lines: 0, first: null,
+    dayCC: new Map(), dayOther: new Map(),
     list: [], seen: 0, bad: 0, pool: new Map() };
 function tokenJournalCounts() {
     const r = tailRead(TOKEN_USAGE_FILE, TOK_LOG);
@@ -8887,6 +9272,7 @@ function tokenJournalCounts() {
     if (r.reset) {
         TOK_LOG.day = new Map(); TOK_LOG.hour = new Map();
         TOK_LOG.cday = new Map(); TOK_LOG.chour = new Map();
+        TOK_LOG.dayCC = new Map(); TOK_LOG.dayOther = new Map();
         TOK_LOG.lines = 0; TOK_LOG.first = null;
         TOK_LOG.list = []; TOK_LOG.seen = 0; TOK_LOG.bad = 0; TOK_LOG.pool = new Map();
     }
@@ -8911,12 +9297,17 @@ function tokenJournalCounts() {
         const dk = dayKey(d), hk = `${dk}T${pad2(d.getHours())}`;
         const tin = Number(e.in) || 0, tout = Number(e.out) || 0;
         const tcr = Number(e.cr) || 0, tcw = Number(e.cw) || 0;
+        const hh = intern(e.h);
         bump(TOK_LOG.day, dk, tin + tout);
         bump(TOK_LOG.hour, hk, tin + tout);
+        // Раздельно по харнессу: stats-cache знает ТОЛЬКО claude-code, поэтому сшивка
+        // в `leagueSelf` обязана сравнивать сопоставимое — его с его, а не с общей
+        // суммой журнала. Иначе чужой харнесс маскирует потерю собственного.
+        bump(hh === 'claude-code' ? TOK_LOG.dayCC : TOK_LOG.dayOther, dk, tin + tout);
         bump(TOK_LOG.cday, dk, tcr + tcw);
         bump(TOK_LOG.chour, hk, tcr + tcw);
         TOK_LOG.list.push({ ms: d.getTime(), in: tin, out: tout, cr: tcr, cw: tcw,
-            cost: Number(e.cost) || 0, h: intern(e.h), m: intern(e.m) });
+            cost: Number(e.cost) || 0, h: hh, m: intern(e.m) });
     }
     return TOK_LOG;
 }
@@ -9080,16 +9471,25 @@ function leagueSelf() {
     } else allKeys.push(today);
     const allLabs = allKeys.map(k => k.slice(5));
 
-    // Токены по дням: где есть журнал хаба — берём его (шире и свежее), раньше —
-    // stats-cache. Первые сутки журнала неполные (он начался днём), поэтому граница
-    // сдвинута на сутки вперёд, иначе 25.08 просел бы вдвое.
-    // 🪤 Третье условие обязательно: сутки, которые есть ТОЛЬКО в журнале (stats-cache
-    // о них не знает — он отстаёт и видит один Claude Code), иначе молча становились
-    // нулём. Замер 05.09: при обрезке журнала так обнулялись 02.09 и 03.09 — 1,83 млрд
-    // токенов. Неполные сутки журнала всё равно лучше нуля.
-    const cut = tj.first ? dayKey(new Date(tj.first.getTime() + 864e5)) : null;
+    // Токены по дням — сложение по ХАРНЕССАМ, а не выбор источника.
+    //   tok(сутки) = max(stats-cache, журнал claude-code) + журнал все остальные
+    // `max` потому, что stats-cache и журнал — два измерения ОДНОГО харнесса с разных
+    // точек: Claude Code пишет сам себя, журнал видит его на front-door. Сложить их =
+    // двойной счёт; взять большее = не потерять ни трафик мимо front-door, ни свежие
+    // сутки, которых stats-cache ещё не посчитал. Не-claude харнессы двойником быть не
+    // могут (stats-cache о них не знает вовсе) и добавляются сверху.
+    //
+    // 🪤 До 11.09 журнал ЗАМЕНЯЛ сутки stats-cache (`tokDay.set`) ради охвата «все
+    // харнессы». Охвата не было: замер 11.09 — claude-code 12,99 млрд против 27,6 тыс.
+    // у всех остальных, зато итог «всё время» падал с 27,90 млрд до 20,75 (−26%), а
+    // подневное отношение гуляло 0,037…1,74. Замена снята; сторож — в check-league.js.
     const tokDay = new Map(sc.day);
-    for (const [k, v] of tj.day) if (!cut || k >= cut || !sc.day.has(k)) tokDay.set(k, v);
+    for (const k of new Set([...tj.dayCC.keys(), ...tj.dayOther.keys()])) {
+        const cc = tj.dayCC.get(k) || 0, other = tj.dayOther.get(k) || 0;
+        tokDay.set(k, Math.max(sc.day.get(k) || 0, cc) + other);
+    }
+    // Граница сшивки больше не влияет на счёт — остаётся только как справка в срезе.
+    const cut = tj.first ? dayKey(new Date(tj.first.getTime() + 864e5)) : null;
 
     const hKeys = timeKeys(24, true), k7 = timeKeys(7), k30 = timeKeys(30);
     const faDay = financeAggregate(allKeys, false);
@@ -9263,6 +9663,107 @@ function leagueConfig() {
     } catch { return { enabled: false, url: '', key: '', everyMin: 10 }; }
 }
 let LEAGUE_SYNC_LAST = { at: null, ok: null, error: null, peers: 0 };
+
+// ── Автоподключение свежей установки ────────────────────────────────────────
+// Требование владельца 11.09: после `git pull` чат обязан работать сам, без ручного
+// `league-config.json`, приглашения и `tools/league-join.js`. До этого любая ручка чата
+// упиралась в «приёмник не настроен» ДО СЕТИ — ровно то, что видел друг.
+// Адрес приёмника берём из коммитимого `routing/league-bootstrap.json`: там нет секрета,
+// только `url` (и, если однажды понадобится путь мимо домена, пара `ip`+`pin`).
+// 🔴 Токен придумывает ХАБ и присылает приёмнику один раз; на диске ноды остаётся только
+// его sha256. Это не общий ключ: у каждой установки он свой и случайный. Он же делает
+// подключение идемпотентным — потерянный ответ повторяется тем же токеном и не заводит
+// второй личности (приёмник отвечает 200 `repeat: true`).
+const LEAGUE_BOOTSTRAP_FILE = path.join(__dirname, 'league-bootstrap.json');
+function leagueBootstrap() {
+    try {
+        const raw = fs.readFileSync(LEAGUE_BOOTSTRAP_FILE, 'utf8');
+        const c = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        const url = String(c.url || '').replace(/\/+$/, '');
+        if (!/^https?:\/\//i.test(url)) return null;
+        const ip = String(c.ip || '');
+        const pin = String(c.pin || '');
+        // Полупара запрещена: `ip` без `pin` — это соединение по адресу с отключаемой
+        // проверкой имени, а `pin` без `ip` ничего не решает. Обе или ни одной.
+        if ((ip && !pin) || (pin && !ip)) return null;
+        return { enabled: true, url, ip, pin,
+            everyMin: Number(c.everyMin) > 0 ? Number(c.everyMin) : 10 };
+    } catch { return null; }
+}
+// Один полёт на процесс: вкладка при первом открытии дёргает `/me`, чат и отправку почти
+// одновременно, и три параллельных подключения завели бы три личности на одну машину.
+let LEAGUE_JOIN_INFLIGHT = null;
+// Готовность к обычным запросам — та же тройка, что у `leagueChatReady`. Если её нет и
+// bootstrap на месте — подключаемся. Возвращает конфиг (уже с ключом) либо бросает
+// внятную ошибку: молчаливый уход «как раньше» здесь означал бы то самое «не отправилось».
+function leagueEnsureConnected() {
+    const cur = leagueConfig();
+    if (leagueChatReady(cur)) return Promise.resolve(cur);
+    // Файл есть, но не читается — это НЕ свежая установка. Перезаписав его, мы потеряли бы
+    // живой токен и завели вторую личность на ту же машину: пусть лучше будет внятный отказ.
+    if (fs.existsSync(LEAGUE_CONFIG_FILE)) {
+        let broken = false;
+        try {
+            const raw = fs.readFileSync(LEAGUE_CONFIG_FILE, 'utf8');
+            JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        } catch { broken = true; }
+        if (broken) {
+            return Promise.reject(Object.assign(
+                new Error('routing/league-config.json лежит, но это не JSON — починить или снести'),
+                { httpStatus: 409 }));
+        }
+        // JSON цел, но участия нет (`enabled: false` или пустой ключ) — это осознанное
+        // решение человека, и подключать его заново без спроса нельзя.
+        if (cur.url && !cur.enabled) {
+            return Promise.reject(Object.assign(
+                new Error('участие в лиге выключено в routing/league-config.json (enabled: false)'),
+                { httpStatus: 409 }));
+        }
+    }
+    const boot = leagueBootstrap();
+    if (!boot) return Promise.reject(Object.assign(new Error(LEAGUE_NO_RECEIVER), { httpStatus: 503 }));
+    if (LEAGUE_JOIN_INFLIGHT) return LEAGUE_JOIN_INFLIGHT;
+    LEAGUE_JOIN_INFLIGHT = (async () => {
+        const id = hubIdentity();
+        const token = crypto.randomBytes(24).toString('base64url');
+        const body = JSON.stringify({ installId: id.installId, nick: id.nick, token });
+        const r = await leagueReq({ ...boot, key: token }, '/autojoin', 'POST', body,
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+        let doc = null;
+        try { doc = JSON.parse(r.body); } catch { /* приёмник ответил не JSON */ }
+        if (r.status !== 200 || !doc || doc.ok !== true) {
+            const why = (doc && doc.error) || `приёмник ответил ${r.status}`;
+            throw Object.assign(new Error(`автоподключение не прошло: ${why}`),
+                { httpStatus: r.status >= 400 && r.status < 500 ? r.status : 502 });
+        }
+        // Пишем ПОСЛЕ успеха и атомарно: файл с непроверенным токеном хуже отсутствующего.
+        const out = { enabled: true, url: boot.url };
+        if (boot.ip) out.ip = boot.ip;
+        if (boot.pin) out.pin = boot.pin;
+        out.key = token;
+        out.everyMin = boot.everyMin;
+        const tmp = LEAGUE_CONFIG_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n', { mode: 0o600 });
+        fs.renameSync(tmp, LEAGUE_CONFIG_FILE);
+        // В лог — только факт и группа. Ни токена, ни его длины: длина тоже подсказка.
+        logLine(`league автоподключение: участник ${String(doc.memberId || '').slice(0, 8)},`
+            + ` групп ${Array.isArray(doc.groups) ? doc.groups.length : 0}`);
+        return leagueConfig();
+    })();
+    LEAGUE_JOIN_INFLIGHT.catch(() => {}).finally(() => { LEAGUE_JOIN_INFLIGHT = null; });
+    return LEAGUE_JOIN_INFLIGHT;
+}
+// Обёртка для ручек: подключиться, если надо, и не соврать про причину отказа.
+// Возвращает `null`, УЖЕ ответив клиенту.
+async function leagueReadyOrJoin(res, what) {
+    try { return await leagueEnsureConnected(); }
+    catch (e) {
+        const code = e && e.httpStatus ? e.httpStatus : 502;
+        if (code >= 500) logLine(`league ${what}: ${e.message}`);
+        jsonRes(res, code, { error: e.message });
+        return null;
+    }
+}
 
 // Свой агент без переиспользования TLS-сессий. Это не оптимизация, а условие
 // работоспособности пина: на возобновлённой сессии сервер НЕ присылает сертификат
@@ -9811,11 +10312,20 @@ async function handleLeagueChatGet(req, res) {
     // проверка «на чтении есть CORS» в tools/check-league-chat.js обязана быть снята той же
     // правкой — файл чужой, поэтому это согласуется, а не правится отсюда.
     const c = leagueConfig();
-    // Приёмник не настроен — это НЕ ошибка: вкладка обязана показать «чата пока нет»,
-    // а не сломаться на первом же опросе. Поэтому 200 и пустой список.
+    // Приёмник не настроен — пробуем подключиться сам: свежая установка обязана увидеть
+    // чат, а не пустоту с запиской про файл, которого у неё и не может быть.
+    // 🔴 Не падаем на ошибке подключения: чтение чата — это ОПРОС раз в три секунды, и
+    // красная лента при недоступной сети хуже пустой. Форма ответа «не настроено» остаётся
+    // прежней (на неё стоит регресс), меняется только причина в `note`.
     if (!leagueChatReady(c)) {
-        return jsonRes(res, 200, { messages: [], seq: 0,
-            receiver: { configured: false, note: LEAGUE_NO_RECEIVER } });
+        let joined = null, why = LEAGUE_NO_RECEIVER;
+        try { joined = await leagueEnsureConnected(); }
+        catch (e) { why = e.message; }
+        if (!joined || !leagueChatReady(joined)) {
+            return jsonRes(res, 200, { messages: [], seq: 0,
+                receiver: { configured: false, note: why } });
+        }
+        return handleLeagueChatGet(req, res);
     }
     // База в `new URL` — заглушка: нужны только searchParams, а от порта прослушки
     // этот разбор зависеть не должен (иначе регресс не сможет позвать ручку без
@@ -9879,10 +10389,19 @@ async function handleLeagueChatPost(req, res) {
     // поэтому источник проверяется явно — см. leagueWriteGuard. Черновик вкладки по
     // file:// писать не сможет: это цена того, что чужая открытая страница не сможет тоже.
     if (!leagueWriteGuard(req, res)) return;
-    const c = leagueConfig();
-    if (!leagueChatReady(c)) return jsonRes(res, 503, { error: LEAGUE_NO_RECEIVER });
+    // 🔴 Тело читаем ДО подключения, а подключаемся ПОСЛЕ проверок формы: иначе мусорный
+    // запрос заводил бы личность на ноде, а человек с нормальным текстом ждал бы сеть зря.
+    let body;
     try {
-        const body = await readJsonBody(req, LEAGUE_CHAT_BODY_MAX);
+        body = await readJsonBody(req, LEAGUE_CHAT_BODY_MAX);
+    } catch (e) {
+        if (e && e.httpStatus === 413) return jsonRes(res, 413, { error: e.message });
+        if (e instanceof SyntaxError) return jsonRes(res, 400, { error: 'тело не JSON' });
+        return jsonRes(res, 500, { error: e.message });
+    }
+    const c = await leagueReadyOrJoin(res, 'чат (подключение)');
+    if (!c) return;
+    try {
         const text = String((body && body.text) || '').trim();
         if (text.length > LEAGUE_TEXT_MAX) {
             return jsonRes(res, 400, { error: `сообщение длиннее ${LEAGUE_TEXT_MAX} символов` });
@@ -10306,6 +10825,10 @@ function leagueBlobHint(url) {
 // Отдельная ручка, а не поле `/health`: на здоровье висят приёмка выката и доказательство
 // подключения в `league-join.js`, и авторизация там ломает все три сразу.
 async function handleLeagueMe(req, res) {
+    // Свежая установка спрашивает `/me` ПЕРВОЙ (вкладка зовёт её при открытии), и именно
+    // отсюда она узнаёт свою группу — без группы отправка не уйдёт, а кнопка будет
+    // выключена. Поэтому подключаемся здесь же, а не только на ручках чата.
+    if (!(await leagueReadyOrJoin(res, 'своя запись (подключение)'))) return;
     return leagueProxy(res, '/me', 'GET', null, 'свою запись в лиге');
 }
 // DELETE /__switch/api/league/me — уйти из лиги целиком. После этого приёмник отвечает 401 на
@@ -11266,6 +11789,11 @@ function handleTsSetGithub(req, res) {
 // detached-процессом (видимый Chromium). Первый раз сессии нет → скрипт ждёт ручного GitHub-логина
 // и автосохраняет её; дальше открывает с сохранённой. Dedup: не плодим второй браузер на тот же label.
 const arLkPids = new Map(); // label → pid последнего живого open-session процесса
+// Режим живого прогона. Нужен очереди: ⚡ и 🎁 сериализуются РАЗДЕЛЬНО и друг друга не
+// ждут, а обычный визит 🌐 не участвует вовсе. Раньше режима не было, «занято» считалось
+// по любому живому браузеру — и ручное окно, которое ждёт человека до 10 минут, держало
+// конвейер автоподарков всё это время (замер 10.09: pid 22352 висел с 04:24:56).
+const arRunKind = new Map(); // label → 'auto' (⚡) | 'manual' (🎁) | 'plain' (🌐)
 function arPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
@@ -11280,14 +11808,43 @@ const AR_AUTO_CHECKIN_TTL_MS = 10 * 60 * 1000;
 // Что означает код возврата agentrouter/open-session.js (см. его заголовок).
 const AR_AUTO_CHECKIN_FAIL = {
     2: 'вход не подтвердился за 90 с — бонус не забран, попробуй ещё раз или добери кнопкой 🎁',
-    3: 'GitHub-сессия аккаунта мертва: пароль и 2FA автоматика не вводит — возьми 🐙 «готовый GitHub» заново',
+    3: 'GitHub-сессия мертва, общий снимок тоже не подошёл: пароль и 2FA автоматика не вводит — перелогинься в этом GitHub (⭐ в менеджере) или добери кнопкой 🎁',
     4: 'шлюз переделал страницу входа: кнопку GitHub найти не удалось — добери бонус кнопкой 🎁',
     5: 'шлюз отверг OAuth (код/state) — бонус не забран',
+    // 🪤 Код 6 развели с четвёртым 10.09, и путать их нельзя: 4 — вёрстка правда другая
+    // (публичная /api/status ОТВЕТИЛА, просто без github_client_id), 6 — край не ответил
+    // вовсе. Пустое тело на публичной ручке = рейт-лимит или WAF по IP, вёрстка ни при чём.
+    // До этого ЛЮБОЙ отказ печатался как «шлюз переделал страницу входа», и владельца
+    // посылали чинить то, чего никто не ломал (замер: седьмой подряд прогон с одного IP).
+    6: 'шлюз не ответил вовсе (пусто на публичной /api/status) — это рейт-лимит по IP, а не сломанная страница: подожди и повтори, пачкой сейчас не гони',
+    // 🔴 Код 7 — прокси аккаунта непригоден (нет назначения, адрес мёртв, схему браузер не
+    // умеет). Напрямую в этом случае НЕ идём намеренно: смена IP под живой GitHub-сессией
+    // заметнее антифроду, чем пропущенный подарок.
+    7: 'прокси аккаунта непригоден — напрямую не пошли намеренно: проверь пул прокси (вкладка «Здоровье») и повтори',
 };
 // Ручной режим ждёт человека 10 минут, а не 90 с — текст про таймаут другой.
 const AR_CHECKIN_FAIL_MANUAL = {
     2: 'вход в окне так и не случился (10 мин) — бонус не забран, открой ещё раз',
 };
+
+// Имя GitHub-аккаунта для сообщения об ошибке. Коды 3 и 5 — это всегда про сессию, а
+// текст был безымянным: «GitHub-сессия аккаунта мертва» на пуле из двадцати записей не
+// говорит, ЧТО чинить. Возраст снимка берём тем же хелпером, что кормит бейдж в таблице.
+function arGhNameFor(id) {
+    try {
+        const rec = arLoad().find(s => s.id === id);
+        const ghId = rec && rec.ghId;
+        if (!ghId) return null;
+        if (ghId === 'personal') return '🐙 личный GitHub';
+        const acct = ghLoad().find(g => g.id === ghId);
+        const nick = acct ? (acct.nickname || acct.login || ghId) : ghId;
+        const h = ghSnapHealth(ghSessionLib(), ghId);
+        const age = h.hasSnap && h.snapAgeDays !== null
+            ? ` (снимок ${h.snapAgeDays} дн${h.snapStale ? ', старше TTL' : ''})`
+            : h.hasSnap === false ? ' (общего снимка нет)' : '';
+        return `🐙 ${nick}${age}`;
+    } catch { return null; }
+}
 
 // Разбираем маркер, который скрипт печатает последней строкой: AUTOCHECKIN_RESULT {...}.
 // `checkedIn` — слово САМОГО шлюза (data.checked_in в ответе /api/oauth/github), это
@@ -11308,10 +11865,26 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
     st.finishedAt = new Date().toISOString();
     const tag = auto ? 'автоподарок' : 'чек-ин';
     try {
+        // Прогон прибит нами по «⏹ Стоп» с killRunning. Это не отказ скрипта: тост про
+        // «завершился с кодом null» тут врал бы про причину и гнал владельца в Server Logs
+        // искать несуществующую поломку. 🪤 Про разлогин предупреждаем прямо в статусе —
+        // убийство между выходом и входом оставляет аккаунт без сессии, и это последствие
+        // остановки, а не бага.
+        if (AR_CHECKIN_KILLED.delete(label)) {
+            st.state = 'cancelled';
+            st.message = 'прогон прибит вручную (⏹ Стоп) — аккаунт мог остаться разлогиненным,'
+                + ' проверь входом 🌐 или повтори ⚡';
+            logLine(`agentrouter ${tag} [${label}]: прибит вручную по стопу`);
+            return;
+        }
         if (code !== 0) {
             st.state = 'error';
             st.message = (auto ? AR_AUTO_CHECKIN_FAIL[code] : AR_CHECKIN_FAIL_MANUAL[code])
                 || AR_AUTO_CHECKIN_FAIL[code] || `скрипт завершился с кодом ${code}`;
+            // Коды 3 и 5 — про GitHub-сессию. Называем аккаунт: плашка в таблице говорит
+            // о состоянии постоянно, а тост должен назвать виновника в момент отказа.
+            const who = (code === 3 || code === 5) ? arGhNameFor(id) : null;
+            if (who) st.message = `${who}: ${st.message}`;
             logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
             return;
         }
@@ -11383,10 +11956,23 @@ function handleArCheckinStatus(req, res) {
     const runs = [];
     for (const [label, st] of AR_AUTO_CHECKIN) {
         const born = Date.parse(st.finishedAt || st.startedAt || 0) || 0;
-        if (st.state !== 'running' && born && now - born > AR_AUTO_CHECKIN_TTL_MS) { AR_AUTO_CHECKIN.delete(label); continue; }
+        // 🪤 `queued` выбрасывать наравне с завершёнными НЕЛЬЗЯ. Задание, простоявшее в
+        // очереди дольше TTL (а ровно это и создаёт забытое открытым ручное окно), теряло
+        // карточку статуса, оставаясь в AR_CHECKIN_QUEUE: наблюдатель на фронте молча
+        // сдавался после 8 промахов, а окно потом всплывало ниоткуда и без тоста.
+        const live = st.state === 'running' || st.state === 'queued';
+        if (!live && born && now - born > AR_AUTO_CHECKIN_TTL_MS) { AR_AUTO_CHECKIN.delete(label); continue; }
         runs.push({ label, ...st });
     }
-    jsonRes(res, 200, { runs });
+    // Пачка едет тем же поллингом, что и отдельные прогоны: второй ручки под прогресс
+    // не заводим — фронт всё равно опрашивает эту раз в 3 с, а два источника правды
+    // разъехались бы (см. историю modelmap: «не править файлом, только через ручку»).
+    // Предел и паузу отдаём здесь же, чтобы фронт не держал их копию: разъехавшаяся
+    // копия обещала бы владельцу в подсказке одно, а бэкенд делал другое.
+    jsonRes(res, 200, {
+        runs, batch: arBatchSnapshot(),
+        limit: AR_CHECKIN_BATCH_MAX, gapSec: Math.round(AR_CHECKIN_GAP_MS / 1000),
+    });
 }
 // ───── Очередь чек-инов: залп по кнопкам превращаем в конвейер ─────────────
 // Владелец жмёт ⚡ на нескольких аккаунтах подряд — и раньше это был залп: три окна
@@ -11394,56 +11980,304 @@ function handleArCheckinStatus(req, res) {
 // точный баланс ВСЕМУ пулу. Теперь клики не отбиваются, а встают в очередь: один
 // прогон за раз плюс пауза между стартами. Кнопка отвечает «в очереди, позиция N»,
 // наблюдатель на фронте ждёт своей очереди как обычного прогона.
+//
+// 🪤 Очередь ОДНА, но полос в ней две, и это принципиально. Ручной чек-ин 🎁 по замыслу
+// ждёт человека до 10 минут, и пока «занято» считалось по любому живому браузеру, одно
+// забытое открытым окно держало весь конвейер ⚡ ровно эти 10 минут (замер 10.09).
+// Полосы сериализованы каждая сама в себе — человек всё равно сидит в одном окне, а ⚡
+// по-прежнему идут по одному, — но друг друга не ждут. Максимум два окна разом: защита
+// от залпа из одиннадцати при этом сохраняется полностью.
 const AR_CHECKIN_QUEUE = [];
 const AR_CHECKIN_GAP_MS = 25_000;   // пауза между прогонами: залп ловит рейт-лимит
-let arCheckinLastStart = 0;
+const arCheckinLastStart = { auto: 0, manual: 0 };
 let arCheckinPumpTimer = null;
 
-// Занято, если жив ХОТЬ ОДИН браузер ЛК: чек-ин по природе последовательный (зашёл,
-// вошёл, забрал, закрылось), а обычный визит 🌐 тоже держит профиль и грузит шлюз.
-function arCheckinBusy() {
-    return [...arLkPids.values()].some(pid => arPidAlive(pid));
+function arLaneOf(job) { return job.wantAuto ? 'auto' : 'manual'; }
+
+// Занято, если жив браузер ЭТОЙ полосы. Обычный визит 🌐 ('plain') сюда не попадает: он
+// человеческий по природе и к чек-ину отношения не имеет.
+function arCheckinBusy(lane) {
+    for (const [label, pid] of arLkPids) {
+        if (arRunKind.get(label) === lane && arPidAlive(pid)) return true;
+    }
+    return false;
 }
 
-// Сколько ещё ждать до старта следующего: либо пока закроется текущее окно, либо
-// остаток паузы после прошлого старта.
-function arCheckinWaitMs() {
-    if (arCheckinBusy()) return AR_CHECKIN_GAP_MS;
-    const since = Date.now() - arCheckinLastStart;
+// Сколько ещё ждать до старта следующего в полосе: либо пока закроется её текущее окно,
+// либо остаток паузы после прошлого старта в ней же.
+function arCheckinWaitMs(lane) {
+    if (arCheckinBusy(lane)) return AR_CHECKIN_GAP_MS;
+    const since = Date.now() - (arCheckinLastStart[lane] || 0);
     return since >= AR_CHECKIN_GAP_MS ? 0 : AR_CHECKIN_GAP_MS - since;
+}
+
+// Место задания ВНУТРИ своей полосы — позиция «3 из 5» по общему массиву врала бы, если
+// в нём вперемешку стоят ⚡ и 🎁.
+function arQueueSpot(label) {
+    const job = AR_CHECKIN_QUEUE.find(j => j.label === label);
+    if (!job) return null;
+    const lane = arLaneOf(job);
+    const mates = AR_CHECKIN_QUEUE.filter(j => arLaneOf(j) === lane);
+    return { lane, index: mates.indexOf(job), total: mates.length };
+}
+
+function arQueueEta(lane, index) {
+    return Math.ceil((arCheckinWaitMs(lane) + index * AR_CHECKIN_GAP_MS) / 1000);
 }
 
 function arCheckinPump() {
     if (arCheckinPumpTimer) { clearTimeout(arCheckinPumpTimer); arCheckinPumpTimer = null; }
+    // Пускаем всё, чья полоса свободна прямо сейчас. Круг короткий: полос две, а спавн
+    // тут же делает свою занятой, так что стартует максимум по одному с каждой.
+    for (;;) {
+        const at = AR_CHECKIN_QUEUE.findIndex(j => arCheckinWaitMs(arLaneOf(j)) === 0);
+        if (at < 0) break;
+        const job = AR_CHECKIN_QUEUE.splice(at, 1)[0];
+        logLine(`agentrouter чек-ин: беру из очереди ${job.dispName}`
+            + ` (полоса ${arLaneOf(job)}, осталось ${AR_CHECKIN_QUEUE.length})`);
+        try { arSpawnSession(job).catch(e => arSpawnFailed(job, e)); } catch (e) {
+            arSpawnFailed(job, e);
+        }
+    }
     if (!AR_CHECKIN_QUEUE.length) return;
-    const wait = arCheckinWaitMs();
-    if (wait > 0) {
-        // Обновляем подписи в статусе, чтобы в тосте было видно, сколько ждать.
-        AR_CHECKIN_QUEUE.forEach((job, i) => {
+    // Освежаем подписи оставшимся и заводим будильник по ближайшей из полос.
+    let soonest = Infinity;
+    for (const lane of ['auto', 'manual']) {
+        const mates = AR_CHECKIN_QUEUE.filter(j => arLaneOf(j) === lane);
+        if (!mates.length) continue;
+        soonest = Math.min(soonest, arCheckinWaitMs(lane));
+        mates.forEach((job, i) => {
             const st = AR_AUTO_CHECKIN.get(job.label);
-            if (st && st.state === 'queued') {
-                st.position = i + 1;
-                st.message = `в очереди ${i + 1}/${AR_CHECKIN_QUEUE.length} — старт примерно через ${Math.ceil((wait + i * AR_CHECKIN_GAP_MS) / 1000)}с`;
-                AR_AUTO_CHECKIN.set(job.label, st);
-            }
+            if (!st || st.state !== 'queued') return;
+            st.position = i + 1;
+            st.message = `в очереди ${i + 1}/${mates.length} — старт примерно через ${arQueueEta(lane, i)}с`;
+            AR_AUTO_CHECKIN.set(job.label, st);
         });
-        arCheckinPumpTimer = setTimeout(arCheckinPump, Math.min(wait, 5000));
-        if (arCheckinPumpTimer.unref) arCheckinPumpTimer.unref();
-        return;
     }
-    const job = AR_CHECKIN_QUEUE.shift();
-    logLine(`agentrouter чек-ин: беру из очереди ${job.dispName} (осталось ${AR_CHECKIN_QUEUE.length})`);
-    try { arSpawnSession(job); } catch (e) {
-        AR_AUTO_CHECKIN.set(job.label, { ...job, state: 'error', message: `запуск не удался: ${e.message}`, finishedAt: new Date().toISOString() });
-        logLine(`agentrouter чек-ин: запуск ${job.dispName} не удался — ${e.message}`);
+    arCheckinPumpTimer = setTimeout(arCheckinPump, Math.min(Math.max(soonest, 250), 5000));
+    if (arCheckinPumpTimer.unref) arCheckinPumpTimer.unref();
+}
+
+// ───── Стоп-кран очереди ──────────────────────────────────────────────────
+// 🪤 Закрыть окно мышкой — это НЕ остановка пачки, а «дальше по списку». Обработчик
+// 'exit' в arSpawnSession зовёт arCheckinPump(), и тот немедленно спавнит следующего:
+// владелец, убивший браузер, получал не тишину, а новое окно через секунду (проверено
+// вживую 10.09). Очередь живёт в памяти процесса, дашборд не перезапускаем — значит
+// остановить её можно только ручкой, и до 10.09 такой ручки не было вовсе.
+//
+// 🪤 Текущий прогон по умолчанию ДОИГРЫВАЕТ. Скрипт сперва разлогинивает аккаунт и
+// только потом входит заново: убийство между этими шагами оставляет аккаунт
+// разлогиненным, и следующий заход придётся делать руками. Прибиваем только по явному
+// killRunning — и предупреждаем об этом в статусе прибитого.
+const AR_CHECKIN_KILLED = new Set();   // label'ы, прибитые нами намеренно
+function arCheckinCancel({ lane = null, reason = 'отменено', killRunning = false } = {}) {
+    const dropped = [];
+    // Идём с конца: splice в прямом проходе перескакивает через соседа.
+    for (let i = AR_CHECKIN_QUEUE.length - 1; i >= 0; i--) {
+        if (lane && arLaneOf(AR_CHECKIN_QUEUE[i]) !== lane) continue;
+        dropped.unshift(AR_CHECKIN_QUEUE.splice(i, 1)[0]);
     }
-    if (AR_CHECKIN_QUEUE.length) arCheckinPump();
+    // Выкинутым ставим 'cancelled', а не просто забываем про них. Наблюдатель на фронте
+    // ждёт СВОЮ карточку, и на её пропажу у него единственная версия — «дашборд
+    // перезапустили»: молчаливая ложь про причину. Штамп finishedAt заодно включает им
+    // TTL, иначе отменённые висели бы в статусе вечно (для 'queued' TTL отключён).
+    for (const job of dropped) {
+        const st = AR_AUTO_CHECKIN.get(job.label) || { id: job.id, label: job.label, name: job.dispName };
+        st.state = 'cancelled';
+        st.message = reason;
+        st.position = null;
+        st.finishedAt = new Date().toISOString();
+        AR_AUTO_CHECKIN.set(job.label, st);
+    }
+    const killed = [];
+    if (killRunning) {
+        for (const [label, pid] of arLkPids) {
+            const kind = arRunKind.get(label);
+            if (kind === 'plain') continue;          // визит 🌐 к чек-ину отношения не имеет
+            if (lane && kind !== lane) continue;
+            if (!arPidAlive(pid)) continue;
+            AR_CHECKIN_KILLED.add(label);
+            // /T — вместе с деревом: под нашим node живёт Chromium от playwright, и
+            // одиночный kill оставил бы окно сиротой на экране, а профиль — с недописанным
+            // SQLite. Фолбэк на SIGKILL нужен, если taskkill в PATH не оказалось.
+            try { execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore' }); }
+            catch { try { process.kill(pid, 'SIGKILL'); } catch {} }
+            killed.push(label);
+        }
+    }
+    if (dropped.length || killed.length) {
+        logLine(`agentrouter чек-ин: стоп — снято с очереди ${dropped.length}`
+            + (killed.length ? `, прибито прогонов ${killed.length}` : '') + ` (${reason})`);
+    }
+    return { dropped: dropped.map(j => j.label), killed };
+}
+
+// ───── Пачка ⚡ «забрать у всех»: предел, прогресс, предохранитель ─────────
+// Кнопка ставит в полосу auto все аккаунты с готовым подарком — по одному, с той же
+// паузой. Залпом нельзя: Aliyun WAF у шлюза ловит нас на частоте и гасит ТОЧНЫЙ баланс
+// всему пулу на 10 минут (см. coolDownHost в newapi-account.js).
+//
+// Предел — не вкус. Замер 10.09: седьмой подряд прогон получил от публичной /api/status
+// ПУСТОЕ тело, то есть шлюз включил рейт-лимит по IP. Шесть — последнее число, на
+// котором мы его ещё не видели; остаток владелец добирает второй пачкой позже.
+const AR_CHECKIN_BATCH_MAX = 6;
+// Сколько отказов «от шлюза» подряд считаем стеной. Один бывает и от кривой страницы,
+// два подряд — уже не совпадение: дальше жечь аккаунты в ту же стену бессмысленно.
+const AR_CHECKIN_BATCH_FUSE = 2;
+const AR_CHECKIN_BATCH = {
+    total: 0, done: 0, ok: 0, failed: 0, cancelled: 0,
+    consecFail: 0, startedAt: null, finishedAt: null, reason: null,
+    labels: new Set(),   // чьи прогоны ещё считаем своими
+};
+
+// Запуск прогона провалился до того, как появился процесс. Вынесено из насоса, потому что
+// с асинхронным arSpawnSession отказ приходит двумя путями: синхронным throw и отказом
+// промиса. Обработчик обязан быть один — иначе второй путь молча терял бы задание.
+function arSpawnFailed(job, e) {
+    const msg = (e && (e.message || String(e))) || 'неизвестная ошибка';
+    // Имя берём из job.dispName явно: `...job` клал в запись поля задания, а не
+    // состояния, и тост про неудачный запуск выходил безымянным.
+    AR_AUTO_CHECKIN.set(job.label, {
+        id: job.id, label: job.label, name: job.dispName, state: 'error',
+        message: `запуск не удался: ${msg}`,
+        startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    });
+    logLine(`agentrouter чек-ин: запуск ${job.dispName} не удался — ${msg}`);
+    // 🪤 Не забыть про пачку. Задание из очереди уже вынуто, а 'exit' по нему не
+    // придёт никогда — без этой строки label навсегда остался бы в labels, и
+    // прогресс замер бы на «4 из 6» с активной кнопкой «Стоп».
+    arBatchNote(job.label, 1);
+    arCheckinPump();
+}
+
+// Итог прогона приехал — двигаем прогресс пачки. Зовётся из обработчика 'exit'
+// СИНХРОННО и ДО arCheckinPump(): иначе предохранитель сработал бы уже после того, как
+// насос выпустил следующего в ту же стену.
+function arBatchNote(label, code) {
+    const b = AR_CHECKIN_BATCH;
+    if (!b.labels.has(label)) return;      // не наш прогон (одиночный клик ⚡ или 🎁)
+    b.labels.delete(label);
+    b.done++;
+    if (code === 0) { b.ok++; b.consecFail = 0; }
+    else {
+        b.failed++;
+        // Коды 4 и 5 — «не нашёл, чем начать GitHub-вход» и «шлюз отверг OAuth». Именно
+        // так выглядит рейт-лимит по IP: страница приезжает пустая, кнопки на ней нет.
+        // Код 6 — тот же рейт-лимит, но названный прямо: край не ответил на публичной
+        // /api/status. Он появился 10.09 вместе с разведением диагнозов в open-session.js,
+        // и не считать его здесь значило бы, что предохранитель ослеп ровно на том случае,
+        // ради которого он и заводился.
+        // Коды 2 и 3 (вход не подтвердился, мёртвая GitHub-сессия) — про КОНКРЕТНЫЙ
+        // аккаунт, и вставать по ним нельзя: два дохлых аккаунта подряд заперли бы
+        // остальные девять живых.
+        //
+        // 🔴 Код 7 (прокси непригоден) считаем наравне с рейт-лимитом, но по другой
+        // причине: одиночный мёртвый адрес гасит только свой прогон, а два подряд на
+        // РАЗНЫХ адресах означают, что сломан сам пул — гнать пачку дальше бессмысленно.
+        if (code === 4 || code === 5 || code === 6 || code === 7) b.consecFail++; else b.consecFail = 0;
+    }
+    if (b.consecFail >= AR_CHECKIN_BATCH_FUSE && b.labels.size) {
+        b.reason = `остановлена сама: ${b.consecFail} прогона подряд отбились от шлюза`
+            + ' (пустая страница входа = рейт-лимит по IP). Подожди ~10 минут и повтори';
+        // Гасим полосу auto целиком, а не только своих: лимит у шлюза по IP, и одиночный
+        // ⚡, стоящий в той же полосе, разбился бы о ту же стену.
+        b.cancelled += b.labels.size;
+        b.labels.clear();
+        arCheckinCancel({ lane: 'auto', reason: `пачка ⚡ ${b.reason}` });
+        logLine(`agentrouter чек-ин: пачка ⚡ ${b.reason}`);
+    }
+    if (!b.labels.size && !b.finishedAt) b.finishedAt = new Date().toISOString();
+}
+
+// Снимок пачки для фронта. queued/running пересчитываем на месте, а не храним: очередь
+// и живые pid'ы — единственная правда, а сохранённый счётчик разъехался бы с ней на
+// первом же ручном «⏹ Стоп».
+function arBatchSnapshot() {
+    const b = AR_CHECKIN_BATCH;
+    if (!b.total) return null;
+    let queued = 0, running = 0;
+    for (const label of b.labels) {
+        if (AR_CHECKIN_QUEUE.some(j => j.label === label)) queued++;
+        else if (arPidAlive(arLkPids.get(label))) running++;
+    }
+    return {
+        total: b.total, done: b.done, ok: b.ok, failed: b.failed, cancelled: b.cancelled,
+        queued, running, active: queued + running > 0,
+        startedAt: b.startedAt, finishedAt: b.finishedAt, reason: b.reason,
+    };
 }
 
 // Спавн окна ЛК/чек-ина. Одна функция на прямой путь (🌐) и на очередь (🎁/⚡) —
 // раньше это был кусок внутри обработчика, и очередь потребовала бы его копии.
-function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
+// Каталог разовых seed-файлов с прокси для дочернего open-session.js. Почему файл, а не
+// аргумент или переменная среды: и то, и другое видно в списке процессов машины владельца
+// вместе с логином и паролем прокси. Файл пишется атомарно и удаляется самим потомком.
+const AR_CHECKIN_PROXY_DIR = path.join(__dirname, 'runtime', 'ar-proxy');
+
+function arWriteProxySeed(label, proxy) {
+    const file = path.join(AR_CHECKIN_PROXY_DIR, `${label}.json`);
+    fs.mkdirSync(AR_CHECKIN_PROXY_DIR, { recursive: true });
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ proxy, at: new Date().toISOString() }), 'utf8');
+    fs.renameSync(tmp, file);
+    return file;
+}
+
+function arClearProxySeed(label) {
+    try { fs.unlinkSync(path.join(AR_CHECKIN_PROXY_DIR, `${label}.json`)); } catch { /* потомок уже съел */ }
+}
+
+// Прокси аккаунта решается ЗДЕСЬ, до запуска браузера, и по id записи пула.
+//
+// 🪤 Почему не внутри потомка: ключ липкости обязан быть от аккаунта. Спроси потомок сам —
+// он знал бы только профиль и хост, а на `host:agentrouter.org` весь пул снова ходил бы
+// одним адресом. Плюс отказ был бы виден только после того, как окно уже открылось.
+async function arResolveCheckinProxy({ id, label, profileDir = null }) {
+    const lib = newapiLib();
+    if (!lib || !lib.accountProxy) return { ok: true, proxy: null };
+    const px = await lib.accountProxy({ host: 'agentrouter.org', accountId: id || null, profileDir });
+    if (!px.ok) return { ok: false, error: px.error };
+    return { ok: true, proxy: px.proxy || null };
+}
+
+async function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
     const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
+    const kind = wantAuto ? 'auto' : wantCheckin ? 'manual' : 'plain';
+
+    // 🔴 Прокси — ДО spawn. Назначения нет или адрес мёртв → окно не поднимаем вовсе:
+    // напрямую под живой GitHub-сессией ходить нельзя, а открытый и тут же упавший
+    // браузер стоил бы попытки подарка.
+    let seedWritten = false;
+    try {
+        const px = await arResolveCheckinProxy({ id, label });
+        if (!px.ok) {
+            logLine(`agentrouter session/open [${label}]: прокси непригоден — окно не открываю (${px.error})`);
+            if (wantCheckin) {
+                await arAutoCheckinFinish(id, label, 7, null, wantAuto);
+                arBatchNote(label, 7);
+                // Паузу полосы НЕ двигаем: она разносит старты окон, а окна не было.
+                // Следующее задание вправе стартовать сразу; сломанный пул остановит
+                // предохранитель после второго отказа подряд, а не искусственная пауза.
+                arCheckinPump();
+            }
+            return null;
+        }
+        // Метку пишем без кредов: label прокси их не содержит по построению.
+        if (px.proxy) {
+            arWriteProxySeed(label, px.proxy);
+            seedWritten = true;
+            logLine(`agentrouter session/open [${label}]: выход через ${px.proxy.label}`);
+        }
+    } catch (e) {
+        logLine(`agentrouter session/open [${label}]: не удалось подготовить прокси: ${e.message}`);
+        if (wantCheckin) {
+            await arAutoCheckinFinish(id, label, 7, null, wantAuto);
+            arBatchNote(label, 7);
+            arCheckinPump();
+        }
+        return null;
+    }
+
     const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
     // Чек-ину stdout нужен не только для логов: в последней строке приезжает маркер
     // AUTOCHECKIN_RESULT — слово шлюза про суточный бонус и СНИМОК точного баланса,
@@ -11458,19 +12292,31 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
     proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
     proc.on('exit', (code, sig) => {
         arLkPids.delete(label);
+        arRunKind.delete(label);
+        // Потомок seed съедает сам; подчищаем на случай, если он упал до чтения — иначе
+        // креды остались бы лежать на диске до следующего запуска.
+        if (seedWritten) arClearProxySeed(label);
         logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
         if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
         // Обычный визит в ЛК (🌐): замок с куки снят, точный баланс стал читаемым.
         // Режимы чек-ина сюда не входят — у них свой хвост со снимком из браузера,
         // и второй чек тут же погнал бы к шлюзу лишний запрос за Aliyun WAF.
         else newapiRecheckAfterLk('ar', id);
+        // Прогресс пачки и её предохранитель — СИНХРОННО и до насоса. arAutoCheckinFinish
+        // асинхронна (ждёт флаша кук), и полагаться на неё было нельзя: насос успел бы
+        // выпустить следующего в ту же стену рейт-лимита ещё до того, как счётчик отказов
+        // подрос бы на единицу.
+        if (wantCheckin) arBatchNote(label, code);
         // Окно закрылось — можно брать следующего из очереди (с паузой, см. arCheckinWaitMs).
-        arCheckinLastStart = Date.now();
+        // Пауза отсчитывается от закрытия и только ВНУТРИ своей полосы; визит 🌐 очередь
+        // не задерживает — раньше он молча стоил ей 25 секунд.
+        if (kind !== 'plain') arCheckinLastStart[kind] = Date.now();
         arCheckinPump();
     });
     proc.unref();
     arLkPids.set(label, proc.pid);
-    arCheckinLastStart = Date.now();
+    arRunKind.set(label, kind);
+    if (kind !== 'plain') arCheckinLastStart[kind] = Date.now();
     if (wantCheckin) {
         AR_AUTO_CHECKIN.set(label, {
             id, label, name: dispName, state: 'running',
@@ -11479,6 +12325,99 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
         });
     }
     return proc;
+}
+
+// POST /__switch/api/ar/checkin-cancel { lane?, killRunning? } → стоп очереди чек-инов.
+//
+// Зачем ручка вообще. Очередь живёт в памяти процесса, дашборд владелец не перезапускает
+// (рестарт рвёт его живые сессии), а закрытие браузера мышкой очередь НЕ останавливает:
+// 'exit' зовёт насос, и тот спавнит следующего. До 10.09 начатую пачку остановить было
+// нечем в принципе — приходилось ждать, пока она добежит сама.
+//
+// `lane` не обязателен: без него снимаем всё, что стоит (и ⚡, и 🎁). `killRunning`
+// прибивает и текущее окно — по умолчанию НЕТ: убийство между разлогином и входом
+// оставляет аккаунт разлогиненным, а это хуже, чем один лишний доигравший прогон.
+async function handleArCheckinCancel(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const lane = (body && (body.lane === 'auto' || body.lane === 'manual')) ? body.lane : null;
+        const killRunning = !!(body && body.killRunning);
+        const b = AR_CHECKIN_BATCH;
+        const out = arCheckinCancel({
+            lane, killRunning,
+            reason: killRunning ? 'остановлено вручную (⏹ Стоп, с прибитием текущего)'
+                                : 'остановлено вручную (⏹ Стоп) — до старта не дошло',
+        });
+        // Свои недобранные списываем в cancelled, чтобы прогресс на кнопке сошёлся:
+        // done + cancelled === total. Иначе пачка навсегда осталась бы «3 из 6 активна».
+        const mine = [...b.labels].filter(l => out.dropped.includes(l) || out.killed.includes(l));
+        for (const label of mine) { b.labels.delete(label); b.cancelled++; }
+        if (mine.length && !b.labels.size) {
+            b.reason = 'остановлена вручную';
+            b.finishedAt = new Date().toISOString();
+        }
+        jsonRes(res, 200, {
+            ok: true, cancelled: out.dropped.length, killed: out.killed.length,
+            labels: out.dropped, killedLabels: out.killed, batch: arBatchSnapshot(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/ar/checkin-all { limit? } → поставить ⚡ на всех, у кого подарок готов.
+// Идут по полосе auto, по одному, с паузой AR_CHECKIN_GAP_MS — то есть ровно так же, как
+// одиночные клики. Залп здесь невозможен by design, и это главное: пачка отличается от
+// одиннадцати кликов не темпом, а тем, что её видно и можно остановить.
+async function handleArCheckinAll(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const ask = Number(body && body.limit);
+        const limit = Math.min(isFinite(ask) && ask > 0 ? Math.floor(ask) : AR_CHECKIN_BATCH_MAX, AR_CHECKIN_BATCH_MAX);
+        const ready = arCheckinReadyList(arLoad());
+        const jobs = [];
+        const skipped = [];
+        for (const s of ready) {
+            const label = 'acct_' + s.id;
+            const dispName = String(s.name || s.email || label);
+            // Дедуп тот же, что у одиночного клика: уже стоит в очереди / уже открыт
+            // браузер на этот профиль (два Chromium на один профиль пишут в один SQLite).
+            if (arQueueSpot(label)) { skipped.push(`${dispName}: уже в очереди`); continue; }
+            if (arPidAlive(arLkPids.get(label))) { skipped.push(`${dispName}: браузер уже открыт`); continue; }
+            if (jobs.length >= limit) { skipped.push(`${dispName}: сверх предела пачки (${limit})`); continue; }
+            jobs.push({ id: s.id, label, dispName, mode: 'autocheckin', wantCheckin: true, wantAuto: true, batch: true });
+        }
+        if (!jobs.length) {
+            return jsonRes(res, 200, {
+                ok: true, queued: 0, ready: ready.length, skipped: skipped.length,
+                skippedWhy: skipped, limit, batch: arBatchSnapshot(),
+            });
+        }
+        // Новая пачка обнуляет счётчики: старые цифры на кнопке хуже, чем никакие.
+        AR_CHECKIN_BATCH.total = jobs.length;
+        AR_CHECKIN_BATCH.done = 0;
+        AR_CHECKIN_BATCH.ok = 0;
+        AR_CHECKIN_BATCH.failed = 0;
+        AR_CHECKIN_BATCH.cancelled = 0;
+        AR_CHECKIN_BATCH.consecFail = 0;
+        AR_CHECKIN_BATCH.reason = null;
+        AR_CHECKIN_BATCH.finishedAt = null;
+        AR_CHECKIN_BATCH.startedAt = new Date().toISOString();
+        AR_CHECKIN_BATCH.labels = new Set(jobs.map(j => j.label));
+        for (const job of jobs) {
+            AR_CHECKIN_QUEUE.push(job);
+            AR_AUTO_CHECKIN.set(job.label, {
+                id: job.id, label: job.label, name: job.dispName, state: 'queued',
+                message: 'пачка ⚡ — ждёт очереди',   // позицию и ETA впишет насос ниже
+                startedAt: new Date().toISOString(), finishedAt: null,
+            });
+        }
+        logLine(`agentrouter чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready.length} готовых`
+            + (skipped.length ? `, пропущено ${skipped.length}` : ''));
+        arCheckinPump();
+        jsonRes(res, 200, {
+            ok: true, queued: jobs.length, ready: ready.length, skipped: skipped.length,
+            skippedWhy: skipped, limit, batch: arBatchSnapshot(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
 async function handleArSessionOpen(req, res) {
@@ -11517,22 +12456,45 @@ async function handleArSessionOpen(req, res) {
         if (wantCheckin) {
             const runMode = wantAuto ? 'autocheckin' : 'checkin';
             const job = { id, label, dispName, mode: runMode, wantCheckin: true, wantAuto };
-            const wait = arCheckinWaitMs();
-            if (wait > 0 || AR_CHECKIN_QUEUE.length) {
+            const lane = arLaneOf(job);
+            // Этот аккаунт уже СТОИТ в очереди. Дедуп выше ловит только уже открытый
+            // браузер (arLkPids), а ждущее задание не ловил вовсе — повторный клик клал
+            // второй job на тот же label, и оба делили одну запись AR_AUTO_CHECKIN.
+            const spot = arQueueSpot(label);
+            if (spot) {
+                const etaSec = arQueueEta(spot.lane, spot.index);
+                logLine(`agentrouter чек-ин: ${dispName} уже в очереди (позиция ${spot.index + 1}/${spot.total})`
+                    + ' — повторный клик пропущен');
+                return jsonRes(res, 200, {
+                    ok: true, label, queued: true, already: true,
+                    position: spot.index + 1, etaSec, mode: runMode,
+                });
+            }
+            const wait = arCheckinWaitMs(lane);
+            const laneQueued = AR_CHECKIN_QUEUE.filter(j => arLaneOf(j) === lane).length;
+            if (wait > 0 || laneQueued) {
                 AR_CHECKIN_QUEUE.push(job);
-                const pos = AR_CHECKIN_QUEUE.length;
-                const etaSec = Math.ceil((wait + (pos - 1) * AR_CHECKIN_GAP_MS) / 1000);
+                const pos = laneQueued + 1;
+                const etaSec = arQueueEta(lane, pos - 1);
                 AR_AUTO_CHECKIN.set(label, {
                     id, label, name: dispName, state: 'queued', position: pos,
                     message: `в очереди ${pos} — старт примерно через ${etaSec}с`,
                     startedAt: new Date().toISOString(), finishedAt: null,
                 });
-                logLine(`agentrouter чек-ин: ${dispName} в очередь (позиция ${pos}, старт через ~${etaSec}с)`);
+                logLine(`agentrouter чек-ин: ${dispName} в очередь (полоса ${lane}, позиция ${pos}, старт через ~${etaSec}с)`);
                 arCheckinPump();
                 return jsonRes(res, 200, { ok: true, label, queued: true, position: pos, etaSec, mode: runMode });
             }
             newapiLkVisited(label);
-            const proc = arSpawnSession(job);
+            const proc = await arSpawnSession(job);
+            // Прокси непригоден → окно не поднималось, состояние уже записано с кодом 7.
+            if (!proc) {
+                const st = AR_AUTO_CHECKIN.get(label);
+                return jsonRes(res, 200, {
+                    ok: false, label, mode: runMode,
+                    error: (st && st.message) || 'прокси аккаунта непригоден — напрямую не пошли',
+                });
+            }
             logLine(`agentrouter session/open: ${dispName} label=${label} mode=${runMode} (pid ${proc.pid})`);
             return jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode: runMode });
         }
@@ -11545,7 +12507,12 @@ async function handleArSessionOpen(req, res) {
         newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
         const mode = isRealKey(target.api_key) ? 'console' : 'register';
-        const proc = arSpawnSession({ id, label, dispName, mode, wantCheckin: false, wantAuto: false });
+        const proc = await arSpawnSession({ id, label, dispName, mode, wantCheckin: false, wantAuto: false });
+        // Обычный визит 🌐 тоже не идёт мимо прокси: пул включён и адрес непригоден —
+        // честный отказ вместо окна, открытого с домашнего IP под живой сессией.
+        if (!proc) {
+            return jsonRes(res, 502, { error: 'прокси аккаунта непригоден — окно не открыто, напрямую не пошли' });
+        }
         const failed = await sessionOpenEarlyFailure(proc);
         if (failed) {
             arLkPids.delete(label);
@@ -12061,18 +13028,19 @@ function arReadModelMap() {
     } catch { return {}; }
 }
 
-// GET /__switch/api/ar/modelmap → текущий маппинг; POST {opus, sonnet, haiku} → сохранить.
+// GET /__switch/api/ar/modelmap → текущий маппинг; POST {opus, sonnet, haiku, gpt} → сохранить.
+// gpt — цель для любого входящего GPT-запроса в keepalive; позволяет переключить
+// весь GPT-трафик на другую модель одним кликом без смены конфига Claude Code.
 async function handleArModelMap(req, res) {
     try {
         if (req.method === 'POST') {
             const body = await readJsonBody(req);
-            const mm = {
-                opus: String(body.opus || '').trim() || '',
-                sonnet: String(body.sonnet || '').trim() || '',
-                haiku: String(body.haiku || '').trim() || '',
-            };
-            fs.writeFileSync(AR_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-            logLine(`agentrouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            // Слияние ради единообразия с девятью близнецами: AR и так пишет все четыре
+            // тира, но через общий writeTierMap любой будущий ключ тоже переживёт запись.
+            const mm = writeTierMap(AR_MODELMAP_FILE, {
+                opus: body.opus, sonnet: body.sonnet, haiku: body.haiku, gpt: body.gpt,
+            }, '');
+            logLine(`agentrouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'} gpt→${mm.gpt || '-'}`);
             return jsonRes(res, 200, { ok: true, modelMap: mm });
         }
         jsonRes(res, 200, { ok: true, modelMap: arReadModelMap() });
@@ -12095,6 +13063,40 @@ function arReadCheckinCfg() {
             bonusUsd: Number(j.bonusUsd) > 0 ? Number(j.bonusUsd) : AR_CHECKIN_DEFAULTS.bonusUsd,
         };
     } catch { return { ...AR_CHECKIN_DEFAULTS }; }
+}
+
+// Начало ТЕКУЩЕГО суточного окна в миллисекундах. Ровно та же арифметика, что у
+// arCheckinWindowStart в proxy-dashboard.html: «который час в Москве» считаем сдвигом от
+// UTC на +3, а не локальной таймзоной машины — иначе кнопка на ноутбуке в другом поясе
+// считала бы другое окно, чем сервер.
+function arCheckinWindowStartMs(hhmm, nowMs) {
+    const parts = String(hhmm || AR_CHECKIN_DEFAULTS.resetHhmmMsk).split(':');
+    const H = Number(parts[0]), M = Number(parts[1]);
+    const now = nowMs || Date.now();
+    const msk = new Date(now + 3 * 3600_000);
+    let b = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), (isFinite(H) ? H : 20) - 3, isFinite(M) ? M : 30);
+    if (b > now) b -= 86400_000;    // граница ещё не наступила → работает вчерашняя
+    return b;
+}
+
+// Кто готов к забору: повтор фронтовой arCheckinState, и повтор НАМЕРЕННЫЙ. Кнопка
+// «забрать у всех» не может верить списку id, присланному браузером: там лежит снимок
+// пула минутной давности, а между рендером и кликом отметка могла уже встать (её ставит
+// и автоподарок, и детект по росту выдачи). Считаем по диску, здесь и сейчас.
+//
+// Нет штампа вообще → считаем «можно забирать»: мы просто не знаем, забирали ли, и лучше
+// потратить прогон, чем молча пропустить деньги. dead/no_key/заглушка вместо ключа — вне
+// зачёта: у мёртвого ключа забирать нечего, у безключевого нет и самого аккаунта.
+function arCheckinReadyList(sessions) {
+    const start = arCheckinWindowStartMs(arReadCheckinCfg().resetHhmmMsk);
+    const ready = [];
+    for (const s of (sessions || [])) {
+        if (!s || s.status === 'dead' || s.status === 'no_key' || !isRealKey(s.api_key)) continue;
+        const at = s.checkinAt ? Date.parse(s.checkinAt) : 0;
+        if (at && at >= start) continue;      // отметка внутри текущего окна = уже забрано
+        ready.push(s);
+    }
+    return ready;
 }
 
 // GET /__switch/api/ar/checkin-config → конфиг; POST {resetHhmmMsk, bonusUsd} → сохранить.
@@ -12770,13 +13772,12 @@ async function handleGoSetModel(req, res) {
 async function handleGoModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(GO_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`gorouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(GO_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`gorouter modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -13008,6 +14009,46 @@ function apLoad() {
 }
 function apSave(arr) {
     fs.writeFileSync(AP_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+
+// Мерж-запись для ДОЛГИХ операций: пинг статусов, батч балансов, фоновый пересчёт
+// из статусбара. Все трое держат снимок массива через `await` по сети — у AIPM это
+// ещё и ретраи на 403 от кромки Cloudflare, то есть секунды, — а обычный apSave()
+// возвращал на диск весь этот устаревший снимок. Аккаунт, заведённый в такое окно,
+// пропадал бесследно: 09.09 так потеряно ЧЕТЫРЕ штуки (в логе две записи `add`
+// подряд на один email с разрывом 17–42 с, в файле — только вторая). По id это не
+// видно: суффикс берётся как sessions.length, и номер затёртого переиспользует
+// следующий. Здесь диск перечитывается непосредственно перед записью, и
+// накладываются ТОЛЬКО переданные объекты.
+//
+// Функция синхронная целиком — в Node это делает её атомарной относительно других
+// обработчиков: между apLoad() и apSave() внутри неё event loop управление никому
+// не передаёт. Поэтому мьютекс не нужен, достаточно не держать снимок через await.
+//
+// 🪤 Мерж идёт по `id`, а не по `api_key` (как в arSaveMerge): у AIPM ключ
+// меняется кнопкой 🔑 через set-key, и снимок со старым ключом не нашёл бы себя на
+// диске — arSaveMerge в этом случае делает push, то есть создал бы ДУБЛЬ аккаунта.
+// Пропавший с диска id не воскрешаем: раз его нет, аккаунт удалили, пока шёл скан.
+//
+// ВНИМАНИЕ: как и arSaveMerge, полей не удаляет (кроме BALANCE_CLEARABLE).
+// Для delete и сброса анкера по-прежнему нужен apSave() целиком.
+function apSaveMerge(changed) {
+    const list = Array.isArray(changed) ? changed : [changed];
+    const disk = apLoad();
+    const byId = new Map(disk.map(s => [s.id, s]));
+    for (const upd of list) {
+        if (!upd || !upd.id) continue;
+        const cur = byId.get(upd.id);
+        if (!cur) continue;                       // удалён, пока шёл скан — не воскрешаем
+        const { active, ...rest } = upd;          // владение активным ключом мержем не переносим
+        Object.assign(cur, rest);
+        for (const k of BALANCE_CLEARABLE) if (!(k in upd)) delete cur[k];
+    }
+    // Инвариант «активен ровно один» восстанавливаем по файлу ключа — тем же
+    // приёмом, что arSaveMerge: правда о владении лежит там, а не в снимке.
+    const activeKey = (() => { try { return fs.readFileSync(AP_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { return ''; } })();
+    if (activeKey) disk.forEach(s => { s.active = s.api_key === activeKey; });
+    apSave(disk);
 }
 function apReadActiveModel() {
     try { return fs.readFileSync(AP_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -13575,13 +14616,12 @@ async function handleKkSetModel(req, res) {
 async function handleKkModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(KK_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`kktoken modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(KK_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`kktoken modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -13605,13 +14645,13 @@ async function handleApSessions(req, res) {
             for (let i = 0; i < sessions.length; i += 3) {
                 await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await apProbe(s.api_key); }));
             }
-            apSave(sessions);
+            apSaveMerge(sessions);   // мерж: пинг статусов не должен затирать заведённый параллельно аккаунт
         }
         if (balance) {
             for (let i = 0; i < sessions.length; i += 3) {
                 await Promise.all(sessions.slice(i, i + 3).map(async s => apApplyBalance(s, await apBalance(s))));
             }
-            apSave(sessions);
+            apSaveMerge(sessions);   // мерж: батч балансов идёт секундами, за это время могли завести аккаунт
         }
         jsonRes(res, 200, { sessions, activeModel: apReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -13640,7 +14680,11 @@ async function handleApBalance(req, res) {
             const sessions = apLoad();
             const target = sessions.find(s => s.api_key === api_key);
             const bal = await apBalance(target || { api_key }, { force });
-            if (target) { apApplyBalance(target, bal); apSave(sessions); }
+            // Мерж по одному аккаунту, а не apSave(sessions): снимок снят ДО запроса
+            // в биллинг, и он же прилетал обратно на диск вместе со всем, чего в нём
+            // ещё не было. Именно этот путь дёргает статусбар фоново (nudge), поэтому
+            // окно открывалось само по себе, без участия владельца.
+            if (target) { apApplyBalance(target, bal); apSaveMerge(target); }
             return bal;
         };
         // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
@@ -14091,13 +15135,12 @@ async function handleApSetModel(req, res) {
 async function handleApModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(AP_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`kktoken modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(AP_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`aipm modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14796,13 +15839,12 @@ async function handleHnSetModel(req, res) {
 async function handleHnModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(HN_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`hcnsec modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(HN_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`hcnsec modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14926,6 +15968,7 @@ async function jwKeepaliveSpawn() {
                 UPSTREAM: JW_UPSTREAM,
                 KEY_FILE: JW_ACTIVE_KEY_FILE,
                 MODELMAP_FILE: JW_MODELMAP_FILE,
+                ALLOW_PAID_HEDGE: '1',
                 ...(process.env.JW_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.JW_PRE_COMMIT_MS } : {}),
             },
         });
@@ -15694,13 +16737,12 @@ async function handleJwSetModel(req, res) {
 async function handleJwModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(JW_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`justwoker modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(JW_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`justwoker modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -16350,13 +17392,12 @@ async function handleSkSetModel(req, res) {
 async function handleSkModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(SK_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        logLine(`seekai modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(SK_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`seekai modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17092,16 +18133,21 @@ async function handleTsSetModel(req, res) {
 async function handleTsModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
-        const mm = {
-            opus: String(body.opus || '').trim() || null,
-            sonnet: String(body.sonnet || '').trim() || null,
-            haiku: String(body.haiku || '').trim() || null,
-        };
-        fs.writeFileSync(TS_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-        const bad = ['opus', 'sonnet', 'haiku'].filter(t => mm[t] && !TS_SYSTEM_HONORED.has(mm[t]));
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(TS_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        // Проверка «модель выбрасывает системный промпт» идёт по ВСЕМ тирам, включая
+        // сохранённый `gpt`: ограничение TrueSOTA от тира не зависит, а проверяются
+        // только заполненные (`mm[t] &&`), так что пустой gpt в предупреждение не лезет.
+        const bad = ROUTE_TIERS.filter(t => mm[t] && !TS_SYSTEM_HONORED.has(mm[t]));
         if (bad.length) logLine(`truesota modelmap: ⚠️ тиры ${bad.join('/')} смотрят на модель, которая выбрасывает системный промпт`);
+        // А вот «пустой тир упадёт без ретрая» — только про три claude-тира: пустой
+        // `gpt` это норма (он заполнен ровно у одного шлюза из одиннадцати), и ругань
+        // на него была бы шумом в каждом сохранении.
         if (['opus', 'sonnet', 'haiku'].some(t => !mm[t])) logLine('truesota modelmap: ⚠️ пустой тир — запрос этого тира упадёт без ретрая');
-        logLine(`truesota modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        logLine(`truesota modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
         jsonRes(res, 200, { ok: true, modelMap: mm, warnTiers: bad });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17418,6 +18464,26 @@ async function keepaliveBring(port, opts = {}) {
 
 // Кнопка «🔄 перезапустить» в Health: пересоздать процесс безусловно.
 const keepaliveRestart = (port) => keepaliveBring(port, { force: true });
+
+// Подъём ПО ТРЕБОВАНИЮ для префиксного роутинга (front-door → сюда).
+//
+// Зачем отдельно от keepaliveRestart: тот идёт с force, то есть УБИВАЕТ живого. Для
+// «подними, если лежит» это негодно — запрос на живой порт убил бы прокси под нагрузкой.
+// keepaliveBring без force сам вернёт `already: true`, если /status отвечает.
+//
+// Зачем сериализация: пачка запросов Claude Code на один мёртвый порт даёт пачку
+// параллельных вызовов, и второй увидит порт занятым, а /status ещё не отвечающим —
+// то есть снимет как зомби процесс, который только что заспавнил первый. Одно обещание
+// на порт закрывает это целиком; переспросившие получают тот же результат.
+const keepaliveEnsureInflight = new Map();
+function keepaliveEnsure(port) {
+    const running = keepaliveEnsureInflight.get(port);
+    if (running) return running;
+    const p = keepaliveBring(port, { waitMs: 8000 })
+        .finally(() => { keepaliveEnsureInflight.delete(port); });
+    keepaliveEnsureInflight.set(port, p);
+    return p;
+}
 
 // Boot-респавн keepalive АКТИВНОГО бэкенда.
 //
@@ -17858,13 +18924,12 @@ async function handleTbModelMap(req, res) {
     try {
         if (req.method === 'POST') {
             const body = await readJsonBody(req);
-            const mm = {
-                opus: String(body.opus || '').trim() || '',
-                sonnet: String(body.sonnet || '').trim() || '',
-                haiku: String(body.haiku || '').trim() || '',
-            };
-            fs.writeFileSync(TB_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-            logLine(`tabi modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+            // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+            const mm = writeTierMap(TB_MODELMAP_FILE, {
+                opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+            }, '');
+            logLine(`tabi modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
             return jsonRes(res, 200, { ok: true, modelMap: mm });
         }
         jsonRes(res, 200, { ok: true, modelMap: tbReadModelMap() });
@@ -18480,13 +19545,12 @@ async function handleXpModelMap(req, res) {
     try {
         if (req.method === 'POST') {
             const body = await readJsonBody(req);
-            const mm = {
-                opus: String(body.opus || '').trim() || '',
-                sonnet: String(body.sonnet || '').trim() || '',
-                haiku: String(body.haiku || '').trim() || '',
-            };
-            fs.writeFileSync(XP_MODELMAP_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
-            logLine(`xpeach modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+            // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+            // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+            const mm = writeTierMap(XP_MODELMAP_FILE, {
+                opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+            }, '');
+            logLine(`xpeach modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
             return jsonRes(res, 200, { ok: true, modelMap: mm });
         }
         jsonRes(res, 200, { ok: true, modelMap: xpReadModelMap() });
@@ -19191,7 +20255,170 @@ async function handleFrontdoorToggle(req, res) {
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
 }
 
+// ═══ Вкладка «Модели» — здоровье пар «бакет × модель» ════════════════════════
+//
+// Считают четыре модуля-соседа, каждый своё: health-agg — агрегат событий,
+// health-reliability — надёжность шлюзов, health-catalog — заявленный каталог
+// моделей, health-probe — платные пробы живым запросом. Здесь только маршрутизация
+// и раскладка ответа по полям; ни агрегации, ни чтения событий тут нет и быть
+// не должно.
+//
+// 🪤 Require ленивый и в try/catch НАМЕРЕННО, а не по привычке. Модули пишутся
+// параллельно, и в момент старта дашборда их на диске может не быть — падение
+// require на верхнем уровне унесло бы весь процесс, а с ним ~450 остальных роутов
+// и живые сессии. Ленивая форма даёт и второе: неудачный require Node НЕ кеширует,
+// поэтому модуль подхватится сам, как только появится, без перезапуска — а
+// перезапуск здесь дорог отдельно (рвёт сессии, идущие через front-door :20100).
+const HEALTH_LIB_LOGGED = new Set();
+function healthLib(name) {
+    try { return require('./' + name); }
+    catch (e) {
+        // Вкладку опрашивают по таймеру — жалуемся ОДИН раз на модуль, иначе
+        // кольцевой буфер /__switch/api/logs забьётся одной и той же строкой.
+        if (!HEALTH_LIB_LOGGED.has(name)) {
+            HEALTH_LIB_LOGGED.add(name);
+            logLine(`${name} недоступен: ${e.message}`);
+        }
+        return null;
+    }
+}
+
+// Зовём модуль и не даём его падению утечь наружу: источников четыре и они
+// независимы — упавший каталог не повод хоронить агрегат, ради которого вкладку и
+// открыли. Отсутствие модуля и его исключение — РАЗНЫЕ строки в warnings:
+// «не собран» это ожидаемое состояние параллельной сборки, а исключение — баг,
+// который надо видеть отдельно. `await` стоит и на синхронных модулях специально:
+// вернут они значение или промис, снаружи это не наше дело.
+async function healthSection(name, call, warnings) {
+    const mod = healthLib(name);
+    if (!mod) { warnings.push(`модуль ${name} не собран`); return null; }
+    try { return await call(mod); }
+    catch (e) {
+        warnings.push(`${name}: ${e.message}`);
+        logLine(`models/health: ${name} упал — ${e.message}`);
+        return null;
+    }
+}
+
+// Окно берём из query, только если оно там осмысленное; иначе отдаём модулю пустые
+// опции и он берёт СВОЙ дефолт. Выдумывать числа за модуль нельзя — окна у агрегата
+// и надёжности разные, и подставленное «на глаз» значение молча переопределит их.
+function healthWindowOpts(raw) {
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? { windowSec: n } : {};
+}
+
+// GET /__switch/api/models/health — агрегат + каталог + надёжность + последние пробы.
+async function handleModelsHealth(req, res) {
+    // Агрегат читает событийный лог за недели — держим соединение живым, как
+    // handleArSessions: молчание дольше нескольких секунд рвут MITM-антивирусы и
+    // расширения, и успешный расчёт превращается в `TypeError: Failed to fetch`.
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const warnings = [];
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+
+        // Агрегат — хребет ответа: без него вкладке рисовать нечего, поэтому его
+        // отсутствие это честный ok:false с названным модулем, а не полупустой успех.
+        if (!healthLib('health-agg')) {
+            return jsonRes(res, 200, {
+                ok: false, error: 'модуль health-agg не собран',
+                generated_at: new Date().toISOString(),
+            });
+        }
+
+        // Окна правятся РАЗНЫМИ параметрами намеренно: один общий `?window=` на оба
+        // модуля склеил бы две несравнимые величины — ровно то, чего делать нельзя.
+        const agg = await healthSection('health-agg',
+            m => m.aggregate(healthWindowOpts(q.get('window'))), warnings) || {};
+        const cat = await healthSection('health-catalog',
+            m => m.catalog(), warnings);
+        const rel = await healthSection('health-reliability',
+            m => m.reliability(healthWindowOpts(q.get('rel_window'))), warnings);
+        const probes = await healthSection('health-probe',
+            m => m.readResults(), warnings);
+
+        // Склейка — ТОЛЬКО раскладка по полям. Числа не мержим и не пересчитываем: у
+        // агрегата окно в дни, у надёжности в часы, у проб — момент прогона. Подписать
+        // это может лишь потребитель, и чтобы ему было чем, окно надёжности едет
+        // отдельным полем: в `reliability` по форме ответа идут одни gateways, а без
+        // window_sec фронт не сможет честно написать, за какой срок цифра.
+        // Список шлюзов верхнего уровня — агрегатский; свой список каталога с ним не
+        // объединяем, он приезжает внутри `catalog` и остаётся там.
+        jsonRes(res, 200, {
+            ok: true,
+            window: agg.window ?? null,
+            pairs: agg.pairs || [],
+            gateways: agg.gateways || [],
+            catalog: cat?.entries || [],
+            catalog_gateways: cat?.gateways || [],
+            catalog_totals: cat?.totals || null,
+            reliability: rel?.gateways || {},
+            reliability_window_sec: rel?.window_sec ?? null,
+            probes: probes || {},
+            warnings: warnings.concat(
+                agg.warnings || [], cat?.warnings || [], rel?.warnings || []),
+            generated_at: new Date().toISOString(),
+        });
+    } catch (e) {
+        jsonRes(res, 500, { ok: false, error: e.message });
+    } finally { stopKeepalive(); }
+}
+
+// POST /__switch/api/models/probe — тело {pairs:[{bk,m}], confirm:true}.
+async function handleModelsProbe(req, res) {
+    // Прогон бьёт живыми запросами по шлюзам и идёт минутами — keepalive обязателен.
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const mod = healthLib('health-probe');
+        if (!mod) return jsonRes(res, 200, { ok: false, error: 'модуль health-probe не собран' });
+
+        let body;
+        try { body = await readJsonBody(req, 256 * 1024); }
+        catch (e) { return jsonRes(res, e.httpStatus || 400, { ok: false, error: `тело запроса: ${e.message}` }); }
+
+        const pairs = Array.isArray(body && body.pairs) ? body.pairs : null;
+        if (!pairs || !pairs.length) {
+            return jsonRes(res, 400, { ok: false, error: 'нужен непустой pairs: [{bk, m}]' });
+        }
+
+        // 💳 Смету считаем ВСЕГДА и первой, а без confirm:true прогон не стартует.
+        // Каждая проба — платный запрос к шлюзу, то есть деньги владельца: цена ошибки
+        // здесь не «лишняя строка в логе», а списанный баланс. Поэтому подтверждение
+        // сверяется строго `=== true` — «1», «yes» и любая непустая строка не годятся:
+        // на них JS-истинность сработала бы молча и запустила прогон за чужой счёт.
+        const estimate = await mod.estimate({ pairs });
+        if (body.confirm !== true) {
+            return jsonRes(res, 200, { ok: true, started: false, needs_confirm: true, estimate });
+        }
+
+        const run = await mod.startRun({ pairs });
+        logLine(`models/probe: старт прогона, пар ${pairs.length}`);
+        return jsonRes(res, 200, { ok: true, started: true, estimate, run });
+    } catch (e) {
+        jsonRes(res, 500, { ok: false, error: e.message });
+    } finally { stopKeepalive(); }
+}
+
+// GET /__switch/api/models/probe/progress — состояние текущего прогона.
+async function handleModelsProbeProgress(req, res) {
+    try {
+        const mod = healthLib('health-probe');
+        if (!mod) return jsonRes(res, 200, { ok: false, error: 'модуль health-probe не собран' });
+        const status = await mod.runStatus() || {};
+        return jsonRes(res, 200, { ok: true, ...status });
+    } catch (e) {
+        return jsonRes(res, 500, { ok: false, error: e.message });
+    }
+}
+
 const server = http.createServer((req, res) => {
+    // ── Вкладка MEDIA: весь её HTTP живёт в модуле ────────────────────────────
+    // Один вход вместо десятка предикатов в этой лестнице: вкладка новая, своих
+    // реестров у неё нет. Модуль сам решает, его ли путь (всё под `/__media/api/`),
+    // на чужие возвращает false — на это стоит проверка в tools/check-media.js.
+    if (require('./lib/media-routes').handle(req, res)) return;
+
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
             current: currentTarget(),
@@ -19201,6 +20428,33 @@ const server = http.createServer((req, res) => {
             oauth: oauthStatus(),
             settings_file: SETTINGS_FILE,
         });
+    }
+
+    // ── Маршруты: шпаргалка префиксного роутинга (вкладка «🔀 Маршруты») ──────
+    if (req.method === 'GET' && req.url === '/__switch/api/routes') {
+        return handleRoutes(res);
+    }
+
+    // POST /__switch/api/routes/modelmap {provider, tier, value} — правка ОДНОГО тира.
+    // Точечно и идемпотентно: соседние тиры не участвуют, поэтому стереть их нельзя
+    // (см. routeWriteTier — десять ручек `<p>/modelmap` перезаписывают файл целиком).
+    if (req.method === 'POST' && req.url === '/__switch/api/routes/modelmap') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const j = JSON.parse(body || '{}');
+                const r = routeWriteTier(String(j.provider || ''), String(j.tier || ''), j.value);
+                jsonRes(res, r.ok ? 200 : 400, r);
+            } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
+        });
+        return;
+    }
+
+    // GET /__switch/api/routes/models?provider=X — каталог моделей провайдера для
+    // `<select>` на вкладке «Маршруты» (ключ из файла, петля через /<ep>/models).
+    if (req.method === 'GET' && req.url.startsWith('/__switch/api/routes/models')) {
+        return handleRoutesModels(req, res);
     }
 
     // ── Front-door :20100 — состояние / тумблер / рестарт ─────────────────────
@@ -19346,6 +20600,24 @@ const server = http.createServer((req, res) => {
             try {
                 const { port } = JSON.parse(body || '{}');
                 const r = await keepaliveRestart(Number(port));
+                jsonRes(res, r.ok ? 200 : 500, r);
+            } catch (e) { jsonRes(res, 400, { error: e.message }); }
+        });
+        return;
+    }
+
+    // POST /__switch/api/keepalive/ensure {port} — поднять инстанс, ЕСЛИ он лежит.
+    // Зовёт front-door, когда запрос с префиксом модели уехал к провайдеру, которого
+    // никто не активировал: до префиксного роутинга такого пути не было вовсе, и
+    // лежащий порт неактивного шлюза считался покоем (см. bootSweepStaleChildren).
+    // В отличие от /restart — БЕЗ force: живого не трогаем, вернётся already:true.
+    if (req.method === 'POST' && req.url === '/__switch/api/keepalive/ensure') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', async () => {
+            try {
+                const { port } = JSON.parse(body || '{}');
+                const r = await keepaliveEnsure(Number(port));
                 jsonRes(res, r.ok ? 200 : 500, r);
             } catch (e) { jsonRes(res, 400, { error: e.message }); }
         });
@@ -19579,6 +20851,152 @@ const server = http.createServer((req, res) => {
             const ids = [...new Set([...Object.keys(installed), ...Object.keys(enabled)])].sort();
             const plugins = ids.map(id => ({ id, enabled: enabled[id] === true, installed: id in installed }));
             return jsonRes(res, 200, { plugins });
+        } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+    }
+
+    // Скиллы Claude Code. Механика сверена с доками 11.09, а не взята по памяти:
+    // ключ `skillOverrides` в settings.json принимает РОВНО четыре значения —
+    // on / name-only / user-invocable-only / off, отсутствие ключа = on. Ключ —
+    // ГОЛОЕ имя скилла, неймспейса в нём не бывает.
+    // 🔴 Плагинные скиллы этим ключом не управляются вообще («Plugin skills are not
+    // affected by skillOverrides. Manage those through /plugin instead») — их
+    // выключатель один, сам плагин, то есть колонка «Плагины» слева. Поэтому они
+    // уезжают на фронт с controllable:false, только показать.
+    // Разрешённый список скиллов не отдаёт ни CLI, ни какой-либо файл: /skills не
+    // показывает встроенные, /context показывает, но только интерактивно. Значит
+    // сканируем диск, а встроенные держим снимком.
+    if (req.method === 'GET' && req.url === '/__switch/api/skills/list') {
+        try {
+            // Снимок 2026-09-11: встроенные скиллы вшиты в бинарник, с диска не читаются.
+            // Устареет при обновлении Claude Code — сверять по /context.
+            const BUNDLED = ['claude-api', 'dataviz', 'fewer-permission-prompts', 'init',
+                'keybindings-help', 'loop', 'review', 'run', 'security-review',
+                'simplify', 'update-config'];
+
+            // Фронтматтер SKILL.md. description часто блок-скаляр (`>-`), и тогда
+            // текст лежит на следующей строке — без этой ветки в панель уезжало «>-».
+            const fmField = (txt, key) => {
+                const m = txt.match(/^---[\r\n]+([\s\S]*?)[\r\n]+---/);
+                if (!m) return '';
+                const lines = m[1].split(/\r?\n/);
+                const i = lines.findIndex(l => l.startsWith(key + ':'));
+                if (i < 0) return '';
+                const v = lines[i].slice(key.length + 1).trim();
+                if (v === '>-' || v === '>' || v === '|' || v === '|-') return (lines[i + 1] || '').trim();
+                return v.replace(/^['"]|['"]$/g, '');
+            };
+            const readSkillMd = (dir) => {
+                try {
+                    const txt = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+                    return { name: fmField(txt, 'name'), desc: fmField(txt, 'description') };
+                } catch { return null; }
+            };
+
+            let userOv = {}, enabledPl = {};
+            try { const s = readSettings(); userOv = s.skillOverrides || {}; enabledPl = s.enabledPlugins || {}; } catch {}
+
+            // Приоритет настроек: managed > settings.local.json > settings.json >
+            // ~/.claude/settings.json. Панель пишет в САМЫЙ СЛАБЫЙ, поэтому без этой
+            // сверки она показывала бы «ВКЛ» там, где проект скилл уже прикрутил:
+            // ровно случай claude-api, выключенного в D:\WORMALIENAIGIGANT.
+            const shadow = {};
+            try {
+                const cj = readClaudeJson();
+                for (const proj of Object.keys(cj.projects || {})) {
+                    for (const f of ['settings.json', 'settings.local.json']) {
+                        try {
+                            const raw = fs.readFileSync(path.join(proj, '.claude', f), 'utf8').replace(/^\uFEFF/, '');
+                            for (const [k, v] of Object.entries(JSON.parse(raw).skillOverrides || {})) {
+                                shadow[k] = { scope: proj, value: v };
+                            }
+                        } catch {}
+                    }
+                }
+            } catch {}
+
+            const skills = [], seen = new Set();
+            const add = (o) => {
+                if (seen.has(o.name)) return;
+                seen.add(o.name);
+                skills.push(Object.assign({
+                    override: userOv[o.name] || null,
+                    shadowedBy: o.controllable ? (shadow[o.name] || null) : null,
+                }, o));
+            };
+
+            // 1. Личные — ~/.claude/skills/<имя>/SKILL.md
+            const perDir = path.join(os.homedir(), '.claude', 'skills');
+            try {
+                for (const d of fs.readdirSync(perDir, { withFileTypes: true })) {
+                    if (!d.isDirectory() || d.name === 'synced') continue;
+                    const dir = path.join(perDir, d.name);
+                    const md = readSkillMd(dir);
+                    if (!md) continue;
+                    // 🪤 Каталог с .claude-plugin/ грузится как плагин <имя>@skills-dir
+                    // (его делает `claude plugin init`) и управляется enabledPlugins,
+                    // а не skillOverrides. Тоггл skillOverrides по нему молча не сработал бы.
+                    const asPlugin = fs.existsSync(path.join(dir, '.claude-plugin'));
+                    // 🪤 Ключ override — ИМЯ КАТАЛОГА, а не frontmatter `name`. Замер
+                    // 11.09 живой сессией: у 8 из 14 личных скиллов frontmatter несёт
+                    // другое имя (taste-brutalist-skill → industrial-brutalist-ui,
+                    // uxpm-design-system → design-system), а Claude Code перечисляет
+                    // их по каталогу. Ключ по frontmatter молча не сработал бы —
+                    // настройка записана, скилл как работал, так и работает.
+                    add({
+                        name: d.name,
+                        altName: (md.name && md.name !== d.name) ? md.name : null,
+                        desc: md.desc,
+                        source: asPlugin ? 'plugin' : 'personal',
+                        plugin: asPlugin ? d.name + '@skills-dir' : null,
+                        controllable: !asPlugin,
+                        pluginEnabled: asPlugin ? enabledPl[d.name + '@skills-dir'] === true : undefined,
+                    });
+                }
+            } catch {}
+
+            // 2. Встроенные — снимок выше
+            for (const n of BUNDLED) add({ name: n, source: 'bundled', plugin: null, desc: '', controllable: true });
+
+            // 3. Плагинные. Версию берём из installed_plugins.json, а не сканом всех
+            // каталогов версий: иначе оставшаяся от обновления старая версия дала бы
+            // второй экземпляр каждого скилла.
+            let installedPl = {};
+            try { installedPl = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; }
+            catch {}
+            for (const [id, rec] of Object.entries(installedPl)) {
+                const inst = Array.isArray(rec) ? rec[0] : rec;
+                const base = inst && inst.installPath;
+                if (!base) continue;
+                const short = id.split('@')[0];
+                const meta = { source: 'plugin', plugin: id, kind: 'skill', controllable: false, pluginEnabled: enabledPl[id] === true };
+                const root = readSkillMd(base);
+                if (root) add(Object.assign({ name: `${short}:${short}`, desc: root.desc }, meta));
+                let entries = [];
+                // 🪤 Тут раньше просился `continue` — и он выбросил бы ровно те плагины,
+                // у которых каталога skills/ нет, а есть commands/ (code-review,
+                // commit-commands, feature-dev). Их команды Claude Code отдаёт тем же
+                // Skill-тулом, и без них список панели разошёлся бы с тем, что видит агент.
+                try { entries = fs.readdirSync(path.join(base, 'skills'), { withFileTypes: true }); } catch {}
+                for (const s of entries) {
+                    if (!s.isDirectory()) continue;
+                    const md = readSkillMd(path.join(base, 'skills', s.name));
+                    if (!md) continue;
+                    // Имя каталога по той же причине, что и у личных, — так их зовёт CC.
+                    add(Object.assign({ name: `${short}:${s.name}`, desc: md.desc }, meta));
+                }
+                let cmds = [];
+                try { cmds = fs.readdirSync(path.join(base, 'commands')).filter(f => f.endsWith('.md')); } catch {}
+                for (const f of cmds) {
+                    const name = f.slice(0, -3);
+                    let desc = '';
+                    try { desc = fmField(fs.readFileSync(path.join(base, 'commands', f), 'utf8'), 'description'); } catch {}
+                    add(Object.assign({}, meta, { name: `${short}:${name}`, desc, kind: 'command' }));
+                }
+            }
+
+            const rank = { personal: 0, bundled: 1, plugin: 2 };
+            skills.sort((a, b) => (rank[a.source] - rank[b.source]) || a.name.localeCompare(b.name));
+            return jsonRes(res, 200, { file: SETTINGS_FILE, skills });
         } catch (e) { return jsonRes(res, 500, { error: e.message }); }
     }
 
@@ -19879,6 +21297,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-config') return handleArCheckinConfig(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-mark')   return handleArCheckinMark(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-status') return handleArCheckinStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-all')    return handleArCheckinAll(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-cancel') return handleArCheckinCancel(req, res);
 
     // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);
@@ -19941,6 +21361,22 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/keepalive/latency')) return keepaliveSk.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ts/keepalive/latency')) return keepaliveTs.latency(req, res);
+
+    // ---- Вкладка «Модели»: здоровье пар, каталог, надёжность, платные пробы ----
+    //
+    // 🪤 Сверяем ПУТЬ без query (`split('?')[0]`), а не сырой req.url. Точное равенство
+    // по сырому URL — общая привычка этой лестницы, и она уже стоила чата лиги (см. 🪤
+    // у `/league/chat` выше): фронт дописал `?gid=`, строка перестала совпадать, запрос
+    // ушёл в общий 404, тот поставил `not_found`, а вкладка перевела это в «ручки нет,
+    // нужен рестарт» — и рестарты не помогали, потому что процесс был ни при чём. Здесь
+    // query неизбежен с первого дня: окна (`?window=`, `?rel_window=`) и антикеш опроса.
+    //
+    // Порядок «progress раньше probe» на collision не влияет — пути сверяются целиком и
+    // методы разные. Он оставлен на случай, если строки когда-нибудь ослабят до
+    // startsWith: тогда при обратном порядке `probe` молча съел бы `probe/progress`.
+    if (req.method === 'GET'  && req.url.split('?')[0] === '/__switch/api/models/probe/progress') return handleModelsProbeProgress(req, res);
+    if (req.method === 'POST' && req.url.split('?')[0] === '/__switch/api/models/probe')          return handleModelsProbe(req, res);
+    if (req.method === 'GET'  && req.url.split('?')[0] === '/__switch/api/models/health')         return handleModelsHealth(req, res);
 
     // ---- GoRouter (go) — автономная вкладка, прямой baseUrl без прокси ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/sessions')) return handleGoSessions(req, res);
@@ -20163,6 +21599,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/gh/star')            return handleGhStar(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/relink')          return handleGhRelink(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/gh/mark')            return handleGhMark(req, res);
+    if ((req.method === 'GET' || req.method === 'POST') && req.url === '/__switch/api/gh/spend') return handleGhSpend(req, res);
     // Заселение готовой GitHub-сессии в новый аккаунт New-API-вкладок (ar/go/tb/xp/jw/sk).
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/gh/available')) return handleGhAvailable(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
@@ -20824,11 +22261,14 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
             }
             const file = path.join(__dirname, 'vendor', ...parts.map(p => path.basename(p)));
             const body = fs.readFileSync(file);
+            // Файлы вкладки «Модели» правятся прямо сейчас, а `immutable` на год браузер
+            // чтит и при Ctrl+Shift+R — правка не была бы видна вообще, никакой перезагрузкой.
+            const fresh = parts[parts.length - 1].startsWith('models-tab');
             res.writeHead(200, {
                 'Content-Type': VENDOR_MIME[ext],
                 // Файлы версионированы именем и меняются только руками — кешируем надолго,
                 // иначе смысл локальной копии теряется на каждом Ctrl+Shift+R.
-                'Cache-Control': 'public, max-age=31536000, immutable',
+                'Cache-Control': fresh ? 'no-cache, must-revalidate' : 'public, max-age=31536000, immutable',
             });
             return res.end(body);
         } catch (e) {
@@ -21130,6 +22570,11 @@ server.listen(LISTEN_PORT, () => {
             if (r) console.log(r.ok ? `  active custom converter recreated on :${r.port}` : `  active custom converter error: ${r.error || '?'}`);
         }).catch(e => console.log('  keepalive boot error:', e.message));
     }
+
+    // Реестр префиксов пересеваем на каждом старте: BACKENDS могли добавить/убрать
+    // правкой кода, а выученные активациями записи файл сохраняет сам. Без этого
+    // префиксы заработали бы только после первой активации провайдера.
+    console.log(`  backends.json: ${writeBackendsRegistry()} провайдер(ов) для префиксного роутинга`);
 
     // Front-door (:20100) — единый вход Claude Code. Поднимаем всегда: с включённым
     // тумблером это единственный бэкенд CC, а с выключенным просто ждёт наготове,

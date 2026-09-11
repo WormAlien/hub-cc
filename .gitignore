@@ -127,6 +127,12 @@ SESSIONS_STATUS.md
 !START.bat
 
 # Routing dir runtime artefacts
+# Пул прокси: конфиг с кредами, привязки «аккаунт → адрес» и разовые seed-файлы для
+# дочернего open-session.js. Ни одно из этого не коммитится: в конфиге логин/пароль
+# прокси, привязки — состояние конкретной машины, seed живёт один запуск.
+routing/proxy-pool.json
+routing/proxy-assign.json
+routing/runtime/
 routing/*.log
 routing/*.err
 routing/*.log.err
@@ -431,6 +437,20 @@ hcnsec/profiles/
 hcnsec/sessions/
 routing/hcnsec-sessions.json
 
+# ── WisdomSatan (вкладка дашборда): приватные данные ──────────────────────────
+# Десятый шлюз, заводится 2026-09-10. Закрываем ДО первого прогона сессии — правило
+# выучено 31.08, когда живые куки двух шлюзов лежали в дереве нетрекаемыми и один
+# `git add -A` опубликовал бы их в публичный репозиторий.
+# В пуле лежат ПАРОЛИ от аккаунтов панели: вход тут только логин+пароль, и ЛК —
+# единственный источник точного остатка, так что пароль хранить приходится.
+# Папки gh-sessions тут нет намеренно, как и у hcnsec: у `api.wisdomsatan.club`
+# `/api/status` отдаёт github_oauth=false (ни GitHub, ни Telegram, ни WeChat, ни
+# OIDC — только пароль и passkey), снимать нечего.
+# wisdomsatan-modelmap.json — безопасный конфиг маппинга, его коммитим.
+wisdomsatan/profiles/
+wisdomsatan/sessions/
+routing/wisdomsatan-sessions.json
+
 # ── Менеджер Outlook-ящиков (2026-08-31) ─────────────────────────────────────
 # В пуле живые пароли от почт, в профилях — куки залогиненных ящиков. Закрыто ДО
 # первого импорта: 31.08 папки двух шлюзов уже лежали в дереве нетрекаемыми, и один
@@ -456,3 +476,10 @@ aipm/profiles/
 aipm/sessions/
 aipm/gh-sessions/
 routing/aipm-sessions.json
+
+# MEDIA (vkladka generacii) - vsyo nizhe generiruetsya i v publichnyy repo ne edet.
+# Video i webp obshchih pravil ne imeyut: *.png i *.jpg est, *.mp4/*.webm/*.gif/*.webp - net.
+routing/media-out/
+routing/media-history.jsonl
+routing/media-models-cache.json
+routing/media-profiles.json

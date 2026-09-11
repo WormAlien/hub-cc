@@ -1,0 +1,220 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   media-tab.css — плотность и форма вкладки «MEDIA» (:8200)
+
+   Правила те же, что у models-tab.css: цвета берутся ТОЛЬКО из токенов тем —
+   var(--color-bg | --color-surface | --color-elevated | --color-line |
+   --color-line-soft | --color-ink | --color-muted | --color-dim) и акцентов
+   (--color-azure | --color-emerald | --color-amber | --color-crimson).
+
+   🪤 Префикс `--color-` обязателен. Дашборд объявляет токены через Tailwind 4
+      `@theme` в OKLCH и навешивает `--color-*` инлайном на <html>; коротких
+      имён вида `--surface` в глобальной области НЕТ. Написать `var(--surface)`
+      значит получить пустое значение и вкладку без стилей — это ловилось прямо
+      при сборке этого файла.
+
+   🪤 Своих hex здесь быть не должно. Захардкоженный цвет превращает панель в
+      тёмный остров на светлых темах (daylight/paper) — этим уже наступали.
+      Смешивать только `color-mix(in oklab, …)`: в oklch оттенок идёт по кругу.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Раскладка: три колонки, центр резиновый ───────────────────────────────── */
+.md-wrap {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+  padding: 24px;
+}
+
+/* Ниже 1400 библиотека уезжает вниз на всю ширину: три колонки по 280 съедают
+   превью, а смотреть результат важнее, чем видеть историю всё время. */
+@media (max-width: 1400px) {
+  .md-wrap { grid-template-columns: 300px minmax(0, 1fr); }
+  .md-col-lib { grid-column: 1 / -1; }
+  .md-library { max-height: 260px; }
+}
+@media (max-width: 1000px) {
+  .md-wrap { grid-template-columns: minmax(0, 1fr); }
+}
+
+.md-col {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+/* ── Поля ──────────────────────────────────────────────────────────────────── */
+.md-label {
+  display: block;
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--color-dim);
+  margin-bottom: 4px;
+}
+
+.md-input {
+  width: 100%;
+  background: var(--color-elevated);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--color-ink);
+  outline: none;
+}
+.md-input:focus { border-color: var(--color-azure); }
+.md-area { resize: vertical; line-height: 1.45; }
+.md-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+
+.md-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ── Кнопки ────────────────────────────────────────────────────────────────── */
+.md-mini {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line-soft);
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+.md-mini:hover { color: var(--color-ink); border-color: var(--color-line); }
+
+.md-modes { display: flex; gap: 6px; }
+.md-mode {
+  flex: 1;
+  font-size: 12px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-line-soft);
+  background: var(--color-elevated);
+  color: var(--color-muted);
+}
+/* Активный режим отмечен рамкой И цветом текста: одной заливки мало, на части
+   тем она почти не отличается от фона. */
+.md-mode-on { border-color: var(--color-azure); color: var(--color-ink); }
+
+.md-go {
+  width: 100%;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 9px;
+  border-radius: 9px;
+  border: 1px solid var(--color-emerald);
+  background: var(--color-elevated);
+  color: var(--color-emerald);
+}
+.md-go:hover { border-color: var(--color-emerald); color: var(--color-ink); }
+.md-go:disabled { opacity: .55; }
+
+/* ── Сообщения ─────────────────────────────────────────────────────────────── */
+.md-warn, .md-err {
+  font-size: 11px;
+  line-height: 1.45;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-top: 8px;
+  border: 1px solid var(--color-line-soft);
+  background: var(--color-elevated);
+}
+.md-warn { color: var(--color-amber); }
+.md-err { color: var(--color-crimson); }
+
+.md-empty {
+  color: var(--color-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 48px 16px;
+  line-height: 1.6;
+}
+
+/* ── Очередь ───────────────────────────────────────────────────────────────── */
+.md-jobs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.md-job {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--color-elevated);
+  cursor: pointer;
+}
+.md-job:hover { border-color: var(--color-line); }
+
+/* ── Результат ─────────────────────────────────────────────────────────────── */
+.md-res-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+
+.md-arts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+.md-art {
+  max-width: 100%;
+  max-height: 62vh;
+  border-radius: 10px;
+  border: 1px solid var(--color-line-soft);
+  display: block;
+}
+
+.md-facts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.md-chip {
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line-soft);
+  color: var(--color-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.md-prompt-echo {
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-muted);
+  border-left: 2px solid var(--color-line-soft);
+  padding-left: 10px;
+}
+
+/* ── Библиотека ────────────────────────────────────────────────────────────── */
+.md-library {
+  margin-top: 10px;
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.md-lib-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.md-lib-item:hover { border-color: var(--color-line-soft); background: var(--color-elevated); }
+
+.md-lib-thumb {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-elevated);
+  border: 1px solid var(--color-line-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.md-lib-thumb img { width: 100%; height: 100%; object-fit: cover; }

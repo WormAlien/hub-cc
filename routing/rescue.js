@@ -251,6 +251,7 @@ async function cmdDoctor() {
         [20156, 'GoRouter keepalive', '/__keepalive/api/status'],
         [20158, 'JustWoker keepalive', '/__keepalive/api/status'],
         [20161, 'KKtoken keepalive', '/__keepalive/api/status'],
+        [20164, 'WisdomSatan keepalive', '/__keepalive/api/status'],
         [20134, 'вотчдог пулов', '/__watchdog/api/status'],
     ];
     for (const [p, name, sp] of PORTS) {

@@ -14,6 +14,54 @@
 <script src="/vendor/tailwindcss-browser-4.js"></script>
 <script src="/vendor/sortable-1.15.6.min.js"></script>
 <link href="/vendor/fonts.css" rel="stylesheet">
+<!-- Вкладка «Модели» вынесена во внешнюю пару файлов: этот html и без того на 31k строк.
+     Отдаёт их тот же :8200 маршрутом /vendor/*, как и остальную локальную вендор-пачку. -->
+<link rel="stylesheet" href="/vendor/models-tab.css">
+<link rel="stylesheet" href="/vendor/media-tab.css">
+<!-- 🪤 Анти-FOUC: Tailwind собирается В БРАУЗЕРЕ, и это гонка с первой отрисовкой.
+     Замер 10.09 в Chrome: CSS готов на 173 мс, первая отрисовка на 236 мс — запас всего
+     63 мс. Zen (Firefox) на холодном кеше эту гонку ПРОИГРЫВАЕТ: страница успевает
+     нарисоваться без единой tailwind-утилиты (px-6, py-8, text-2xl, gap-3 …), то есть с
+     дефолтными кеглями и без отступов — выглядит как «всё огромное». Лечится F5 именно
+     потому, что второй раз скрипт уже тёплый и компиляция успевает до отрисовки.
+     Прячем ТОЛЬКО до готовности CSS. visibility, а не display: лэйаут при этом считается
+     как обычно, и boot-код, меряющий clientWidth (lgDrawPlot, графы), получает верные
+     размеры — с display:none он получил бы нули.
+     🔴 Раскрытие ОБЯЗАНО быть безусловным по таймеру: сбой компилятора не должен
+     оставлять пустую страницу. 2.5 с — заведомо больше самой медленной сборки. -->
+<style id="tw-boot-gate">html.tw-boot body{visibility:hidden}</style>
+<script>
+(function () {
+  var el = document.documentElement;
+  el.classList.add('tw-boot');
+  var done = false, probe = null;
+  function reveal() {
+    if (done) return;
+    done = true;
+    if (probe && probe.parentNode) probe.parentNode.removeChild(probe);
+    el.classList.remove('tw-boot');
+  }
+  // Пробник вместо обхода всех правил: обход тысяч rule.cssText на каждом кадре сам
+  // стоил бы заметно. `.px-6` даёт padding-inline 1.5rem = 24px, пока CSS нет — 0.
+  function tick() {
+    if (done) return;
+    if (document.body) {
+      if (!probe) {
+        probe = document.createElement('div');
+        probe.id = 'tw-boot-probe';
+        probe.className = 'px-6';
+        probe.setAttribute('aria-hidden', 'true');
+        probe.style.cssText = 'position:absolute;top:-9999px;left:-9999px;width:0;height:0';
+        document.body.appendChild(probe);
+      }
+      if (parseFloat(getComputedStyle(probe).paddingLeft) > 0) return reveal();
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  setTimeout(reveal, 2500);
+})();
+</script>
 <style type="text/tailwindcss">
 @theme {
   --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
@@ -492,6 +540,16 @@ function randomThemeId() {
         <span class="flex-1">Health</span>
         <span class="text-[10px] font-mono text-faint" id="nav-health-badge">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="models">
+        <span class="w-5 text-center text-[14px]">🧠</span>
+        <span class="flex-1">Модели</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-models">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="routes" title="Шпаргалка префиксного роутинга: чем адресовать каждый шлюз в /model и куда его тир-карта переписывает модель. Показывает только видимые вкладки.">
+        <span class="w-5 text-center text-[14px]">🔀</span>
+        <span class="flex-1">Маршруты</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-routes" title="провайдеров в шпаргалке (видимых)">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="claude">
         <span class="text-base">✳</span>
         <span class="flex-1">Claude Code</span>
@@ -622,15 +680,10 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🤖</span>
         <span class="flex-1">AnyModel</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="video">
-        <span class="text-base">🎬</span>
-        <span class="flex-1">Video API</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-video">—</span>
-      </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="image">
-        <span class="text-base">🖼</span>
-        <span class="flex-1">Картинки API</span>
-        <span class="text-[10px] font-mono text-faint" id="nav-count-image">—</span>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="media" title="Генерация картинок и видео: промпт, модель, очередь и библиотека результатов">
+        <span class="text-base">🎨</span>
+        <span class="flex-1">MEDIA</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-media" title="моделей картинок / видео у выбранного провайдера">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="grok">
         <span class="text-base">🤖</span>
@@ -1133,7 +1186,7 @@ function randomThemeId() {
           </div>
         </div>
       </div>
-      <div class="money"><span>Потратил на GitHub-аккаунты, ₽</span><input id="rub" value="1200">
+      <div class="money"><span>Потратил на GitHub-аккаунты, ₽</span><input id="rub" value="0">
         <span id="out"></span></div>
     </div>
 
@@ -2808,10 +2861,19 @@ function makeFigure(canvas, opts) {
     toStatic(b);
     p.hit = false; p.restAt = 0; p.dragged = false; dirty = true;
   }
+  // Видимость канваса стоит дорого: `offsetParent` — геометрическое свойство, и
+  // спрошенное на КАЖДОМ кадре оно заставляет браузер пересчитать лэйаут — тот самый
+  // forced reflow, ~150 раз в секунду на фигуру. По трейсу под throttling 4× именно
+  // эта строка дала 1 648 мс из 8 000, то есть 20 % всего времени, — а написана она
+  // ровно ради экономии на невидимой вкладке. Спрашиваем 4 раза в секунду и держим
+  // ответ в переменной: вкладки не переключают по 150 раз в секунду.
+  let visAt = 0, visOn = false;
   function frame() {
     requestAnimationFrame(frame);
-    if (document.hidden || !canvas.offsetParent) return;      // вкладка не видна — не считаем
+    if (document.hidden) return;
     const now = performance.now();
+    if (now - visAt > 250) { visOn = !!canvas.offsetParent; visAt = now; }
+    if (!visOn) return;                                       // вкладка не видна — не считаем
     const busy = awake > 0;
     if (busy) {
       // Пока куча насыпается (первые 900 мс после build) — до 4 шагов за кадр,
@@ -3118,7 +3180,7 @@ function makeGraph(canvas, anchor) {
       x0 = Math.min(x0, p.x - p.r); x1 = Math.max(x1, p.x + p.r);
       y0 = Math.min(y0, p.y - p.r); y1 = Math.max(y1, p.y + p.r);
     }
-    const r = anchor.getBoundingClientRect();
+    const r = anchorBox() || anchor.getBoundingClientRect();
     tkx = Math.max(1, Math.min(2, (r.width - 30) / Math.max(80, x1 - x0)));
     // Общий зум под размер места. Нужен из-за того, что размах облака задаёт равновесие
     // сил, а оно зависит от ЧИСЛА узлов: на 48 аккаунтах облако само занимает 414×258 в
@@ -3148,8 +3210,24 @@ function makeGraph(canvas, anchor) {
     kz += (tkz - kz) * .14;
     return true;
   }
+  // Геометрия якоря — ОДИН кэш на все горячие пути. `getBoundingClientRect()` и
+  // `offsetParent` форсируют пересчёт лэйаута, а спрашивали их четыре раза за кадр:
+  // live(), retarget(), step() и center() — то есть ~600 forced reflow в секунду на
+  // 165 Гц. Место фигуры за 250 мс никуда не уезжает, а прокрутка и ресайз сбрасывают
+  // кэш сами (см. слушатели ниже), поэтому на глаз разницы нет.
+  let _boxAt = 0, _box = null, _boxOn = false;
+  function anchorBox() {
+    const t = performance.now();
+    if (t - _boxAt > 250) {
+      _boxOn = !canvas.hidden && !!anchor.offsetParent;
+      _box = _boxOn ? anchor.getBoundingClientRect() : null;
+      _boxAt = t;
+    }
+    return _box;
+  }
+  function anchorBoxDrop() { _boxAt = 0; }
   const center = () => {
-    const r = anchor.getBoundingClientRect();
+    const r = anchorBox() || anchor.getBoundingClientRect();
     return { x: r.left + r.width/2 + ox, y: r.top + r.height/2 + oy, r };
   };
   function build(m) {
@@ -3221,7 +3299,7 @@ function makeGraph(canvas, anchor) {
       // радиальной силы равновесие круглое, и облако выходило узким и высоким —
       // 247×307 при месте 462×330, отсюда «отступы не ровные» (слева цепь во всю
       // половину, справа узкий пятачок). С поправкой облако ложится по форме места.
-      const r = anchor.getBoundingClientRect();
+      const r = anchorBox() || anchor.getBoundingClientRect();
       const ax = r.width > r.height ? r.height / r.width : 1;
       const ay = r.height > r.width ? r.width / r.height : 1;
       for (const p of nodes) {
@@ -3306,9 +3384,10 @@ function makeGraph(canvas, anchor) {
   // Слой во весь экран, но считать его надо только когда граф показан и его место на
   // экране. `offsetParent` у самого канваса не спросить — он `position:fixed`, у таких
   // элементов это всегда null; спрашиваем у якоря.
-  const live = () => !canvas.hidden && anchor.offsetParent
-    && (() => { const r = anchor.getBoundingClientRect();
-                return r.bottom > -240 && r.top < innerHeight + 240; })();
+  const live = () => {
+    const r = anchorBox();
+    return !!(r && r.bottom > -240 && r.top < innerHeight + 240);
+  };
   function frame() {
     requestAnimationFrame(frame);
     if (document.hidden || !live()) return;
@@ -3324,11 +3403,14 @@ function makeGraph(canvas, anchor) {
     DPR = Math.min(2, window.devicePixelRatio || 1);
     W = innerWidth; H = innerHeight;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    anchorBoxDrop();                  // размеры поменялись — кэш геометрии протух
     dirty = true;
   }
   addEventListener('resize', resize);
   // Облако привязано к месту на странице, значит при прокрутке его надо перерисовать.
-  addEventListener('scroll', () => { dirty = true; }, { passive: true });
+  // Кэш геометрии якоря при этом обязан протухнуть: место уехало, а держим мы его
+  // 250 мс — без сброса фигура рисовалась бы по старым координатам.
+  addEventListener('scroll', () => { anchorBoxDrop(); dirty = true; }, { passive: true });
   resize();
 
   // ── руки ──────────────────────────────────────────────────────────────────
@@ -3674,7 +3756,52 @@ function render() {
 
   pile.build(P.count); fire.build(hubN);
 }
-$('#rub').oninput = () => { render(); renderCharts(); };
+// Сумма трат на GitHub-аккаунты живёт на сервере (`/__switch/api/gh/spend`), а не в
+// разметке и не в localStorage: до 11.09.2026 в поле стоял литерал `value="1200"`, и
+// любое введённое число исчезало по F5. Поле — источник ввода, сервер — источник истины.
+let rubSaved = 0;      // последнее подтверждённое сервером значение
+let rubTimer = null;
+
+async function rubLoad() {
+  try {
+    const r = await fetch('/__switch/api/gh/spend', { cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    const n = Number(j && j.rub);
+    if (!Number.isFinite(n)) return;
+    rubSaved = n;
+    $('#rub').value = String(n);
+    render(); renderCharts();
+  } catch {}
+}
+
+async function rubStore() {
+  const raw = $('#rub').value.trim();
+  const n = Number(raw);
+  // Пустое поле — это «ещё не дописал», а не ноль: не затираем сохранённое на сервере.
+  if (raw === '' || !Number.isFinite(n) || n < 0) return;
+  try {
+    const r = await fetch('/__switch/api/gh/spend', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rub: n }),
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    rubSaved = n;
+  } catch {
+    // Не сохранилось — возвращаем поле к последнему подтверждённому, иначе на экране
+    // останется число, которого на сервере нет, и владелец будет считать по нему.
+    $('#rub').value = String(rubSaved);
+    render(); renderCharts();
+  }
+}
+
+$('#rub').oninput = () => {
+  render(); renderCharts();
+  clearTimeout(rubTimer);
+  rubTimer = setTimeout(rubStore, 400);
+};
+rubLoad();
 
 // ══ резиновая сцена ════════════════════════════════════════════════════════
 // Канвас получает размер от своей половины сцены, но не «во всю ширину». Куча из
@@ -4531,7 +4658,7 @@ window.finNavCount = async () => {
          не отдельное приложение, поэтому ни своей палитры, ни своих кеглей у него нет.
          Все величины взяты у соседей по вкладке: радиусы 12/16/999, кегли 17/14/13/11.5/11,
          отступы 14×16 и 11×15 — как у .lgtile и .lgrow. */
-      #leagueTab #lg-chat{margin-top:16px;min-height:320px}
+      #leagueTab #lg-chat{margin-top:16px}
       #leagueTab .lgchead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
         padding:14px 16px 8px}
       #leagueTab .lgchead h2{font:600 17px/1.2 inherit;letter-spacing:-.01em;color:var(--lg-ink)}
@@ -4585,7 +4712,7 @@ window.finNavCount = async () => {
       #leagueTab .lginvl .lgcap{margin-right:auto}
       /* Лента прокручивается сама, а не тянет страницу: overscroll-behavior:contain
          не даёт прокрутке «пробить» ленту и уехать в документ на последней строке. */
-      #leagueTab .lgfeed{min-height:140px;max-height:360px;overflow-y:auto;overscroll-behavior:contain;
+      #leagueTab .lgfeed{max-height:360px;overflow-y:auto;overscroll-behavior:contain;
         padding:4px 16px 11px;display:flex;flex-direction:column;gap:11px}
       /* Третья колонка — место кнопки удаления. Оно занято ВСЕГДА, даже когда кнопка
          невидима: появись она только на наведении, текст каждого сообщения при заходе
@@ -4641,15 +4768,21 @@ window.finNavCount = async () => {
         color:var(--lg-ink2);background:color-mix(in oklab,var(--lg-amber) 10%,transparent);
         border:1px solid color-mix(in oklab,var(--lg-amber) 34%,transparent)}
       #leagueTab .lggap code{font:11.5px var(--lg-mono);color:var(--lg-amber)}
-      #leagueTab .lgcomp .lgtgl{padding:13px 27px;font-size:14px}
-      #leagueTab .lgcomp .lgtgl svg{width:32px;height:32px}
-      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:16px 16px 20px;
-        display:flex;align-items:center;gap:14px;border-radius:0 0 16px 16px;
+      /* Кнопки компоузера равны по высоте ПОЛЮ ВВОДА, а не сами себе. Замер 10.09:
+         поле 46 px, кнопки были 29 — иконочные (SVG 15 + padding 12 + border 2), текстовая
+         26.5 (line-height 12.5 + 12 + 2). Разнобой в 17 px читался как «кнопки меньше чата».
+         Иконочные держат квадрат 46×46: при radius 999px прямоугольник стал бы вертикальной
+         капсулой. Поле растёт до 120 px — кнопки остаются 46 и прижимаются к низу (flex-end). */
+      #leagueTab .lgcomp .lgtgl{display:inline-flex;align-items:center;justify-content:center;
+        min-height:46px}
+      #leagueTab .lgcomp #lg-mic,#leagueTab .lgcomp #lg-clip{width:46px;padding:0}
+      #leagueTab .lgcomp{border-top:1px solid var(--lg-line-soft);padding:11px 15px;
+        display:flex;align-items:flex-end;gap:10px;border-radius:0 0 16px 16px;
         transition:background .16s var(--lg-spring)}
       #leagueTab .lgcomp.drop{background:color-mix(in oklab,var(--lg-azure) 12%,transparent)}
       #leagueTab #lg-inp{flex:1 1 auto;min-width:0;resize:none;appearance:none;
-        border:1px solid var(--lg-line-soft);border-radius:12px;padding:21px 25px;
-        font:400 15px/1.45 inherit;color:var(--lg-ink);max-height:160px;overflow-y:auto;
+        border:1px solid var(--lg-line-soft);border-radius:12px;padding:10px 12px;
+        font:400 14px/1.45 inherit;color:var(--lg-ink);max-height:120px;overflow-y:auto;
         background:color-mix(in oklab,var(--lg-bg) 55%,transparent);outline:none;
         transition:border-color .16s var(--lg-spring)}
       #leagueTab #lg-inp:focus{border-color:color-mix(in oklab,var(--lg-azure) 60%,transparent)}
@@ -4878,13 +5011,91 @@ window.finNavCount = async () => {
       </div>
     </div>
 
+    <!-- ═════════ TAB: МАРШРУТЫ ═════════ -->
+    <!-- Шпаргалка префиксного роутинга. Зачем: с 10.09 `/model aipm/claude-opus-4-6[1m]`
+         уводит ОКНО на названный шлюз, независимо от активного бэкенда — но узнать, что
+         именно набирать, было неоткуда: имена и алиасы лежат в ~/.claude/backends.json,
+         а тир-карты разбросаны по вкладкам шлюзов. Разбор — вики «Роутинг по модели».
+         Данные — один запрос `GET /__switch/api/routes` (handleRoutes в
+         transparent-proxy.js): реестр `~/.claude/backends.json` + тир-карты
+         `routing/<p>-modelmap.json` + активные модели `~/.claude/<p>-active-model.txt`.
+         🪤 Черновик брал тиры из `/__switch/api/models/health`, и это была ошибка:
+         `catalog` хранит запись на пару «шлюз|модель» и держит в ней только ПЕРВЫЙ
+         подошедший тир, а тира `gpt` не знает вовсе. У justwoker, где одна модель на
+         все три тира, уцелел бы один. Поэтому читаем сами карты.
+         🪤 Показываем только провайдеров, чья вкладка ВИДИМА (effectiveHiddenSet) —
+         требование владельца: «если вкладка скрыта, там не должно быть его». -->
+    <div data-tab-content="routes">
+      <!-- max-w-5xl: без ограничения строка растягивается на всю ширину, и на 1920
+           кнопка копирования улетает от своего же содержимого на ~1100 px — замерено
+           браузером, читается как чужой элемент, а не как часть строки. -->
+      <div class="px-6 py-8 space-y-4 max-w-5xl">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">🔀</span> Маршруты
+            </h1>
+            <p class="text-sm text-muted mt-1">чем адресовать шлюз в <code class="font-mono text-xs">/model</code> и куда его тир-карта переписывает модель</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <button onclick="loadRoutes(true)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          </div>
+        </header>
+        <div id="routes-box" class="text-sm text-muted">загружаю…</div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: МОДЕЛИ ═════════ -->
+    <!-- Только каркас. Разметка карточек, KPI и таблицы, а также весь fetch/рендер живут
+         во внешнем /vendor/models-tab.js (неймспейс window.MODELS) и /vendor/models-tab.css.
+         Здесь — три пустых контейнера с фиксированными id, их имена менять нельзя:
+         на них завязан внешний файл.
+         🪤 Ключ джойна модели во внешнем коде — `${bk}|${m}`, оба куска lowercase + trim. -->
+    <div data-tab-content="models">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-emerald">🩺</span> Модели
+            </h1>
+            <p class="text-sm text-muted mt-1">какие модели живы на каких шлюзах — сводка по всему флоту</p>
+          </div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <!-- Без inline onclick: обработчик вешает models-tab.js по этому id. Инлайн звал бы
+                 MODELS до загрузки внешнего файла и падал бы «MODELS is not defined». -->
+            <button id="models-refresh" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          </div>
+        </header>
+
+        <!-- Прогресс фонового прогона (скрыт, пока не запущен) — калька с tgm-progress -->
+        <div id="models-progress" class="hidden text-[11px] font-mono text-azure flex items-center gap-2">
+          <div class="flex-1 h-1.5 bg-elevated rounded-full overflow-hidden max-w-[240px]">
+            <div id="models-progress-bar" class="h-full bg-azure transition-all" style="width:0%"></div>
+          </div>
+          <span id="models-progress-txt">—</span>
+        </div>
+
+        <div id="models-kpi" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div id="models-cards" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div id="models-table">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: SETTINGS ═════════ -->
     <!-- ═════════ TAB: PLUGINS / MCP ═════════ -->
     <div data-tab-content="plugins">
       <div class="max-w-5xl mx-auto px-6 py-8 space-y-6">
         <header>
-          <h1 class="text-2xl font-semibold tracking-tight">Плагины / MCP-серверы</h1>
-          <p class="text-sm text-muted mt-1">Плагины пишут в <code class="font-mono text-emerald text-xs">enabledPlugins</code> (<code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>), MCP — в <code class="font-mono text-emerald text-xs">~/.claude.json</code>. Перезапусти Claude Code после изменений.</p>
+          <h1 class="text-2xl font-semibold tracking-tight">Плагины / MCP / Скиллы</h1>
+          <p class="text-sm text-muted mt-1">Плагины пишут в <code class="font-mono text-emerald text-xs">enabledPlugins</code> (<code class="font-mono text-emerald text-xs">~/.claude/settings.json</code>), MCP — в <code class="font-mono text-emerald text-xs">~/.claude.json</code>, скиллы — в <code class="font-mono text-emerald text-xs">skillOverrides</code> там же. Плагины и MCP требуют перезапуска Claude Code, <b class="text-ink">скиллы подхватываются на лету</b>.</p>
         </header>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
           <!-- Плагины -->
@@ -4923,6 +5134,31 @@ window.finNavCount = async () => {
             </div>
           </section>
         </div>
+
+        <!-- Скиллы. Во всю ширину под двумя колонками: строк ~59, в третью колонку
+             рядом они не влезают. Группы — по источнику, потому что механика выключения
+             у источников РАЗНАЯ: личные и встроенные гасятся ключом skillOverrides,
+             плагинные не гасятся поштучно вообще (только весь плагин слева). -->
+        <section class="rounded-xl bg-surface border border-line-soft">
+          <div class="flex items-center justify-between gap-2 px-4 py-3 border-b border-line-soft">
+            <div class="flex items-center gap-2">
+              <span>🎓</span>
+              <h2 class="text-sm font-semibold">Скиллы</h2>
+              <span class="text-[10px] font-mono text-faint" id="skills-count"></span>
+            </div>
+            <div class="shrink-0 flex items-center gap-3">
+              <label class="flex items-center gap-1.5 text-[10px] text-muted cursor-pointer select-none" title="Спрятать плагинные — те, что поштучно не переключаются">
+                <input type="checkbox" id="skills-only-ctl" onchange="renderSkills()" class="accent-emerald"> только переключаемые
+              </label>
+              <button onclick="loadSkills()" class="px-2.5 py-1.5 bg-elevated border border-line-soft text-xs rounded-lg hover:border-emerald/60 transition">🔄</button>
+            </div>
+          </div>
+          <div class="p-3">
+            <div id="skills-list" class="space-y-4">
+              <div class="text-xs text-faint py-3 px-2">—</div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -5418,146 +5654,13 @@ window.finNavCount = async () => {
     </div>
 
     <!-- ═════════ TAB: OmniRoute Pool ═════════ -->
-    <!-- ═════════ TAB: VIDEO API ═════════ -->
-    <div data-tab-content="video">
-      <div class="px-6 py-8 space-y-4">
-        <header class="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-rose">🎬</span> Video API
-            </h1>
-            <p class="text-sm text-muted mt-1">хранилище ключей видео-провайдеров — <code class="font-mono text-rose text-xs">routing/video-keys.json</code> · фильтр по вкладкам провайдера · 👁 показать / 📋 копировать</p>
-          </div>
-          <div class="flex gap-2 items-center flex-wrap">
-            <button onclick="loadVideoKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
-            <button onclick="vidShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить ключ</button>
-          </div>
-        </header>
-
-        <!-- Провайдер-табы -->
-        <div id="vid-provtabs" class="flex gap-1.5 flex-wrap"></div>
-
-        <!-- Add form (скрыта по умолчанию) -->
-        <div id="vid-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
-          <div class="flex gap-2 items-end flex-wrap">
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">провайдер</span>
-              <select id="vid-add-prov" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-36 focus:outline-none focus:border-emerald/60">
-                <option value="fal">fal</option>
-                <option value="replicate">Replicate</option>
-                <option value="veo">Veo (Google)</option>
-                <option value="kling">Kling</option>
-                <option value="runway">Runway</option>
-                <option value="pika">Pika</option>
-                <option value="luma">Luma</option>
-                <option value="other">other</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">метка (email/аккаунт)</span>
-              <input id="vid-add-label" placeholder="main" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
-            </label>
-            <label class="flex flex-col gap-1 flex-1">
-              <span class="text-[10px] text-faint">api_key</span>
-              <input id="vid-add-key" placeholder="ключ…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
-            </label>
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">заметка</span>
-              <input id="vid-add-note" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
-            </label>
-            <button onclick="vidAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
-            <button onclick="vidShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
-          </div>
-        </div>
-
-        <div id="vid-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
-          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
-        </div>
-
-        <!-- триал-сайты -->
-        <header class="flex items-end justify-between gap-4 flex-wrap pt-6 border-t border-line-soft">
-          <div>
-            <h2 class="text-lg font-semibold tracking-tight flex items-center gap-2">🔎 Триал-сайты</h2>
-            <p class="text-sm text-muted mt-1">где взять бесплатные кредиты — кликни статус, чтобы отметить рабочий/дохлый</p>
-          </div>
-          <button onclick="loadVideoTrials()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
-        </header>
-        <div id="vid-trials" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          <div class="p-6 text-center text-faint text-xs col-span-full">загрузка…</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═════════ TAB: IMAGE API (Картинки) ═════════ -->
-    <div data-tab-content="image">
-      <div class="px-6 py-8 space-y-4">
-        <header class="flex items-end justify-between gap-4 flex-wrap">
-          <div>
-            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-azure">🖼</span> Картинки API
-            </h1>
-            <p class="text-sm text-muted mt-1">менеджер аккаунтов картинко-провайдеров (NanoBanana / fal / Replicate / Imagen…) — <code class="font-mono text-azure text-xs">routing/image-keys.json</code> · email-метка + ключ · 👁 показать / 📋 копировать. Обёртки под провайдеров — потом.</p>
-          </div>
-          <div class="flex gap-2 items-center flex-wrap">
-            <button onclick="loadImageKeys()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
-            <button onclick="imgShowAdd()" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">➕ Добавить аккаунт</button>
-          </div>
-        </header>
-
-        <!-- Провайдер-табы -->
-        <div id="img-provtabs" class="flex gap-1.5 flex-wrap"></div>
-
-        <!-- Add form (скрыта по умолчанию) -->
-        <div id="img-add-form" class="hidden rounded-xl bg-surface border border-emerald/40 p-4">
-          <div class="flex gap-2 items-end flex-wrap">
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">провайдер</span>
-              <select id="img-add-prov" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
-                <option value="nanobanana">NanoBanana</option>
-                <option value="kie">Kie.ai</option>
-                <option value="gemini">Gemini / Imagen</option>
-                <option value="fal">fal</option>
-                <option value="replicate">Replicate</option>
-                <option value="leonardo">Leonardo</option>
-                <option value="ideogram">Ideogram</option>
-                <option value="flux">FLUX</option>
-                <option value="recraft">Recraft</option>
-                <option value="other">other</option>
-              </select>
-            </label>
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">метка (email/аккаунт)</span>
-              <input id="img-add-label" placeholder="main" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-emerald/60">
-            </label>
-            <label class="flex flex-col gap-1 flex-1">
-              <span class="text-[10px] text-faint">api_key</span>
-              <input id="img-add-key" placeholder="ключ…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-emerald/60">
-            </label>
-            <label class="flex flex-col gap-1">
-              <span class="text-[10px] text-faint">заметка</span>
-              <input id="img-add-note" placeholder="опц." class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-40 focus:outline-none focus:border-emerald/60">
-            </label>
-            <button onclick="imgAdd()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">Сохранить</button>
-            <button onclick="imgShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
-          </div>
-        </div>
-
-        <div id="img-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
-          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
-        </div>
-
-        <!-- триал-сайты -->
-        <header class="flex items-end justify-between gap-4 flex-wrap pt-6 border-t border-line-soft">
-          <div>
-            <h2 class="text-lg font-semibold tracking-tight flex items-center gap-2">🔎 Триал-сайты</h2>
-            <p class="text-sm text-muted mt-1">где взять бесплатные кредиты на картинки — кликни статус, чтобы отметить рабочий/дохлый</p>
-          </div>
-          <button onclick="loadImageTrials()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
-        </header>
-        <div id="img-trials" class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          <div class="p-6 text-center text-faint text-xs col-span-full">загрузка…</div>
-        </div>
-      </div>
+    <!-- ═════════ TAB: MEDIA ═════════ -->
+    <!-- Скелет пустой намеренно: всю разметку строит /vendor/media-tab.js
+         (неймспейс window.MEDIA), как это сделано у вкладки «Модели».
+         Заменил две мёртвые вкладки — «Video API» и «Картинки API»: обе были
+         только хранилищами ключей, генерации в них не было ни строки. -->
+    <div data-tab-content="media">
+      <div id="media-root"></div>
     </div>
 
     <!-- ═════════ TAB: GROK ═════════ -->
@@ -8535,14 +8638,16 @@ function showTab(name) {
   if (name === 'ourtoken' && !state.loaded.ourtoken) { state.loaded.ourtoken = true; loadOurtokenSessions(false); }
   if (name === 'custom' && !state.loaded.custom) { state.loaded.custom = true; loadCustomProviders(); }
   if (name === 'omniroute-pool' && !state.loaded['omniroute-pool']) { state.loaded['omniroute-pool'] = true; loadOmSessions(false); }
-  if (name === 'video' && !state.loaded.video) { state.loaded.video = true; loadVideoKeys(); }
+  // MEDIA заменила вкладки «Video API» и «Картинки API». Гвард по typeof — по той же
+  // причине, что у Grok ниже: код вкладки во внешнем /vendor/media-tab.js, подключённом
+  // в конце body, а восстановление вкладки на F5 зовёт showTab из более раннего блока.
+  if (name === 'media' && !state.loaded.media) { state.loaded.media = true; if (typeof MEDIA !== 'undefined') MEDIA.load(); }
   // Гвард по typeof — та же причина, что у лиги ниже: `grokRenderSaved` живёт в последнем
   // блоке скриптов, а восстановление вкладки на F5 зовёт `showTab` из блока 5. С открытой
   // вкладкой Grok летел `grokRenderSaved is not defined`, и исключение съедало всё, что
   // регистрируется после вызова. Grok на этом не страдает: свой первый рендер он делает
   // сам в конце своего блока.
   if (name === 'grok' && typeof grokRenderSaved === 'function') { grokRenderSaved(); }
-  if (name === 'image' && !state.loaded.image) { state.loaded.image = true; loadImageKeys(); }
   if (name === 'conduit') { loadTgPool(); loadCdtActiveModel(); loadCdtModels(false); if (!state.loaded.conduit) { state.loaded.conduit = true; loadConduitSessions(false); } }
   if (name === 'agentrouter') { if (!state.loaded.agentrouter) { state.loaded.agentrouter = true; loadArSessions(false); } arLoadKeepalive(); }
   if (name === 'gorouter') { if (!state.loaded.gorouter) { state.loaded.gorouter = true; loadGoSessions(false); } goLoadKeepalive(); }
@@ -8554,6 +8659,10 @@ function showTab(name) {
   if (name === 'hcnsec') { if (!state.loaded.hcnsec) { state.loaded.hcnsec = true; loadHnSessions(false); } hnLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
+  // Маршруты перечитываем на КАЖДЫЙ заход, без ленивой загрузки: тир-карту правят на
+  // вкладках шлюзов, а провайдера скрывают в «Настроить вкладки» — закешированная
+  // шпаргалка врала бы ровно там, где её открывают, чтобы свериться.
+  if (name === 'routes') { loadRoutes(); }
   if (name === 'github') { if (!state.loaded.github) { state.loaded.github = true; loadGhKeys(); } ghStartTimer(); }
   // Список ящиков — по ленивой загрузке, а поллинг прогресса дёргаем на каждый заход:
   // проверка сессий идёт минутами в фоне, и вернувшись на вкладку надо увидеть полосу,
@@ -8571,7 +8680,7 @@ function showTab(name) {
     loadTrUsageCache();
   }
   if (name === 'settings') { loadEnvSettings(); loadSettingsJson(); loadSettingsBackups(); loadFrontdoor(); loadRefCodes(); }
-  if (name === 'plugins') { loadPlugins(); loadMcp(); }
+  if (name === 'plugins') { loadPlugins(); loadMcp(); loadSkills(); }
   if (name === 'health') { loadHealth(); }
   // Гвард по typeof — не украшательство: `showTab` живёт в блоке 7, а код лиги в 9-м,
   // и при загрузке страницы с открытой «Лигой» восстановление вкладки зовёт `lgRender`
@@ -8590,6 +8699,10 @@ function showTab(name) {
   if (name === 'ladmin' && typeof ladRender === 'function') {
     ladRender(); ladLoad(); state.loaded.ladmin = true;
   }
+  // Тот же гвард по typeof, но по третьей причине: код вкладки живёт не в этом файле,
+  // а во внешнем /vendor/models-tab.js. Он подключён в конце body, то есть на F5 с
+  // открытой вкладкой «Модели» showTab отработает раньше, чем MODELS появится.
+  if (name === 'models' && typeof MODELS !== 'undefined' && MODELS.load) { MODELS.load(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -8849,6 +8962,210 @@ async function restartFrontdoor() {
   } catch (e) { toast('рестарт front-door: ' + e.message, 'error'); }
   loadHealth();
   try { await loadFrontdoor(); } catch {}
+}
+
+// ── Вкладка «🔀 Маршруты»: шпаргалка префиксного роутинга ────────────────────
+// Что тут вообще происходит. С 10.09 модель может нести имя шлюза префиксом
+// (`/model aipm/claude-opus-4-6[1m]`), и front-door :20100 уводит ЭТОТ запрос туда,
+// независимо от активного бэкенда — так разные окна Claude Code сидят на разных
+// шлюзах. Вкладка отвечает на два вопроса: чем адресовать шлюз и куда его тир-карта
+// перепишет модель.
+//
+// 🪤 Показываем только провайдеров, чья вкладка ВИДИМА — требование владельца
+// («если вкладка скрыта, там не должно быть его»). Гейт тот же, что у общего гейджа
+// в шапке: effectiveHiddenSet(). Скрытых считаем и пишем числом — молча укоротить
+// список нельзя, иначе пропажа строки читается как поломка.
+//
+// 🪤 Имя провайдера в реестре НЕ всегда равно имени вкладки: `fm_openai` живёт во
+// вкладке `freemodel`, `vyce_openai` — во `vyceai`, а у `omniroute` вкладки нет вовсе.
+// Без этой карты первые два судились бы по несуществующей вкладке и всегда считались
+// скрытыми, а третий висел бы в списке навсегда.
+const ROUTES_TAB_OF = { fm_openai: 'freemodel', vyce_openai: 'vyceai' };
+
+async function loadRoutes(force) {
+  const el = $('routes-box');
+  if (!el) return;
+  // Панель не открыта — не ходим в сеть. Разметка статическая, поэтому контейнер есть
+  // всегда, и без этой проверки КАЖДОЕ нажатие глазка в «Настроить вкладки» слало бы
+  // запрос, даже если вкладку ни разу не открывали.
+  const panel = el.closest('[data-tab-content]');
+  if (panel && !panel.classList.contains('active')) return;
+  if (force) el.innerHTML = '<div class="text-xs text-muted">обновляю…</div>';
+  let d;
+  try {
+    d = await (await fetch('/__switch/api/routes')).json();
+  } catch (e) {
+    el.innerHTML = `<div class="text-xs text-crimson">маршруты: ${esc(e.message)}</div>`;
+    return;
+  }
+  if (!d || d.ok === false) {
+    el.innerHTML = `<div class="text-xs text-crimson">маршруты: ${esc((d && d.error) || 'пустой ответ')}</div>`;
+    return;
+  }
+  const hidden = effectiveHiddenSet();
+  // 🪤 Область ТА ЖЕ, что у effectiveHiddenSet() → getMainNavButtons(): только прямые
+  // дети #main-nav. Через `#main-nav [data-tab]` (потомки) сюда попадали бы ещё пять
+  // кнопок из свёрнутой группы «Чтим память» — xpeach, seekai, truesota, notion,
+  // freemodel. Их hidden-set не перечисляет вовсе, поэтому они считались бы видимыми
+  // и висели бы в шпаргалке навсегда: спрятать их через UI нельзя, менеджер вкладок
+  // их тоже не показывает. То есть пять мёртвых шлюзов в списке «куда слать».
+  const navTabs = new Set([...document.querySelectorAll('#main-nav > button[data-tab]')].map(b => b.dataset.tab));
+  let hiddenCount = 0;
+  const rows = [];
+  const visible = [];
+  routesProviders = {};
+  for (const p of (d.providers || [])) {
+    const tab = ROUTES_TAB_OF[p.name] || p.name;
+    // Вкладки нет вовсе (omniroute) — считаем скрытым: адресовать можно, но на доске
+    // его не существует, и показывать строку без хозяина хуже, чем не показать.
+    if (!navTabs.has(tab) || hidden.has(tab)) { hiddenCount++; continue; }
+    routesProviders[p.name] = p;
+    rows.push(routesRow(p));
+    if (p.tiers) visible.push(p.name);          // каталог есть только у редактируемых
+  }
+  const cnt = $('nav-count-routes');
+  if (cnt) cnt.textContent = String(rows.length);
+  const note = hiddenCount
+    ? `<span class="text-faint" title="провайдеры, чья вкладка скрыта в «Настроить вкладки» либо отсутствует">${hiddenCount} скрыто</span>`
+    : '';
+  if (!rows.length) {
+    // Разводим два разных «пусто»: всех спрятали руками — это одно, а реестра нет
+    // вовсе — совсем другое. Единый текст «все скрыты» во втором случае врал бы про
+    // причину и отправлял чинить не туда.
+    el.innerHTML = hiddenCount
+      ? `<div class="text-xs text-muted">все провайдеры скрыты (${hiddenCount}). Включи вкладку шлюза в «Настроить вкладки» — строка появится здесь.</div>`
+      : '<div class="text-xs text-muted">провайдеров нет — реестр пуст. Активируй любой шлюз в дашборде, и он появится здесь.</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div class="text-xs text-muted mb-3">${rows.length} провайдер(ов) ${note}</div>
+    <div class="space-y-2">${rows.join('')}</div>`;
+  // Каталоги — после разметки: селекты уже в DOM, дополним их опциями. Не ждём (await
+  // выше уже отрисовал строки с текущими значениями), мёртвый шлюз просто не обогатит.
+  routesLoadCatalogs(visible);
+}
+
+// Каждая строка «Маршрутов» редактируема: четыре `<select>` (opus/sonnet/haiku/gpt),
+// сохранение сразу при выборе. Держим `p`-объекты и каталоги в модуле, чтобы
+// перерисовывать одну строку после подгрузки каталога, не дёргая весь список.
+let routesProviders = {};
+const routesCatalog = {};
+
+// Безопасный id из имени провайдера. Имена в реестре — [a-z0-9_], но не рискуем.
+function routesId(name) { return String(name).replace(/[^a-z0-9_-]/gi, '_'); }
+
+// Опции одного тира: '' («как есть») + каталог провайдера + текущее значение (всегда
+// в списке, даже если его нет в каталоге — иначе выбор молча слетел бы на пустой).
+function routesOptions(name, current) {
+  const cat = routesCatalog[name] || [];
+  const seen = new Set();
+  const opts = ['', ...cat, current].filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true));
+  return opts.map(id =>
+    `<option value="${esc(id)}"${id === (current || '') ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+}
+
+// Сохранение одного тира. Вызывается из onchange селекта. Оптимистично не рисуем —
+// ждём ответ сервера (это диск), при ошибке откатываем выбор к прошлому значению.
+async function routesSaveTier(sel) {
+  const name = sel.dataset.provider, tier = sel.dataset.tier, value = sel.value;
+  const st = document.getElementById(`routes-st-${routesId(name)}-${tier}`);
+  const prev = sel.dataset.prev || '';
+  sel.disabled = true;
+  if (st) { st.textContent = '…'; st.className = 'text-[10px] text-faint ml-1'; }
+  try {
+    const r = await (await fetch('/__switch/api/routes/modelmap', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: name, tier, value }),
+    })).json();
+    if (!r || !r.ok) throw new Error((r && r.error) || 'сервер отказал');
+    sel.dataset.prev = value;
+    if (routesProviders[name]) routesProviders[name].tiers = r.tiers;
+    if (st) { st.textContent = '✓'; st.className = 'text-[10px] text-emerald ml-1'; setTimeout(() => { if (st.textContent === '✓') st.textContent = ''; }, 2000); }
+    // Команда копирования опирается на активную модель, а при её отсутствии — на opus.
+    // Значит правка opus без активной модели меняет и команду: перерисуем её.
+    routesRefreshCmd(name);
+  } catch (e) {
+    sel.value = prev;                          // откат: на диск не легло — и в UI не оставляем
+    if (st) { st.textContent = '✗ ' + (e.message || 'ошибка'); st.className = 'text-[10px] text-crimson ml-1'; }
+  } finally {
+    sel.disabled = false;
+  }
+}
+
+// Перерисовать только команду копирования строки (после смены opus).
+function routesRefreshCmd(name) {
+  const box = document.getElementById(`routes-cmd-${routesId(name)}`);
+  const p = routesProviders[name];
+  if (box && p) box.outerHTML = routesCmdHtml(p);
+}
+
+// Подтянуть каталоги моделей видимых провайдеров и обновить их селекты. Ключ сервер
+// берёт из `<prefix>-active-key.txt`, каталог — из кеша `/<ep>/models`, поэтому вкладку
+// шлюза открывать не нужно. Мёртвый шлюз вернёт пустой список — селект останется с
+// текущими значениями, а не опустеет.
+async function routesLoadCatalogs(names) {
+  await Promise.all(names.map(async (name) => {
+    try {
+      const d = await (await fetch(`/__switch/api/routes/models?provider=${encodeURIComponent(name)}`)).json();
+      const models = (d && Array.isArray(d.models)) ? d.models : [];
+      if (!models.length) return;                        // нечем обогащать — оставляем как есть
+      routesCatalog[name] = models;
+      // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.
+      for (const tier of ['opus', 'sonnet', 'haiku', 'gpt']) {
+        const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
+        if (sel) sel.innerHTML = routesOptions(name, sel.value);
+      }
+    } catch { /* каталог не обязателен — тихо пропускаем */ }
+  }));
+}
+
+// HTML команды копирования (отдельно, чтобы перерисовывать при смене opus).
+function routesCmdHtml(p) {
+  const id = routesId(p.name);
+  const model = p.activeModel || (p.tiers && p.tiers.opus) || '';
+  const cmd = model ? '/model ' + withCtxSuffix(`${p.name}/${model}`) : '';
+  // 🪤 Одинарная кавычка. `esc()` (:8504) её НЕ трогает — экранирует только & < > " —
+  // а onclick здесь в одинарных кавычках. Имя модели приходит из `<p>-modelmap.json`
+  // без валидации символов: цель вида `a'onmouseover='alert(1)//` закрыла бы атрибут.
+  const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
+  return cmd
+    ? `<button id="routes-cmd-${id}" onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
+         class="shrink-0 px-2 py-1 rounded text-[11px] font-mono bg-elevated hover:bg-surface border border-line-soft transition"
+         title="Скопировать готовую команду для окна Claude Code">📋 ${esc(cmd)}</button>`
+    : `<span id="routes-cmd-${id}" class="shrink-0 text-[11px] text-faint" title="ни активной модели, ни цели тира opus — копировать нечего">нечего копировать</span>`;
+}
+
+// Одна строка провайдера: префиксы, четыре редактируемых тира, кнопка копирования.
+function routesRow(p) {
+  const id = routesId(p.name);
+  const prefixes = [p.name, ...(p.aliases || [])]
+    .map(a => `<code class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-elevated border border-line-soft">${esc(a)}/</code>`)
+    .join(' ');
+  // Провайдер без тир-карты (omniroute, notion, custom) не редактируется: показываем
+  // факт, а не пустые селекты, которым некуда писать.
+  const tiers = p.tiers
+    ? ['opus', 'sonnet', 'haiku', 'gpt'].map(t => {
+        const v = (p.tiers[t] || '');
+        return `<label class="inline-flex flex-col gap-0.5 mr-3 mb-1 align-top">
+          <span class="text-[10px] text-faint">${t}<span id="routes-st-${id}-${t}"></span></span>
+          <select id="routes-sel-${id}-${t}" data-provider="${esc(p.name)}" data-tier="${t}" data-prev="${esc(v)}"
+            onchange="routesSaveTier(this)"
+            class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1 min-w-[9rem] max-w-[13rem]">${routesOptions(p.name, v)}</select>
+        </label>`;
+      }).join('')
+    : '<span class="text-faint text-[11px]">тир-карты нет — модель уходит как есть</span>';
+  return `
+    <div id="routes-row-${id}" class="p-3 rounded-md bg-surface border border-line-soft">
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-center gap-2 flex-wrap min-w-0">
+          <span class="font-medium">${esc(p.label || p.name)}</span>
+          ${prefixes}
+          ${p.local ? '' : '<span class="text-[10px] text-faint" title="удалённый шлюз: ключ инжектит front-door">remote</span>'}
+        </div>
+        ${routesCmdHtml(p)}
+      </div>
+      <div class="mt-2 flex flex-wrap items-end">${tiers}</div>
+    </div>`;
 }
 
 // ── Front-door: тумблер на вкладке «Настройки» ───────────────────────────────
@@ -9324,11 +9641,16 @@ async function copyModelId(id) {
 }
 // Модель для /model и settings.json: у claude-opus/sonnet дотягиваем суффикс окна
 // [1m]. Без него Claude Code считает окно 200k и режет историю втрое раньше — а
-// шлюзы (agentrouter/gorouter/tabi) отдают эти модели с 1M. Зеркало серверного
-// arSettingsModel() в transparent-proxy.js — править синхронно.
+// шлюзы (agentrouter/gorouter/tabi) отдают эти модели с 1M.
+// 🪤 Regex — БУКВАЛЬНАЯ копия normalizeCcModel() из transparent-proxy.js. До 10.09 здесь
+// стояло `/^claude-(opus|sonnet)-/`, и они разошлись на СЕМИ входах из тринадцати:
+// префиксные имена (`aipm/claude-opus-4-6`), glm-5.3 и всё семейство gpt-5.6 клиент
+// оставлял без суффикса. То есть кнопка «копировать» раздавала тихий 200k — ровно тот
+// симптом, от которого чокпоинт и заводили. Правится ТОЛЬКО парой, обе строки разом.
+const CC_1M_RE = /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/;
 function withCtxSuffix(id) {
   const s = String(id || '').trim();
-  return /^claude-(opus|sonnet)-/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+  return CC_1M_RE.test(s) && !s.includes('[') ? `${s}[1m]` : s;
 }
 
 async function copyModelCmd(id) {
@@ -9862,9 +10184,22 @@ function cunSplitHypeModels(models) {
   return { hype, rest };
 }
 
+function cunNormalizeCcModel(m) {
+  const s = String(m || '').trim();
+  if (!s || s.includes('[')) return s;
+  // 🪤 Третья копия того же инвариантa. До 10.09 здесь стоял только
+  // `/^gpt-5\.6-(sol|luna|terra)$/` — без claude, без glm, без префикса провайдера, то
+  // есть 159 расхождений с сервером из 337 проверенных имён. Последствие видно на самой
+  // вкладке: сервер хранит активную модель через полный normalizeCcModel (с `[1m]`), а
+  // сравнение шло с голым именем — чип активной claude/glm-модели не подсвечивался
+  // никогда, а клик отправлял имя без суффикса, то есть окно 200k.
+  return CC_1M_RE.test(s) ? `${s}[1m]` : s;
+}
+
 function cunModelChip(id, tone) {
-  const active = state.cunActiveModel === id;
-  const idJ = JSON.stringify(id);
+  const model = cunNormalizeCcModel(id);
+  const active = state.cunActiveModel === model;
+  const idJ = JSON.stringify(model);
   const baseCls = tone === 'hype'
     ? 'bg-amber/10 border-amber/40 text-amber'
     : 'bg-violet/10 border-violet/30 text-violet';
@@ -9873,7 +10208,7 @@ function cunModelChip(id, tone) {
     : baseCls;
   return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono border ${activeCls}">
     <button onclick='cunSelectModel(${idJ})' title="Выбрать модель → settings (ANTHROPIC_MODEL)"
-      class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(id)}</button>
+      class="hover:underline text-left">${active ? '🌟 ' : ''}${esc(model)}</button>
     <button onclick='copyModelCmd(${idJ})' title="Копировать /model &lt;id&gt;"
       class="text-faint hover:text-ink px-1">📋</button>
   </span>`;
@@ -10327,126 +10662,6 @@ const VID_PROVIDERS = [
   { id: 'luma',      name: 'Luma' },
   { id: 'other',     name: 'other' },
 ];
-state.video = state.video || [];
-state.videoFilter = state.videoFilter || 'all';
-state.videoReveal = state.videoReveal || {};   // api_key -> bool (показан ли полностью)
-state.videoTrials = state.videoTrials || [];   // каталог триал-сайтов
-
-async function loadVideoKeys() {
-  try {
-    const res = await fetch('/__switch/api/video/keys');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    state.video = data.keys || [];
-    $('nav-count-video').textContent = state.video.length;
-    renderVideoTabs();
-    renderVideo();
-    loadVideoTrials();
-  } catch (e) {
-    $('vid-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
-  }
-}
-
-function vidSetFilter(id) { state.videoFilter = id; renderVideoTabs(); renderVideo(); }
-
-function renderVideoTabs() {
-  const counts = {};
-  state.video.forEach(k => { counts[k.provider] = (counts[k.provider] || 0) + 1; });
-  $('vid-provtabs').innerHTML = VID_PROVIDERS.map(p => {
-    const on = state.videoFilter === p.id;
-    const n = p.id === 'all' ? state.video.length : (counts[p.id] || 0);
-    return `<button onclick="vidSetFilter('${p.id}')"
-      class="text-xs px-3 py-1.5 rounded-lg border transition ${on ? 'bg-rose/10 border-rose/50 text-rose font-medium' : 'bg-surface border-line-soft text-muted hover:border-line'}">
-      ${esc(p.name)} <span class="text-faint font-mono">${n}</span></button>`;
-  }).join('');
-}
-
-function vidToggleReveal(api_key) {
-  state.videoReveal[api_key] = !state.videoReveal[api_key];
-  renderVideo();
-}
-
-async function vidCopy(api_key) {
-  try { await navigator.clipboard.writeText(api_key); toast('📋 ключ скопирован', 'info'); }
-  catch { toast('clipboard недоступен', 'warn'); }
-}
-
-function renderVideo() {
-  const rows = state.video.filter(k => state.videoFilter === 'all' || k.provider === state.videoFilter);
-  if (!rows.length) {
-    $('vid-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить ключ</div>`;
-    return;
-  }
-  const body = rows.map(s => {
-    const revealed = !!state.videoReveal[s.api_key];
-    const mask = s.api_key.length > 18 ? s.api_key.slice(0, 10) + '…' + s.api_key.slice(-6) : '***' + s.api_key.slice(-4);
-    const shown = revealed ? esc(s.api_key) : esc(mask);
-    const kJ = JSON.stringify(s.api_key);
-    return `<tr class="border-t border-line-soft hover:bg-elevated/30">
-      <td class="px-4 py-2.5 text-xs"><span class="text-rose font-medium">${esc(s.provider)}</span></td>
-      <td class="px-4 py-2.5 text-xs">${esc(s.label || '—')}</td>
-      <td class="px-4 py-2.5">
-        <span class="font-mono text-[11px] ${revealed ? 'text-ink' : 'text-azure'} select-all">${shown}</span>
-        <button onclick='vidToggleReveal(${kJ})' title="${revealed ? 'скрыть' : 'показать'}" class="ml-1.5 text-faint hover:text-ink">${revealed ? '🙈' : '👁'}</button>
-        <button onclick='vidCopy(${kJ})' title="копировать" class="ml-1 text-faint hover:text-ink">📋</button>
-      </td>
-      <td class="px-4 py-2.5 text-xs text-faint">${esc(s.note || '')}</td>
-      <td class="px-4 py-2.5 text-xs text-faint whitespace-nowrap">${esc(s.added || '')}</td>
-      <td class="px-4 py-2.5 text-right">
-        <button onclick='vidDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
-      </td>
-    </tr>`;
-  }).join('');
-  $('vid-list').innerHTML = `<table class="w-full text-left">
-    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
-      <th class="px-4 py-2 font-medium">провайдер</th>
-      <th class="px-4 py-2 font-medium">метка</th>
-      <th class="px-4 py-2 font-medium">ключ</th>
-      <th class="px-4 py-2 font-medium">заметка</th>
-      <th class="px-4 py-2 font-medium">добавлен</th>
-      <th class="px-4 py-2"></th>
-    </tr></thead><tbody>${body}</tbody></table>`;
-}
-
-function vidShowAdd(show = true) {
-  $('vid-add-form').classList.toggle('hidden', !show);
-  if (show) {
-    $('vid-add-label').value = ''; $('vid-add-key').value = ''; $('vid-add-note').value = '';
-    if (state.videoFilter !== 'all') $('vid-add-prov').value = state.videoFilter;
-    $('vid-add-key').focus();
-  }
-}
-
-async function vidAdd() {
-  const provider = $('vid-add-prov').value;
-  const label = $('vid-add-label').value.trim();
-  const api_key = $('vid-add-key').value.trim();
-  const note = $('vid-add-note').value.trim();
-  if (!api_key) return toast('api_key обязателен', 'warn');
-  try {
-    const res = await fetch('/__switch/api/video/add', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, label, api_key, note }),
-    });
-    const data = await res.json();
-    if (data.ok) { toast('✓ ключ добавлен', 'success'); vidShowAdd(false); loadVideoKeys(); }
-    else toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Add: ' + e.message, 'error'); }
-}
-
-async function vidDelete(api_key) {
-  if (!confirm('Удалить ключ?')) return;
-  try {
-    const res = await fetch('/__switch/api/video/delete', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
-    });
-    const data = await res.json();
-    if (data.ok) { toast('удалён', 'info'); loadVideoKeys(); }
-    else toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Delete: ' + e.message, 'error'); }
-}
-
 // ───── Ourtoken (🪙) ─────
 function otPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
@@ -11420,6 +11635,13 @@ function arRenderCheckinCard() {
         <span class="text-muted ml-2 text-xs">${summary}${next}</span>
       </div>
       <div class="flex items-center gap-2 text-xs">
+        <button id="ar-batch-go" onclick="arCheckinAll()"
+          class="px-2.5 py-1 bg-emerald/10 border border-emerald/50 text-emerald rounded hover:bg-emerald/20 disabled:opacity-35 disabled:cursor-not-allowed font-medium">⚡ Забрать у всех</button>
+        <button id="ar-batch-stop" onclick="arCheckinStop(event)"
+          class="hidden px-2.5 py-1 bg-rose/10 border border-rose/50 text-rose rounded hover:bg-rose/20 font-medium">⏹ Стоп</button>
+        <span id="ar-batch-progress" class="text-faint font-mono"></span>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
         <span class="text-faint" title="Наблюдение владельца: после этого времени бонус можно забрать снова, независимо от того, во сколько забирал вчера.">граница суток</span>
         <input id="ar-checkin-hhmm" value="${esc(cfg.resetHhmmMsk)}" size="5" maxlength="5" placeholder="20:30"
           class="w-16 bg-elevated border border-line-soft rounded px-2 py-1 font-mono text-center text-ink focus:border-sky/60 outline-none">
@@ -11427,7 +11649,12 @@ function arRenderCheckinCard() {
         <button onclick="arSaveCheckinCfg()" class="px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">💾</button>
       </div>
     </div>
-    <p class="text-[10px] text-faint mt-2">Забрать: 🎁 в колонке «${'🎁'} $${cfg.bonusUsd}» → <span class="text-emerald">⚡ забрать автоматически</span> (браузер откроется и закроется сам, баланс пересчитается). Не вышло — в том же меню 🌐 «открыть браузер руками»: сайт выйдет из аккаунта через меню профиля, останется клик «Continue with GitHub». <span class="text-amber/80">По одному-двум аккаунтам за раз: залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут выродится в прикидку.</span></p>`;
+    <p class="text-[10px] text-faint mt-2">Забрать: 🎁 в колонке «${'🎁'} $${cfg.bonusUsd}» → <span class="text-emerald">⚡ забрать автоматически</span> (браузер откроется и закроется сам, баланс пересчитается). Не вышло — в том же меню 🌐 «открыть браузер руками»: сайт выйдет из аккаунта через меню профиля, останется клик «Continue with GitHub». <span class="text-amber/80">Пачка ⚡ идёт по одному с паузой ${arBatchLimits.gapSec}с и не больше ${arBatchLimits.max} за раз: залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут выродится в прикидку.</span></p>`;
+  // Кнопки рисуем один раз вместе с карточкой, а их подписи — отдельной функцией:
+  // innerHTML целиком сбрасывал бы фокус в поле «граница суток» посреди набора,
+  // а прогресс пачки надо обновлять каждые 3 секунды.
+  arBatchPaint();
+  arBatchSync();
 }
 
 async function arSaveCheckinCfg() {
@@ -11533,8 +11760,17 @@ async function arCheckinWatch(id, label, maxMs, icon) {
       const data = await res.json();
       run = (data.runs || []).find(r => r.label === label);
     } catch { continue; }              // дашборд перезапустили/сеть дёрнулась — ждём дальше
-    // Прогон пропал из статуса (рестарт дашборда) — ждать его бессмысленно.
-    if (!run) { if (++misses > 8) return; continue; }
+    // Прогон пропал из статуса — ждать его бессмысленно. Причина теперь ровно одна:
+    // дашборд перезапустили (записи живут в памяти процесса). Раньше сюда же попадало
+    // задание, простоявшее в очереди дольше 10 минут — его съедал TTL в
+    // handleArCheckinStatus, — и наблюдатель уходил МОЛЧА, без единого тоста: владелец
+    // не понимал, забрался подарок или нет, а окно всплывало позже само по себе.
+    if (!run) {
+      if (++misses > 8) {
+        return toast(`${icon} прогон пропал из статуса — похоже, дашборд перезапустили. Глянь Server Logs`, 'warn', 10000);
+      }
+      continue;
+    }
     misses = 0;
     // Стоим в очереди (залп по кнопкам): бэкенд пускает прогоны по одному с паузой.
     // Пока ждём — отсчёт таймаута НЕ идёт, иначе на пятом аккаунте наблюдатель сдался бы
@@ -11548,6 +11784,10 @@ async function arCheckinWatch(id, label, maxMs, icon) {
       continue;
     }
     if (run.state === 'running') continue;
+    // Пачку остановили (руками через ⏹ Стоп или предохранителем по отказам шлюза).
+    // Молчать тут нельзя: наблюдатель просто исчез бы, и владелец до сих пор ждал бы
+    // окна, которого уже не будет.
+    if (run.state === 'cancelled') return toast(`${icon} ${run.message || 'отменено'}`, 'warn', 10000);
     if (run.state === 'error') return toast(icon + ' ' + (run.message || 'не получилось'), 'error', 14000);
     await loadArSessionsLight();
     toast(run.checkedIn === false
@@ -11556,6 +11796,145 @@ async function arCheckinWatch(id, label, maxMs, icon) {
     return;
   }
   toast(icon + ' чек-ин: результат так и не пришёл — глянь Server Logs', 'warn', 12000);
+}
+
+// ───── Пачка ⚡ «Забрать у всех» и стоп-кран ⏹ ─────────────────────────────
+// Главное здесь не «забрать», а «остановить». До 10.09 начатую пачку остановить было
+// НЕЧЕМ: очередь живёт в памяти дашборда, дашборд не перезапускаем, а закрытие браузера
+// мышкой очередь не гасит — бэкенд на 'exit' тут же спавнит следующего.
+//
+// Предел и паузу своей копией НЕ держим: приезжают из /checkin-status вместе с
+// прогрессом. Значения ниже — заглушка до первого ответа, разъехавшаяся копия обещала бы
+// в подсказке одно, а бэкенд делал другое.
+let arBatchLimits = { max: 6, gapSec: 25 };
+// Что видел последний опрос статуса. queued/running считаем по ВСЕМ прогонам, включая
+// одиночные клики ⚡/🎁: «Стоп» снимает и их, значит и показывать надо их.
+let arBatchLive = { queued: 0, running: 0, batch: null };
+let arBatchTimer = null;
+let arBatchSyncedAt = 0;
+let arBatchToldReason = '';
+
+// Кнопки перекрашиваем точечно. Перерисовка карточки целиком сбросила бы фокус в поле
+// «граница суток» посреди набора — та же причина, по которой тикающая цифра живёт в
+// отдельном span'е с data-атрибутом.
+function arBatchPaint() {
+  const go = $('ar-batch-go'), stop = $('ar-batch-stop'), prog = $('ar-batch-progress');
+  if (!go || !stop || !prog) return;
+  const ready = arCheckinReadyCount(state.agentrouter).ready;
+  const b = arBatchLive.batch;
+  const busy = arBatchLive.queued + arBatchLive.running > 0;
+  const take = Math.min(ready, arBatchLimits.max);
+  go.textContent = `⚡ Забрать у всех (${ready})`;
+  go.disabled = ready === 0 || busy;
+  go.title = ready === 0
+    ? 'Готовых подарков нет — все забраны в этом суточном окне'
+    : busy
+    ? 'Прогоны ещё идут — дождись конца или нажми ⏹ Стоп'
+    : `Поставит в очередь ${take}${ready > take ? ` из ${ready} готовых (предел пачки — ${arBatchLimits.max})` : ''}.`
+      + ` Пойдут по одному с паузой ${arBatchLimits.gapSec}с; остановить — кнопкой ⏹ Стоп`;
+  // «Стоп» показываем ТОЛЬКО когда есть что останавливать: мёртвая кнопка рядом с живой
+  // учит не доверять ни одной из них.
+  stop.classList.toggle('hidden', !busy);
+  stop.title = 'Снимает с очереди всё, что ещё не стартовало.'
+    + ' 🪤 Текущее окно доигрывает намеренно: убийство между разлогином и входом оставит'
+    + ' аккаунт разлогиненным. Shift+клик — прибить и текущий прогон';
+  prog.textContent = b && b.total
+    ? (b.active ? `${b.done}/${b.total}` : `✓ ${b.ok}/${b.total}`)
+      + (b.failed ? ` ✗${b.failed}` : '') + (b.cancelled ? ` ⏹${b.cancelled}` : '')
+    : busy ? `${arBatchLive.running} идёт, ${arBatchLive.queued} в очереди` : '';
+}
+
+// Один опрос статуса → перекраска; пока что-то идёт, повторяем каждые 3 с.
+// Зачем опрашивать, если клик и сам возвращает прогресс: пачку могли поставить в другой
+// вкладке или до F5 — и кнопка «Стоп» обязана появиться САМА. Иначе остановить чужую
+// пачку нечем, а это ровно та беда, из которой всё выросло.
+async function arBatchSync(force) {
+  if (arBatchTimer) return;                                   // цикл уже крутится
+  if (!force && Date.now() - arBatchSyncedAt < 2000) return;  // карточку рисуют из шести мест
+  arBatchSyncedAt = Date.now();
+  const prevDone = (arBatchLive.batch && arBatchLive.batch.done) || 0;
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-status');
+    const data = await res.json();
+    const runs = data.runs || [];
+    arBatchLive = {
+      queued: runs.filter(r => r.state === 'queued').length,
+      running: runs.filter(r => r.state === 'running').length,
+      batch: data.batch || null,
+    };
+    if (Number(data.limit) > 0) {
+      arBatchLimits = { max: Number(data.limit), gapSec: Number(data.gapSec) || arBatchLimits.gapSec };
+    }
+    // Пачка встала сама (предохранитель по отказам шлюза) — сказать ОДИН раз. Молчание
+    // здесь было бы худшим исходом: очередь пуста, окна не открываются, и владелец не
+    // знает, добежала пачка или разбилась о рейт-лимит.
+    const reason = arBatchLive.batch && arBatchLive.batch.reason;
+    if (reason && reason !== arBatchToldReason) {
+      arBatchToldReason = reason;
+      toast('⚡ пачка ' + reason, 'warn', 15000);
+    }
+    // Очередной прогон дошёл до конца → в пуле уже новая цифра и, возможно, отметка 📦.
+    // Перечитываем локальный JSON: в сеть за балансом не идём, её уже сходил браузер.
+    if (arBatchLive.batch && arBatchLive.batch.done > prevDone) loadArSessionsLight().catch(() => {});
+  } catch { /* дашборд дёрнулся — следующий тик повторит */ }
+  arBatchPaint();
+  if (arBatchLive.queued + arBatchLive.running > 0) {
+    arBatchTimer = setTimeout(() => { arBatchTimer = null; arBatchSync(true); }, AR_AUTO_POLL_MS);
+  }
+}
+
+// ⚡ Забрать у всех: готовность считает БЭКЕНД по диску, фронт лишь показывает цифру.
+// Список id мы не отправляем намеренно — в браузере лежит снимок пула минутной давности,
+// а отметка могла встать между рендером и кликом.
+async function arCheckinAll() {
+  const ready = arCheckinReadyCount(state.agentrouter).ready;
+  if (!ready) return toast('🎁 готовых подарков нет — все забраны в этом суточном окне', 'info', 6000);
+  const go = $('ar-batch-go');
+  if (go) go.disabled = true;      // второй клик положил бы вторую пачку поверх первой
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-all', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    if (!data.queued) {
+      const why = (data.skippedWhy || []).join('; ');
+      toast('⚡ ставить некого' + (why ? ': ' + why : ''), 'warn', 9000);
+    } else {
+      arBatchToldReason = '';
+      toast(`⚡ пачка: ${data.queued} в очереди`
+        + (data.ready > data.queued ? ` (готовых ${data.ready}, предел пачки ${data.limit})` : '')
+        + `. Пойдут по одному с паузой ${arBatchLimits.gapSec}с — остановить можно кнопкой ⏹ Стоп`,
+        'success', 11000);
+    }
+  } catch (e) { toast('пачка ⚡: ' + e.message, 'error', 12000); }
+  finally { arBatchSync(true); }
+}
+
+// ⏹ Стоп. По умолчанию текущее окно ДОИГРЫВАЕТ — см. ловушку в подсказке кнопки.
+// Shift/Alt+клик прибивает и его, вместе с деревом процессов (под node живёт Chromium).
+async function arCheckinStop(ev) {
+  const killRunning = !!(ev && (ev.shiftKey || ev.altKey));
+  const stop = $('ar-batch-stop');
+  if (stop) stop.disabled = true;
+  try {
+    const res = await fetch('/__switch/api/ar/checkin-cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ killRunning }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const did = (data.cancelled || 0) + (data.killed || 0);
+    toast(did
+      ? `⏹ снято с очереди ${data.cancelled}`
+        + (data.killed ? `, прибито прогонов ${data.killed} — эти аккаунты могли остаться разлогиненными` : '')
+        + (!killRunning && arBatchLive.running ? '. Текущее окно доигрывает; Shift+клик прибивает и его' : '')
+      : '⏹ в очереди никого не было', did ? 'success' : 'info', 11000);
+  } catch (e) { toast('стоп: ' + e.message, 'error', 12000); }
+  finally {
+    if (stop) stop.disabled = false;
+    arBatchSync(true);
+  }
 }
 
 // Счётчик в сайдваре. Есть готовые к забору → показываем 🎁N вместо числа ключей:
@@ -11754,15 +12133,15 @@ async function renderArModelMap() {
   const mm = state.arModelMap || {};
   const models = (state.arModels || []).map(m => m.id);
   // см. renderGoModelMap: сохранённые цели всегда в опциях, иначе «— как есть —».
-  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
-  const sel = (name) => {
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku, mm.gpt].filter(v => typeof v === 'string'))];
+  const sel = (name, hint) => {
     const val = mm[name] || '';
     const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
-    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}${hint ? ` <span class="text-faint/60">${hint}</span>` : ''}</span>
       <select id="ar-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
   };
   $('ar-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
-    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}${sel('gpt', '(gpt-* → цель)')}
     <button onclick='arSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
   </div>`;
 }
@@ -11772,11 +12151,12 @@ async function arSaveModelMap() {
     opus: $('ar-mm-opus')?.value || '',
     sonnet: $('ar-mm-sonnet')?.value || '',
     haiku: $('ar-mm-haiku')?.value || '',
+    gpt: $('ar-mm-gpt')?.value || '',
   };
   try {
     const res = await fetch('/__switch/api/ar/modelmap', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku, gpt: mm.gpt }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -11805,9 +12185,16 @@ function setStatText(id, txt, kind) {
   if (el.textContent === txt) return;
   el.textContent = txt;
   el.classList.remove('stat-pop', 'stat-pop-sk');
-  void el.offsetWidth; // перезапуск анимации
   el.style.setProperty('--stat-color', STAT_COLORS[kind] || '#38bdf8');
-  el.classList.add('stat-pop', 'stat-pop-sk');
+  // Класс возвращаем СЛЕДУЮЩИМ кадром, а не через `void el.offsetWidth`. Тот
+  // перезапускал анимацию ценой принудительного пересчёта лэйаута — синхронный
+  // reflow на ~15 тыс. узлов дашборда, и так шесть раз за тик карточки keepalive,
+  // то есть каждые 3 секунды. Браузер и так видит элемент без класса до
+  // следующего кадра, поэтому анимация перезапускается ровно так же, а лэйаут
+  // не трогается вовсе.
+  requestAnimationFrame(() => {
+    el.classList.add('stat-pop', 'stat-pop-sk');
+  });
 }
 
 // Одна формулировка конфига на три места (загрузка карточки, применение, тост):
@@ -13213,6 +13600,11 @@ async function newapiEnsureGhNames(pool) {
 // у всех четырёх шлюзов, а плашки «где уже используется» на вкладке GitHub читают
 // именно `ghId` — без метки на go/tb/xp занятость там угадывалась по совпадению ника
 // с email записи и молчала, если аккаунт назван иначе.
+//
+// С 10.09 бейдж показывает ещё и ЖИВОСТЬ сессии. Раньше он был всегда бирюзовый, и про
+// протухший снимок владелец узнавал единственным способом — по неудачному автоподарку,
+// который к тому же не называл аккаунт. Поля snapStale/snapAgeDays приезжают тем же
+// /api/gh/keys, что и сам список: отдельного запроса тут нет.
 function newapiGhBadge(s, prov) {
   const kJ = JSON.stringify(s.api_key);
   const pJ = JSON.stringify(prov);
@@ -13222,8 +13614,21 @@ function newapiGhBadge(s, prov) {
   }
   const gh = s.ghId ? (state.github || []).find(g => g.id === s.ghId) : null;
   if (gh) {
-    return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="${esc('GitHub: ' + gh.login + ' · клик — сменить/отвязать')}"
-      class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-teal/10 border border-teal/40 text-teal rounded font-mono hover:bg-teal/20 whitespace-nowrap">🐙 ${esc(gh.nickname || gh.login)}</button>`;
+    const nick = gh.nickname || gh.login;
+    const age = gh.snapAgeDays === null || gh.snapAgeDays === undefined ? null : gh.snapAgeDays;
+    // hasSnap === null → бэкенд не смог посмотреть (модуль сессий недоступен): молчим и
+    // красим как раньше, врать про «протух» на неизвестности нельзя.
+    const bad = gh.hasSnap === false || gh.status === 'dead';
+    const stale = !bad && gh.snapStale === true;
+    const tone = bad ? 'crimson' : stale ? 'amber' : 'teal';
+    const mark = bad ? ' ⚠' : stale ? ' ⚠' : '';
+    const note = bad
+      ? (gh.status === 'dead' ? 'помечен dead в менеджере' : 'снимка сессии нет вовсе')
+      : stale
+        ? `снимок ${age} дн — старше TTL 7 сут, автоподарок попробует, но GitHub может попросить пароль`
+        : age === null ? 'снимок есть' : `снимок свежий (${age} дн)`;
+    return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="${esc(`GitHub: ${gh.login} · ${note} · клик — сменить/отвязать`)}"
+      class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-${tone}/10 border border-${tone}/40 text-${tone} rounded font-mono hover:bg-${tone}/20 whitespace-nowrap">🐙 ${esc(nick)}${mark}</button>`;
   }
   return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="GitHub не выбран · клик — выбрать"
     class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-elevated border border-line-soft text-faint rounded font-mono hover:border-teal/60 hover:text-teal whitespace-nowrap">🐙 —</button>`;
@@ -19279,197 +19684,6 @@ async function xpSaveModelMap() {
 }
 
 // ───── триал-сайты (где взять бесплатные кредиты) ─────
-const VID_TRIAL_STATUS = {
-  'dead':    { label: '💀 дохлый',   cls: 'bg-crimson/15 border-crimson/40 text-crimson' },
-  '?':       { label: '❔ не проверял', cls: 'bg-surface border-line-soft text-faint' },
-};
-const VID_TRIAL_CYCLE = ['?', 'working', 'dead'];
-
-async function loadVideoTrials() {
-  try {
-    const res = await fetch('/__switch/api/video/trials');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    state.videoTrials = data.trials || [];
-    renderVideoTrials();
-  } catch (e) {
-    $('vid-trials').innerHTML = `<div class="p-6 text-crimson text-xs col-span-full">${esc(e.message)}</div>`;
-  }
-}
-
-function renderVideoTrials() {
-  const rows = state.videoTrials || [];
-  if (!rows.length) {
-    $('vid-trials').innerHTML = `<div class="p-6 text-center text-faint text-xs col-span-full">пусто</div>`;
-    return;
-  }
-  $('vid-trials').innerHTML = rows.map(t => {
-    const st = VID_TRIAL_STATUS[t.status] || VID_TRIAL_STATUS['?'];
-    const idJ = JSON.stringify(t.id);
-    return `<div class="rounded-xl bg-surface border border-line-soft p-3 flex flex-col gap-2">
-      <div class="flex items-start justify-between gap-2">
-        <a href="${esc(t.url)}" target="_blank" rel="noopener" class="text-sm font-medium text-ink hover:text-rose">${esc(t.name)} ↗</a>
-        <span class="text-[10px] px-2 py-0.5 rounded bg-elevated text-faint whitespace-nowrap">${esc(t.kind)}</span>
-      </div>
-      <p class="text-xs text-muted leading-snug">${esc(t.note || '')}</p>
-      <button onclick='vidTrialCycle(${idJ})' class="text-xs px-2.5 py-1.5 rounded-lg border transition ${st.cls}">${st.label}</button>
-    </div>`;
-  }).join('');
-}
-
-async function vidTrialCycle(id) {
-  const t = (state.videoTrials || []).find(x => x.id === id);
-  if (!t) return;
-  const i = VID_TRIAL_CYCLE.indexOf(t.status);
-  const next = VID_TRIAL_CYCLE[(i + 1) % VID_TRIAL_CYCLE.length];
-  t.status = next;
-  renderVideoTrials();
-  try {
-    const res = await fetch('/__switch/api/video/trial-status', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status: next, note: t.userNote || '' }),
-    });
-    const data = await res.json();
-    if (!data.ok) toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Status: ' + e.message, 'error'); }
-}
-
-// ═══════════════════ IMAGE API (Картинки) ════════════════════════════
-// Зеркало Video API: менеджер аккаунтов картинко-провайдеров. Чисто CRUD:
-// фильтр по провайдеру, add/delete, маска ключа с 👁/📋. Без активации.
-const IMG_PROVIDERS = [
-  { id: 'all',        name: '🖼 Все' },
-  { id: 'nanobanana', name: 'NanoBanana' },
-  { id: 'kie',        name: 'Kie.ai' },
-  { id: 'gemini',     name: 'Gemini' },
-  { id: 'fal',        name: 'fal' },
-  { id: 'replicate',  name: 'Replicate' },
-  { id: 'leonardo',   name: 'Leonardo' },
-  { id: 'ideogram',   name: 'Ideogram' },
-  { id: 'flux',       name: 'FLUX' },
-  { id: 'recraft',    name: 'Recraft' },
-  { id: 'other',      name: 'other' },
-];
-state.image = state.image || [];
-state.imageFilter = state.imageFilter || 'all';
-state.imageReveal = state.imageReveal || {};   // api_key -> bool (показан ли полностью)
-state.imageTrials = state.imageTrials || [];   // каталог триал-сайтов
-
-async function loadImageKeys() {
-  try {
-    const res = await fetch('/__switch/api/image/keys');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    state.image = data.keys || [];
-    $('nav-count-image').textContent = state.image.length;
-    renderImageTabs();
-    renderImage();
-    loadImageTrials();
-  } catch (e) {
-    $('img-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
-  }
-}
-
-function imgSetFilter(id) { state.imageFilter = id; renderImageTabs(); renderImage(); }
-
-function renderImageTabs() {
-  const counts = {};
-  state.image.forEach(k => { counts[k.provider] = (counts[k.provider] || 0) + 1; });
-  $('img-provtabs').innerHTML = IMG_PROVIDERS.map(p => {
-    const on = state.imageFilter === p.id;
-    const n = p.id === 'all' ? state.image.length : (counts[p.id] || 0);
-    return `<button onclick="imgSetFilter('${p.id}')"
-      class="text-xs px-3 py-1.5 rounded-lg border transition ${on ? 'bg-azure/10 border-azure/50 text-azure font-medium' : 'bg-surface border-line-soft text-muted hover:border-line'}">
-      ${esc(p.name)} <span class="text-faint font-mono">${n}</span></button>`;
-  }).join('');
-}
-
-function imgToggleReveal(api_key) {
-  state.imageReveal[api_key] = !state.imageReveal[api_key];
-  renderImage();
-}
-
-async function imgCopy(api_key) {
-  try { await navigator.clipboard.writeText(api_key); toast('📋 ключ скопирован', 'info'); }
-  catch { toast('clipboard недоступен', 'warn'); }
-}
-
-function renderImage() {
-  const rows = state.image.filter(k => state.imageFilter === 'all' || k.provider === state.imageFilter);
-  if (!rows.length) {
-    $('img-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">пусто — нажми ➕ Добавить аккаунт</div>`;
-    return;
-  }
-  const body = rows.map(s => {
-    const revealed = !!state.imageReveal[s.api_key];
-    const mask = s.api_key.length > 18 ? s.api_key.slice(0, 10) + '…' + s.api_key.slice(-6) : '***' + s.api_key.slice(-4);
-    const shown = revealed ? esc(s.api_key) : esc(mask);
-    const kJ = JSON.stringify(s.api_key);
-    return `<tr class="border-t border-line-soft hover:bg-elevated/30">
-      <td class="px-4 py-2.5 text-xs"><span class="text-azure font-medium">${esc(s.provider)}</span></td>
-      <td class="px-4 py-2.5 text-xs">${esc(s.label || '—')}</td>
-      <td class="px-4 py-2.5">
-        <span class="font-mono text-[11px] ${revealed ? 'text-ink' : 'text-azure'} select-all">${shown}</span>
-        <button onclick='imgToggleReveal(${kJ})' title="${revealed ? 'скрыть' : 'показать'}" class="ml-1.5 text-faint hover:text-ink">${revealed ? '🙈' : '👁'}</button>
-        <button onclick='imgCopy(${kJ})' title="копировать" class="ml-1 text-faint hover:text-ink">📋</button>
-      </td>
-      <td class="px-4 py-2.5 text-xs text-faint">${esc(s.note || '')}</td>
-      <td class="px-4 py-2.5 text-xs text-faint whitespace-nowrap">${esc(s.added || '')}</td>
-      <td class="px-4 py-2.5 text-right">
-        <button onclick='imgDelete(${kJ})' title="Удалить" class="text-xs text-faint hover:text-crimson px-2">🗑</button>
-      </td>
-    </tr>`;
-  }).join('');
-  $('img-list').innerHTML = `<table class="w-full text-left">
-    <thead><tr class="text-[10px] uppercase tracking-wide text-faint">
-      <th class="px-4 py-2 font-medium">провайдер</th>
-      <th class="px-4 py-2 font-medium">метка</th>
-      <th class="px-4 py-2 font-medium">ключ</th>
-      <th class="px-4 py-2 font-medium">заметка</th>
-      <th class="px-4 py-2 font-medium">добавлен</th>
-      <th class="px-4 py-2"></th>
-    </tr></thead><tbody>${body}</tbody></table>`;
-}
-
-function imgShowAdd(show = true) {
-  $('img-add-form').classList.toggle('hidden', !show);
-  if (show) {
-    $('img-add-label').value = ''; $('img-add-key').value = ''; $('img-add-note').value = '';
-    if (state.imageFilter !== 'all') $('img-add-prov').value = state.imageFilter;
-    $('img-add-key').focus();
-  }
-}
-
-async function imgAdd() {
-  const provider = $('img-add-prov').value;
-  const label = $('img-add-label').value.trim();
-  const api_key = $('img-add-key').value.trim();
-  const note = $('img-add-note').value.trim();
-  if (!api_key) return toast('api_key обязателен', 'warn');
-  try {
-    const res = await fetch('/__switch/api/image/add', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, label, api_key, note }),
-    });
-    const data = await res.json();
-    if (data.ok) { toast('✓ аккаунт добавлен', 'success'); imgShowAdd(false); loadImageKeys(); }
-    else toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Add: ' + e.message, 'error'); }
-}
-
-async function imgDelete(api_key) {
-  if (!confirm('Удалить ключ?')) return;
-  try {
-    const res = await fetch('/__switch/api/image/delete', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ api_key }),
-    });
-    const data = await res.json();
-    if (data.ok) { toast('удалён', 'info'); loadImageKeys(); }
-    else toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Delete: ' + e.message, 'error'); }
-}
-
 // ───── GitHub-аккаунты (gh) — карточки с TOTP ─────
 async function loadGhKeys() {
   try {
@@ -21136,54 +21350,6 @@ function olProgressPoll() {
 
 
 // ───── триал-сайты картинок (где взять бесплатные кредиты) ─────
-async function loadImageTrials() {
-  try {
-    const res = await fetch('/__switch/api/image/trials');
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    state.imageTrials = data.trials || [];
-    renderImageTrials();
-  } catch (e) {
-    $('img-trials').innerHTML = `<div class="p-6 text-crimson text-xs col-span-full">${esc(e.message)}</div>`;
-  }
-}
-
-function renderImageTrials() {
-  const rows = state.imageTrials || [];
-  if (!rows.length) {
-    $('img-trials').innerHTML = `<div class="p-6 text-center text-faint text-xs col-span-full">пусто</div>`;
-    return;
-  }
-  $('img-trials').innerHTML = rows.map(t => {
-    const st = VID_TRIAL_STATUS[t.status] || VID_TRIAL_STATUS['?'];
-    const idJ = JSON.stringify(t.id);
-    return `<div class="rounded-xl bg-surface border border-line-soft p-3 flex flex-col gap-2">
-      <div class="flex items-start justify-between gap-2">
-        <a href="${esc(t.url)}" target="_blank" rel="noopener" class="text-sm font-medium text-ink hover:text-azure">${esc(t.name)} ↗</a>
-        <span class="text-[10px] px-2 py-0.5 rounded bg-elevated text-faint whitespace-nowrap">${esc(t.kind)}</span>
-      </div>
-      <p class="text-xs text-muted leading-snug">${esc(t.note || '')}</p>
-      <button onclick='imgTrialCycle(${idJ})' class="text-xs px-2.5 py-1.5 rounded-lg border transition ${st.cls}">${st.label}</button>
-    </div>`;
-  }).join('');
-}
-
-async function imgTrialCycle(id) {
-  const t = (state.imageTrials || []).find(x => x.id === id);
-  if (!t) return;
-  const i = VID_TRIAL_CYCLE.indexOf(t.status);
-  const next = VID_TRIAL_CYCLE[(i + 1) % VID_TRIAL_CYCLE.length];
-  t.status = next;
-  renderImageTrials();
-  try {
-    const res = await fetch('/__switch/api/image/trial-status', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status: next, note: t.userNote || '' }),
-    });
-    const data = await res.json();
-    if (!data.ok) toast('Ошибка: ' + data.error, 'error');
-  } catch (e) { toast('Status: ' + e.message, 'error'); }
-}
 
 // ═══════════════════ CONDUIT ═════════════════════════════════════════
 async function loadConduitSessions(refresh) {
@@ -21986,7 +22152,10 @@ let fmModelsLoading = false;
 // 200k, автокомпактит на ~78% от них и рисует 200k в статус-баре, хотя апстрим
 // принимает миллион (проба — routing/ctx-probe.sh). Дописываем суффикс тем, кто
 // 1M поддерживает: haiku/fable и gpt-модели — нет, им голый id.
-const FM_1M_RE = /^claude-(opus|sonnet)-/;
+// 🪤 Тот же инвариант, что у withCtxSuffix: своя копия regex здесь разошлась с сервером
+// и теряла [1m] на префиксных именах, glm-5.3 и gpt-5.6-*. Переиспользуем CC_1M_RE —
+// одна строка правды на весь фронт, разойтись больше нечему.
+const FM_1M_RE = CC_1M_RE;
 function fmModelWithWindow(m) {
   const id = String(m.id || '');
   if (m.source === 'openai' || id.includes('[') || !FM_1M_RE.test(id)) return id;
@@ -25365,6 +25534,101 @@ async function toggleMcp(name, scope, enable) {
   } catch (e) { toast('MCP: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ СКИЛЛЫ (секция во всю ширину) ════════════════════
+// Читает /api/skills/list. Управляется ключом skillOverrides в
+// ~/.claude/settings.json: on / name-only / user-invocable-only / off, причём
+// ОТСУТСТВИЕ ключа = on. Панель двухпозиционная (решение владельца 11.09) —
+// пишет только 'off' и снимает ключ обратно, промежуточные значения не трогает.
+// 🔴 Плагинные скиллы этим ключом не управляются вообще: их выключатель — сам
+// плагин в левой колонке. Поэтому у них не кнопка, а бейдж.
+// ⚡ Рестарт Claude Code не нужен: он следит за файлами настроек и применяет на лету.
+let _skills = [];
+
+async function loadSkills() {
+  const box = $('skills-list');
+  box.innerHTML = '<div class="text-xs text-faint py-3 px-2">загрузка…</div>';
+  try {
+    const res = await fetch('/__switch/api/skills/list');
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    _skills = d.skills;
+    renderSkills();
+  } catch (e) { box.innerHTML = `<div class="text-xs text-crimson py-3 px-2">✗ ${esc(e.message)}</div>`; }
+}
+
+const skillIsOn = s => s.override !== 'off';
+
+function renderSkills() {
+  const box = $('skills-list');
+  if (!box) return;
+  const onlyCtl = $('skills-only-ctl') && $('skills-only-ctl').checked;
+  const shown = onlyCtl ? _skills.filter(s => s.controllable) : _skills;
+  const ctl = _skills.filter(s => s.controllable);
+  $('skills-count').textContent = `${ctl.filter(skillIsOn).length}/${ctl.length} упр. · ${_skills.length} всего`;
+  const groups = [
+    ['personal', 'Личные',     '~/.claude/skills/ — переключаются'],
+    ['bundled',  'Встроенные', 'вшиты в Claude Code — переключаются'],
+    ['plugin',   'Плагинные',  'поштучно не гасятся: выключатель — плагин слева'],
+  ];
+  const html = groups.map(([src, title, hint]) => {
+    const items = shown.filter(s => s.source === src);
+    if (!items.length) return '';
+    return `<div>
+      <div class="flex items-baseline gap-2 px-2 pb-1">
+        <h3 class="text-xs font-semibold text-dim">${title}</h3>
+        <span class="text-[10px] font-mono text-faint">${items.length}</span>
+        <span class="text-[10px] text-faint truncate">${hint}</span>
+      </div>
+      <div class="divide-y divide-line-soft/40">${items.map(skillRow).join('')}</div>
+    </div>`;
+  }).join('');
+  box.innerHTML = html || '<div class="text-xs text-faint py-3 px-2">пусто</div>';
+}
+
+function skillRow(s) {
+  const on = skillIsOn(s);
+  const dim = s.source === 'plugin' && !s.pluginEnabled;
+  // frontmatter name показываем только когда он РАСХОДИТСЯ с каталогом: Claude Code
+  // зовёт скилл по каталогу, и это имя — ключ override. Иначе выглядело бы, что
+  // выключили не то.
+  const alt = s.altName
+    ? ` <span class="text-faint" title="frontmatter name: ${esc(s.altName)} — Claude Code его не использует">(в файле: ${esc(s.altName)})</span>` : '';
+  const shadow = s.shadowedBy
+    ? `<span class="ml-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-400/15 text-amber-300" title="Проект перебивает пользовательский уровень: ${esc(s.shadowedBy.scope)} → ${esc(s.shadowedBy.value)}">⚠ проект</span>` : '';
+  const badge = s.source === 'plugin'
+    ? `<span class="ml-1 text-[9px] font-mono px-1.5 py-0.5 rounded bg-violet/15 text-violet" title="${esc(s.plugin)}">${s.kind === 'command' ? 'команда' : 'плагин'}</span>` : '';
+  const btn = s.controllable
+    ? `<button onclick="toggleSkill('${esc(s.name)}', ${on})"
+         class="shrink-0 px-3 py-1 rounded-md text-xs font-medium border transition ${on
+           ? 'bg-emerald/15 border-emerald/40 text-emerald hover:bg-emerald/25'
+           : 'bg-elevated border-line-soft text-dim hover:text-ink'}">${on ? '● ВКЛ' : 'выкл'}</button>`
+    : `<span class="shrink-0 px-2 py-1 text-[10px] text-faint font-mono" title="Поштучно не выключается — только весь плагин ${esc(s.plugin || '')}">${s.pluginEnabled ? 'через плагин' : 'плагин выкл'}</span>`;
+  return `<div class="flex items-center gap-3 py-2 px-2 ${dim ? 'opacity-45' : ''}">
+    <div class="flex-1 min-w-0">
+      <div class="text-sm font-medium truncate">${esc(s.name)}${badge}${shadow}</div>
+      <div class="text-[10px] text-faint truncate" title="${esc(s.desc || '')}">${esc(s.desc || '—')}${alt}</div>
+    </div>${btn}</div>`;
+}
+
+async function toggleSkill(name, currentlyOn) {
+  // /settings/apply делает shallow-merge верхних ключей → шлём ВЕСЬ skillOverrides.
+  // 🪤 Карта собирается из _skills, а не из «списка выключенных»: иначе выставленное
+  // руками name-only / user-invocable-only затёрлось бы первым же кликом по соседу.
+  const map = {};
+  _skills.forEach(s => { if (s.controllable && s.override) map[s.name] = s.override; });
+  if (currentlyOn) map[name] = 'off'; else delete map[name];   // отсутствие ключа = on
+  try {
+    const res = await fetch('/__switch/api/settings/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings: { skillOverrides: map } }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'fail');
+    toast(`${currentlyOn ? '✗ выключен' : '✓ включён'} скилл ${name} — рестарт не нужен`, 'success', 4000);
+    loadSkills();
+  } catch (e) { toast('Skill: ' + e.message, 'error'); }
+}
+
 // ═══════════════════ SETTINGS TAB ═════════════════════════════════════
 async function checkDashboardUpdate() {
   const badge = $('dash-update-badge'), btn = $('dash-update-btn');
@@ -25889,7 +26153,10 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 31.08 → возвращено 05.09: `outlook` сразу за `github` (обе про аккаунты, не про
 // шлюзы), `hcnsec` сразу за `kktoken` (одно поколение панели New API). Из дефолта они
 // пропали не решением, а откатом 04.09 20:11 — код той ночи лежал незакоммиченным.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+// 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
+// кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
+// обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -26078,6 +26345,11 @@ function toggleTabHidden(name) {
   // значит после переключения глазка их надо подтянуть (или выкинуть) сразу,
   // не дожидаясь тика и уж тем более F5.
   refreshNavCounts(true);
+  // Шпаргалка «Маршруты» фильтруется тем же effectiveHiddenSet(), но своего тика у неё
+  // нет — без этой строки спрятанный шлюз остался бы в ней висеть до перезахода.
+  // 🪤 `.catch()`, а не try/catch: функция async, синхронный catch её отказ не поймает.
+  // Сама она молча выходит, если панель не открыта, — сети на каждый глазок не будет.
+  loadRoutes().catch(() => {});
 }
 function openTabsManager() {
   const el = document.getElementById('tabs-manager');
@@ -26096,6 +26368,10 @@ function resetTabsConfig() {
   applyTabsConfig();
   renderTabsManagerList();
   refreshNavCounts(true);
+  // Тот же случай, что в toggleTabHidden: сброс возвращает вкладки к дефолту, значит
+  // состав шпаргалки меняется — без этой строки в ней висели бы строки провайдеров,
+  // которые сброс только что снова спрятал.
+  loadRoutes().catch(() => {});
 }
 
 // ═══════════════════ Универсальный auto-refresh ══════════════════════
@@ -26207,11 +26483,13 @@ function autoRefreshTick() {
       case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
       case 'helpcoder':     loadHelpcoderSessions(false); break;
-      case 'video':         loadVideoKeys(); break;
-      case 'image':         loadImageKeys(); break;
+      case 'media':         if (typeof MEDIA !== 'undefined') MEDIA.refresh(); break;
       case 'github':        loadGhKeys(); break;
       case 'outlook':       loadOlList(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
+      // Гвард по typeof — код вкладки во внешнем /vendor/models-tab.js, тик может
+      // прийти раньше, чем файл разобран (см. тот же гвард в showTab).
+      case 'models': if (typeof MODELS !== 'undefined' && MODELS.load) MODELS.load(); break;
       // grok — свой autopoll (4s) уже отдельно
       // switcher/settings/plugins — статичные, не трогаем
       // tokenrouter/devin/notion — deprecated, не трогаем
@@ -26282,8 +26560,7 @@ const NAV_COUNT_JOBS = [
   // вкладке не появится никогда.
   { tab: 'svrtr',       fn: () => loadSvrtrSessions(false) },
   { tab: 'helpcoder',   fn: () => loadHelpcoderSessions(false) },
-  { tab: 'video',       fn: () => loadVideoKeys(),              mark: 'video' },
-  { tab: 'image',       fn: () => loadImageKeys(),              mark: 'image' },
+  { tab: 'media',       fn: () => (typeof MEDIA !== 'undefined') && MEDIA.load(), mark: 'media' },
   { tab: 'github',      fn: () => loadGhKeys(),                 mark: 'github' },
   // Ящики: /ol/list — чтение локального JSON, в Microsoft не ходит (сессии проверяет
   // только явная кнопка), поэтому в дешёвый круговой тик его брать можно.
@@ -26295,6 +26572,10 @@ const NAV_COUNT_JOBS = [
   // хотя цена та же — /api/mcp/list читает ~/.claude.json, замер 2 мс. Отдельным заданием,
   // а не вторым вызовом внутри первого: так очередь выдержит между ними свою паузу.
   { tab: 'plugins',     fn: () => loadMcp() },
+  // Третья секция той же вкладки. Отдельным заданием по той же причине, что и MCP:
+  // /api/skills/list — чистый скан диска (~59 записей, в сеть не ходит), но пусть
+  // очередь выдержит между ними свою паузу.
+  { tab: 'plugins',     fn: () => loadSkills() },
   // Ниже — только цифра, без рендера вкладки. Причины разные, но все про цену:
   //   cun/ot  — их загрузчики в конце зовут loadCunModels / loadOtModels, а те
   //             перебирают все ключи против /models шлюза;
@@ -31642,6 +31923,14 @@ function ladRender() {
 // должна появиться сама. Задержка — чтобы не толкаться с первой загрузкой дашборда.
 setTimeout(() => { ladProbeRole(); }, 2500);
 </script>
+
+<!-- Вкладка «Модели» — весь её код (window.MODELS) снаружи. Подключаем последним, после
+     всех инлайновых блоков: скрипт рассчитывает, что showTab и DOM панели уже есть. -->
+<script src="/vendor/models-tab.js"></script>
+
+<!-- Вкладка «MEDIA» — тем же приёмом: весь код (window.MEDIA) во внешней паре файлов.
+     Разбор — docs/MEDIA-TAB-SEAM.md, регресс — tools/check-media.js. -->
+<script src="/vendor/media-tab.js"></script>
 
 </body>
 </html>

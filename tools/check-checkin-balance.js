@@ -454,7 +454,11 @@ const snap = (quota, used = 0) => ({ quota, used, id: 439148, username: 'github_
         check(/Number\(marker\.self\.quota\) > 0/.test(finish), 'бэкенд принимает только положительную квоту из маркера');
         check(/if \(!snap\) await new Promise/.test(finish), 'паузу на флаш кук платим только без снимка');
         const status = cutFn(src, 'function handleArCheckinStatus(');
-        check(/state !== 'running'/.test(status), 'идущий прогон не выбрасывается по TTL (ручной ждёт человека 10 мин)');
+        // Условие переехало 10.09: было `state !== 'running'`, стало `live = running ||
+        // queued` (стоящие в очереди тоже перестали выбрасываться, см.
+        // tools/check-checkin-queue.js). Смысл проверки тот же — идущий прогон живёт.
+        check(/st\.state === 'running'/.test(status) && /const live =/.test(status),
+            'идущий прогон не выбрасывается по TTL (ручной ждёт человека 10 мин)');
     }
 
     // Окно ЛК открыто: точный чек не идёт вовсе, а кешированная цифра честно помечена

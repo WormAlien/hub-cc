@@ -18,6 +18,8 @@ const os = require('os');
 const path = require('path');
 
 const PROXY = path.join(__dirname, '..', 'routing', 'transparent-proxy.js');
+const FRONTDOOR = path.join(__dirname, '..', 'routing', 'frontdoor-proxy.js');
+const TRANSPARENT_TEST_API = path.join(os.tmpdir(), 'check-1m-transparent-api.json');
 const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 // Единственная разрешённая прямая запись: восстановление сырого текста из бэкапа
 // (JSON.stringify его сломает — там строка, а не объект).
@@ -96,11 +98,24 @@ if (src) {
                 ['ComboWombo', 'ComboWombo'],                 // виртуальная модель шлюза
                 ['opus-4.8', 'opus-4.8'],                     // notion: не claude-*
                 ['opus[1m]', 'opus[1m]'],
-                ['gpt-5.6-sol', 'gpt-5.6-sol'],               // у gpt своё окно
+                ['gpt-5.6-sol', 'gpt-5.6-sol[1m]'],
+                ['gpt-5.6-luna', 'gpt-5.6-luna[1m]'],
+                ['gpt-5.6-terra', 'gpt-5.6-terra[1m]'],
+                ['gpt-5.6-sol[1m]', 'gpt-5.6-sol[1m]'],
                 ['glm-5.3', 'glm-5.3[1m]'],                   // 04.09: glm-5.3 — окно 1M
                 ['glm-5.3[1m]', 'glm-5.3[1m]'],               // идемпотентность
                 ['glm-5.2', 'glm-5.2'],                       // старые glm — окно не заявлено
                 ['claude-haiku-4-5', 'claude-haiku-4-5'],     // у haiku 200k штатно
+                // Префиксный роутинг: `/model aipm/claude-opus-4-6` выбирает шлюз именем
+                // в модели. Без поддержки префикса якорь ^ не матчился, [1m] не вешался,
+                // и окно молча падало до 200k — ровно то, что этот чокпоинт и ловит.
+                ['aipm/claude-opus-4-6', 'aipm/claude-opus-4-6[1m]'],
+                ['agentrouter/claude-opus-4-8[1m]', 'agentrouter/claude-opus-4-8[1m]'],  // идемпотентность
+                ['ar/claude-sonnet-5', 'ar/claude-sonnet-5[1m]'],                        // короткий алиас
+                ['aipm/glm-5.3', 'aipm/glm-5.3[1m]'],
+                ['aipm/glm-5.2', 'aipm/glm-5.2'],                                        // старые glm — как и без префикса
+                ['justwoker/gpt-5.6-sol', 'justwoker/gpt-5.6-sol[1m]'],
+                ['aipm/claude-haiku-4-5', 'aipm/claude-haiku-4-5'],                      // haiku 200k штатно
                 ['', ''],
                 [null, ''],
             ];
@@ -111,6 +126,52 @@ if (src) {
             if (!fails.length) ok.push(`normalizeCcModel: ${cases.length} кейсов`);
         }
     }
+
+    // Cun UI: три выделенных GPT 5.6 должны кликаться и копироваться уже с [1m].
+    // Сторожим реальный путь бейджа, а не отдельную копию списка в тесте.
+    try {
+        const dashboard = fs.readFileSync(path.join(__dirname, '..', 'routing', 'proxy-dashboard.html'), 'utf8');
+        // 🪤 Функции фронта вырезаются и исполняются в песочнице, поэтому всё, на что они
+        // ссылаются, надо вырезать вместе с ними. С 10.09 регекс `[1m]` вынесен в общую
+        // CC_1M_RE — ЗАЧЕМ: три копии (withCtxSuffix, FM_1M_RE, cunNormalizeCcModel)
+        // успели разойтись и с сервером, и между собой на 159 именах из 337. Одна
+        // константа на весь фронт — единственный способ, которым они больше не разъедутся.
+        const shared = dashboard.match(/const CC_1M_RE = [^\n]+/);
+        if (!shared) fails.push('proxy-dashboard.html: нет общей CC_1M_RE — копии регекса снова разойдутся с сервером');
+        const preamble = shared ? shared[0] + '\n' : '';
+        const uiNormalize = dashboard.match(/function cunNormalizeCcModel\(m\) \{[\s\S]*?\n\}/);
+        const ctxSuffix = dashboard.match(/function withCtxSuffix\(id\) \{[\s\S]*?\n\}/);
+        const chip = dashboard.match(/function cunModelChip\(id, tone\) \{[\s\S]*?\n\}/);
+        if (!uiNormalize) {
+            fails.push('proxy-dashboard.html: нет cunNormalizeCcModel() для GPT 5.6 бейджей');
+        } else {
+            const normalizeUi = new Function(`${preamble}${uiNormalize[0]}; return cunNormalizeCcModel;`)();
+            for (const id of ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-5.6-terra']) {
+                if (normalizeUi(id) !== `${id}[1m]`) fails.push(`cunNormalizeCcModel(${id}) не добавил [1m]`);
+            }
+            // Клиент обязан совпадать с сервером буквально: вкладка «Маршруты» раздаёт
+            // готовые команды `/model <шлюз>/<модель>`, и потерянный здесь суффикс —
+            // это молча выданное окно 200k вместо 1M. Серверную функцию вырезаем здесь
+            // заново: `normalize` выше объявлен в чужом блоке и сюда не виден.
+            const srvFn = src && src.match(/function normalizeCcModel\(m\) \{[\s\S]*?\n\}/);
+            const srvNorm = srvFn ? new Function(`${srvFn[0]}; return normalizeCcModel;`)() : null;
+            if (ctxSuffix && srvNorm) {
+                const withCtx = new Function(`${preamble}${ctxSuffix[0]}; return withCtxSuffix;`)();
+                for (const id of ['claude-opus-4-6', 'aipm/claude-opus-4-6', 'ar/claude-sonnet-5',
+                    'glm-5.3', 'aipm/glm-5.3', 'gpt-5.6-sol', 'justwoker/gpt-5.6-sol',
+                    'hcnsec/kimi-k3', 'claude-opus-5[1m]', 'ComboWombo']) {
+                    if (withCtx(id) !== srvNorm(id)) {
+                        fails.push(`withCtxSuffix(${id}) = ${withCtx(id)}, а сервер даёт ${srvNorm(id)} — копии разошлись`);
+                    }
+                }
+            }
+        }
+        if (!chip || !/cunNormalizeCcModel\(id\)/.test(chip[0])) {
+            fails.push('cunModelChip(): бейдж не нормализует GPT 5.6 в …[1m] перед выбором и копированием');
+        }
+    } catch (e) {
+        fails.push(`proxy-dashboard.html не прочитан: ${e.message}`);
+    }
 }
 
 // ---- вывод ------------------------------------------------------------------
@@ -119,12 +180,61 @@ if (src) {
 // Инвариант: модель есть в routing/model-windows.json → env.CLAUDE_CODE_MAX_CONTEXT_TOKENS
 // равен её окну; модель claude-* → ключа нет вовсе (залипшее значение = переполнение).
 if (src) {
+    // Реестр префиксов: без него front-door не знает имён провайдеров и `/model aipm/…`
+    // молча уедет на активный бэкенд — то есть окно будет думать, что сидит на AIPM,
+    // а жечь чужой баланс. Сторожим обе половины: саму функцию и её вызов в чокпоинте.
+    if (!/function writeBackendsRegistry\(/.test(src)) {
+        fails.push('transparent-proxy.js: нет writeBackendsRegistry() — front-door перестанет знать префиксы провайдеров');
+    }
+    const afd = src.match(/function applyFrontdoor\(obj\) \{[\s\S]*?\n\}/);
+    if (afd && !/writeBackendsRegistry\(/.test(afd[0])) {
+        fails.push('applyFrontdoor(): реестр не обновляется на активации — helper-режимы (conduit/ourtoken/…) выпадут из префиксного роутинга');
+    }
     const ws = src.match(/function writeSettings\(obj\) \{[\s\S]*?\n\}/);
     if (ws && !/ccContextTokensFor\(obj\.model\)/.test(ws[0])) {
         fails.push('writeSettings(): нет ccContextTokensFor() — окно gpt-моделей снова не доедет до статуслайна');
     }
+    const cunTiers = src.match(/function cunResolveTiers\(availableIds\) \{[\s\S]*?\n\}/);
+    if (!cunTiers || !/normalizeCcModel\(/.test(cunTiers[0])) {
+        fails.push('cunResolveTiers(): GPT 5.6 в автомэппинге тиров не получает [1m]');
+    } else {
+        try {
+            const prefs = src.match(/const CUN_TIER_PREFS = \{[\s\S]*?\n\};/)[0];
+            const pick = src.match(/function cunPickFromPrefs\(prefs, availableSet\) \{[\s\S]*?\n\}/)[0];
+            const norm = src.match(/function normalizeCcModel\(m\) \{[\s\S]*?\n\}/)[0];
+            const saved = { opus: 'gpt-5.6-sol', sonnet: 'gpt-5.6-luna', haiku: 'gpt-5.6-terra' };
+            const resolveTiers = new Function('cunReadTiers', `${norm}\n${prefs}\n${pick}\n${cunTiers[0]}; return cunResolveTiers;`)(() => saved);
+            const got = resolveTiers(Object.values(saved));
+            for (const tier of ['opus', 'sonnet', 'haiku']) {
+                if (got[tier] !== `${saved[tier]}[1m]`) fails.push(`cunResolveTiers(saved).${tier} = ${got[tier]}, ожидалось ${saved[tier]}[1m]`);
+            }
+            const savedSuffixed = Object.fromEntries(Object.entries(saved).map(([tier, id]) => [tier, `${id}[1m]`]));
+            const resolveSuffixed = new Function('cunReadTiers', `${norm}\n${prefs}\n${pick}\n${cunTiers[0]}; return cunResolveTiers;`)(() => savedSuffixed);
+            const gotSuffixed = resolveSuffixed(Object.values(saved));
+            for (const tier of ['opus', 'sonnet', 'haiku']) {
+                if (gotSuffixed[tier] !== savedSuffixed[tier] || gotSuffixed.source !== 'saved') {
+                    fails.push(`cunResolveTiers(saved [1m]).${tier} потерял сохранённый выбор: ${JSON.stringify(gotSuffixed)}`);
+                }
+            }
+            const readActive = src.match(/function cunReadActiveModel\(\) \{[\s\S]*?\n\}/);
+            if (!readActive || !/normalizeCcModel\(/.test(readActive[0])) {
+                fails.push('cunReadActiveModel(): legacy GPT 5.6 без [1m] не канонизируется для активного бейджа');
+            }
+        } catch (e) {
+            fails.push(`cunResolveTiers не исполняется: ${e.message}`);
+        }
+    }
     if (ws && !/delete .*CLAUDE_CODE_MAX_CONTEXT_TOKENS/.test(ws[0])) {
         fails.push('writeSettings(): ключ CLAUDE_CODE_MAX_CONTEXT_TOKENS не снимается для claude-* — залипнет и даст переполнение');
+    }
+    try {
+        const frontdoor = fs.readFileSync(FRONTDOOR, 'utf8');
+        const remapRemote = frontdoor.match(/function remapForRemote\(method, reqPath, body, mm, preserveGpt56Suffix\) \{[\s\S]*?\n\}/);
+        if (!remapRemote || !/preserveGpt56Suffix && \/\^gpt-5\\\.6-/.test(remapRemote[0])) {
+            fails.push('frontdoor remapForRemote(): Cun GPT 5.6 потеряет [1m] до шлюза');
+        }
+    } catch (e) {
+        fails.push(`frontdoor-proxy.js не прочитан: ${e.message}`);
     }
     const i = src.indexOf('const MODEL_WINDOWS_FILE');
     const e = src.indexOf('\n}', src.indexOf('function ccContextTokensFor'));
@@ -146,6 +256,14 @@ if (src) {
                 ['claude-opus-5[1m]', null],   // claude любой формы — не переопределяем
                 ['ComboWombo', null],          // виртуальная модель шлюза
                 ['модели-нет-в-таблице', null],
+                // Префиксный роутинг: имя шлюза перед моделью не должно прятать окно.
+                // Без среза префикса `/^claude-/` не матчится И ключа нет в таблице —
+                // возвращался бы null, и glm-5.3 теряла бы своё 1050000.
+                ['aipm/glm-5.3', 1050000],
+                ['ar/glm-5.3[1m]', 1050000],
+                ['justwoker/gpt-5.6-sol', 1050000],
+                ['aipm/claude-opus-5', null],        // claude любой формы — не переопределяем
+                ['aipm/модели-нет', null],
                 ['', null],
             ];
             for (const [input, want] of cases) {

@@ -952,7 +952,9 @@ t('дефолтный набор вкладок дашборда — как на
     // 'github' — оба про аккаунты, а не про шлюзы; 'hcnsec' (девятый шлюз, New API без
     // GitHub-входа) — сразу за 'kktoken', рядом со своим поколением панели. Обе вкладки
     // 04.09 пропали из дефолта не по решению, а откатом: код лежал незакоммиченным.
-    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'hcnsec', 'tabi', 'custom', 'plugins', 'health', 'settings'];
+    // 10–11.09: добавились 'aipm' (десятый шлюз), 'models' (здоровье моделей), 'media'
+    // (генерация картинок/видео) и 'routes' (шпаргалка префиксного роутинга).
+    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

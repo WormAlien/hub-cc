@@ -32,6 +32,7 @@
 // Код возврата 0 = профиль открыт, 2 = таймаут ожидания GitHub-логина (первый вход).
 
 const { chromium } = require('playwright');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -308,11 +309,13 @@ async function main() {
 
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
-    viewport: { width: 1280, height: 800 },
-    args: ['--disable-blink-features=AutomationControlled'],
+    viewport: null,
+    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
   });
 
   const page = context.pages()[0] || await context.newPage();
+  await page.bringToFront();
+  raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
   await disableHttpCache(context, page);
 
   let appliedSession = false;

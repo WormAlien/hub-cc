@@ -38,6 +38,7 @@
 // Код возврата 0 = открыт, 1 = ошибка.
 
 const { chromium } = require('playwright');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -154,8 +155,8 @@ async function main() {
   // launchPersistentContext держит профиль открытым и пишет на диск всё сам.
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
-    viewport: { width: 1280, height: 800 },
-    args: ['--disable-blink-features=AutomationControlled'],
+    viewport: null,
+    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
   });
 
   // Куки — ДО первой навигации, иначе GitHub успеет отдать страницу логина.
@@ -166,6 +167,8 @@ async function main() {
   }
 
   const page = context.pages()[0] || await context.newPage();
+  await page.bringToFront();
+  raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
 
   try {
     await page.goto(targetUrl || GITHUB_LOGIN_URL, { waitUntil: 'domcontentloaded' });

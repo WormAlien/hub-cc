@@ -33,6 +33,7 @@ const SANDBOX = path.join(os.tmpdir(), 'fd-check-' + process.pid);
 const CLAUDE = path.join(SANDBOX, '.claude');
 const SETTINGS = path.join(CLAUDE, 'settings.json');
 const STATE = path.join(CLAUDE, 'active-backend.json');
+const REGISTRY = path.join(CLAUDE, 'backends.json');
 const FD_CFG = path.join(SANDBOX, 'frontdoor.json');
 
 const fails = [];
@@ -103,6 +104,24 @@ async function main() {
         check(st && st.upstream === 'https://conduit.ozdoev.net/v1', 'состояние: upstream = адрес шлюза как есть');
         check(st && st.keyFile === 'cdt-active-key.txt', 'состояние: ключ из helper-команды');
         check(st && st.modelmap === 'cdt-modelmap.json', 'состояние: карта тиров по префиксу ключа');
+
+        // 1b. Реестр префиксного роутинга: активация обязана «выучить» провайдера.
+        // Без этого `/model conduit/...` молча уедет на активный бэкенд, и окно будет
+        // думать, что сидит на conduit, а жечь чужой баланс. Helper-режимов в BACKENDS
+        // нет вовсе — они попадают в реестр ТОЛЬКО этим путём.
+        const reg = readJson(REGISTRY);
+        check(reg && reg.providers, 'реестр backends.json создан активацией');
+        check(reg && reg.providers && reg.providers.conduit
+            && reg.providers.conduit.upstream === 'https://conduit.ozdoev.net/v1',
+            'реестр выучил conduit с его апстримом');
+        check(reg && reg.providers && reg.providers.conduit
+            && reg.providers.conduit.keyFile === 'cdt-active-key.txt',
+            'реестр выучил файл ключа conduit');
+        // Локальные шлюзы из BACKENDS должны быть в реестре с рождения, без активаций.
+        check(reg && reg.providers && reg.providers.aipm && reg.providers.aipm.keyFile === null,
+            'реестр: локальный aipm есть сразу и без keyFile (ключ инжектит keepalive)');
+        check(reg && reg.aliases && reg.aliases.ap === 'aipm' && reg.aliases.ar === 'agentrouter',
+            'реестр: короткие алиасы ap/ar разрешаются в полные имена');
 
         // 2. Повторная запись, когда base уже наш: состояние НЕ трогаем.
         const before = fs.readFileSync(STATE, 'utf8');

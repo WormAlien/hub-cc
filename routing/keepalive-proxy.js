@@ -2214,6 +2214,15 @@ const server = http.createServer((req, res) => {
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
     if (remapped) stats.remaps += 1;
+    // Реальная модель — заголовком, потому что в ТЕЛЕ ответа её уже не будет:
+    // rewriteModelJson подменяет `model` обратно на клиентскую (MODEL_ECHO), и
+    // счётчик токенов на front-door читает именно тело. Отсюда во вкладке «Здоровье»
+    // висел `claude-opus-5` у justwoker, который на самом деле отдаёт `gpt-5.6-sol`.
+    // Заголовок клиенту не мешает: он смотрит на тело, а подмена там сохранена.
+    try {
+      const sent = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
+      if (sent && !res.headersSent) res.setHeader('x-actual-model', sent);
+    } catch (e) { /* не-JSON тело: реальную модель знать неоткуда, заголовка не будет */ }
     streaming = wantsStream(req.method, reqPath, req.headers, reqBody);
     // Пре-коммит (v1tusha): открываем SSE клиенту только после cfg.preCommitMs
     // тишины от upstream, не сразу. 0 = отложенный пре-коммит выключен.

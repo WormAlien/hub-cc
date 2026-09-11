@@ -2,7 +2,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File keepalive-restart.ps1 -Port 20155
 # Instances: 20133 = AgentRouter, 20155 = Tabi, 20156 = GoRouter, 20157 = XPeach,
 #            20158 = JustWoker, 20159 = SeekAi, 20160 = TrueSOTA, 20161 = KKtoken,
-#            20162 = HCNsec.
+#            20162 = HCNsec, 20163 = AIPM, 20164 = WisdomSatan.
 #
 # Normal path is the dashboard button (Health tab -> POST /__switch/api/keepalive/restart).
 # This script is the fallback for when the dashboard itself is down.
@@ -64,9 +64,14 @@ $perPort = @{
              MODELMAP_FILE = (Join-Path $dir 'hcnsec-modelmap.json') }
   20163 = @{ UPSTREAM = 'https://emtf.aipm9527.xyz'; KEY_FILE = "$profileDir.claude\aipm-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'aipm-modelmap.json') }
+  # WisdomSatan (New API v0.11.5): bare root, same as every New API entry above.
+  # The panel advertises a second domain in /api/status (server_address =
+  # api.hczhw.com) - do NOT use it, it answers 403 from here (measured 2026-09-10).
+  20164 = @{ UPSTREAM = 'https://api.wisdomsatan.club'; KEY_FILE = "$profileDir\.claude\wisdomsatan-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'wisdomsatan-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163 / 20164)"; exit 1
 }
 
 # Kill the current listener

@@ -48,6 +48,8 @@ check(html.includes('const n = m ? 8 : 32'), 'term dial draws 32 segments (8h ×
 check(html.includes('(toA + 120) % 360'), 'day pre-batch highlight is a third of the circle');
 check(html.includes("'вечерняя'"), 'day caption names all three batches');
 check(html.includes("x.id === 'day'"), 'default dial falls back to day');
+check(html.includes("ar-quota-dial2"), 'dial choice key bumped to gen2 — day default reaches everyone');
+check(html.includes('localStorage.removeItem(KEY_OLD)'), 'old dial choice key is cleaned up');
 check(html.includes('тремя партиями'), 'mini tooltip says three batches');
 check(html.includes('Три партии в сутки'), 'big caption says three batches');
 

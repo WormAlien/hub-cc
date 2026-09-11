@@ -523,7 +523,7 @@ function randomThemeId() {
       </div>
       <!-- AR-QUOTA-DIAL:MINI — часы до сброса квоты AgentRouter.
            Вариант циферблата общий с большими часами на вкладке AR (localStorage
-           'ar-quota-dial'): листаешь там стрелками — меняется и здесь, рисует одна
+           'ar-quota-dial2'): листаешь там стрелками — меняется и здесь, рисует одна
            и та же функция. Висит всегда, а не только когда активен AR: знать, когда
            у него долив, нужно как раз чтобы решить, переключаться ли на него. -->
       <div id="arq-mini" class="arq hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]"
@@ -31538,7 +31538,10 @@ function sideOpenCurrentTab(ev) {
    арифметика — одна сетка по модулю от любой из них; опора взята 16:00 UTC. */
 const CYCLE = 8 * 3600 * 1000;
 const ANCHOR = Date.UTC(1970, 0, 1, 16, 0, 0);
-const KEY = 'ar-quota-dial';
+/* Поколение ключа 2: при переходе на тройную сетку (2026-09-12) сохранённый вид
+   сброшен всем — дефолтом стали «Сутки»; дальше выбор снова сохраняется. */
+const KEY = 'ar-quota-dial2';
+const KEY_OLD = 'ar-quota-dial';
 const R = 84, CIRC = 2 * Math.PI * R;
 
 const pad = n => String(n).padStart(2, '0');
@@ -31790,6 +31793,7 @@ function init() {
   if (!hosts.length) return;
   const mrow = document.getElementById('arq-mini');
   if (mrow) mrow.classList.remove('hidden');
+  try { localStorage.removeItem(KEY_OLD); } catch (e) { /* хранилище закрыто */ }
   idx = readIdx();
   const step = d => { idx = (idx + d + V.length) % V.length; saveIdx(); build(); };
   const prev = document.querySelector('#arq-big .arq-prev');

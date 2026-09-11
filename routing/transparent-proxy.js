@@ -19,6 +19,7 @@ const { execFileSync } = require('child_process');
 // историю С ДИСКА, когда прокси провайдера не запущен — иначе график был бы только у
 // активного бэкенда, а у остальных «не отвечает» при готовых данных в файле рядом.
 const latencyStore = require('./latency-store.js');
+const { AR_QUOTA_BODY, classifyArQuotaProbe } = require('./lib/ar-quota-probe');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
@@ -10632,6 +10633,44 @@ async function handleFinanceHistory(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+async function handleArQuotaCheck(req, res) {
+    let key = '';
+    try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
+    if (!key.startsWith('sk-')) return jsonRes(res, 400, { state: 'error', error: 'нет активного ключа AgentRouter' });
+
+    const payload = JSON.stringify(AR_QUOTA_BODY);
+    const target = new URL(agentRouterBase());
+    const result = await new Promise((resolve) => {
+        const probe = https.request({
+            hostname: target.hostname,
+            port: target.port || 443,
+            method: 'POST',
+            path: '/v1/messages',
+            headers: {
+                'content-type': 'application/json',
+                'content-length': Buffer.byteLength(payload),
+                'anthropic-version': '2023-06-01',
+                'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+                'anthropic-dangerous-direct-browser-access': 'true',
+                'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+                'x-app': 'cli',
+                'authorization': `Bearer ${key}`,
+                'x-api-key': key,
+            },
+            timeout: 60000,
+        }, (up) => {
+            const chunks = [];
+            up.on('data', c => chunks.push(c));
+            up.on('end', () => resolve(classifyArQuotaProbe(up.statusCode, Buffer.concat(chunks).toString('utf8'))));
+        });
+        probe.on('timeout', () => probe.destroy(new Error('таймаут проверки')));
+        probe.on('error', e => resolve({ state: 'error', error: e.message }));
+        probe.end(payload);
+    });
+    logLine(`agentrouter quota-check claude-opus-5 -> ${result.state}`);
+    return jsonRes(res, 200, { ...result, model: AR_QUOTA_BODY.model, checkedAt: new Date().toISOString() });
+}
+
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
 async function handleArPing(req, res) {
     try {
@@ -19811,6 +19850,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/sessions')) return handleArSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/ping'))     return handleArPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/balance'))  return handleArBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ar/quota-check') return handleArQuotaCheck(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);

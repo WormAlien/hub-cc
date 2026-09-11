@@ -473,6 +473,16 @@ function randomThemeId() {
           <span id="side-auto-knob" class="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full transition-all duration-200 left-[3px] bg-dim"></span>
         </button>
       </div>
+      <!-- AR-QUOTA-DIAL:MINI — часы до сброса квоты AgentRouter.
+           Вариант циферблата общий с большими часами на вкладке AR (localStorage
+           'ar-quota-dial'): листаешь там стрелками — меняется и здесь, рисует одна
+           и та же функция. Висит всегда, а не только когда активен AR: знать, когда
+           у него долив, нужно как раз чтобы решить, переключаться ли на него. -->
+      <div id="arq-mini" class="arq hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]"
+           title="Квота AgentRouter льётся двумя партиями: 02:00 и 14:00 МСК (07:00/19:00 Пекина)">
+        <span class="arq-host shrink-0 leading-none"></span>
+        <span class="arq-txt text-dim truncate"></span>
+      </div>
     </div>
 
     <!-- Nav -->
@@ -5934,6 +5944,27 @@ window.finNavCount = async () => {
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">agentrouter.org</code> · клик по ключу = активный (пишется в <code class="font-mono text-sky text-xs">~/.claude/ar-active-key.txt</code> — смена на лету) · claude-* → <code class="font-mono text-sky text-xs">:20133</code> keepalive · gpt-* → <code class="font-mono text-sky text-xs">:20132</code> proxy · base БЕЗ /v1 · WAF пускает только Claude Code запросы</p>
           </div>
         </header>
+
+        <!-- AR-QUOTA-DIAL:BIG — часы до сброса дневной квоты. Стрелки ‹ › листают шесть
+             вариантов циферблата; выбор пишется в localStorage и подхватывается мини-версией
+             наверху сайдбара. Тик 1 Гц правит текстовые узлы на месте и НЕ пересобирает
+             разметку — по той же причине, что у ar-checkin ниже: пересборка рамки мигает. -->
+        <div id="arq-big" class="arq rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between gap-3 mb-1">
+            <h2 class="text-sm font-semibold tracking-tight">⏳ До сброса квоты</h2>
+            <div class="flex items-center gap-1 shrink-0">
+              <button type="button" class="arq-nav arq-prev px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Предыдущий вид">‹</button>
+              <span class="arq-name text-[10px] font-mono w-[68px] text-center text-dim"></span>
+              <button type="button" class="arq-nav arq-next px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Следующий вид">›</button>
+            </div>
+          </div>
+          <p class="text-xs text-muted mb-2">Две партии в сутки: <span class="font-mono text-ink">02:00</span> и <span class="font-mono text-ink">14:00</span> МСК (07:00/19:00 Пекина). Партия конечная — «用完即止», кончиться может раньше срока.</p>
+          <div class="flex justify-center py-1"><span class="arq-host"></span></div>
+          <div class="mt-2 flex flex-col items-center gap-1.5">
+            <button id="arq-check" type="button" onclick="arqCheckQuota()" class="text-xs px-3 py-1.5 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить квоту</button>
+            <span id="arq-check-result" class="text-xs text-faint font-mono" aria-live="polite">—</span>
+          </div>
+        </div>
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
@@ -31106,6 +31137,328 @@ function sideOpenCurrentTab(ev) {
 }
 
 
+</script>
+
+<!-- ═══════════════════ AR-QUOTA-DIAL ═══════════════════
+     Часы до сброса дневной квоты AgentRouter. Отдельным блоком в конце файла, а не
+     внутри основного скрипта: модуль самодостаточен — ничего в дашборде не читает и
+     не трогает, своё хранилище, свой таймер. Вырезается целиком по трём маркерам
+     AR-QUOTA-DIAL:MINI / :BIG / этому. -->
+<style>
+/* Ни одного своего hex: только токены тем. Смеси ТОЛЬКО in oklab — oklch
+   интерполирует оттенок по кругу, и на светлых темах цвет уезжает через 0°. */
+.arq            { --arq-cc: var(--color-azure); }
+.arq[data-arq-state="burned"] { --arq-cc: var(--color-amber); }   /* поймали 402 */
+.arq[data-arq-state="fresh"]  { --arq-cc: var(--color-emerald); } /* только что налили */
+.arq-host       { display: inline-flex; align-items: center; }
+.arq-dial       { display: block; overflow: visible; }
+.arq-track      { fill: none; stroke: var(--color-line-soft); }
+.arq-arc        { fill: none; stroke: var(--arq-cc); stroke-linecap: round; }
+#arq-big .arq-arc { transition: stroke-dasharray .9s linear; }
+.arq-hand       { transform-origin: 100px 100px;
+                  transition: transform 320ms cubic-bezier(.34, 1.56, .64, 1); }
+/* tabular-nums обязателен: без него счётчик каждую секунду меняет ширину и пляшет. */
+.arq-num        { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+                  font-weight: 600; letter-spacing: -0.03em; fill: var(--color-ink); }
+/* Трекинг размерный: крупным цифрам минус, мелким капсам плюс. */
+.arq-cap        { font-family: var(--font-sans); font-size: 9px; font-weight: 600;
+                  letter-spacing: .13em; text-transform: uppercase;
+                  fill: color-mix(in oklab, var(--color-ink) 62%, var(--color-surface)); }
+.arq-capc       { fill: var(--arq-cc); }
+.arq-seg        { stroke: color-mix(in oklab, var(--color-ink) 22%, var(--color-surface)); }
+.arq-seg.on     { stroke: var(--arq-cc); }
+.arq-seg.now    { stroke: var(--color-ink); }
+.arq-glow       { filter: drop-shadow(0 0 5px color-mix(in oklab, var(--arq-cc) 80%, transparent)); }
+.arq-nav        { color: color-mix(in oklab, var(--color-ink) 62%, var(--color-surface)); }
+.arq-nav:hover  { color: var(--arq-cc); }
+.arq-glass      { position: relative; display: inline-grid; place-items: center;
+                  padding: 10px; border-radius: 50%; }
+.arq-glass::before { content: ""; position: absolute; inset: 16%; border-radius: 50%;
+                  background: radial-gradient(circle at 50% 42%,
+                    color-mix(in oklab, var(--arq-cc) 55%, transparent), transparent 68%);
+                  filter: blur(22px); }
+.arq-glass::after { content: ""; position: absolute; inset: 6px; border-radius: 50%;
+                  background: color-mix(in oklab, var(--color-elevated) 55%, transparent);
+                  backdrop-filter: blur(12px) saturate(150%);
+                  border: 1px solid color-mix(in oklab, var(--color-ink) 16%, transparent);
+                  box-shadow: 0 14px 32px -16px color-mix(in oklab, var(--color-bg) 90%, transparent); }
+.arq-glass > svg { position: relative; z-index: 1; }
+/* В 26 px стекло не читается, а backdrop-filter — самая дорогая отрисовка из шести.
+   Мини оставляет от него только свечение. */
+.arq-glass.mini { padding: 0; }
+.arq-glass.mini::after  { display: none; }
+.arq-glass.mini::before { inset: -10%; filter: blur(6px); }
+@media (prefers-reduced-motion: reduce) { .arq-hand, .arq-arc { transition: none !important; } }
+</style>
+<script>
+(() => {
+'use strict';
+/* ── Модель времени ───────────────────────────────────────────────────────
+   Квота льётся двумя партиями в сутки: 07:00 и 19:00 по Пекину = UTC 23:00 и 11:00
+   = 02:00 и 14:00 МСК. Ни Китай, ни Россия часы не переводят, поэтому связка
+   фиксирована навсегда и её можно зашить. Партии разнесены РОВНО на 12 ч, поэтому
+   вся арифметика — одна сетка по модулю от любой из них; опора взята 11:00 UTC. */
+const CYCLE = 12 * 3600 * 1000;
+const ANCHOR = Date.UTC(1970, 0, 1, 11, 0, 0);
+const KEY = 'ar-quota-dial';
+const R = 84, CIRC = 2 * Math.PI * R;
+
+const pad = n => String(n).padStart(2, '0');
+const polar = (r, deg) => { const a = (deg - 90) * Math.PI / 180;
+  return [100 + r * Math.cos(a), 100 + r * Math.sin(a)]; };
+
+function cyc(t) {
+  const el = ((t - ANCHOR) % CYCLE + CYCLE) % CYCLE, rem = CYCLE - el;
+  const s = Math.floor(rem / 1000);
+  return { t, el, rem, p: el / CYCLE, next: new Date(t + rem),
+           h: pad(Math.floor(s / 3600)), m: pad(Math.floor(s / 60) % 60), s: pad(s % 60) };
+}
+
+/* ── Шесть видов ──────────────────────────────────────────────────────────
+   Каждый рисуется большим и мини. mini=true отбрасывает подписи (в 26 px их не
+   прочесть — время выводится HTML-строкой рядом) и утолщает штрихи: при масштабе
+   200→26 линия в 6 единиц превращается в волосок. */
+const V = [
+{ id: 'clock', label: 'Циферблат',
+  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
+    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?11:1}"/>
+    ${m?'':'<g class="tk"></g>'}
+    <path class="arq-arc" d="" stroke-width="${m?11:4}"/>
+    ${m?'':'<circle class="mk" r="5" fill="var(--color-surface)" stroke="var(--arq-cc)" stroke-width="2.5"/>'}
+    <line class="arq-hand hh" x1="100" y1="100" x2="100" y2="54" stroke-width="${m?13:4.5}"
+          stroke-linecap="round" stroke="var(--color-ink)"/>
+    <line class="arq-hand mh" x1="100" y1="100" x2="100" y2="36" stroke-width="${m?8:2.5}"
+          stroke-linecap="round" stroke="color-mix(in oklab, var(--color-ink) 62%, var(--color-surface))"/>
+    ${m?'':`<circle cx="100" cy="100" r="3.5" fill="var(--color-ink)"/>
+    <text class="arq-num hero" x="100" y="146" text-anchor="middle" font-size="19"></text>
+    <text class="arq-cap" x="100" y="160" text-anchor="middle">до сброса</text>`}
+  </svg>`,
+  init(el, m) { if (m) return;
+    const g = el.querySelector('.tk');
+    for (let i = 0; i < 12; i++) { const [x1,y1] = polar(76, i*30), [x2,y2] = polar(i%3?71:68, i*30);
+      g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+        stroke-width="${i%3?1:2}" stroke="color-mix(in oklab, var(--color-ink) ${i%3?24:44}%, var(--color-surface))"/>`); } },
+  tick(el, c, m) {
+    const d = new Date(c.t);
+    const hA = ((d.getHours() % 12) + d.getMinutes() / 60) * 30;
+    el.querySelector('.hh').style.transform = `rotate(${hA}deg)`;
+    el.querySelector('.mh').style.transform = `rotate(${(d.getMinutes() + d.getSeconds()/60) * 6}deg)`;
+    const to = ((c.next.getHours() % 12) + c.next.getMinutes() / 60) * 30;
+    const from = hA + d.getSeconds() / 120, sweep = (to - from + 360) % 360;
+    const [sx,sy] = polar(84, from), [ex,ey] = polar(84, to);
+    el.querySelector('.arq-arc').setAttribute('d',
+      sweep < 0.5 ? '' : `M ${sx} ${sy} A 84 84 0 ${sweep>180?1:0} 1 ${ex} ${ey}`);
+    if (m) return;
+    const mk = el.querySelector('.mk'); mk.setAttribute('cx', ex); mk.setAttribute('cy', ey);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`; } },
+
+{ id: 'ring', label: 'Кольцо',
+  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
+    ${m?'':'<g class="tk"></g>'}
+    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?16:8}"/>
+    <circle class="arq-arc" cx="100" cy="100" r="84" stroke-width="${m?16:8}"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    ${m?'':`<text class="arq-num hero" x="100" y="98" text-anchor="middle" font-size="38"></text>
+    <text class="arq-cap" x="100" y="116" text-anchor="middle">до следующей партии</text>
+    <text class="arq-cap arq-capc at" x="100" y="134" text-anchor="middle" font-size="10.5"></text>`}
+  </svg>`,
+  init(el, m) { if (m) return;
+    const g = el.querySelector('.tk');
+    for (let i = 0; i < 12; i++) { const [x1,y1] = polar(95, i*30), [x2,y2] = polar(91, i*30);
+      g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="1.5"
+        stroke="color-mix(in oklab, var(--color-ink) 26%, var(--color-surface))"/>`); } },
+  tick(el, c, m) {
+    el.querySelector('.arq-arc').setAttribute('stroke-dasharray', `${(CIRC*c.p).toFixed(1)} ${CIRC}`);
+    if (m) return;
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск · ${c.s} с`; } },
+
+{ id: 'term', label: 'Терминал',
+  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
+    <g class="sg"></g>
+    ${m?'':`<text class="arq-cap" x="100" y="80" text-anchor="middle">next drop</text>
+    <text class="arq-num hero" x="100" y="108" text-anchor="middle" font-size="30"></text>
+    <text class="arq-cap arq-capc at" x="100" y="126" text-anchor="middle" font-size="10"></text>`}
+  </svg>`,
+  init(el, m) { const n = m ? 12 : 48, g = el.querySelector('.sg');
+    for (let i = 0; i < n; i++) { const a = i * (360/n), long = !m && i % 4 === 0;
+      const [x1,y1] = polar(m?94:88, a), [x2,y2] = polar(m?70:(long?72:78), a);
+      g.insertAdjacentHTML('beforeend', `<line class="arq-seg" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+        stroke-width="${m?9:(long?3:2)}" stroke-linecap="round"/>`); } },
+  tick(el, c, m) {
+    const sg = el.querySelectorAll('.arq-seg'), n = sg.length, done = Math.floor(c.p * n);
+    sg.forEach((t, i) => { t.classList.toggle('on', i < done); t.classList.toggle('now', i === done); });
+    if (m) return;
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} MSK`; } },
+
+{ id: 'min', label: 'Минимал',
+  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
+    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?6:1}"/>
+    <circle class="arq-arc" cx="100" cy="100" r="84" stroke-width="${m?6:1.5}"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    <circle class="pt" r="${m?16:5}" fill="var(--arq-cc)"/>
+    ${m?'':`<text class="arq-num hero" x="100" y="99" text-anchor="middle" font-size="34"
+          font-weight="300" letter-spacing="-0.04em"></text>
+    <text class="arq-cap at" x="100" y="120" text-anchor="middle"></text>`}
+  </svg>`,
+  tick(el, c, m) {
+    el.querySelector('.arq-arc').setAttribute('stroke-dasharray', `${(CIRC*c.p).toFixed(1)} ${CIRC}`);
+    const [x,y] = polar(84, c.p * 360), pt = el.querySelector('.pt');
+    pt.setAttribute('cx', x); pt.setAttribute('cy', y);
+    if (m) return;
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.at').textContent = `сброс в ${pad(c.next.getHours())}:${pad(c.next.getMinutes())}`; } },
+
+{ id: 'glass', label: 'Стекло',
+  svg: m => `<div class="arq-glass${m?' mini':''}">
+    <svg class="arq-dial" width="${m?26:186}" height="${m?26:186}" viewBox="0 0 200 200">
+    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?13:6}"
+            stroke="color-mix(in oklab, var(--color-ink) 12%, transparent)"/>
+    <circle class="arq-arc" cx="100" cy="100" r="84" stroke-width="${m?13:6}"
+            transform="rotate(-90 100 100)" stroke-dasharray="0 999"/>
+    <circle class="hd arq-glow" r="${m?13:6}" fill="var(--arq-cc)"/>
+    ${m?'':`<text class="arq-num hero" x="100" y="97" text-anchor="middle" font-size="34"></text>
+    <text class="arq-cap" x="100" y="117" text-anchor="middle">до сброса квоты</text>
+    <text class="arq-cap arq-capc at" x="100" y="135" text-anchor="middle" font-size="10.5"></text>`}
+  </svg></div>`,
+  tick(el, c, m) {
+    el.querySelector('.arq-arc').setAttribute('stroke-dasharray', `${(CIRC*c.p).toFixed(1)} ${CIRC}`);
+    const [x,y] = polar(84, c.p * 360), hd = el.querySelector('.hd');
+    hd.setAttribute('cx', x); hd.setAttribute('cy', y);
+    if (m) return;
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск`; } },
+
+/* Круг на 24 часа, а не на 12 — и это не украшение. На 12-часовом циферблате 02:00
+   и 14:00 попадают в ОДНУ точку, дуга между ними вырождается в ноль и не рисуется
+   вообще (проверено на черновике). На суточном они встают друг напротив друга. */
+{ id: 'day', label: 'Сутки',
+  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
+    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?13:6}"/>
+    <path class="hf" fill="none" stroke-width="${m?13:6}"
+          stroke="color-mix(in oklab, var(--arq-cc) 30%, var(--color-surface))"/>
+    <path class="arq-arc" fill="none" stroke-width="${m?13:6}" stroke-linecap="round"/>
+    ${m?'':'<g class="tk"></g>'}
+    <g class="mks"></g>
+    ${m?'':`<circle class="pt" r="4.5" fill="var(--color-ink)"/>
+    <text class="arq-num hero" x="100" y="94" text-anchor="middle" font-size="29"></text>
+    <text class="arq-cap" x="100" y="112" text-anchor="middle">до сброса</text>
+    <text class="arq-cap arq-capc ph" x="100" y="131" text-anchor="middle" font-size="10.5"></text>`}
+  </svg>`,
+  init(el, m) {
+    if (!m) { const g = el.querySelector('.tk');
+      for (let h = 0; h < 24; h += 2) { const a = h * 15, big = h % 6 === 0;
+        const [x1,y1] = polar(95, a), [x2,y2] = polar(big?89:92, a);
+        g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
+          stroke-width="${big?2:1}" stroke="color-mix(in oklab, var(--color-ink) ${big?40:22}%, var(--color-surface))"/>`); } }
+    const mk = el.querySelector('.mks');
+    [[2,'02'], [14,'14']].forEach(([h, lbl]) => { const a = h * 15, [x,y] = polar(84, a);
+      const [lx,ly] = polar(68, a);
+      mk.insertAdjacentHTML('beforeend',
+        `<circle cx="${x}" cy="${y}" r="${m?10:5.5}" fill="var(--color-surface)"
+                 stroke="var(--arq-cc)" stroke-width="${m?5:2.5}"/>` +
+        (m ? '' : `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle"
+                 class="arq-cap" font-size="9">${lbl}</text>`)); }); },
+  tick(el, c, m) {
+    const d = new Date(c.t);
+    const nowA = (d.getHours() + d.getMinutes()/60 + d.getSeconds()/3600) * 15;
+    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15, fromA = (toA + 180) % 360;
+    const [hx,hy] = polar(84, fromA), [ehx,ehy] = polar(84, toA);
+    el.querySelector('.hf').setAttribute('d', `M ${hx} ${hy} A 84 84 0 0 1 ${ehx} ${ehy}`);
+    const sweep = (nowA - fromA + 360) % 360, [ax,ay] = polar(84, nowA);
+    el.querySelector('.arq-arc').setAttribute('d',
+      sweep < 0.4 ? '' : `M ${hx} ${hy} A 84 84 0 ${sweep>180?1:0} 1 ${ax} ${ay}`);
+    if (m) return;
+    const pt = el.querySelector('.pt'); pt.setAttribute('cx', ax); pt.setAttribute('cy', ay);
+    el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
+    el.querySelector('.ph').textContent =
+      `${c.next.getHours() < 12 ? 'ночная' : 'дневная'} партия · ${pad(c.next.getHours())}:${pad(c.next.getMinutes())}`; } },
+];
+
+/* ── Сборка и тик ─────────────────────────────────────────────────────── */
+const hosts = [];
+let idx = 0, timer = null;
+
+function readIdx() { let v = NaN;
+  try { v = parseInt(localStorage.getItem(KEY), 10); } catch (e) { /* хранилище закрыто */ }
+  return Number.isInteger(v) && v >= 0 && v < V.length ? v : 0; }
+function saveIdx() { try { localStorage.setItem(KEY, String(idx)); } catch (e) { /* живёт до перезагрузки */ } }
+
+function build() {
+  const v = V[idx];
+  hosts.forEach(h => { h.el.innerHTML = v.svg(h.mini); if (v.init) v.init(h.el, h.mini); });
+  const name = document.querySelector('#arq-big .arq-name');
+  if (name) name.textContent = v.label;
+  paint();
+}
+/* Тик правит атрибуты и текстовые узлы НА МЕСТЕ, разметку не пересобирает:
+   пересборка рамки раз в секунду даёт мигание (та же грабля, что у ar-checkin). */
+function paint() {
+  const c = cyc(Date.now()), v = V[idx];
+  hosts.forEach(h => v.tick(h.el, c, h.mini));
+  const txt = document.querySelector('#arq-mini .arq-txt');
+  if (txt) txt.textContent = `${c.h}:${c.m} до долива`;
+}
+/* 1 Гц, а не requestAnimationFrame: дашборд открыт постоянно, платить кадрами не за что.
+   На скрытой вкладке таймер снимается совсем. */
+function start() { if (!timer) { paint(); timer = setInterval(paint, 1000); } }
+function stop()  { clearInterval(timer); timer = null; }
+document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
+
+/* Цвет состояния меняет и большие, и мини-часы. Ручная проба ниже вызывает его
+   только при доказанном 2xx или каноническом 402; прочие ошибки цвет не меняют. */
+window.arqState = s => document.querySelectorAll('.arq').forEach(n => n.dataset.arqState = s);
+
+window.arqCheckQuota = async function arqCheckQuota() {
+  const btn = document.getElementById('arq-check');
+  const out = document.getElementById('arq-check-result');
+  if (!btn || !out || btn.disabled) return;
+  btn.disabled = true;
+  out.className = 'text-xs text-faint font-mono';
+  out.textContent = 'проверяю claude-opus-5…';
+  try {
+    const res = await fetch('/__switch/api/ar/quota-check', { method: 'POST' });
+    const data = await res.json();
+    if (data.state === 'available') {
+      arqState('fresh');
+      out.className = 'text-xs text-emerald font-mono';
+      out.textContent = 'Квота есть';
+    } else if (data.state === 'exhausted') {
+      arqState('burned');
+      out.className = 'text-xs text-amber font-mono';
+      out.textContent = 'Квота закончилась';
+    } else {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+  } catch (e) {
+    out.className = 'text-xs text-crimson font-mono';
+    out.textContent = 'Ошибка проверки: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+function init() {
+  const mini = document.querySelector('#arq-mini .arq-host');
+  const big  = document.querySelector('#arq-big .arq-host');
+  if (mini) hosts.push({ el: mini, mini: true });
+  if (big)  hosts.push({ el: big,  mini: false });
+  if (!hosts.length) return;
+  const mrow = document.getElementById('arq-mini');
+  if (mrow) mrow.classList.remove('hidden');
+  idx = readIdx();
+  const step = d => { idx = (idx + d + V.length) % V.length; saveIdx(); build(); };
+  const prev = document.querySelector('#arq-big .arq-prev');
+  const next = document.querySelector('#arq-big .arq-next');
+  if (prev) prev.addEventListener('click', () => step(-1));
+  if (next) next.addEventListener('click', () => step(1));
+  build();
+  start();
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+else init();
+})();
 </script>
 
 <!-- ═══════════════ АДМИНКА ЛИГИ ═══════════════════════════════════════════════

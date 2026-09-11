@@ -148,6 +148,18 @@ function tierTargetFor(model) {
 function isGptLike(model) {
     return /gpt|o[0-9]|davinci|chatgpt/i.test(String(model || ''));
 }
+
+// Граница клиентского имени и model id на проводе. Claude Code использует `[1m]`
+// как локальную метку окна и поэтому источник приходит с суффиксом. В GPT-цели
+// его не переносим: большинство шлюзов, включая JustWoker, публикуют и принимают
+// только голый id. Для claude-цели сохраняем окно источника, предварительно снимая
+// возможный старый суффикс цели.
+function upstreamModelFor(target, sourceModel) {
+    const bareTarget = String(target || '').replace(/\s*\[[^\]]*\]\s*$/, '');
+    if (isGptLike(bareTarget)) return bareTarget;
+    const ctxSuffix = /\[1m\]$/.test(String(sourceModel || '')) ? '[1m]' : '';
+    return bareTarget + ctxSuffix;
+}
 // Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с
 // «что получилось после подмены» и не повторять запрос той же самой моделью.
 function modelInBody(buf) {
@@ -1198,18 +1210,17 @@ function remapHaiku(method, reqPath, body) {
     const mmg = readModelMap();
     if (mmg.gpt) {
       const target = mmg.gpt;
-      const ctxSuffix = /\[1m\]$/.test(model) ? '[1m]' : '';
+      const finalTarget = upstreamModelFor(target, model);
       if (isGptLike(target)) {
-        const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+        const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
         if (!GPT_PROXY_ENABLED) {
-          log(`${method} ${reqPath} gpt→${target} (mm.gpt, gpt, без конвертера) via ${upstream.host}`);
+          log(`${method} ${reqPath} gpt→${finalTarget} (mm.gpt, gpt, без конвертера) via ${upstream.host}`);
           return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
         }
-        log(`${method} ${reqPath} gpt→${target} (mm.gpt, gpt) via ${HAIKU_GPT_PROXY}`);
+        log(`${method} ${reqPath} gpt→${finalTarget} (mm.gpt, gpt) via ${HAIKU_GPT_PROXY}`);
         return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
       }
       // claude-цель: убираем чужой суффикс, переносим [1m] от источника
-      const finalTarget = target.replace(/\s*\[[^\]]*\]\s*$/, '') + ctxSuffix;
       const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
       log(`${method} ${reqPath} gpt→${finalTarget} (mm.gpt, claude) via ${upstream.host}`);
       return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
@@ -1225,14 +1236,14 @@ function remapHaiku(method, reqPath, body) {
   let label = null;
 
   // Маппинг из ar-modelmap.json (вкладка AgentRouter) — приоритетнее env.
-  // Суффикс `[1m]` ПРИНУДИТЕЛЬНО переносится на целевую модель: CC без него
-  // получает 200k-окно, что ломает длинные сессии. GPT-моделям суффикс не нужен.
-  const ctxSuffix = /\[1m\]$/.test(model) ? '[1m]' : '';
+  // `[1m]` — клиентская метка окна. На claude-цель переносим её, а GPT-цель
+  // отправляем голым model id: JustWoker и большинство шлюзов суффикс не публикуют.
   const tm = tierTargetFor(model);
   if (tm && tm.target && tm.target !== bare) {
     const target = tm.target;
+    const finalTarget = upstreamModelFor(target, model);
     if (isGptLike(target)) {
-      newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8');
+      newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
       // Конвертера нет (не агентроутеровский инстанс) — маппинг уважаем, но модель
       // отдаём своему же шлюзу, а не чужому конвертеру.
       if (!GPT_PROXY_ENABLED) {
@@ -1244,8 +1255,7 @@ function remapHaiku(method, reqPath, body) {
       log(`${method} ${reqPath} ${label} via ${HAIKU_GPT_PROXY}`);
       return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
     }
-    // claude-модель: дописываем [1m] если исходная пришла с ним
-    const finalTarget = target + ctxSuffix;
+    // claude-модель: upstreamModelFor переносит [1m] от клиентской модели
     newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
     label = tm.substituted
       ? `${tm.tier}→${finalTarget} (map, claude; ПОДМЕНА: ${tm.from} нет у шлюза)`

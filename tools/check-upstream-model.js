@@ -97,65 +97,11 @@ if (!stripMatch) {
 if (!/stripClaudeOnlyFields\(reqBody\)/.test(src)) {
   failures.push('обработчик запроса не зовёт stripClaudeOnlyFields(reqBody) — срезка не подключена');
 }
-
-// ── stripImageBlocks: картинки в истории валят не-claude каналы целиком ──
-// 11.09 (вечер), живой бой: один pasted-скрин в истории — и каждый запрос сессии
-// умирает «Upstream rejected» (канал glm не принимает image-блоки). Бисект по
-// реальному телу: без image — 200 за 12с, с ним — 500 на каждом повторе.
-const imgMatch = src.match(/const IMAGE_PLACEHOLDER = \{[^}]*\};\nfunction stripImageBlocks\(body\) \{[\s\S]*?\n\}/);
-if (!imgMatch) {
-  failures.push('keepalive-proxy.js: нет stripImageBlocks() — image-блок в истории убивает сессию на glm-канале');
-} else {
-  let stripImg;
-  try {
-    stripImg = new Function(`${imgMatch[0]}; return stripImageBlocks;`)();
-  } catch (error) {
-    failures.push(`stripImageBlocks() не исполняется: ${error.message}`);
-  }
-  if (stripImg) {
-    const withImg = Buffer.from(JSON.stringify({
-      model: 'glm-5.3',
-      messages: [
-        { role: 'user', content: [
-          { type: 'text', text: 'смотри скрин' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
-        ] },
-        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'shot', input: {} }] },
-        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBB' } },
-        ] }] },
-      ],
-    }));
-    const cleaned = stripImg(withImg);
-    if (!cleaned) {
-      failures.push('stripImageBlocks(): тело с картинками вернуло null — срезки не было');
-    } else {
-      const j2 = JSON.parse(cleaned.toString('utf8'));
-      const flat = JSON.stringify(j2);
-      if (/"type":"image"/.test(flat)) failures.push('stripImageBlocks(): image-блок пережил срезку');
-      if (!flat.includes('[image removed')) failures.push('stripImageBlocks(): вместо картинки нет текстовой метки');
-      if (!flat.includes('смотри скрин')) failures.push('stripImageBlocks(): посторонний текст пострадал');
-      if (j2.messages[1].content[0].type !== 'tool_use') failures.push('stripImageBlocks(): tool_use пострадал');
-    }
-    if (stripImg(Buffer.from(JSON.stringify({ model: 'glm-5.3', messages: [{ role: 'user', content: 'текст' }] }))) !== null) {
-      failures.push('stripImageBlocks(): тело без картинок должно давать null (лишняя перезапись)');
-    }
-    if (stripImg(Buffer.from('not json')) !== null) {
-      failures.push('stripImageBlocks(): не-JSON тело должно давать null');
-    }
-  }
-}
-if (!/stripImageBlocks\(reqBody\)/.test(src)) {
-  failures.push('обработчик запроса не зовёт stripImageBlocks(reqBody) — срезка картинок не подключена');
-}
-// Гейт срезки — явный список моделей-отвергателей (12.09, слова владельца:
-// картинки не принимают только glm-5.3 и deepseek-v4-flash, остальные — все —
-// принимают). Никаких масок: /^glm-\d/ ловила и vision-варианты — поймано тестом.
-if (!/IMG_REJECTING_MODELS\.has\(outModel\)/.test(src)) {
-  failures.push('срезка картинок не заперта на явный список IMG_REJECTING_MODELS');
-}
-if (!/new Set\(\['glm-5\.3', 'deepseek-v4-flash'\]\)/.test(src)) {
-  failures.push('в IMG_REJECTING_MODELS должны быть glm-5.3 и deepseek-v4-flash (точные id из каталога)');
+// Срезка image-блоков (11.09) снята 12.09: прямая проба зрения (probe-vision.js)
+// показала, что deepseek-v4-flash РЕАЛЬНО ВИДИТ картинки — срезка слепила его.
+// Отвергающий канал AgentRouter был временным (~11ч). Убедиться, что срезки нет:
+if (/stripImageBlocks\(reqBody\)/.test(src)) {
+  failures.push('stripImageBlocks снова подключена — 12.09 снята за слепление vision-моделей (вернуть осознанно: git show 0b3462b)');
 }
 
 // ── content-length пересчитывается ВСЕГДА, не только при ремапе ──

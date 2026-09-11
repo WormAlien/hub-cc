@@ -178,39 +178,13 @@ function stripClaudeOnlyFields(body) {
         return Buffer.from(JSON.stringify(j), 'utf8');
     } catch (e) { return null; }
 }
-// 🪤 11–12.09, живой бой: image-блок в истории убивает сессию насовсем — канал
-// отвергает ВЕСЬ запрос «Upstream rejected the request as invalid». По словам
-// владельца, картинки отвергают только эти модели, все остальные принимают.
-// Список явный и точный: новая модель — одна строка, никакой магии масок
-// (маска /^glm-\d/ ловила и vision-варианты — поймано тестом до выката).
-const IMG_REJECTING_MODELS = new Set(['glm-5.3', 'deepseek-v4-flash']);
-const IMAGE_PLACEHOLDER = { type: 'text', text: '[image removed: this model cannot accept images]' };
-function stripImageBlocks(body) {
-    try {
-        const j = JSON.parse(body.toString('utf8') || '{}');
-        if (!Array.isArray(j.messages)) return null;
-        let touched = false;
-        for (const m of j.messages) {
-            if (!Array.isArray(m.content)) continue;
-            for (let i = 0; i < m.content.length; i++) {
-                const b = m.content[i];
-                if (b && b.type === 'image') {
-                    m.content[i] = Object.assign({}, IMAGE_PLACEHOLDER);
-                    touched = true;
-                }
-                if (b && b.type === 'tool_result' && Array.isArray(b.content)) {
-                    for (let k = 0; k < b.content.length; k++) {
-                        if (b.content[k] && b.content[k].type === 'image') {
-                            b.content[k] = Object.assign({}, IMAGE_PLACEHOLDER);
-                            touched = true;
-                        }
-                    }
-                }
-            }
-        }
-        return touched ? Buffer.from(JSON.stringify(j), 'utf8') : null;
-    } catch (e) { return null; }
-}
+// 🪤 Срезка image-блоков (была 11.09) СНЯТА 12.09 по прямой пробе зрения
+// (probe-vision.js): канал glm-5.3 снова принимает картинки и модель честно
+// отвечает «НЕ ВИЖУ ИЗОБРАЖЕНИЕ», а deepseek-v4-flash РЕАЛЬНО ВИДИТ и описывает
+// скрин — срезка слепила работающую vision-модель. Отвергающий канал AgentRouter
+// прожил ~11 часов и ушёл вместе с ротацией. Если вернётся — дампы
+// runtime/faildump/ (fail-perm + reqhdr) поймают за минуты, вернуть функцию:
+// git show 0b3462b (stripImageBlocks).
 // Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с
 // «что получилось после подмены» и не повторять запрос той же самой моделью.
 function modelInBody(buf) {
@@ -2327,18 +2301,13 @@ const server = http.createServer((req, res) => {
     // claude-целей поля сохраняем (это их родной API), прочим моделям они всё равно
     // ничего не значат — срезаем до отправки. Применяется и к ремапнутым телам,
     // и к passthrough (модель может прийти уже конечной, например glm-5.3).
-    // Картинки — отдельная болезнь и ОТДЕЛЬНЫЙ гейт (см. IMG_REJECTING_RE): не по
-    // классу модели, а по доказанной неспособности канала, чтобы не ослеплять
-    // не-claude модели с vision.
+    // Картинки НЕ трогаем (см. комментарий у снятой срезки выше): канал их принимает,
+    // текстовые модели честно отвечают «не вижу», vision-модели — видят.
     try {
       const outModel = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
       if (outModel && !/^claude[-_]/i.test(outModel)) {
         const stripped = stripClaudeOnlyFields(reqBody);
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
-        if (IMG_REJECTING_MODELS.has(outModel)) {
-          const noimg = stripImageBlocks(reqBody);
-          if (noimg) { reqBody = noimg; stats.remaps += 1; }
-        }
       }
     } catch (e) { /* не-JSON тело — срезать нечего */ }
     // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.

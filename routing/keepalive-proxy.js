@@ -245,15 +245,18 @@ const upBase = upstream.pathname.replace(/\/+$/, '');
 // как `Client network socket disconnected before secure TLS`). Явный лимит гасит эти
 // кластеры обрывов и заодно переиспользует сокет: замер 20.08 — первое рукопожатие
 // ~0.5с, дальше запросы идут за ~0.25с.
-// 🎯 16 → 32 (05.09): «с запасом на N агентов Orca» считали по ЧИСЛУ агентов, а сокет
-// держится всю ЖИЗНЬ стримового ответа — у упавших агентов это 56–687 с. Замер по
-// живому :20158: пул 16/16 занято, в очереди до 24 запросов, ожидание сокета до 50,4 с
-// и первый байт 52 с при пустых dns/tcp/tls. Запрос, стоящий в очереди агента Node,
-// ещё не отправлен — и пре-коммит SSE ему не помогает: клиент видит тишину. Выше 32 не
-// идём без замера: лимит здесь ради кластеров TLS-рукопожатий через happ-tun, и он
-// возвращается ростом `Client network socket disconnected before secure TLS`.
+// 🎯 32 → 256 (12.09, владелец: «по максимуму потолок»): давка вернулась с оркестрацией.
+// Замер ночи 12.09: 8 агентов Orca одновременно → кластер `Client network socket
+// disconnected before secure TLS` и очередь пула — клиент видел тишину, hold-механика
+// не помогала (запрос в очереди ещё НЕ ОТПРАВЛЕН). Сутки на 32 сокетах: 231 clientgone,
+// 116 abort. Арифметика потолка: сокет держится всю жизнь стрима (минуты), 8 орк-агентов
+// × стримы + сабагенты CC легко > 32; 256 = потолок «не упираться в очередь вообще»
+// при любой разумной оркестрации. Риск «кластеры TLS-рукопожатий через happ-tun»
+// снимается тем, что очередь и была причиной шторма: запросы врываются скопом,
+// когда освобождается место. Контроль после выката: `pool.queued` в /__state под
+// живой нагрузкой — если снова > 0, значит давит что-то другое, и это следующий замер.
 // Разбор — вики, [[Обрывы пути к шлюзам — план удержания запроса]].
-const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 32);
+const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 256);
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
@@ -529,7 +532,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online', 'www.aikeysapi.com']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1116,6 +1119,7 @@ const GW_BY_HOST = {
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
   'emtf.aipm9527.online': 'ap',
+  'www.aikeysapi.com': 'ak',
   // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
   // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
   // авторотация: прокси просто не знает, в какой пул звонить, и ошибки в логе нет.

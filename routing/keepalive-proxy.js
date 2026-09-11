@@ -1950,6 +1950,21 @@ const server = http.createServer((req, res) => {
       stats.budgetStops = (stats.budgetStops || 0) + 1;
       log(`${req.method} ${reqPath} бюджет повторов исчерпан: ${Math.round(spentMs / 1000)}с > `
         + `${Math.round(cfg.retryBudgetMs / 1000)}с — не переигрываю, отдаю отказ клиенту (${why})`);
+      // 🔬 Разборный дамп (11.09): тело запроса, убившего бюджет ретраев, — на диск.
+      // Синтетические пробы любой формы (110k токенов, все беты, cache_control) летают,
+      // а реальные запросы новых окон стабильно умирают 60с→502; без тела не найти убийцу.
+      // Не более трёх файлов, чтобы не копить чужие промпты на диске.
+      try {
+        const dumpDir = path.join(__dirname, 'runtime', 'faildump');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        // Чистим только свои fail-*: рядом лежат reqhdr-* (снимки заголовков) и
+        // утилиты разбора (replay.js), им здесь не место под нож.
+        const olds = fs.readdirSync(dumpDir).filter(f => f.startsWith('fail-')).sort();
+        for (const f of olds.slice(0, Math.max(0, olds.length - 2))) fs.unlinkSync(path.join(dumpDir, f));
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.writeFileSync(path.join(dumpDir, `fail-${stamp}.json`), reqBody);
+        log(`${req.method} ${reqPath} тело упавшего запроса: routing/runtime/faildump/fail-${stamp}.json (${reqBody.length}Б)`);
+      } catch (e) { /* дамп — диагностика, не обязан работать */ }
     }
     if (activeSet.size === 0) {
       // Удержание уже идёт (его начала другая попытка) — она же и доведёт запрос.
@@ -2068,12 +2083,19 @@ const server = http.createServer((req, res) => {
         headers['x-api-key'] = arKey;
       }
     } catch {}
-    // Ремап мог заменить body (haiku→gpt, срезание суффикса) — content-length от клиента
-    // больше не соответствует длине тела, Node отправит заголовок со старой длиной и
-    // сервер будет ждать недостающие байты (запрос висит). Пересчитываем сами.
-    if (tgt) {
-      headers['content-length'] = Buffer.byteLength(body);
-    }
+    // Длину тела пересчитываем ВСЕГДА, а не только при ремапе. Тело меняет не один
+    // ремап: срезка context_management/output_config укорачивает и passthrough-запросы
+    // (голая glm-5.3 от CC — ремапа нет, tgt=null), а Node отправляет заголовок со
+    // СТАРОЙ длиной — шлюз ждёт недостающие ~100 байт до своего 60с-таймаута nginx
+    // и отвечает 502. 🪤 11.09, живой бой: так лежали все новые окна с прямым
+    // glm-5.3[1m] после фикса срезки полей; контрольные пробы проходили, потому что
+    // уходили с суффиксом [1m] → через ремап → с пересчётом. Воспроизведено
+    // replay.js с завышенным CL_DELTA: 62с → 502 nginx, один-в-один симптом.
+    // Мы всегда шлём upReq.end(body) с полным буфером — верная длина известна
+    // в каждом пути. transfer-encoding с клиента снимаем: с явным content-length
+    // фрейминг определяется длиной, двойное указание недопустимо.
+    headers['content-length'] = Buffer.byteLength(body);
+    delete headers['transfer-encoding'];
     // Просим апстрим НЕ кодировать ответ — и для стрима (gzip-мусор в SSE-канале
     // после раннего SSE/мульти-запроса ломает поток, v1tusha), и для обычных запросов: тело
     // нужно читать как текст (MODEL_ECHO, проверка на пустой 200, isTransientBody).
@@ -2270,6 +2292,24 @@ const server = http.createServer((req, res) => {
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
       }
     } catch (e) { /* не-JSON тело — срезать нечего */ }
+    // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.
+    // Разбор того дня упёрся в бисект хопов только потому, что снимка заголовков не
+    // было: тело оказалось невиновно, а виноват content-length. Пишем и входящую
+    // длину (она равна телу клиента), и исходящую (после ремапа/срезки) — расхождение
+    // видно сразу. Ротация — 3 файла, только своё (fail-* не трогаем).
+    if (/^glm-/.test(clientModel)) {
+      try {
+        const dumpDir = path.join(__dirname, 'runtime', 'faildump');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        const olds = fs.readdirSync(dumpDir).filter((f) => f.startsWith('reqhdr-')).sort();
+        for (const f of olds.slice(0, Math.max(0, olds.length - 2))) fs.unlinkSync(path.join(dumpDir, f));
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.writeFileSync(path.join(dumpDir, `reqhdr-${stamp}.json`), JSON.stringify({
+          url: req.url, clientModel, inBytes: rawBody0.length, outBytes: reqBody.length,
+          inContentLength: req.headers['content-length'] || null, headers: req.headers,
+        }, null, 2));
+      } catch (e) { /* снимок — диагностика, не обязан работать */ }
+    }
     // Реальная модель — заголовком, потому что в ТЕЛЕ ответа её уже не будет:
     // rewriteModelJson подменяет `model` обратно на клиентскую (MODEL_ECHO), и
     // счётчик токенов на front-door читает именно тело. Отсюда во вкладке «Здоровье»
@@ -2360,14 +2400,27 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(remapHaiku('POST', '/v1/messages', Buffer.from('not json')), null, 'не-JSON без изменений');
   // ремап: не /v1/messages не трогаем
   assert.strictEqual(remapHaiku('POST', '/v1/count_tokens', o), null, 'не /v1/messages без изменений');
-  // роутинг gpt: уходит на конвертер :20132, тело не переписывается.
+  // роутинг gpt: куда уходит — решает ЖИВАЯ карта mm.gpt. Пустая → конвертер :20132
+  // с нетронутым телом; gpt-цель → конвертер с переписанной моделью; не-gpt цель
+  // (11.09: glm-5.3) → свой upstream с переписанной моделью. Ассерт обязан читать
+  // карту, а не предполагать её пустой — иначе любая настройка mm.gpt с вкладки
+  // роняет selftest ложным красным (поймано 11.09 при mm.gpt=glm-5.3).
   // Обе ветки гейта проверяем явно, чтобы прогон не зависел от UPSTREAM инстанса.
   const gptWas = GPT_PROXY_ENABLED;
   GPT_PROXY_ENABLED = true;
   const g = remapHaiku('POST', '/v1/messages?beta=true', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] })));
-  assert.ok(g, 'gpt должен уходить на конвертер');
-  assert.strictEqual(g.host, gptProxy.host, 'gpt -> gpt-прокси');
-  assert.strictEqual(parse(g.body).model, 'gpt-5.6-sol', 'модель gpt не переписывается');
+  const mmg = String(readModelMap().gpt || '');
+  if (mmg) {
+    const want = upstreamModelFor(mmg, 'gpt-5.6-sol');
+    assert.ok(g, 'gpt с заданным mm.gpt должен роутиться');
+    assert.strictEqual(parse(g.body).model, want, 'модель gpt переписана на цель mm.gpt');
+    assert.strictEqual(g.host, isGptLike(mmg) ? gptProxy.host : upstream.host,
+      'маршрут gpt выбирается по типу цели mm.gpt (gpt → конвертер, прочая → свой шлюз)');
+  } else {
+    assert.ok(g, 'gpt должен уходить на конвертер');
+    assert.strictEqual(g.host, gptProxy.host, 'gpt -> gpt-прокси');
+    assert.strictEqual(parse(g.body).model, 'gpt-5.6-sol', 'модель gpt не переписывается');
+  }
   // роутинг gpt не зависит от HAIKU_REMAP: флаг про маппинг тиров, а не про конвертер.
   // Само поведение при HAIKU_REMAP=0 в одном процессе не проверить (const), но
   // gpt-ветка стоит ДО этой проверки в remapHaiku — см. комментарий там.
@@ -2377,9 +2430,17 @@ if (process.argv[2] === 'selftest') {
   // → gpt остаётся passthrough на своём upstream.
   GPT_PROXY_ENABLED = false;
   try {
-    assert.strictEqual(
-      remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] }))),
-      null, 'без своего конвертера gpt не уводится на :20132');
+    const gnc = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'gpt-5.6-sol', messages: [] })));
+    if (mmg) {
+      // Карта задана — она уважается и без конвертера: цель уходит на СВОЙ шлюз,
+      // а не на чужой :20132 (живой инстанс тут агентроутеровский, чужих нет).
+      assert.ok(gnc && gnc.host !== gptProxy.host,
+        'без своего конвертера gpt не уводится на :20132 (цель mm.gpt идёт на свой шлюз)');
+      assert.strictEqual(parse(gnc.body).model, upstreamModelFor(mmg, 'gpt-5.6-sol'),
+        'модель переписана на цель mm.gpt и без конвертера');
+    } else {
+      assert.strictEqual(gnc, null, 'без своего конвертера gpt не уводится на :20132');
+    }
     const hb = remapHaiku('POST', '/v1/messages', Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })));
     if (isGptLike(mapHaiku || '')) {
       // Маппинг тира на gpt-цель БЕЗ конвертера: цель уважаем (тело переписано), но

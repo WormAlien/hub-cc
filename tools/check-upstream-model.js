@@ -98,6 +98,22 @@ if (!/stripClaudeOnlyFields\(reqBody\)/.test(src)) {
   failures.push('обработчик запроса не зовёт stripClaudeOnlyFields(reqBody) — срезка не подключена');
 }
 
+// ── content-length пересчитывается ВСЕГДА, не только при ремапе ──
+// 11.09, живой бой: срезка context_management/output_config укорачивала passthrough-
+// тело (голая glm-5.3 от CC — ремапа нет, tgt=null), а пересчёт длины стоял под
+// if (tgt) — наверх уезжал завышенный content-length, шлюз ждал недостающие байты
+// 60с и отвечал 502. Так лежали все новые окна с прямым glm-5.3[1m]. Воспроизведено
+// replay.js с CL_DELTA: 62с → 502 nginx, один-в-один симптом падения.
+if (!/headers\['content-length'\] = Buffer\.byteLength\(body\);/.test(src)) {
+  failures.push('makeUpstream(): нет пересчёта content-length по фактическому телу');
+}
+if (/if \(tgt\) \{\s*headers\['content-length'\]/.test(src)) {
+  failures.push('makeUpstream(): пересчёт content-length заперт под if (tgt) — passthrough со срезкой полей уезжает с завышенной длиной (502 за 60с)');
+}
+if (!/delete headers\['transfer-encoding'\];/.test(src)) {
+  failures.push('makeUpstream(): с клиента не снимается transfer-encoding при явном content-length');
+}
+
 if (failures.length) {
   console.error(failures.map((x) => `[FAIL] ${x}`).join('\n'));
   process.exit(1);

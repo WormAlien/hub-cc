@@ -29437,6 +29437,50 @@ const LGC_ME_MS = 30000;
 // человека в первую группу списка, и «в какой я группе» приходится вспоминать.
 const LGC_GID_KEY = 'abusehub-league-gid';
 const LGC_KEEP = 300;             // сколько сообщений держим в памяти страницы
+// ── Кэш ленты на перезагрузку страницы (11.09). Жалоба владельца: «после обновления
+// страницы чат пропадает и долго грузит». Лента приезжает первым тиком опроса — то есть
+// после me-запроса и fetch, и вкладка секундами пустая. Снимок буфера групп кладём в
+// localStorage тем же ключом-структурой, что живёт в памяти; на старте восстанавливаем и
+// рисуем ДО первого тика. Честность обязательна: кэш помечен словом «кэш» в строке
+// состояния, а кураторы (seq/gseq/firstSeq) восстанавливаются тоже — инкрементальный
+// опрос не начнёт тащить историю заново и не пропустит удалённое.
+const LGC_CACHE_KEY = 'abusehub-league-feed';
+const LGC_CACHE_MS = 6 * 3600_000; // старше шести часов — не восстанавливаем, пишем заново
+function lgCacheSave() {
+  try {
+    const groups = {};
+    for (const [k, g] of Object.entries(LGC.g)) {
+      if (!Array.isArray(g.msgs) || !g.msgs.length) continue;
+      groups[k] = { seq: g.seq, gseq: g.gseq, firstSeq: g.firstSeq, title: g.title,
+        gone: !!g.gone, msgs: g.msgs.slice(-LGC_KEEP) };
+    }
+    const me = (LG.data && LG.data.me) || {};
+    window.localStorage.setItem(LGC_CACHE_KEY, JSON.stringify({ at: Date.now(),
+      gid: LGC.gid || '', nick: me.nick || '', groups }));
+  } catch (e) { /* квота/приватный режим — кэш не обязан работать */ }
+}
+function lgCacheRestore() {
+  try {
+    const raw = window.localStorage.getItem(LGC_CACHE_KEY);
+    if (!raw) return false;
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object' || Date.now() - (Number(j.at) || 0) > LGC_CACHE_MS) return false;
+    let any = false;
+    for (const [k, v] of Object.entries(j.groups || {})) {
+      if (!LGC_GID_RE.test(k) || !v || !Array.isArray(v.msgs)) continue;
+      const g = lgG(k);
+      // Кураторы НАСТОЯЩИЕ, из прошлого сеанса: seq/gseq/firstSeq. first=false —
+      // иначе первый ответ приёмника посчитался бы «историей» и заглушил бы звук.
+      g.msgs = v.msgs.filter(m => m && Number(m.seq) > 0);
+      g.seq = Number(v.seq) || 0; g.gseq = Number(v.gseq) || 0;
+      g.firstSeq = Number(v.firstSeq) || 0; g.first = false;
+      if (v.title) g.title = String(v.title).slice(0, 64);
+      if (v.gone) g.gone = true;
+      if (g.msgs.length) any = true;
+    }
+    return any;
+  } catch (e) { return false; }
+}
 // ── Голосовое. Числа не выбираются на глаз, они замерены — разбор в
 // _research/voice-findings.md. Битрейт задаётся ЯВНО: без него Chrome берёт OPUS_AUTO
 // (~49 кбит/с), а на некоторых сборках уезжает к 128 кбит/с — это впятеро больше по
@@ -29910,6 +29954,9 @@ async function lgChatFetch() {
       const t = lgChatApply(j);
       if (!t.ok) gap = { code: 'noshape', text: 'ручка ответила без ленты сообщений' };
       got = t.got; changed = t.changed; bar = t.bar; cold = t.cold; beep = t.beep;
+      // Снимок ленты — только после УСПЕШНОГО разбора: копить отказы в кэше значило
+      // бы восстанавливать «пусто» поверх живой вчерашней ленты.
+      if (t.ok && !cold) lgCacheSave();
     }
   } catch (e) {
     gap = { code: 'net', text: e.message || 'запрос не ушёл' };
@@ -29935,6 +29982,11 @@ async function lgChatFetch() {
 function lgChatStart() {
   if (LGC.booted) return;
   LGC.booted = true;
+  // Кэш ленты — ДО me-запроса и до первого тика: он не ждёт сети вообще. Порядок
+  // с keepalive-определением группы не конфликтует: восстановленный gid лишь
+  // вспомогательный, настоящим станет список из /me.
+  const cached = lgCacheRestore();
+  if (cached && typeof lgChatPaint === 'function') { lgChatPaint(); lgChatState(true); }
   // Своя запись у приёмника — ДО первого опроса: от неё зависит форма запроса, и без неё
   // первый тик ушёл бы наследуемой формой, получил 400 в режиме личности и нарисовал
   // «чат не отвечает» на живом приёмнике.
@@ -30166,13 +30218,17 @@ function lgChatGapHtml() {
       <span class="lgcap">сам проверяю раз в 30 с — чаще значило бы забивать журнал хаба</span>
     </div></div>`;
 }
-function lgChatState() {
+function lgChatState(fromCache) {
   const el = document.getElementById('lg-cstate');
   if (!el) return;
   const last = LGC.msgs[LGC.msgs.length - 1];
+  // fromCache — лента нарисована из localStorage, сети ещё не было. Слово «кэш»
+  // обязательно: иначе секунды между стартом и первым ответом выглядели бы как
+  // самая свежая правда (а это вчерашний снимок).
   el.textContent = LGC.gap ? 'ручек чата ещё нет'
     : lgG().gone ? 'группы больше нет'
     : !lgChatLive() ? 'групп пока нет'
+    : fromCache ? `кэш · сообщений ${LGC.msgs.length} — догоняю живые`
     : last ? `сообщений ${LGC.msgs.length} · последнее ${lgAgo(last.recvAt)}`
     : 'лента пуста';
 }

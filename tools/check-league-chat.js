@@ -1362,11 +1362,12 @@ async function main() {
       'lgChatBar', 'LG', 'toast',
       `${cliSrc}\n${o.invites ? invSrc : ''}\nreturn { LGC, lgG, lgChatTake, lgChatDrop,`
       + ' lgChatGone, lgChatFetch, lgChatApply, lgChatUrl, lgChatGids, lgChatLive,'
+      + ' lgCacheSave, lgCacheRestore,'
       + ' lgChatSeenNow, lgChatSeen, lgChatGroupPick, lgGroupsSet, lgGroupTitle, lgChatWhere,'
       + (o.invites ? ' lgInvCreate, lgInvPaint, lgInvList, lgInvWhy, lgJoinHtml, lgInvRevoke,' : '')
       + ' lgChatMe, lgGroupLoad };'
     )(
-      {}, doc, () => {}, fetchImpl,
+      { localStorage: (opt && opt.store) || null }, doc, () => {}, fetchImpl,
       // `console` и `toast` — параметрами, чтобы поймать утечку строки приглашения в любой
       // из двух журналов: и в консоль браузера, и в тост на экране.
       { log: (...a) => logs.push(['log', ...a]), warn: (...a) => logs.push(['warn', ...a]),
@@ -1384,8 +1385,18 @@ async function main() {
     api.els = els;
     return api;
   };
+  // localStorage-мок для кэша ленты: живой код ходит в настоящий, а в песочнице его
+  // нет вовсе — и оба обращения сидят в try/catch, то есть кэш молча «не работает»
+  // и проверки ничего не поймут. Кладём простой объект в window.localStorage.
+  const mkStore = () => {
+    const m = new Map();
+    return { getItem: k => (m.has(String(k)) ? m.get(String(k)) : null),
+      setItem: (k, v) => m.set(String(k), String(v)), removeItem: k => m.delete(String(k)),
+      _map: m };
+  };
   let cli = null, cliErr = '';
-  try { cli = mkCli(async () => ({ ok: false, status: 0, json: async () => null })); }
+  const cliStore = mkStore();
+  try { cli = mkCli(async () => ({ ok: false, status: 0, json: async () => null }), { store: cliStore }); }
   catch (e) { cliErr = e.message; }
   check('блок ленты вырезается и исполняется вне браузера', !!cli, cliErr);
   if (cli) {
@@ -1457,6 +1468,56 @@ async function main() {
     await cli4.lgChatFetch();
     check('на cold опрос уходит в дочитывание хвоста (reload), а не рисует пустое',
       cli4.calls.includes('reload'), cli4.calls);
+  }
+
+  // ── Кэш ленты на F5 (11.09): жалоба «после обновления страницы чат пропадает и
+  // долго грузит». Проверяем сохранение ПОСЛЕ успешного тика, восстановление
+  // курсоров вместе с лентой и честную пометку «кэш» в строке состояния.
+  console.log('\nкэш ленты: снимок в localStorage, восстановление до первого тика:');
+  {
+    const GA2 = 'd4'.repeat(16);
+    const store2 = mkStore();
+    const feed = mkCli(async () => ({ ok: true, status: 200,
+      json: async () => ({ groups: { [GA2]: { seq: 3, gseq: 4, firstSeq: 0, cold: false,
+        more: false, gone: [], messages: [
+          { seq: 1, installId: 'b'.repeat(16), nick: 'сосед', text: 'раз', recvAt: new Date().toISOString() },
+          { seq: 2, installId: 'b'.repeat(16), nick: 'сосед', text: 'два', recvAt: new Date().toISOString() },
+          { seq: 3, installId: 'b'.repeat(16), nick: 'сосед', text: 'три', recvAt: new Date().toISOString() },
+        ] } }, unknown: [] }) }), { store: store2 });
+    feed.lgGroupsSet([{ gid: GA2, title: 'Общий' }]);
+    await feed.lgChatFetch();
+    const saved = JSON.parse(store2.getItem('abusehub-league-feed') || 'null');
+    check('после успешного тика снимок ленты лёг в localStorage',
+      !!(saved && saved.groups && saved.groups[GA2]
+        && saved.groups[GA2].msgs.length === 3), saved && Object.keys(saved.groups || {}));
+    check('в снимке сохранены и КУРСОРЫ, а не только сообщения',
+      saved.groups[GA2].seq === 3 && saved.groups[GA2].gseq === 4, saved.groups[GA2]);
+    // «Перезагрузка»: новая песочница с ТЕМ ЖЕ store — пустое состояние, сеть лежит.
+    // Восстановление обязано дать ленту до первого ответа сети.
+    const revived = mkCli(async () => { throw new Error('сети нет'); }, { store: store2 });
+    const ok = revived.lgCacheRestore();
+    check('лента восстановилась из кэша без сети',
+      ok === true && revived.lgG(GA2).msgs.length === 3
+        && revived.lgG(GA2).msgs[0].text === 'раз', { ok, n: revived.lgG(GA2).msgs.length });
+    check('курсоры восстановились тоже: инкрементальный опрос не начнёт историю заново',
+      revived.lgG(GA2).seq === 3 && revived.lgG(GA2).gseq === 4
+        && revived.lgG(GA2).first === false,
+      { seq: revived.lgG(GA2).seq, gseq: revived.lgG(GA2).gseq, first: revived.lgG(GA2).first });
+    // Пометка честности: настоящая lgChatState в песочнице заменена моком, поэтому
+    // проверяем сам источник — ветка fromCache обязана существовать и говорить «кэш».
+    check('строка состояния честно помечает показанное словом «кэш»',
+      /fromCache \? `кэш · сообщений \$\{LGC\.msgs\.length\} — догоняю живые`/.test(HTML)
+        && /lgChatState\(true\)/.test(HTML));
+    check('восстановленная лента рисуется ДО первого тика сети',
+      /const cached = lgCacheRestore\(\);/.test(HTML)
+        && /cached && typeof lgChatPaint === 'function'/.test(HTML));
+    // Старый снимок не восстанавливается: лента-полумесячной давности хуже пустой.
+    const stale = mkStore();
+    stale.setItem('abusehub-league-feed', JSON.stringify({ at: Date.now() - 7 * 86400_000,
+      groups: { [GA2]: { seq: 1, gseq: 0, firstSeq: 0, msgs: [{ seq: 1, text: 'старьё' }] } } }));
+    const old = mkCli(async () => { throw new Error('нет'); }, { store: stale });
+    check('снимок старше TTL не восстанавливается — лучше пустая лента, чем недельная',
+      old.lgCacheRestore() === false && old.lgG(GA2).msgs.length === 0);
   }
 
   // ── Группы живьём: две формы чтения, курсоры и счётчики на группу ──────────

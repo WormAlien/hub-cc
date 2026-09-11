@@ -31704,7 +31704,12 @@ const V = [
   tick(el, c, m) {
     const d = new Date(c.t);
     const nowA = (d.getHours() + d.getMinutes()/60 + d.getSeconds()/3600) * 15;
-    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15, fromA = (toA + 120) % 360;
+    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15,
+          // Сектор 120°, ЗАКАНЧИВАЮЩАЯСЯ на партии — поэтому минус, не плюс: дуга
+          // рисуется от fromA к toA по часовой и покрывает (toA−fromA) mod 360, так
+          // что +120 разворачивал её в 240° через соседний сектор. Половина круга
+          // симметрична и этот баг не ловила, треть — нет.
+          fromA = (toA - 120 + 360) % 360;
     const [hx,hy] = polar(84, fromA), [ehx,ehy] = polar(84, toA);
     el.querySelector('.hf').setAttribute('d', `M ${hx} ${hy} A 84 84 0 0 1 ${ehx} ${ehy}`);
     const sweep = (nowA - fromA + 360) % 360, [ax,ay] = polar(84, nowA);

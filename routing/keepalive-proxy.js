@@ -165,6 +165,19 @@ function upstreamModelFor(target, sourceModel) {
     const ctxSuffix = /^claude[-_]/i.test(bareTarget) && /\[1m\]$/.test(String(sourceModel || '')) ? '[1m]' : '';
     return bareTarget + ctxSuffix;
 }
+// Поля Claude API, которые НЕ-claude каналы шлюзов не понимают и отвергают весь
+// запрос (11.09, AgentRouter + glm-5.3: 400/500 «Upstream rejected the request
+// as invalid» стабильно на каждом запросе с ними, без них — 200). Возвращает
+// новое тело или null, если срезать нечего / тело не-JSON.
+const CLAUDE_ONLY_FIELDS = ['context_management', 'output_config'];
+function stripClaudeOnlyFields(body) {
+    try {
+        const j = JSON.parse(body.toString('utf8') || '{}');
+        if (!CLAUDE_ONLY_FIELDS.some(k => k in j)) return null;
+        for (const k of CLAUDE_ONLY_FIELDS) delete j[k];
+        return Buffer.from(JSON.stringify(j), 'utf8');
+    } catch (e) { return null; }
+}
 // Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с
 // «что получилось после подмены» и не повторять запрос той же самой моделью.
 function modelInBody(buf) {
@@ -2177,7 +2190,21 @@ const server = http.createServer((req, res) => {
           if (isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
-            log(`${req.method} ${reqPath} -> постоянная ошибка ${status}: ${buf.toString('utf8').slice(0, 200)}`);
+            // clientModel — модель из тела КЛИЕНТА (до ремапа); остальное — разбор
+            // 11.09: 500 «Upstream rejected» ловился на ремапнутых запросах тоже,
+            // и без списка полей тела/заголовков причина не локализовалась.
+            let errMeta = clientModel || '—';
+            try {
+              const j2 = JSON.parse(reqBody.toString('utf8') || '{}');
+              const small = {};
+              for (const k of ['max_tokens', 'thinking', 'metadata', 'context_management', 'output_config', 'stream']) {
+                if (k in j2) small[k] = j2[k];
+              }
+              errMeta += ` | отправлено: ${j2.model || '—'} | ${JSON.stringify(small)} | ${Object.keys(j2).join(',')} | ${reqBody.length}Б`;
+            } catch (e) { errMeta += ` | тело не-JSON ${reqBody.length}Б`; }
+            const ab = String(req.headers['anthropic-beta'] || '');
+            if (ab) errMeta += ` | anthropic-beta: ${ab.slice(0, 120)}`;
+            log(`${req.method} ${reqPath} -> постоянная ошибка ${status} (клиент: ${errMeta}): ${buf.toString('utf8').slice(0, 200)}`);
             forwardBuffered(buf, headers);
           }
         });
@@ -2229,6 +2256,20 @@ const server = http.createServer((req, res) => {
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
     if (remapped) stats.remaps += 1;
+    // 🪤 11.09, живой бой: AgentRouter отвергает запросы к НЕ-claude моделям с новыми
+    // полями Claude Code v2.1.220 — `context_management` и `output_config` — ответом
+    // 400/500 «Upstream rejected the request as invalid», на каждом запросе нового
+    // окна (бисект пробами: adaptive thinking проходит, эти два поля — нет). Для
+    // claude-целей поля сохраняем (это их родной API), прочим моделям они всё равно
+    // ничего не значат — срезаем до отправки. Применяется и к ремапнутым телам,
+    // и к passthrough (модель может прийти уже конечной, например glm-5.3).
+    try {
+      const outModel = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
+      if (outModel && !/^claude[-_]/i.test(outModel)) {
+        const stripped = stripClaudeOnlyFields(reqBody);
+        if (stripped) { reqBody = stripped; stats.remaps += 1; }
+      }
+    } catch (e) { /* не-JSON тело — срезать нечего */ }
     // Реальная модель — заголовком, потому что в ТЕЛЕ ответа её уже не будет:
     // rewriteModelJson подменяет `model` обратно на клиентскую (MODEL_ECHO), и
     // счётчик токенов на front-door читает именно тело. Отсюда во вкладке «Здоровье»

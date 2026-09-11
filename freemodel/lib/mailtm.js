@@ -40,9 +40,18 @@ async function _post(path, body) {
     return res.json();
 }
 
+// mail.tm сменил формат: на accept: application/json теперь приходит ПЛОСКИЙ массив,
+// hydra-обёртка остаётся только на application/ld+json (замер 2026-09-12).
+// Принимаем оба, чтобы формат не зависел от заголовка.
+function _list(data) {
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data['hydra:member'])) return data['hydra:member'];
+    return [];
+}
+
 async function getDomains() {
     const data = await _get('/domains');
-    const domains = (data['hydra:member'] || []).filter(d => d.isActive).map(d => d.domain);
+    const domains = _list(data).filter(d => d.isActive).map(d => d.domain);
     if (!domains.length) throw new Error('mail.tm: нет активных доменов');
     return domains;
 }
@@ -62,7 +71,7 @@ async function createEmail() {
 
 async function fetchInbox(token) {
     const data = await _get('/messages', token);
-    return Array.isArray(data['hydra:member']) ? data['hydra:member'] : [];
+    return _list(data);
 }
 
 async function fetchMessage(token, id) {

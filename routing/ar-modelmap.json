@@ -1,6 +1,6 @@
 {
-  "opus": "claude-opus-5",
-  "sonnet": "claude-opus-5",
-  "haiku": "claude-opus-5",
-  "gpt": "claude-opus-5"
+  "opus": "glm-5.3",
+  "sonnet": "glm-5.3",
+  "haiku": "deepseek-v4-flash",
+  "gpt": "glm-5.3"
 }

@@ -88,17 +88,6 @@
     "working_last": 2
   },
   {
-    "name": "Proxifly All",
-    "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt",
-    "protocol": "MIXED",
-    "parser": "regex",
-    "origin_repo": "https://github.com/proxifly/free-proxy-list",
-    "added_at": "2026-09-11T04:56:08.097384",
-    "reason": "runtime_low_yield",
-    "checked_last": 647,
-    "working_last": 0
-  },
-  {
     "name": "monosans HTTP",
     "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
     "protocol": "HTTP",
@@ -264,17 +253,6 @@
     "working_last": 0
   },
   {
-    "name": "Proxmint All",
-    "url": "https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/all.txt",
-    "protocol": "MIXED",
-    "parser": "regex",
-    "origin_repo": "https://github.com/proxmint/free-proxy-list",
-    "added_at": "2026-09-11T04:59:50.752372",
-    "reason": "runtime_low_yield",
-    "checked_last": 120,
-    "working_last": 0
-  },
-  {
     "name": "Proxifly SOCKS4",
     "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",
     "protocol": "SOCKS4",
@@ -372,17 +350,6 @@
     "reason": "runtime_low_yield",
     "checked_last": 104,
     "working_last": 0
-  },
-  {
-    "name": "Dinoz0rg HTTP",
-    "url": "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "origin_repo": "https://github.com/dinoz0rg/proxy-list",
-    "added_at": "2026-09-11T05:53:39.657007",
-    "reason": "runtime_low_yield",
-    "checked_last": 506,
-    "working_last": 1
   },
   {
     "name": "jetkai/proxy-list SOCKS4",

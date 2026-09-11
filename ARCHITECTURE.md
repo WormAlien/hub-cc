@@ -567,12 +567,13 @@ git config core.hooksPath .githooks
 `supported_endpoint_types: [anthropic, openai]`) и `gpt-5.6-sol` (только `openai`, поэтому
 идёт через конвертер `:20132`).
 
-**У gpt-моделей `[1m]` не работает — но окно у них известно и переопределяемо.** Суффикс
-`[1m]` — перечисление внутри Claude Code (в бинаре он есть только на `opus|sonnet|fable|opusplan`
-и `claude-opus-4-6…5` / `claude-sonnet-4-5…5`), к `gpt-5.6-sol` неприменим. Больше того,
-`gpt-5.6-sol[1m]` **сломает запрос**: в `keepalive-proxy.js` ветка `isGptLike()` уходит на
-конвертер **до** среза суффикса, а `agentrouter-proxy.js` его не режет — апстрим получит имя
-модели вместе с `[1m]`.
+**У GPT 5.6 `[1m]` живёт только на клиентской стороне.** `normalizeCcModel()` добавляет
+суффикс к `gpt-5.6-{sol,luna,terra}`, чтобы Claude Code считал окно 1M; перед форвардом
+`keepalive-proxy.js:upstreamModelFor()` снимает его с GPT-цели. Живой каталог JustWoker
+11.09.2026 подтвердил только три голых id, а `gpt-5.6-sol[1m]` шлюз отвергает так же, как
+несуществующую модель. Для claude-цели тот же helper переносит `[1m]` от клиентской модели.
+Граница закреплена регрессом `tools/check-upstream-model.js`; исключение — Cun, где
+front-door отдельно сохраняет суффикс по `preserveGpt56Suffix`.
 
 Настоящее окно смотреть не у шлюза (ни `/v1/models`, ни `/api/pricing` длину контекста не
 содержат), а в каталоге провайдера. `gpt-5.6-sol` — это публичная **OpenAI GPT-5.6 Sol:

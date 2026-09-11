@@ -25,6 +25,7 @@ const lf = (s) => s.replace(/\r\n/g, '\n');
 const SESS = lf(fs.readFileSync(path.join(ROOT, 'agentrouter', 'open-session.js'), 'utf8'));
 const PROXY = lf(fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8'));
 const HTML = lf(fs.readFileSync(path.join(ROOT, 'routing', 'proxy-dashboard.html'), 'utf8'));
+const GSL = require('../routing/lib/github-session.js');
 
 let fail = 0;
 const check = (ok, what) => {
@@ -79,8 +80,25 @@ check(/readCache/.test(health) && /cacheAgeMs/.test(health) && /cacheStale/.test
     'считается готовыми хелперами github-session, а не своей арифметикой');
 check(/hasSnap: null/.test(health),
     'модуль недоступен → null, а не false: врать «снимка нет» на незнании нельзя');
+check(/transferableProfile/.test(health) && /hasSession/.test(health),
+    'здоровье объединяет общий снимок с переносимой user_session из профилей');
 
-// ── 4. фронт: три состояния бейджа ──
+const now = Date.now();
+const profileHit = typeof GSL.transferableProfile === 'function'
+    ? GSL.transferableProfile(['profile-only'], [
+        { login: 'other', hasUserSession: true, lastUpdate: now - 1000, tag: 'go', label: 'wrong' },
+        { login: 'PROFILE-ONLY', hasUserSession: true, lastUpdate: now, tag: 'ar', label: 'acct_profile_only' },
+      ])
+    : null;
+check(!!profileHit && profileHit.label === 'acct_profile_only',
+    'профиль с user_session считается переносимым даже без общего снимка');
+check(typeof GSL.transferableProfile === 'function'
+    && GSL.transferableProfile(['empty'], [
+        { login: 'empty', hasUserSession: false, lastUpdate: now, tag: 'ar', label: 'acct_empty' },
+      ]) === null,
+    'профиль без user_session не выдаётся за переносимую сессию');
+
+// ── 4. фронт: агрегированное состояние бейджа ──
 console.log('\n4. плашка в строке аккаунта');
 const badge = cutFn(HTML, 'function newapiGhBadge(');
 check(/snapStale/.test(badge) && /snapAgeDays/.test(badge), 'бейдж читает свежесть снимка');

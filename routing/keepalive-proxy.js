@@ -178,10 +178,63 @@ function stripClaudeOnlyFields(body) {
         return Buffer.from(JSON.stringify(j), 'utf8');
     } catch (e) { return null; }
 }
+// 🪤 11.09 (вечер), живой бой: ОДИН image-блок в истории убивает сессию насовсем.
+// Канал glm-5.3 у AgentRouter не принимает картинки — весь запрос отвергается
+// «Upstream rejected the request as invalid». Ночная сессия прожила с картинкой
+// в истории 9 часов (канал её терпел), в 19:42 МСК шлюз сменил канал — и каждый
+// запрос с ней стал умирать. Бисект по реальному телу: без image — 200 за 12с,
+// с ним — 500 на каждом повторе. Картинка модели через этот канал всё равно
+// недоступна, поэтому для не-claude целей заменяем её текстовой меткой — запрос
+// остаётся валидным, сессия жива, модель знает, что картинка была. claude-целям
+// изображения сохраняем (их родной API умеет). Покрыты и картинки в tool_result
+// (скриншоты cdt/playwright) — их ждёт та же смерть.
+const IMAGE_PLACEHOLDER = { type: 'text', text: '[image removed: the model behind this gateway does not accept images]' };
+function stripImageBlocks(body) {
+    try {
+        const j = JSON.parse(body.toString('utf8') || '{}');
+        if (!Array.isArray(j.messages)) return null;
+        let touched = false;
+        for (const m of j.messages) {
+            if (!Array.isArray(m.content)) continue;
+            for (let i = 0; i < m.content.length; i++) {
+                const b = m.content[i];
+                if (b && b.type === 'image') {
+                    m.content[i] = Object.assign({}, IMAGE_PLACEHOLDER);
+                    touched = true;
+                }
+                if (b && b.type === 'tool_result' && Array.isArray(b.content)) {
+                    for (let k = 0; k < b.content.length; k++) {
+                        if (b.content[k] && b.content[k].type === 'image') {
+                            b.content[k] = Object.assign({}, IMAGE_PLACEHOLDER);
+                            touched = true;
+                        }
+                    }
+                }
+            }
+        }
+        return touched ? Buffer.from(JSON.stringify(j), 'utf8') : null;
+    } catch (e) { return null; }
+}
 // Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с
 // «что получилось после подмены» и не повторять запрос той же самой моделью.
 function modelInBody(buf) {
     try { return String(JSON.parse((buf || Buffer.alloc(0)).toString('utf8') || '{}').model || ''); } catch { return ''; }
+}
+// 🔬 11.09 (вечер): тело запроса, умершего в бою, — на диск: и при исчерпании бюджета
+// ретраев, и на постоянной ошибке. Синтетические пробы проходят любую форму (1.35 МБ
+// разнородного текста, max_tokens 64000, тул-пара WebSearch — все 200), а реальные
+// запросы ночной сессии падают стабильно — без тела не найти, ЧТО в содержимом
+// отвергает канал. Ротация: fail-*, последних 5; reqhdr-* и утилиты не трогаем.
+function dumpFailBody(kind, body) {
+    try {
+        const dumpDir = path.join(__dirname, 'runtime', 'faildump');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        const olds = fs.readdirSync(dumpDir).filter((f) => f.startsWith('fail-')).sort();
+        for (const f of olds.slice(0, Math.max(0, olds.length - 4))) fs.unlinkSync(path.join(dumpDir, f));
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        fs.writeFileSync(path.join(dumpDir, `fail-${kind}-${stamp}.json`), body);
+        log(`дамп упавшего тела: runtime/faildump/fail-${kind}-${stamp}.json (${body.length}Б)`);
+    } catch (e) { /* дамп — диагностика, не обязан работать */ }
 }
 
 // ── Имя модели в ОТВЕТЕ: возвращаем клиенту то, что он просил ──
@@ -1953,18 +2006,7 @@ const server = http.createServer((req, res) => {
       // 🔬 Разборный дамп (11.09): тело запроса, убившего бюджет ретраев, — на диск.
       // Синтетические пробы любой формы (110k токенов, все беты, cache_control) летают,
       // а реальные запросы новых окон стабильно умирают 60с→502; без тела не найти убийцу.
-      // Не более трёх файлов, чтобы не копить чужие промпты на диске.
-      try {
-        const dumpDir = path.join(__dirname, 'runtime', 'faildump');
-        fs.mkdirSync(dumpDir, { recursive: true });
-        // Чистим только свои fail-*: рядом лежат reqhdr-* (снимки заголовков) и
-        // утилиты разбора (replay.js), им здесь не место под нож.
-        const olds = fs.readdirSync(dumpDir).filter(f => f.startsWith('fail-')).sort();
-        for (const f of olds.slice(0, Math.max(0, olds.length - 2))) fs.unlinkSync(path.join(dumpDir, f));
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        fs.writeFileSync(path.join(dumpDir, `fail-${stamp}.json`), reqBody);
-        log(`${req.method} ${reqPath} тело упавшего запроса: routing/runtime/faildump/fail-${stamp}.json (${reqBody.length}Б)`);
-      } catch (e) { /* дамп — диагностика, не обязан работать */ }
+      dumpFailBody('budget', reqBody);
     }
     if (activeSet.size === 0) {
       // Удержание уже идёт (его начала другая попытка) — она же и доведёт запрос.
@@ -2227,6 +2269,10 @@ const server = http.createServer((req, res) => {
             const ab = String(req.headers['anthropic-beta'] || '');
             if (ab) errMeta += ` | anthropic-beta: ${ab.slice(0, 120)}`;
             log(`${req.method} ${reqPath} -> постоянная ошибка ${status} (клиент: ${errMeta}): ${buf.toString('utf8').slice(0, 200)}`);
+            // 🔬 11.09 (вечер): тело постоянной ошибки — на диск. Ночная сессия
+            // падает на «Upstream rejected» стабильно, при этом синтетика любой
+            // формы проходит — без реального тела причину не локализовать.
+            dumpFailBody('perm', reqBody);
             forwardBuffered(buf, headers);
           }
         });
@@ -2285,11 +2331,15 @@ const server = http.createServer((req, res) => {
     // claude-целей поля сохраняем (это их родной API), прочим моделям они всё равно
     // ничего не значат — срезаем до отправки. Применяется и к ремапнутым телам,
     // и к passthrough (модель может прийти уже конечной, например glm-5.3).
+    // Той же болезнью страдают image-блоки (см. stripImageBlocks) — канал glm их
+    // не принимает, срезаем вместе с полями одним гейтом не-claude цели.
     try {
       const outModel = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
       if (outModel && !/^claude[-_]/i.test(outModel)) {
         const stripped = stripClaudeOnlyFields(reqBody);
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
+        const noimg = stripImageBlocks(reqBody);
+        if (noimg) { reqBody = noimg; stats.remaps += 1; }
       }
     } catch (e) { /* не-JSON тело — срезать нечего */ }
     // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.

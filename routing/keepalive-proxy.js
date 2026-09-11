@@ -154,10 +154,15 @@ function isGptLike(model) {
 // его не переносим: большинство шлюзов, включая JustWoker, публикуют и принимают
 // только голый id. Для claude-цели сохраняем окно источника, предварительно снимая
 // возможный старый суффикс цели.
+// 🪤 11.09, живой бой: `[1m]` нельзя переносить и на ПРОЧИЕ цели. AgentRouter
+// отвергал прямые `glm-5.3[1m]` как неизвестную модель («Upstream rejected the
+// request as invalid», 500), при этом голый `glm-5.3` по тем же картам работал.
+// Перенос оставлен только для целей, начинающихся с `claude`: у них `[1m]` —
+// настоящий вариант модели (1M-окно), а не клиентская метка.
 function upstreamModelFor(target, sourceModel) {
     const bareTarget = String(target || '').replace(/\s*\[[^\]]*\]\s*$/, '');
     if (isGptLike(bareTarget)) return bareTarget;
-    const ctxSuffix = /\[1m\]$/.test(String(sourceModel || '')) ? '[1m]' : '';
+    const ctxSuffix = /^claude[-_]/i.test(bareTarget) && /\[1m\]$/.test(String(sourceModel || '')) ? '[1m]' : '';
     return bareTarget + ctxSuffix;
 }
 // Какая модель реально лежит в теле запроса — нужно, чтобы сравнить «что послали» с

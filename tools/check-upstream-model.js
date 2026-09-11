@@ -35,6 +35,10 @@ const cases = [
   ['claude-opus-5', 'claude-sonnet-5[1m]', 'claude-opus-5[1m]'],
   ['claude-opus-5[200k]', 'claude-sonnet-5[1m]', 'claude-opus-5[1m]'],
   ['claude-opus-5', 'claude-sonnet-5', 'claude-opus-5'],
+  // 11.09, живой бой: glm-цель с [1m] от источника уезжала как glm-5.3[1m], и
+  // AgentRouter отвергал её 500 «Upstream rejected the request as invalid».
+  ['glm-5.3', 'claude-opus-5[1m]', 'glm-5.3'],
+  ['glm-5.3', 'gpt-5.6-sol[1m]', 'glm-5.3'],
 ];
 
 const failures = [];

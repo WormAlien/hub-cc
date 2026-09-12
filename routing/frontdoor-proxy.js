@@ -415,7 +415,14 @@ function routeByModel(method, body, reg) {
         prefix: j.model.slice(0, slash),
         from: j.model,
         to: model,
-        tier: tierOfRequest(model),
+        // 🎯 Тиры `opus/sonnet/haiku` считаем и здесь: сабагент называет себя именем
+        // `claude-haiku-4-5-…`, и по нему видно, КТО спросил — это и есть вариант A
+        // владельца (haiku остаётся дешёвым). А вот `gpt` — не метка спрашивающего, а
+        // физическое имя модели, которое сабагент не назовёт никогда: его пишет человек
+        // руками. Поэтому gpt-тир на явном имени НЕ применяем — `/model
+        // agentrouter/gpt-6-astra` обязан дать ровно `gpt-6-astra` (заявка владельца 12.09,
+        // поймано на живом запросе: имя подменялось на значение ключа `gpt`).
+        tier: tierOfRequest(model) === 'gpt' ? null : tierOfRequest(model),
         body: Buffer.from(JSON.stringify(Object.assign({}, j, { model })), 'utf8'),
     };
 }

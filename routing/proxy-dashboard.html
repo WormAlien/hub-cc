@@ -140,10 +140,12 @@
 .rt-trims { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .rt-glab { grid-column: 1 / -1; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-faint); }
 /* Ненастроенный шлюз приглушён — иначе пять пустых строк из семи спорят за внимание
-   с той единственной, где сигнал есть. Наведение возвращает полную яркость. */
-.rt-row[data-off="1"] { opacity: .6; }
+   с той единственной, где сигнал есть. Наведение возвращает полную яркость.
+   🪤 Селекту приглушённой строки фон НЕ убираем: с прозрачным фоном он перестаёт
+   выглядеть элементом управления — читается как подпись, и строка кажется выключенной,
+   хотя кликается и сохраняется. Жалоба владельца 12.09 была именно про это. */
+.rt-row[data-off="1"] { opacity: .78; }
 .rt-row[data-off="1"]:hover { opacity: 1; }
-.rt-row[data-off="1"] .rt-sel { background: transparent; }
 .rt-grip {
   width: 22px; height: 26px; border: 0; background: transparent; color: var(--color-faint);
   cursor: grab; border-radius: 6px; font-size: 13px; line-height: 1;
@@ -9275,6 +9277,13 @@ async function routesSaveTier(sel) {
     if (!r || !r.ok) throw new Error((r && r.error) || 'сервер отказал');
     sel.dataset.prev = value;
     if (routesProviders[name]) routesProviders[name].tiers = r.tiers;
+    // 🪤 Строка перестаёт быть приглушённой только при перерисовке, а её здесь не было:
+    // выбрал `окно` — строка осталась серой, как будто выбор не сработал. Пересчитываем
+    // сразу, иначе человек делает вывод «некликабельно» и бросает.
+    const row = document.getElementById(`routes-row-${routesId(name)}`);
+    if (row && routesProviders[name]) {
+      row.dataset.off = String(routesProviders[name].tiers.default || '').trim() ? '0' : '1';
+    }
     if (st) { st.textContent = '✓'; st.className = 'text-[10px] text-emerald ml-1'; setTimeout(() => { if (st.textContent === '✓') st.textContent = ''; }, 2000); }
     // Рядом с командой показан итог развёртки (`→ glm-5.3`), а он берётся из
     // `tiers.default` — значит смена ЛЮБОГО тира может его поменять. Перерисовываем.

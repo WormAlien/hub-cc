@@ -165,6 +165,28 @@ const ok = (name, cond, extra = '') => {
     ok('отказ сервера откатил выбор', (await arOpus.inputValue()) === prevOpus,
         `${prevOpus} → ${await arOpus.inputValue()}`);
 
+    // Приглушение обязано сниматься сразу после выбора окна, а не после перезагрузки:
+    // иначе строка остаётся серой и выбор выглядит несработавшим.
+    // 🪤 Проверяем переход В ОБЕ СТОРОНЫ: стенд держит карты в памяти, поэтому «до» зависит
+    // от прошлых прогонов — утверждение на абсолютном значении падало со второго запуска.
+    const aipmRow = await page.$('#routes-rows .rt-row[data-provider="aipm"]');
+    const aipmDef = await page.$('#routes-rows .rt-row[data-provider="aipm"] select[data-tier="default"]');
+    await aipmDef.selectOption('');                    // пусто → строка обязана потускнеть
+    await page.waitForTimeout(700);
+    const offEmpty = await aipmRow.getAttribute('data-off');
+    await aipmDef.selectOption('claude-opus-4-6');     // выбрали окно → обязана зажечься
+    await page.waitForTimeout(700);
+    const offSet = await aipmRow.getAttribute('data-off');
+    ok('приглушение переключается сразу за выбором окна (пусто → тускло, выбрано → ярко)',
+        offEmpty === '1' && offSet === '0', `пусто: ${offEmpty}, выбрано: ${offSet}`);
+    // И селект приглушённой строки не должен быть прозрачным: с прозрачным фоном он
+    // читается как подпись, а не как элемент управления.
+    // 🪤 Берём строку, которая в стенде ТОЧНО есть и ТОЧНО приглушена, и отдельно требуем,
+    // чтобы элемент нашёлся: селектор по несуществующему провайдеру давал ложный PASS.
+    const bg = await page.$eval('#routes-rows .rt-row[data-provider="aikeysapi"] .rt-sel',
+        el => getComputedStyle(el).backgroundColor);
+    ok('у селекта пустой строки есть фон', !!bg && !/rgba\(0, 0, 0, 0\)|transparent/.test(bg), bg);
+
     await browser.close();
     console.log(failed ? `\n${failed} провалов` : '\nвсё зелёное');
     process.exit(failed ? 1 : 0);

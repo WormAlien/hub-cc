@@ -167,6 +167,16 @@ const check = (name, fn) => {
     await post(FD_PORT, '/v1/messages', { model: 'testprov/claude-sonnet-5', max_tokens: 1 });
     check('sonnet помечен своим тиром', () => assert.strictEqual(seen[0] && seen[0].tier, 'sonnet'));
 
+    // 4b. Явное gpt-имя — НЕ метка спрашивающего, а физическая модель: тир не ставится,
+    // имя уходит как названо. Иначе `/model agentrouter/gpt-6-astra` подменялся значением
+    // ключа `gpt` routes-карты (заявка владельца 12.09, поймано на живом запросе).
+    seen.length = 0;
+    await post(FD_PORT, '/v1/messages', { model: 'testprov/gpt-6-astra', max_tokens: 1 });
+    check('явное gpt-имя уходит как названо, без тира',
+        () => assert.strictEqual(seen[0] && seen[0].tier, null, JSON.stringify(seen[0])));
+    check('и само имя не подменено',
+        () => assert.strictEqual(seen[0] && seen[0].model, 'gpt-6-astra', JSON.stringify(seen[0])));
+
     // 5. Пустой default → 400 с подсказкой, ничего никуда не уехало
     seen.length = 0;
     r = await post(FD_PORT, '/v1/messages', { model: 'bare', max_tokens: 1 });

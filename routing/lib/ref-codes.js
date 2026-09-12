@@ -32,6 +32,7 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    aikeysapi:   { host: 'www.aikeysapi.com', path: '/register?aff=', label: 'AIKeysAPI' },
     aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
     // WisdomSatan (2026-09-10) — New API v0.11.5, но форма `/register?aff=`, как у
     // AgentRouter, а НЕ `/sign-up?aff=` восьми соседей. Не догадка: по ссылке этой формы

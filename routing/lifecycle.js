@@ -149,6 +149,7 @@ function children() {
         { port: 20162, name: 'HCNsec keepalive', respawn: false },
         { port: 20163, name: 'AIPM keepalive', respawn: false },
         { port: 20164, name: 'WisdomSatan keepalive', respawn: false },
+        { port: 20165, name: 'AIKeysAPI keepalive', respawn: false },
         { port: 8300, name: 'Дашборд (легаси)', respawn: false },
     ];
 }

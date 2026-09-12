@@ -133,6 +133,9 @@ SESSIONS_STATUS.md
 routing/proxy-pool.json
 routing/proxy-assign.json
 routing/runtime/
+# Липкий UA на аккаунт: выбор конкретной машины, не код
+agentrouter/ua/
+
 routing/*.log
 routing/*.err
 routing/*.log.err
@@ -476,6 +479,14 @@ aipm/profiles/
 aipm/sessions/
 aipm/gh-sessions/
 routing/aipm-sessions.json
+
+# AIKeysAPI
+# Browser profiles and live API sessions contain credentials; modelmap is safe config.
+aikeysapi/profiles/
+aikeysapi/sessions/
+routing/aikeysapi-sessions.json
+# Инбокс регистрации: email + пароль созданного аккаунта. Репозиторий публичный.
+aikeysapi/.signup-inbox.json
 
 # MEDIA (vkladka generacii) - vsyo nizhe generiruetsya i v publichnyy repo ne edet.
 # Video i webp obshchih pravil ne imeyut: *.png i *.jpg est, *.mp4/*.webm/*.gif/*.webp - net.

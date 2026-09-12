@@ -1129,6 +1129,38 @@ async function main() {
   check('первое открытие Лиги пересчитывает график после скрытой предзагрузки',
     /LG\._lastHash = ''/.test(tabLeague) && tabLeague.indexOf("LG._lastHash = ''") < tabLeague.indexOf('lgRender()'));
 
+  // ── Первое открытие: чего ждёт вкладка ─────────────────────────────────────
+  // Замер живьём (12.09, firefox, вьюпорт 1920×1080, задержка среза 1500 мс): вкладка
+  // 2,1 с состоит из ОДНОГО узла «срез считается…» высотой 75 px — ни шапки, ни каркаса
+  // графика, ни чата. При этом кэш ленты лежит в localStorage и читается синхронно, но
+  // `lgChatPaint` выходит на `if (!feed) return`: рисовать некуда, оболочка строится
+  // только после среза. Первая строка ленты в том замере появилась на 5,5 с.
+  //
+  // Отсюда два правила, и оба проверяются СТАТИКОЙ (браузера здесь нет): оболочка
+  // строится ДО развилки на отсутствие данных, и развилка перестаёт её сносить.
+  const lgRenderBody = fnBody('function lgRender', 'function lgMovement');
+  check('оболочка вкладки строится ДО проверки «данных ещё нет», а не после',
+    lgRenderBody.length > 0
+      && lgRenderBody.indexOf("host.innerHTML = LG_SHELL") > 0
+      && lgRenderBody.indexOf("host.innerHTML = LG_SHELL") < lgRenderBody.indexOf('if (!LG.data)'));
+  // `dataset.built` — единственный признак «оболочка на месте». Снося его на время
+  // ожидания, вкладка теряет DOM чата вместе с уже нарисованной лентой: переход на
+  // вкладку, пока срез в полёте, стирал переписку обратно в «считается…».
+  const noDataBranch = lgRenderBody.slice(lgRenderBody.indexOf('if (!LG.data)'),
+    lgRenderBody.indexOf('const rows = lgRows'));
+  check('ожидание среза НЕ сносит оболочку и нарисованную ленту',
+    noDataBranch.length > 0 && !/delete host\.dataset\.built/.test(noDataBranch));
+  check('кэш чата запускается сразу после оболочки, не ждёт срез рейтинга',
+    lgRenderBody.indexOf('lgChatStart()') > lgRenderBody.indexOf("host.innerHTML = LG_SHELL")
+      && lgRenderBody.indexOf('lgChatStart()') < lgRenderBody.indexOf('if (!LG.data)'));
+  // Скелет в области графика. Он обязан ДЕРЖАТЬ ВЫСОТУ: иначе подпись «считаю срез» и
+  // приехавший график разной высоты, и вкладка прыгает на пол-экрана в момент подмены.
+  const skelRule = cssRule('#leagueTab .lgskel{');
+  check('скелет держит высоту графика, а не схлопывается в строку',
+    /min-height\s*:/.test(skelRule) && /class="lgskel"/.test(HTML));
+  check('анимация скелета гаснет при prefers-reduced-motion',
+    /prefers-reduced-motion[^}]*\}[^}]*lgskel/.test(lgCss) || /lgskel[\s\S]{0,200}prefers-reduced-motion/.test(lgCss));
+
   console.log('\nаватарка во вкладке:');
   const avPick = fnBody('async function lgAvPick', 'function lgAvSheet');
   check('сжатие идёт в браузере: canvas → webp, квадрат, предел 20 КБ',

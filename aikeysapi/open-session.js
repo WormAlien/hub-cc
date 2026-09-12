@@ -1,0 +1,327 @@
+// aikeysapi/open-session.js
+//
+// Открывает видимый Chromium с персональным профилем аккаунта AIKeysAPI.
+// Профиль сохраняет историю, cookies, localStorage и сессию панели на диск.
+//
+// Использование:
+//   node aikeysapi/open-session.js <label> [register|console|auto]
+//     label — имя профиля (папка aikeysapi/profiles/<label>/)
+//     mode — register: форма регистрации по реф-ссылке,
+//            console: консоль аккаунта,
+//            auto (по умолчанию): чистый профиль = register, иначе console.
+//
+// Email и пароль берутся только из AK_LK_EMAIL и AK_LK_PASS. В argv они не передаются.
+// Окно остаётся открытым до закрытия пользователем.
+
+const { chromium } = require('playwright');
+const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
+const fs = require('fs');
+const path = require('path');
+
+const REGISTER_URL = 'https://www.aikeysapi.com/register?aff=vsFh';
+const CONSOLE_URL = 'https://www.aikeysapi.com/console';
+const ROOT_URL = 'https://www.aikeysapi.com/';
+const STATUS_URL = 'https://www.aikeysapi.com/api/status';
+const PROFILES_DIR = path.join(__dirname, 'profiles');
+const SESSIONS_DIR = path.join(__dirname, 'sessions');
+const POOL_FILE = path.join(__dirname, '..', 'routing', 'aikeysapi-sessions.json');
+
+const labelArg = process.argv[2];
+const label = (labelArg || `session_${Date.now()}`).replace(/[^\w-]/g, '_');
+const mode = String(process.argv[3] || 'auto'); // register | console | auto
+const profileDir = path.join(PROFILES_DIR, label);
+
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Окно живёт до Ctrl+C: обещание резолвится только при закрытии контекста.
+function holdOpen(context) {
+  return new Promise((resolve) => { context.on('close', resolve); });
+}
+
+// Импортированный share-снимок может содержать cookies и localStorage уже созданного
+// аккаунта. GitHub-only snapshots намеренно игнорируются: у AIKeysAPI нет GitHub-входа.
+function loadImportedSession() {
+  try {
+    const p = path.join(SESSIONS_DIR, label + '.json');
+    if (!fs.existsSync(p)) return null;
+    const ss = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!ss || typeof ss !== 'object') return null;
+    if (ss.seed === 'github') return { ghSeedOnly: true };
+    return {
+      cookies: Array.isArray(ss.cookies) ? ss.cookies : [],
+      origins: Array.isArray(ss.origins) ? ss.origins : [],
+    };
+  } catch { return null; }
+}
+
+async function applyImportedSession(context, session) {
+  if (!session) return false;
+  let applied = false;
+  if (session.cookies && session.cookies.length) {
+    try {
+      await context.addCookies(session.cookies);
+      applied = true;
+    } catch (e) {
+      console.log(`⚠️ часть cookies не применилась: ${e.message}`);
+    }
+  }
+  const lsOrigins = (session.origins || []).filter(o => o.localStorage && o.localStorage.length);
+  for (const o of lsOrigins) {
+    try {
+      await context.addInitScript(
+        (entries) => { for (const { name, value } of entries) { try { localStorage.setItem(name, value); } catch {} } },
+        o.localStorage.map(({ name, value }) => ({ name, value })),
+      );
+      applied = true;
+    } catch { /* origin может быть невалидным — пропускаем */ }
+  }
+  return applied;
+}
+
+function isFreshProfile() {
+  try {
+    const prefs = path.join(profileDir, 'Default', 'Preferences');
+    return !fs.existsSync(prefs);
+  } catch { return true; }
+}
+
+const SITE_HOST = new URL(ROOT_URL).hostname.toLowerCase();
+const CF_COOKIE_RE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl)/i;
+const SITE_SESSION_RE = /session|token|access|auth|refresh|new_api/i;
+function hasSessionCookie(cookies) {
+  return cookies.some(c => {
+    const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
+    if (d !== SITE_HOST && !d.endsWith('.' + SITE_HOST)) return false;
+    return !CF_COOKIE_RE.test(c.name) && SITE_SESSION_RE.test(c.name) && !!c.value;
+  });
+}
+
+async function disableHttpCache(context, page) {
+  const apply = async (p) => {
+    try {
+      const cdp = await context.newCDPSession(p);
+      await cdp.send('Network.enable');
+      await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    } catch { /* без кеш-бага страница живёт и так — не роняем открытие */ }
+  };
+  context.on('page', p => { apply(p); });
+  await apply(page);
+}
+
+async function reportRender(page) {
+  const ok = await page.waitForFunction(
+    () => { const r = document.getElementById('root'); return !!r && r.innerHTML.length > 200; },
+    { timeout: 15000 },
+  ).then(() => true).catch(() => false);
+  console.log(ok
+    ? '✅ страница отрисовалась'
+    : '⚠️  белый экран: SPA не поднялась — жми F5, в DevTools ищи 404 на /static/js/*.js');
+}
+
+async function preflight() {
+  try {
+    const r = await fetch(STATUS_URL, {
+      signal: AbortSignal.timeout(15000),
+      headers: { Accept: 'application/json' },
+    });
+    if (r.status !== 200) return { ok: false, error: `api/status HTTP ${r.status}` };
+    const d = ((await r.json()) || {}).data || {};
+    return {
+      ok: true,
+      registration: d.register_enabled !== false && d.password_register_enabled !== false,
+      passwordLogin: d.password_login_enabled !== false,
+      emailVerify: d.email_verification === true,
+      turnstile: d.turnstile_check === true,
+      site: d.system_name || 'AIKeysAPI',
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+const SITE_ERRORS = [
+  {
+    code: 'no_register',
+    terminal: true,
+    re: /new (user )?registration (is )?(disabled|closed)|registration (is )?disabled by (the )?admin|(clos|disabl)\w* new (user )?registration|管理员关闭了新用户注册|регистрац[а-яё]* (нов[а-яё]* [а-яё]* )?(закрыт|отключен)|закрыл[а-яё]* регистрацию/i,
+    msg: '❌ AIKeysAPI закрыл регистрацию новых аккаунтов (ответ панели) — этот аккаунт создать нельзя.',
+  },
+];
+
+async function siteError(page) {
+  let text = '';
+  try { text = await page.evaluate(() => document.body ? document.body.innerText : ''); } catch { return null; }
+  return SITE_ERRORS.find(e => e.re.test(text)) || null;
+}
+
+async function openRegister(page) {
+  await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  const readAff = () => page
+    .evaluate(() => { try { return localStorage.getItem('aff'); } catch { return null; } })
+    .catch(() => null);
+
+  const aff = await readAff();
+  if (aff) {
+    console.log(`🤝 реф-код сохранён в профиль: aff=${aff}`);
+    return;
+  }
+
+  console.log('⚠️  реф-код не осел с первого раза — прогреваю корень и захожу заново');
+  await page.goto(ROOT_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(1500);
+  const aff2 = await readAff();
+  console.log(aff2
+    ? `🤝 реф-код сохранён в профиль со второй попытки: aff=${aff2}`
+    : '⚠️  реф-код так и не осел в localStorage — регистрация может не зачесться');
+}
+
+const AUTH_PAGE_RE = /\/sign-in|\/sign-up|\/register|\/otp|\/forgot-password|\/reset/;
+async function waitForLogin(page, context) {
+  const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+  const seen = new Set();
+  while (Date.now() < deadline) {
+    const cookies = await context.cookies().catch(() => []);
+    if (!AUTH_PAGE_RE.test(page.url()) && hasSessionCookie(cookies)) return { ok: true };
+
+    const err = await siteError(page);
+    if (err && !seen.has(err.code)) {
+      seen.add(err.code);
+      console.log(err.msg);
+      if (err.terminal) return { ok: false, err };
+    }
+    await page.waitForTimeout(1500);
+  }
+  return { ok: false };
+}
+
+// Кнопку входа не нажимаем: панель может потребовать код из письма или капчу.
+// Это только удобная подстановка кредов из окружения, не автоматический логин.
+async function prefillLogin(page) {
+  const email = String(process.env.AK_LK_EMAIL || '').trim();
+  const pass = String(process.env.AK_LK_PASS || '');
+  if (!email && !pass) return false;
+  try {
+    const emailSel = 'input[name="username"], input[name="email"], input[type="email"], input[id*="username" i], input[id*="email" i]';
+    const passSel = 'input[name="password"], input[type="password"]';
+    await page.waitForSelector(passSel, { timeout: 20000 });
+    if (email) {
+      const e = page.locator(emailSel).first();
+      if (await e.count()) await e.fill(email);
+    }
+    if (pass) {
+      const p = page.locator(passSel).first();
+      if (await p.count()) await p.fill(pass);
+    }
+    console.log(`🔐 Логин подставлен из переменных окружения${pass ? ' (email и пароль)' : ' (только email — пароля нет)'}.`);
+    console.log('   Кнопку входа нажми сам: панель может спросить код с почты или капчу.');
+    return true;
+  } catch (e) {
+    console.log(`ℹ️  Поле пароля не найдено (${e.message.split('\n')[0]}) — вход руками.`);
+    return false;
+  }
+}
+
+async function main() {
+  if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
+  const fresh = isFreshProfile();
+  const imported = loadImportedSession();
+  if (imported && imported.ghSeedOnly) {
+    console.log('⚠️  Рядом лежит снимок только GitHub-сессии: AIKeysAPI не поддерживает GitHub-вход, игнорирую файл.');
+  }
+  const shared = imported && !imported.ghSeedOnly ? imported : null;
+
+  console.log('🚀 Запускаю Chromium (видимый режим)…');
+  console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен вход почтой)' : 'уже есть (сохранённый)'}`);
+  console.log(`🗂️  пул сессий: ${POOL_FILE}`);
+
+  const pre = await preflight();
+  if (!pre.ok) {
+    console.log(`⚠️  предполётная проверка панели не удалась (${pre.error}) — открываю окно как есть.`);
+  } else {
+    console.log(`🛰️  ${pre.site}: регистрация ${pre.registration ? 'открыта' : 'ЗАКРЫТА'},`
+      + ` вход паролем ${pre.passwordLogin ? 'есть' : 'ВЫКЛЮЧЕН'},`
+      + ` код на почту ${pre.emailVerify ? 'нужен' : 'не нужен'},`
+      + ` капча ${pre.turnstile ? 'есть' : 'нет'}`);
+    if (!pre.registration) console.log('   ❌ Новый аккаунт создать нельзя — панель закрыла регистрацию. Окно всё равно открою.');
+    if (!pre.passwordLogin) console.log('   ❌ Вход паролем выключен, а других путей у AIKeysAPI нет.');
+  }
+
+  const context = await chromium.launchPersistentContext(profileDir, {
+    headless: false,
+    viewport: null,
+    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
+  });
+
+  const page = context.pages()[0] || await context.newPage();
+  await page.bringToFront();
+  raiseBrowserWindow();
+  await disableHttpCache(context, page);
+
+  const appliedSession = (fresh && shared) ? await applyImportedSession(context, shared) : false;
+  const wantRegister = appliedSession ? false
+    : mode === 'register' ? true
+    : mode === 'console' ? false
+    : fresh;
+  console.log(`🎯 ${wantRegister ? `регистрация: ${REGISTER_URL}` : `консоль: ${CONSOLE_URL}`}`);
+
+  try {
+    if (appliedSession) {
+      await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+      await reportRender(page);
+      console.log('✅ Импортированная сессия применена (AIKeysAPI уже залогинен).');
+      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
+      await holdOpen(context);
+      return;
+    }
+
+    if (wantRegister) {
+      await openRegister(page);
+      console.log('⚠️  Регистрация по реф-ссылке. Введи email и пароль, затем пройди код почты/капчу, если панель их попросит.');
+      await prefillLogin(page);
+
+      const res = await waitForLogin(page, context);
+      if (!res.ok) {
+        if (res.err && res.err.code === 'no_register') {
+          console.error('❌ Регистрация AIKeysAPI закрыта администратором — новый аккаунт не создать.');
+          console.error('   Браузер оставляю открытым: ответ панели видно на странице.');
+          await holdOpen(context);
+          return;
+        }
+        console.error('❌ Таймаут ожидания входа (10 мин). Закрываю.');
+        process.exit(2);
+      }
+      await reportRender(page);
+      console.log('✅ Вход выполнен, профиль сохранён на диск. Забирай ключ в консоли.');
+      console.log('   Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
+      await holdOpen(context);
+      return;
+    }
+
+    await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
+    if (!fresh) {
+      await reportRender(page);
+      console.log('✅ Профиль восстановлен (AIKeysAPI уже залогинен, если заходил раньше).');
+      console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
+      await holdOpen(context);
+      return;
+    }
+
+    console.log('⚠️  Первый вход. Залогинься email + паролем на открывшейся странице, затем возьми ключ в консоли.');
+    await prefillLogin(page);
+    const res = await waitForLogin(page, context);
+    if (!res.ok) {
+      console.error('❌ Таймаут ожидания входа (10 мин). Закрываю.');
+      process.exit(2);
+    }
+    console.log('✅ Вход выполнен, профиль сохранён на диск. Браузер остаётся открытым — закрой когда закончишь (Ctrl+C).');
+    await holdOpen(context);
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+main().catch(err => {
+  console.error('❌ Ошибка:', err.message);
+  process.exit(1);
+});

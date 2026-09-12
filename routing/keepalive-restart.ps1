@@ -69,9 +69,11 @@ $perPort = @{
   # api.hczhw.com) - do NOT use it, it answers 403 from here (measured 2026-09-10).
   20164 = @{ UPSTREAM = 'https://api.wisdomsatan.club'; KEY_FILE = "$profileDir\.claude\wisdomsatan-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'wisdomsatan-modelmap.json') }
+  20165 = @{ UPSTREAM = 'https://www.aikeysapi.com'; KEY_FILE = "$profileDir\.claude\aikeysapi-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'aikeysapi-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163 / 20164)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163 / 20164 / 20165)"; exit 1
 }
 
 # Kill the current listener

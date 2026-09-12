@@ -82,6 +82,8 @@ check(/hasSnap: null/.test(health),
     'модуль недоступен → null, а не false: врать «снимка нет» на незнании нельзя');
 check(/transferableProfile/.test(health) && /hasSession/.test(health),
     'здоровье объединяет общий снимок с переносимой user_session из профилей');
+check(/sessionSource/.test(health) && /profileSource/.test(health),
+    'бэкенд называет источник сессии, а не только выдаёт булево');
 
 const now = Date.now();
 const profileHit = typeof GSL.transferableProfile === 'function'
@@ -102,12 +104,14 @@ check(typeof GSL.transferableProfile === 'function'
 console.log('\n4. плашка в строке аккаунта');
 const badge = cutFn(HTML, 'function newapiGhBadge(');
 check(/snapStale/.test(badge) && /snapAgeDays/.test(badge), 'бейдж читает свежесть снимка');
-check(/hasSnap === false/.test(badge) && /status === 'dead'/.test(badge),
-    'красное состояние — и «снимка нет», и «помечен dead»');
+check(/hasSession === false/.test(badge) && /status === 'dead'/.test(badge),
+    'красное состояние — только «сессии нет нигде» или аккаунт помечен dead');
+check(/sessionSource/.test(badge) && /profileSource/.test(badge),
+    'подсказка бейджа различает общий снимок и профиль-источник');
 check(/crimson/.test(badge) && /amber/.test(badge) && /teal/.test(badge),
     'три цвета: живой / протух / нечем входить');
 check(/snapStale === true/.test(badge),
-    'протухшим считается только явное true — на null бейдж красится как раньше');
+    'протухшим считается только снимок без профильного источника');
 
 // ── 5. имя аккаунта в тосте ошибки ──
 console.log('\n5. ошибка называет аккаунт');

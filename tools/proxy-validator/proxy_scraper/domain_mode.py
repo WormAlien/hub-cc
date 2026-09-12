@@ -203,16 +203,23 @@ def main(argv: List[str] | None = None) -> int:
 
     def on_check(done: int, total: int, result: DomainCheckResult) -> None:
         nonlocal done_mark
-        proxy_text = format_proxy_uri(result.proxy)
-        for target_name in result.passed_targets:
-            passed_by_target.setdefault(target_name, set()).add(proxy_text)
-        if len(result.passed_targets) == len(targets):
-            all_valid.add(proxy_text)
+        try:
+            proxy_text = format_proxy_uri(result.proxy)
+        except ValueError:
+            # No tunnelable protocol -> nothing downstream could use the line.
+            # Counting it as checked but not exporting it keeps the progress
+            # bar honest without poisoning the export with auto:// entries.
+            proxy_text = None
+        if proxy_text is not None:
+            for target_name in result.passed_targets:
+                passed_by_target.setdefault(target_name, set()).add(proxy_text)
+            if len(result.passed_targets) == len(targets):
+                all_valid.add(proxy_text)
 
         if done == total or done - done_mark >= max(1, args.progress_every):
             done_mark = done
             flush_outputs()
-        progress.update(done, ok=len(all_valid), bad=done - len(all_valid), note=f"{len(result.passed_targets)}/{len(targets)} {proxy_text}")
+        progress.update(done, ok=len(all_valid), bad=done - len(all_valid), note=f"{len(result.passed_targets)}/{len(targets)} {proxy_text or result.proxy.address + ' (no protocol)'}")
 
     checked = checker.check_many(records, targets, progress_cb=on_check)
     flush_outputs()

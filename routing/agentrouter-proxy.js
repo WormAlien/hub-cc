@@ -386,6 +386,19 @@ function convertClaudeToOpenAI(claudeReq) {
                 },
             }));
     }
+    // gpt-6-astra: тулы требуют явного reasoning_effort="none" (2026-09-12).
+    // Шлюз по умолчанию включает для этой модели reasoning и сам подставляет
+    // reasoning_effort — а апстрим (`MaaS_GP_6_astra_…`) отвергает комбинацию
+    // «function tools + reasoning_effort»: 400 на КАЖДОМ запросе с тулами, независимо
+    // от max_tokens и от наличия `thinking` (то есть Claude Code с астрой не работал
+    // в принципе — он всегда шлёт тулы). Проверено пробами: без tools → 200;
+    // с 1 и с 40 тулами, а также в streaming → 200 ТОЛЬКО с reasoning_effort="none".
+    // Другие значения не годятся: low/medium/high → тот же 400, а "minimal" модель не
+    // поддерживает вовсе («Unsupported value»). Ставим поле лишь при наличии тулов —
+    // без них дефолт работает и лишнее поле не нужно.
+    if (openaiReq.tools && openaiReq.tools.length && /astra/i.test(String(claudeReq.model || ''))) {
+        openaiReq.reasoning_effort = 'none';
+    }
     if (claudeReq.tool_choice) {
         const tc = claudeReq.tool_choice;
         if (tc.type === 'auto') openaiReq.tool_choice = 'auto';

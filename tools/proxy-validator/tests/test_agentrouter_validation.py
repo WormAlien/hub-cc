@@ -263,11 +263,9 @@ class StabilityPipelineTest(unittest.TestCase):
             )
             self.assertEqual(report["failures"]["203.0.113.20:8080"], "failed pass 3")
 
-    def test_pool_caps_two_per_24_and_one_per_hostname_port(self) -> None:
+    def test_pool_caps_ten_per_24_and_one_per_hostname_port(self) -> None:
         records = [
-            _record("203.0.113.10", 30.0),
-            _record("203.0.113.11", 10.0),
-            _record("203.0.113.12", 20.0),
+            *[_record(f"203.0.113.{n}", float(n)) for n in range(10, 22)],
             _record("198.51.100.7", 40.0),
             _record("gate.example", 9.0),
             _record("gate.example", 2.0),
@@ -283,17 +281,12 @@ class StabilityPipelineTest(unittest.TestCase):
             )
 
             lines = (out / "stable.txt").read_text(encoding="utf-8").splitlines()
-            self.assertEqual(
-                lines,
-                [
-                    "http://gate.example:8080",
-                    "http://203.0.113.11:8080",
-                    "http://203.0.113.12:8080",
-                    "http://198.51.100.7:8080",
-                ],
-            )
-            self.assertEqual(report["stable_count"], 4)
-            self.assertEqual(report["dropped_by_subnet"], 1)
+            self.assertEqual(lines[0], "http://gate.example:8080")
+            subnet_lines = [line for line in lines if line.startswith("http://203.0.113.")]
+            self.assertEqual(len(subnet_lines), 10)
+            self.assertIn("http://198.51.100.7:8080", lines)
+            self.assertEqual(report["stable_count"], 12)
+            self.assertEqual(report["dropped_by_subnet"], 2)
 
     def test_interrupt_saves_report_without_stable_file(self) -> None:
         def check_pass(candidates, pass_index):

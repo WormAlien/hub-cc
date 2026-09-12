@@ -66,68 +66,6 @@ const LOGOUT_MENU_RE = /退出|登出|注销|logout|log ?out|sign ?out|выйт�
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
-// ───── Прокси аккаунта: приезжает файлом, живёт один запуск ───────────────
-//
-// Адрес выбирает РОДИТЕЛЬ (routing/transparent-proxy.js) по id записи пула и кладёт сюда
-// разовым файлом. Почему не аргументом и не переменной среды: и то, и другое видно в
-// списке процессов машины владельца вместе с логином и паролем прокси.
-//
-// 🪤 Отсутствие файла — это НЕ ошибка: значит пул выключен, и браузер идёт как раньше.
-// Отказ «прокси нужен, но не дан» ловится раньше, в родителе: он просто не спавнит нас.
-const PROXY_SEED_DIR = path.join(__dirname, '..', 'routing', 'runtime', 'ar-proxy');
-
-function readProxySeed(label, dir = PROXY_SEED_DIR) {
-    const file = path.join(dir, `${String(label || '')}.json`);
-    let raw = null;
-    try { raw = fs.readFileSync(file, 'utf8'); }
-    catch { return null; }
-    // Удаляем СРАЗУ: файл одноразовый и содержит креды. Он создан текущим прогоном и
-    // пересоздаётся родителем на каждый запуск, поэтому прямое удаление здесь уместно.
-    try { fs.unlinkSync(file); } catch { /* переживём: следующий запуск перезапишет */ }
-    try {
-        const doc = JSON.parse(raw);
-        return (doc && doc.proxy) ? doc.proxy : null;
-    } catch { return null; }
-}
-
-// Прокси → опции launchPersistentContext. Отдельной чистой функцией, чтобы регресс
-// проверял правила БЕЗ запуска браузера.
-//
-// 🔴 Chromium умеет не всё, и умалчивает об этом по-разному: socks4 он не поддерживает
-// вовсе, а SOCKS с логином/паролем ИГНОРИРУЕТ — запрос спокойно уходит напрямую. Второе
-// опаснее первого: тихий уход с домашнего IP под живой GitHub-сессией это ровно тот
-// провал, ради которого пул и написан. Поэтому оба случая — явный отказ до запуска.
-function proxyLaunchOptions(proxy) {
-    if (!proxy) return { ok: true, options: {} };
-    const scheme = String(proxy.scheme || '').toLowerCase();
-    const hostname = String(proxy.hostname || '').trim();
-    const port = Number(proxy.port);
-    if (!hostname || !Number.isInteger(port) || port < 1 || port > 65535) {
-        return { ok: false, error: `прокси без адреса или порта (${hostname || '—'}:${proxy.port || '—'})` };
-    }
-    const hasAuth = !!(proxy.user || proxy.pass);
-    if (scheme === 'socks4') {
-        return { ok: false, error: 'socks4 браузер не поддерживает — нужен http/https или socks5 без логина' };
-    }
-    if ((scheme === 'socks' || scheme === 'socks5') && hasAuth) {
-        return { ok: false, error: 'SOCKS с логином и паролем Chromium молча игнорирует (ушёл бы напрямую) — нужен http/https' };
-    }
-    if (!['http', 'https', 'socks', 'socks5'].includes(scheme)) {
-        return { ok: false, error: `неизвестная схема прокси: ${scheme || '—'}` };
-    }
-    const server = `${scheme === 'socks' ? 'socks5' : scheme}://${hostname}:${port}`;
-    return {
-        ok: true,
-        options: {
-            proxy: {
-                server,
-                ...(proxy.user ? { username: proxy.user } : {}),
-                ...(proxy.pass ? { password: proxy.pass } : {}),
-            },
-        },
-    };
-}
-
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
 // Автоподарку человек не нужен: клик, редиректы GitHub-а и колбэк укладываются
 // в считанные секунды. Полторы минуты — с запасом на медленный WAF.
@@ -154,10 +92,6 @@ const GH_POPUP_WAIT_MS = 6000;
 // Живы мы или нет, решается гонкой «аватар в шапке / SPA увела на /login» (см. consoleGate).
 // Потолок нужен только на третий случай — белый экран, когда не случилось ни того, ни другого.
 const CONSOLE_GATE_MS = 8000;
-// Эталон «до подарка» своим fetch'ем: живой кабинет отвечает за доли секунды (страница
-// делает тот же запрос на каждой загрузке). Если не ответил за 3 с — это заглушка WAF
-// или мёртвая сессия, и ждать дольше значит просто удлинять прогон.
-const BASELINE_SELF_MS = 3000;
 
 const labelArg = process.argv[2];
 const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
@@ -698,282 +632,6 @@ async function siteSelfOk(page, userId = null, timeoutMs = 0) {
   }, { uidArg: userId, ms: Number(timeoutMs) || 0 }).catch(() => null);
 }
 
-// Объект пользователя, который SPA кладёт в localStorage после входа. Ноль запросов к
-// шлюзу: читаем то, что страница уже получила. Имена полей печатаем — состав шлюз меняет.
-async function readStoredUser(page) {
-  if (page.isClosed()) return null;
-  return await page.evaluate(() => {
-    try {
-      const u = JSON.parse(localStorage.getItem('user') || 'null');
-      if (!u || typeof u !== 'object') return null;
-      return { keys: Object.keys(u), quota: u.quota, used: u.used_quota, id: u.id, username: u.username };
-    } catch { return null; }
-  }).catch(() => null);
-}
-
-// ───── Точный остаток: перехват вместо своего запроса ─────────────────────
-// Страница на кошельке сама ходит в /api/user/self — это и есть цифра, которую видит
-// глаз. Перехватываем ЕЁ ответ: своего запроса к шлюзу не добавляется вообще, а WAF тут
-// ни при чём (запрос всё равно был бы). route.fetch() буферизует тело у нас, fulfill
-// отдаёт его странице — приём тот же, что с колбэком OAuth.
-const SELF_API_RE = /\/api\/user\/self/i;
-
-// 🪤 Перехват копит ответы за ВСЮ жизнь браузера, а в режиме чек-ина первый из них
-// приезжает ДО подарка: uiLogout заходит на страницу кошелька ещё залогиненным, и
-// кабинет честно спрашивает /api/user/self со старым остатком. Дальше вход, подарок —
-// и если пост-логиновый ответ окажется заглушкой WAF или придёт со старой цифрой,
-// `out.last` так и останется предподарочным. Дашборд ставит эту цифру как точную
-// (arAutoCheckinFinish), то есть подарок «не считается» ровно так, как жалуется владелец.
-// Поэтому у перехвата есть reset(): предподарочные ответы забываются, и снимок берётся
-// только из того, что приехало ПОСЛЕ входа.
-function watchSelfResponses(context) {
-  const out = {
-    last: null, seen: 0, stubs: 0,
-    reset() { this.last = null; this.seen = 0; this.stubs = 0; },
-  };
-  context.route(SELF_API_RE, async (route) => {
-    try {
-      const resp = await route.fetch();
-      const body = await resp.text();
-      out.seen++;
-      try {
-        const j = JSON.parse(body);
-        const d = j && j.data;
-        if (j && j.success && d && typeof d.quota === 'number') {
-          out.last = { quota: d.quota, used: Number(d.used_quota) || 0, id: d.id != null ? d.id : null, username: d.username || null };
-        }
-      } catch {
-        // HTTP 200 + HTML — заглушка Aliyun WAF. Ровно на ней падает и наш чек с диска:
-        // «WAF-заглушка (слишком часто), пауза 10 мин» в newapi-account.js.
-        out.stubs++;
-      }
-      await route.fulfill({ response: resp, body });
-    } catch (e) {
-      await route.continue().catch(() => {});
-    }
-  }).catch(() => {});
-  return out;
-}
-
-// Снимок годен, только если в нём есть ЧЕМ распорядиться. Нули отбиваем: именно так
-// выглядел обнулённый ответ колбэка, и он бы записал в пул $0 (см. watchOauthResult).
-function selfSnapshotUsable(s) {
-  return !!s && typeof s.quota === 'number' && isFinite(s.quota)
-    && (s.quota > 0 || Number(s.used) > 0);
-}
-
-// Цифра «до подарка». Шлюз наливает бонус на `quota`, не двигая `used_quota`, поэтому
-// сравнение по остатку тут законно: подарок обязан поднять quota выше предподарочной.
-// Считаем устаревшим и РАВЕНСТВО: именно так выглядит кабинет, который надо обновить.
-function selfIsPreGift(s, baseline, expectGrowth) {
-  return !!(expectGrowth && baseline && s && Number(s.quota) <= Number(baseline.quota));
-}
-
-// Цифра «до подарка», снятая НАМЕРЕННО, а не по случаю. Сначала localStorage (ноль
-// запросов — кабинет уже всё получил), потом свой fetch из страницы. Оба источника
-// работают только при живой сессии, поэтому зовётся до разлогина — и ТОЛЬКО когда
-// сессия точно жива (см. consoleGate): на мёртвой оба обречены, а стоят они 4.7 с
-// впустую — ровно столько показал замер 10.09.
-async function readBaselineSelf(page) {
-  const ls = await readStoredUser(page);
-  if (selfSnapshotUsable(ls)) return { quota: ls.quota, used: ls.used || 0, id: ls.id, username: ls.username, from: 'localStorage' };
-  // Своим запросом — с поводком: живой кабинет отвечает мгновенно, а заглушка WAF не
-  // ответит никогда, и без сигнала мы ждали бы её до потолка page.evaluate.
-  const own = await siteSelfOk(page, null, BASELINE_SELF_MS);
-  if (selfSnapshotUsable(own)) return { ...own, from: 'self-fetch' };
-  return null;
-}
-
-// Обновление страницы после подарка — не косметика, а единственный способ увидеть новую
-// цифру: кабинет спрашивает /api/user/self один раз на загрузку, а колбэк OAuth квоту
-// отдаёт обнулённой (см. watchOauthResult). Руками владелец жмёт F5 — здесь то же самое.
-//
-// ⚠️ ПЕРЕПИСАНО 2026-08-24 по замеру владельца: «он очень быстро перезагружает страницу,
-// баланс не успевает появиться, и он падает с прошлым балансом либо без баланса. Подарок
-// точно срабатывает». Что было не так в первой версии:
-//   1. `waitUntil: 'domcontentloaded'` — это ДО того, как SPA нарисовалась и успела
-//      спросить остаток. Ответ ловился уже после, но окно ожидания начинало течь раньше;
-//   2. ждать роста решал флаг `checked_in` из колбэка, а он врёт (пять прогонов 22.08
-//      получили `true` без роста, задача в трекере). При `false`/неизвестном делался
-//      ОДИН круг без требования роста — то есть предподарочная цифра принималась молча;
-//   3. трёх кругов по 12 с не хватало: зачисление на стороне шлюза не мгновенное.
-// Теперь: до шести полных загрузок, между ними пауза, общий потолок 90 с, и роста ждём
-// всегда, когда известен эталон. Флаг шлюза оставлен ровно для одного решения — явное
-// `checked_in: false` (суточное окно не сменилось) отменяет ожидание, там расти нечему.
-const GIFT_RELOAD_ATTEMPTS = 6;
-const GIFT_SELF_WAIT_MS = 12000;
-const GIFT_SETTLE_MS = 3000;      // пауза между кругами: шлюз зачисляет не мгновенно
-const GIFT_WAF_SETTLE_MS = 12000; // а если ответы — заглушки WAF, частить нельзя вовсе
-const GIFT_TOTAL_BUDGET_MS = 90000;
-
-// Ждём, пока цифра появится В КАРТОЧКЕ БАЛАНСА, а не где-нибудь на странице.
-//
-// 🪤 Первая версия искала любое `$…` в тексте и поэтому всегда говорила «нарисовала»:
-// в правой колонке кабинета висит блок «邀请奖励» с тремя нулями (`$0.00`), а сама
-// карточка «当前余额» в это время — пустой серый скелетон. Владелец прислал ровно такой
-// кадр 25.08: страница «не показывает баланс», а лог рапортует, что показала.
-// Поэтому ищем ПОДПИСЬ карточки и требуем цифру рядом с ней.
-const BALANCE_LABEL_RE = /^(当前余额|余额|Current balance|Balance|Остаток|Текущий баланс)\s*$/i;
-async function waitBalanceRendered(page, ms = 12000) {
-  return page.waitForFunction(
-    (reSrc) => {
-      const re = new RegExp(reSrc, 'i');
-      const nodes = document.querySelectorAll('div,span,p,label,h1,h2,h3,h4');
-      for (const n of nodes) {
-        const own = (n.textContent || '').trim();
-        if (!re.test(own)) continue;
-        // Значение лежит рядом с подписью — поднимаемся на два уровня и смотрим,
-        // появилась ли в карточке цифра помимо самой подписи.
-        for (const box of [n.parentElement, n.parentElement && n.parentElement.parentElement]) {
-          if (!box) continue;
-          const rest = (box.innerText || '').replace(own, '');
-          if (/\d/.test(rest)) return true;
-        }
-      }
-      return false;
-    },
-    BALANCE_LABEL_RE.source,
-    { timeout: ms },
-  ).then(() => true).catch(() => false);
-}
-
-// Полная перезагрузка кабинета: не клиентский роут SPA, а новая загрузка документа.
-// `waitUntil: 'load'` вместо 'domcontentloaded' — иначе отсчёт ожидания начинается до
-// того, как бандл поднялся и спросил остаток. На URL колбэка перезагружаться нельзя:
-// `code` одноразовый (см. OAUTH_CALLBACK_RE), поэтому оттуда уходим навигацией.
-async function fullReloadConsole(page, why) {
-  const onConsole = /agentrouter\.org\/console/i.test(page.url());
-  console.log(`🔄 ${why}: ${onConsole ? 'reload(load)' : 'goto ' + CONSOLE_URL} (сейчас ${page.url()})`);
-  if (onConsole) await page.reload({ waitUntil: 'load' }).catch(() => {});
-  else await page.goto(CONSOLE_URL, { waitUntil: 'load' }).catch(() => {});
-  await waitSpaReady(page, 15000);
-  const drawn = await waitBalanceRendered(page);
-  console.log(`   карточка баланса ${drawn ? 'заполнена' : 'осталась пустой (скелетон) — обычно это заглушка WAF в ответе self'}`);
-  return drawn;
-}
-
-async function reloadForFreshSelf(page, selfWatch, baseline, expectGrowth, settleOnly = false) {
-  if (!selfWatch) return;
-  const show = s => `$${(s.quota / 500000).toFixed(2)}`;
-  // Три режима, и разница между ними — что считать «дождались»:
-  //   growth — эталон известен: ждём цифру ВЫШЕ него, до шести кругов;
-  //   settle — эталона нет, но подарок мог налиться: делаем ДВА круга с паузой и берём
-  //            второй. Рост так не проверить, но и первую (возможно, предзачисленную)
-  //            цифру не хватаем: квота от зачисления только растёт, значит второе
-  //            чтение не хуже первого;
-  //   single — шлюз сказал `checked_in: false` либо режим ручной: расти нечему.
-  const mode = expectGrowth ? 'growth' : (settleOnly ? 'settle' : 'single');
-  const attempts = mode === 'growth' ? GIFT_RELOAD_ATTEMPTS : mode === 'settle' ? 2 : 1;
-  const until = Date.now() + GIFT_TOTAL_BUDGET_MS;
-  console.log(`🧭 обновление страницы: режим ${mode}, до ${attempts} кругов,`
-    + ` потолок ${GIFT_TOTAL_BUDGET_MS / 1000} с, эталон ${baseline ? show(baseline) : 'неизвестен'}`);
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    selfWatch.reset();
-    await fullReloadConsole(page, `круг ${attempt}/${attempts}`);
-
-    const deadline = Math.min(Date.now() + GIFT_SELF_WAIT_MS, until);
-    const lastRound = attempt === attempts;
-
-    while (Date.now() < deadline) {
-      const s = selfWatch.last;
-      // В режиме settle ранний выход разрешён только на последнем круге — иначе мы
-      // вернёмся с первой же цифрой, то есть ровно с тем, от чего уходим.
-      if (selfSnapshotUsable(s) && !selfIsPreGift(s, baseline, expectGrowth)
-          && (mode !== 'settle' || lastRound)) {
-        console.log(`✅ после обновления кабинет отдал ${show(s)}`
-          + (baseline ? ` (было ${show(baseline)})` : '') + ` — круг ${attempt}`);
-        return;
-      }
-      await page.waitForTimeout(500).catch(() => {});
-    }
-    const s = selfWatch.last;
-    console.log(`   круг ${attempt}: ответов self ${selfWatch.seen}`
-      + (selfWatch.stubs ? `, заглушек WAF ${selfWatch.stubs}` : '')
-      + (s ? `, последняя цифра ${show(s)}` : ', годной цифры нет'));
-    if (Date.now() >= until) {
-      console.log(`⌛ потолок ожидания ${GIFT_TOTAL_BUDGET_MS / 1000} с исчерпан на круге ${attempt}`
-        + ` — дальше решает captureSelfSnapshot (предподарочную цифру он не отправит)`);
-      return;
-    }
-    if (lastRound) return;
-    if (s && selfIsPreGift(s, baseline, expectGrowth)) {
-      console.log(`⏳ кабинет всё ещё показывает предподарочные ${show(s)} — жду ${GIFT_SETTLE_MS / 1000} с и обновляю (${attempt}/${attempts})`);
-    } else if (!s) {
-      console.log(`⏳ годного /api/user/self после обновления не дождался — жду ${GIFT_SETTLE_MS / 1000} с и обновляю (${attempt}/${attempts})`);
-    } else if (mode === 'settle') {
-      console.log(`⏳ цифра есть (${show(s)}), но эталона нет — жду ${GIFT_SETTLE_MS / 1000} с и перечитываю на всякий случай`);
-    } else {
-      return;
-    }
-    // Пауза между кругами: зачисление на стороне шлюза не мгновенное, и подряд идущие
-    // перезагрузки только тратят ответы. 🪤 Если ответы приходили ЗАГЛУШКАМИ WAF (Aliyun
-    // включает защиту на частые запросы — 25.08 на `lustrouscult` из трёх ответов self
-    // два были заглушками, и в кабинете висел пустой скелетон), то частить бессмысленно:
-    // ждём заметно дольше, иначе следующий круг просто соберёт ещё одну заглушку.
-    const wafRound = selfWatch.stubs > 0 && !selfWatch.last;
-    const pause = wafRound ? GIFT_WAF_SETTLE_MS : GIFT_SETTLE_MS;
-    if (wafRound) console.log(`🧱 ответы шлюза — заглушки WAF (${selfWatch.stubs}): жду ${pause / 1000} с, частить нельзя`);
-    await page.waitForTimeout(pause).catch(() => {});
-  }
-  console.log(`⚠️  круги (${attempts}) закончились, роста квоты кабинет так и не показал`);
-}
-
-// Точный остаток БЕЗ повторного обращения к шлюзу нашим клиентом. Источники по порядку:
-//
-//   1. перехваченный ответ САМОЙ страницы (watchSelfResponses) — ноль лишних запросов;
-//   2. localStorage['user'] — то же, но разобранное SPA; работает и в ручном режиме;
-//   3. свой fetch из страницы — последний резерв. Это запрос БРАУЗЕРА, а не нашего
-//      клиента: клиентской паузы coolDownHost на нём нет, но заглушку WAF он поймать
-//      может (проверено живьём 2026-08-22 — кабинет с живой сессией показывал $0.00).
-//
-// Снимок уезжает в маркер AUTOCHECKIN_RESULT: дашборд ставит цифру как есть, вместо того
-// чтобы после закрытия окна идти за ней второй раз через куки профиля с диска.
-// Делитель 500000 здесь только для ЛОГА — в маркер уходит сырая quota, а на доллары её
-// переводит бэкенд по quota_per_unit своего инстанса (см. newapi-account.js).
-//
-// `baseline` + `expectGrowth` отбивают предподарочную цифру во ВСЕХ трёх источниках:
-// localStorage кабинет заполняет из той же загрузки страницы, что и перехват, поэтому
-// без проверки фолбэк вернул бы ровно ту цифру, которую мы только что отвергли.
-async function captureSelfSnapshot(page, oauth, selfWatch, baseline = null, expectGrowth = false) {
-  const show = s => `$${(s.quota / 500000).toFixed(2)} (потрачено $${((s.used || 0) / 500000).toFixed(2)})`;
-  const stale = s => selfIsPreGift(s, baseline, expectGrowth);
-
-  if (selfWatch) {
-    console.log(`🛰️  запросов /api/user/self через страницу: ${selfWatch.seen}`
-      + (selfWatch.stubs ? `, из них заглушек WAF: ${selfWatch.stubs}` : '')
-      + (selfWatch.last ? '' : ' — годного ответа среди них нет'));
-  }
-  if (selfWatch && selfSnapshotUsable(selfWatch.last) && !stale(selfWatch.last)) {
-    console.log(`💰 на счету ${show(selfWatch.last)} — перехвачено у самой страницы, лишних запросов ноль`);
-    return { ...selfWatch.last, from: 'page-self' };
-  }
-
-  const ls = await readStoredUser(page);
-  if (ls) console.log(`🗃️  localStorage['user'] отдал поля: ${ls.keys.join(',')}`);
-  if (selfSnapshotUsable(ls) && !stale(ls)) {
-    console.log(`💰 на счету ${show(ls)} — цифра из localStorage страницы, лишних запросов ноль`);
-    return { quota: ls.quota, used: ls.used || 0, id: ls.id, username: ls.username, from: 'localStorage' };
-  }
-
-  const self = await siteSelfOk(page, (oauth && oauth.userId) || (ls && ls.id) || null);
-  if (selfSnapshotUsable(self) && !stale(self)) {
-    console.log(`💰 на счету ${show(self)} — цифра своим запросом из страницы`);
-    return { ...self, from: 'self-fetch' };
-  }
-  // Отдать предподарочную цифру как точную нельзя: дашборд пометит чек-ин забранным и
-  // покажет остаток БЕЗ подарка (arAutoCheckinFinish ставит marker.self как есть).
-  // Пусть лучше он посчитает сам — там подарок доедет со следующим чеком баланса.
-  const anyStale = [selfWatch && selfWatch.last, ls, self].find(s => selfSnapshotUsable(s) && stale(s));
-  if (anyStale) {
-    console.log(`⚠️  все источники отдают предподарочные ${show(anyStale)} — цифру НЕ отправляю,`
-      + ' иначе дашборд запишет остаток без подарка. Баланс он пересчитает сам.');
-    return null;
-  }
-  console.log('⚠️  годной цифры со страницы нет (перехват / localStorage / свой запрос) —'
-    + ' дашборд посчитает баланс сам, как раньше');
-  return null;
-}
-
 async function waitForSiteSession(context, page, timeoutMs, oauth, pollMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1299,18 +957,7 @@ async function uiLogout(context, page, out = null) {
     return false;
   }
 
-  // Эталон «до подарка» снимаем ЗДЕСЬ — сессия точно жива (gate === 'live') и кабинет
-  // открыт. Раньше он брался из случайно перехваченного ответа страницы, и в обоих живых
-  // прогонах 25.08 в логе стояло «предподарочную цифру снять не удалось»: логаут
-  // уводит страницу и обрывает летящий запрос self, так что перехвату ловить нечего.
-  // Без эталона проверка роста вырождается — принимается ЛЮБАЯ цифра, в том числе
-  // предподарочная. Отсюда и жалоба «падает с прошлым балансом».
-  if (out) {
-    out.baseline = await readBaselineSelf(page);
-    console.log(out.baseline
-      ? `📌 эталон до подарка: $${(out.baseline.quota / 500000).toFixed(2)} (снят в кабинете до разлогина, источник ${out.baseline.from})`
-      : '📌 эталон до подарка снять не удалось даже прямым запросом — рост проверить будет нечем');
-  }
+  if (out) out.baseline = null;
 
   const ack = watchLogoutAck(page);
   try {
@@ -1436,6 +1083,92 @@ async function restoreGithubIfLost(context, ghBefore) {
   }
 }
 
+// ───── Отпечаток: один UA на аккаунт, навсегда ───────────────────────────
+//
+// До 12.09 UA тут не задавался вовсе: окно ходило строкой самой сборки Playwright
+// (`HeadlessChrome/148`) — то есть версией движка, а не живого браузера, и ОДИНАКОВОЙ у всех
+// 20+ аккаунтов. Прокси развёл их по IP, а отпечаток остался общим.
+//
+// 🪤 UA обязан быть ЛИПКИМ ровно как прокси. Аккаунт, у которого между двумя входами
+// сменился браузер, выглядит как угнанная сессия — тот же класс сигнала, что уже убил три
+// GitHub-сессии. Поэтому выбор пишется на диск рядом с профилем и переживает перезапуск.
+//
+// 🪤 Только Chrome-строки. Playwright поднимает Chromium: Firefox- или Safari-UA в нём
+// противоречит `navigator.userAgentData`, WebGL и порядку заголовков — это ХУЖЕ дефолта.
+// Пакет `user-agents` (intoli) отдаёт живой срез реального трафика, из него берём Chrome.
+const UA_DIR = path.join(__dirname, 'ua');
+const UA_FALLBACK = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36',
+];
+
+// Генератор строится ОДИН раз: у пакета дорого строится фильтр, а не выборка.
+let uaGen = null;
+try {
+  const UserAgent = require('user-agents');
+  uaGen = new UserAgent({ deviceCategory: 'desktop' });
+} catch { /* пакета нет — работаем на запасном списке */ }
+
+function freshUserAgent() {
+  for (let i = 0; i < 40 && uaGen; i++) {
+    let candidate = '';
+    try { candidate = String(uaGen().toString()); } catch { break; }
+    // Chromium умеет притворяться только Chrome. Всё остальное создаёт противоречие
+    // внутри одного отпечатка, поэтому просто тянем следующую строку.
+    if (/Chrome\/\d+/.test(candidate) && !/Firefox|FxiOS|OPR\/|Edg\/|HeadlessChrome/.test(candidate)) {
+      const v = Number((/Chrome\/(\d+)/.exec(candidate) || [])[1]);
+      if (v >= 140) return candidate;
+    }
+  }
+  return UA_FALLBACK[Math.floor(Math.random() * UA_FALLBACK.length)];
+}
+
+// UA аккаунта: читаем сохранённый, иначе выбираем и запоминаем.
+function accountUserAgent(label, dir = UA_DIR) {
+  const file = path.join(dir, `${String(label || 'default')}.json`);
+  try {
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (saved && typeof saved.ua === 'string' && saved.ua) return saved.ua;
+  } catch { /* первого запуска ещё не было */ }
+
+  const ua = freshUserAgent();
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ ua, at: new Date().toISOString() }), 'utf8');
+    fs.renameSync(tmp, file);
+  } catch { /* не записали — на следующем запуске выберется заново, это не повод падать */ }
+  return ua;
+}
+
+// Client hints ИЗ ТОЙ ЖЕ строки UA.
+//
+// 🔴 Опция `userAgent` у Playwright меняет только `navigator.userAgent`, а
+// `navigator.userAgentData.brands` остаётся ПУСТЫМ — замер 12.09: при UA `Chrome/152`
+// массив `[]`. Пустые brands у «хрома» — готовый детект. Синхронизирует их только
+// `Network.setUserAgentOverride` с `userAgentMetadata` (проверено на живой https-странице).
+function uaMetadata(ua) {
+  const version = String((/Chrome\/(\d+)/.exec(ua) || [])[1] || '152');
+  const full = (/Chrome\/([\d.]+)/.exec(ua) || [])[1] || `${version}.0.0.0`;
+  const platform = /Windows/.test(ua) ? 'Windows'
+    : /Macintosh/.test(ua) ? 'macOS'
+    : /X11|Linux/.test(ua) ? 'Linux' : 'Windows';
+  return {
+    brands: [
+      { brand: 'Chromium', version },
+      { brand: 'Google Chrome', version },
+      { brand: 'Not_A Brand', version: '24' },
+    ],
+    fullVersion: full,
+    platform,
+    platformVersion: platform === 'Windows' ? '15.0.0' : platform === 'macOS' ? '14.0.0' : '6.0.0',
+    architecture: 'x86',
+    model: '',
+    mobile: false,
+  };
+}
+
 async function main() {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const fresh = isFreshProfile();
@@ -1444,27 +1177,40 @@ async function main() {
   console.log(`🚀 Запускаю Chromium (видимый режим)…`);
   console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен GitHub-логин)' : 'уже есть (сохранённый)'}`);
 
-  // Прокси аккаунта: выбран родителем, приехал разовым файлом. Нет файла — пул выключен,
-  // и запуск идёт ровно как до правки.
-  const proxySeed = readProxySeed(label);
-  const launchProxy = proxyLaunchOptions(proxySeed);
-  if (!launchProxy.ok) {
-    // 🔴 Напрямую НЕ идём: у аккаунта живая GitHub-сессия, и подмена IP под ней заметнее
-    // антифроду, чем пропущенный подарок. Родитель покажет это отдельной причиной.
-    console.error(`❌ Прокси аккаунта непригоден: ${launchProxy.error}. Напрямую НЕ пойду.`);
-    process.exit(7);
-  }
-  if (proxySeed) console.log(`🌐 выход через прокси ${proxySeed.scheme}://${proxySeed.hostname}:${proxySeed.port}`);
+  // Browser relogin is always direct. Proxy fallback is confined to the parent process's
+  // post-browser HTTP balance check.
 
   // launchPersistentContext держит профиль открытым и пишет на диск всё сам.
+  // Отпечаток аккаунта: липкий UA, выбранный один раз и сохранённый на диск.
+  const ua = accountUserAgent(label);
+  const uaVer = (/Chrome\/([\d.]+)/.exec(ua) || [])[1] || '?';
+  const uaPlat = /Windows/.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'macOS' : 'Linux';
+  console.log(`🖥️  отпечаток: Chrome ${uaVer} на ${uaPlat}`);
+
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: null,
+    userAgent: ua,
     args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
-    ...launchProxy.options,
   });
 
   const page = context.pages()[0] || await context.newPage();
+
+  // 🔴 Без этого оверрайда `navigator.userAgentData.brands` остаётся ПУСТЫМ при подменённом
+  // UA (замер 12.09) — пустые brands у «хрома» сами по себе детект. Метаданные выводим из
+  // той же строки, чтобы версия в UA и в brands совпадала.
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.setUserAgentOverride', {
+      userAgent: ua,
+      acceptLanguage: 'en-US,en;q=0.9',
+      platform: /Macintosh/.test(ua) ? 'MacIntel' : /X11|Linux/.test(ua) ? 'Linux x86_64' : 'Win32',
+      userAgentMetadata: uaMetadata(ua),
+    });
+  } catch (e) {
+    // Не падаем: UA в заголовках всё равно подменён, просто client hints останутся дефолтными.
+    console.log(`⚠️  client hints не синхронизированы: ${e.message}`);
+  }
   await page.bringToFront();
   raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
   await disableHttpCache(context, page);
@@ -1477,23 +1223,13 @@ async function main() {
     // Подписку на ответ колбэка вешаем ДО клика и на КОНТЕКСТ, а не на страницу:
     // колбэк уедет в попап, которого сейчас ещё нет.
     const oauth = auto ? watchOauthResult(context) : null;
-    // Перехват self — тоже до навигации и в обоих режимах: страница кошелька запросит
-    // остаток сама, и это единственный способ узнать цифру, ничего не спрашивая заново.
-    const selfWatch = watchSelfResponses(context);
+    // Browser only relogs and harvests cookies; balance is checked after exit by the parent.
     try {
       console.log(auto
         ? '⚡ Автоподарок: гашу сессию и вхожу через GitHub сам.'
         : '🎁 Чек-ин +$25: гашу сессию и открываю вход.');
       if (RUN_LOG) console.log(`📝 полный след прогона: ${RUN_LOG}`);
-      const takenBaseline = await doCheckinLogout(context, page);
-      // Эталон «до подарка». Основной источник — намеренный съём внутри uiLogout, пока
-      // сессия жива (см. readBaselineSelf). Перехваченный ответ страницы оставлен вторым
-      // номером: он ловится не всегда — логаут обрывает летящий запрос self, и оба живых
-      // прогона 25.08 остались без эталона именно так.
-      const baseline = takenBaseline
-        || (selfSnapshotUsable(selfWatch.last) ? { ...selfWatch.last, from: 'перехват' } : null);
-      if (!takenBaseline && baseline) console.log(`📌 эталон взят из перехвата: $${(baseline.quota / 500000).toFixed(2)}`);
-      selfWatch.reset();
+      await doCheckinLogout(context, page);
 
       if (auto) {
         // Живость GitHub-сессии смотрим ПО КУКАМ ПРОФИЛЯ. Сырой пробник на github.com
@@ -1594,74 +1330,18 @@ async function main() {
         }
       }
       await settleAfterCheckin(page);
-      // Подарок налит, а кабинет об этом ещё не знает: /api/user/self он спрашивает один
-      // раз на загрузку страницы, и цифра в окне меняется только после F5 (жалоба
-      // владельца 2026-08-23). Делаем этот F5 сами — иначе в маркер уехал бы остаток БЕЗ
-      // подарка, и дашборд поставил бы его как точный.
-      //
-      // Роста ждём ВСЕГДА, когда известна предподарочная цифра. Слову шлюза здесь больше
-      // не верим: `checked_in: true` приходил и без роста (пять прогонов 22.08), а
-      // отсутствие флага не значит, что не налили — владелец 24.08: «подарок точно
-      // срабатывает». Единственное, что флаг ещё решает, — явное `checked_in: false`:
-      // суточное окно не сменилось, расти нечему, и ждать значило бы тянуть прогон
-      // впустую и выбросить верную цифру.
-      const gatewaySaysNo = !!(auto && oauth && oauth.seen && oauth.checkedIn === false);
-      const expectGrowth = !!(auto && baseline && !gatewaySaysNo);
-      // Эталона нет, но подарок мог налиться — тогда хотя бы не хватаем первую цифру:
-      // два круга с паузой, берём второй (зачисление квоту только поднимает).
-      const settleOnly = !expectGrowth && auto && !gatewaySaysNo;
-      console.log(`🎯 ожидание роста: ${expectGrowth ? 'да' : settleOnly ? 'нет эталона — беру вторым чтением' : 'нет'}`
-        + ` (эталон ${baseline ? 'есть' : 'НЕТ'}, шлюз: ${!auto ? 'ручной режим' : !oauth || !oauth.seen ? 'колбэк не поймали'
-          : oauth.checkedIn ? 'checked_in: true' : 'checked_in: false — окно не сменилось'})`);
-      await reloadForFreshSelf(page, selfWatch, baseline, expectGrowth, settleOnly);
-      // Прямой замер версии «страница отдаёт кэш»: спрашиваем /api/user/self СВОИМ
-      // запросом из страницы и печатаем обе цифры рядом. Расходятся — виновата
-      // страница (её ответ устарел), совпадают — цифра честная и подарка в ней нет,
-      // то есть искать надо на стороне шлюза, а не в браузере. Один лишний запрос на
-      // прогон чек-ина: цена ответа на вопрос, который иначе решается догадками.
-      // Сверка «страница против своего запроса» — ДИАГНОСТИКА, по умолчанию выключена.
-      // Свой запрос стоит ещё одного обращения к шлюзу, а Aliyun WAF включает защиту
-      // именно на частоту: 25.08 из трёх ответов self два пришли заглушками, и кабинет
-      // остался с пустой карточкой баланса. Вопрос, ради которого сверка делалась
-      // («страница отдаёт кэш?»), она уже закрыла — ответ «нет, не отдаёт». Включить
-      // обратно: `AR_SELF_PROBE=1` в окружении прогона.
-      if (process.env.AR_SELF_PROBE === '1') {
-        // 🪤 Снимок «что видела страница» берём ДО своего запроса: он идёт через тот же
-        // перехват (context.route), то есть сам перезапишет selfWatch.last — и сверка
-        // сравнивала бы свой запрос сам с собой, всегда получая «совпали».
-        const pageSaw = selfWatch.last ? { ...selfWatch.last } : null;
-        const own = await siteSelfOk(page, (auto && oauth && oauth.userId) || null);
-        const q = s => s && typeof s.quota === 'number' ? `$${(s.quota / 500000).toFixed(2)}` : '—';
-        const same = own && pageSaw && Number(own.quota) === Number(pageSaw.quota);
-        console.log(`🔬 сверка: страница ${q(pageSaw)} · свой запрос ${q(own)}`
-          + ` · эталон до подарка ${q(baseline)} → ${same ? 'СОВПАЛИ (кэша страницы нет)'
-            : own && pageSaw ? 'РАЗОШЛИСЬ — страница отдавала устаревшее' : 'сравнить не с чем'}`);
-      }
-      // Точную цифру снимаем ЗДЕСЬ, пока браузер жив и стоит на балансе: /api/user/self
-      // отвечает сессии САМОЙ страницы. Это тот же ответ, за которым дашборд после
-      // закрытия окна лез бы во второй раз — расшифровывая куки профиля с диска и
-      // стучась к шлюзу за Aliyun WAF (именно этот запрос ловит рейт-лимит и роняет
-      // точный баланс всего пула на 10 минут). Снимок уезжает в маркер, дашборд ставит
-      // цифру как есть; не снялся — старый путь остаётся фолбэком.
-      const selfSnap = await captureSelfSnapshot(page, auto ? oauth : null, selfWatch, baseline, expectGrowth);
       await backupGhAfterLogin(context);
-    await harvestCookiesToJar(context);
       await harvestCookiesToJar(context);
       console.log('✅ Вход выполнен. Закрываю браузер, чтобы куки легли на диск —');
       console.log('   без этого следующий чек баланса не найдёт в профиле живой сессии.');
       await context.close().catch(() => {});
-      // Маркер печатают ОБА режима: цифра, снятая со страницы, одинаково избавляет
-      // дашборд от повторного чека, кто бы ни жал кнопку входа — скрипт или человек.
-      // checkedIn = слово ШЛЮЗА про суточный бонус (только auto, в ручном режиме
-      // колбэк не перехватываем); null — решает бэкенд по росту выдачи, как раньше.
+      // The marker reports only the gateway's check-in verdict. The parent obtains the
+      // authoritative balance through cookie/raw-auth after this process exits.
       console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
         checkedIn: auto && oauth && oauth.seen ? !!oauth.checkedIn : null,
         message: (auto && oauth && oauth.message) || '',
-        self: selfSnap,
       })}`);
-      console.log(selfSnap
-        ? '🎁 Готово. Баланс снят со страницы — дашборд поставит цифру и 📦 сам, жать 💰 не нужно.'
-        : '🎁 Готово, но цифру со страницы снять не удалось — дашборд пересчитает баланс сам, как раньше.');
+      console.log('🎁 Готово. Куки сохранены; дашборд сейчас проверит точный баланс обычным HTTP-путём.');
       process.exit(0);
     } catch (e) {
       await context.close().catch(() => {});
@@ -1786,4 +1466,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readProxySeed, proxyLaunchOptions, PROXY_SEED_DIR };
+module.exports = { accountUserAgent, uaMetadata, UA_DIR };

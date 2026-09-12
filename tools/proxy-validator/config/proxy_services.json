@@ -1,43 +1,11 @@
 [
   {
-    "name": "iPlocate SOCKS5",
-    "url": "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/iplocate/free-proxy-list"
-  },
-  {
     "name": "Proxifly SOCKS5",
     "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
     "protocol": "SOCKS5",
     "parser": "regex",
     "enabled": true,
     "origin_repo": "https://github.com/proxifly/free-proxy-list"
-  },
-  {
-    "name": "TheSpeedX SOCKS5",
-    "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/TheSpeedX/PROXY-List"
-  },
-  {
-    "name": "sunny9577 HTTP",
-    "url": "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/sunny9577/proxy-scraper"
-  },
-  {
-    "name": "Thordata HTTPS",
-    "url": "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/https.txt",
-    "protocol": "HTTPS",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/Thordata/awesome-free-proxy-list"
   },
   {
     "name": "databay-labs SOCKS5",
@@ -48,132 +16,12 @@
     "origin_repo": "https://github.com/databay-labs/free-proxy-list"
   },
   {
-    "name": "r00tee SOCKS5",
-    "url": "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/r00tee/Proxy-List"
-  },
-  {
-    "name": "dpangestuw SOCKS5",
-    "url": "https://raw.githubusercontent.com/dpangestuw/Free-Proxy/main/socks5_proxies.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/dpangestuw/Free-Proxy"
-  },
-  {
-    "name": "NikolaiT HTTPS working",
-    "url": "https://raw.githubusercontent.com/NikolaiT/free-proxy-list/main/proxies/https_working.txt",
-    "protocol": "HTTPS",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/NikolaiT/free-proxy-list"
-  },
-  {
-    "name": "Skillter ProxyGather working HTTP",
-    "url": "https://raw.githubusercontent.com/Skillter/ProxyGather/refs/heads/master/proxies/working-proxies-http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/Skillter/ProxyGather#live-proxy-lists"
-  },
-  {
-    "name": "Zaeem20 SOCKS4",
-    "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks4.txt",
-    "protocol": "SOCKS4",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST"
-  },
-  {
-    "name": "proxyspace.pro HTTP",
-    "url": "https://proxyspace.pro/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://proxyspace.pro"
-  },
-  {
-    "name": "KangProxy HTTP",
-    "url": "https://raw.githubusercontent.com/officialputuid/KangProxy/main/http/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/officialputuid/KangProxy"
-  },
-  {
-    "name": "noctiro/getproxy SOCKS4",
-    "url": "https://raw.githubusercontent.com/noctiro/getproxy/master/file/socks4.txt",
-    "protocol": "SOCKS4",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/noctiro/getproxy"
-  },
-  {
-    "name": "relayglass SOCKS5",
-    "url": "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks5/socks5.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/relayglass/free-proxy-list"
-  },
-  {
-    "name": "hproxy-com SOCKS5",
-    "url": "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/socks5.txt",
-    "protocol": "SOCKS5",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/hproxy-com/free-proxy-list"
-  },
-  {
-    "name": "xyzs996 health HTTP",
-    "url": "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/xyzs996/free-proxy-health-list"
-  },
-  {
-    "name": "dinoz0rg checked SOCKS4",
-    "url": "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt",
-    "protocol": "SOCKS4",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/dinoz0rg/proxy-list"
-  },
-  {
-    "name": "pwnx0 checked HTTP",
-    "url": "https://raw.githubusercontent.com/pwnx0/proxy/main/proxies/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/pwnx0/proxy"
-  },
-  {
-    "name": "zevtyardt HTTP",
-    "url": "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/http.txt",
-    "protocol": "HTTP",
-    "parser": "regex",
-    "enabled": true,
-    "origin_repo": "https://github.com/zevtyardt/proxy-list"
-  },
-  {
     "name": "zevtyardt SOCKS4",
     "url": "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks4.txt",
     "protocol": "SOCKS4",
     "parser": "regex",
     "enabled": true,
     "origin_repo": "https://github.com/zevtyardt/proxy-list"
-  },
-  {
-    "name": "Proxifly All",
-    "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt",
-    "protocol": "MIXED",
-    "parser": "regex",
-    "origin_repo": "https://github.com/proxifly/free-proxy-list",
-    "enabled": true
   },
   {
     "name": "Proxmint All",
@@ -184,11 +32,499 @@
     "enabled": true
   },
   {
+    "name": "ProxyScrape v4 SOCKS4",
+    "url": "https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=socks4&timeout=8000&country=all&ssl=all&anonymity=all",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://api.proxyscrape.com",
+    "enabled": true
+  },
+  {
+    "name": "hookzof SOCKS5 list",
+    "url": "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/hookzof/socks5_list",
+    "enabled": true
+  },
+  {
+    "name": "stormsia SOCKS4",
+    "url": "https://raw.githubusercontent.com/stormsia/proxy-list/main/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/stormsia/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "ShiftyTR SOCKS4",
+    "url": "https://raw.githubusercontent.com/ShiftyTR/Proxy-List/master/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/ShiftyTR/Proxy-List",
+    "enabled": true
+  },
+  {
+    "name": "monosans HTTP",
+    "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/monosans/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "NikolaiT HTTP working",
+    "url": "https://raw.githubusercontent.com/NikolaiT/free-proxy-list/main/proxies/http_working.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/NikolaiT/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "NikolaiT SOCKS4 working",
+    "url": "https://raw.githubusercontent.com/NikolaiT/free-proxy-list/main/proxies/socks4_working.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/NikolaiT/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "saisuiu/uiu HTTP",
+    "url": "https://raw.githubusercontent.com/saisuiu/uiu/main/free.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/saisuiu/uiu",
+    "enabled": true
+  },
+  {
+    "name": "GeoNode HTTPS API",
+    "url": "https://proxylist.geonode.com/api/proxy-list?limit=500&page=1&sort_by=lastChecked&sort_type=desc&protocols=https",
+    "protocol": "HTTPS",
+    "parser": "geonode",
+    "origin_repo": "https://github.com/geonode/geonode",
+    "enabled": true
+  },
+  {
+    "name": "fyvri HTTP",
+    "url": "https://raw.githubusercontent.com/fyvri/fresh-proxy-list/archive/storage/classic/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/fyvri/fresh-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "ProxyScrape v4 HTTP",
+    "url": "https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=http&timeout=8000&country=all&ssl=all&anonymity=all",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://api.proxyscrape.com",
+    "enabled": true
+  },
+  {
+    "name": "hproxy-com HTTPS",
+    "url": "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/hproxy-com/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "xyzs996 health SOCKS5",
+    "url": "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/xyzs996/free-proxy-health-list",
+    "enabled": true
+  },
+  {
+    "name": "noctiro/getproxy HTTPS",
+    "url": "https://raw.githubusercontent.com/noctiro/getproxy/master/file/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/noctiro/getproxy",
+    "enabled": true
+  },
+  {
+    "name": "stormsia SOCKS5",
+    "url": "https://raw.githubusercontent.com/stormsia/proxy-list/main/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/stormsia/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "monosans SOCKS5",
+    "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/monosans/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "relayglass HTTPS",
+    "url": "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/https/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/relayglass/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "openproxylist.xyz SOCKS4",
+    "url": "https://openproxylist.xyz/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://openproxylist.xyz",
+    "enabled": true
+  },
+  {
+    "name": "sslproxies.org HTTPS",
+    "url": "https://www.sslproxies.org/",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/iw4p/proxy-scraper",
+    "enabled": true
+  },
+  {
+    "name": "Proxifly SOCKS4",
+    "url": "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks4/data.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/proxifly/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "TuanMinPay live SOCKS4",
+    "url": "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/TuanMinPay/live-proxy",
+    "enabled": true
+  },
+  {
+    "name": "iPlocate HTTP",
+    "url": "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/iplocate/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "Thordata Top HTTP",
+    "url": "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/top-http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Thordata/awesome-free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "openproxylist.xyz SOCKS5",
+    "url": "https://openproxylist.xyz/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://openproxylist.xyz",
+    "enabled": true
+  },
+  {
+    "name": "Zaeem20 HTTPS",
+    "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST",
+    "enabled": true
+  },
+  {
+    "name": "Zaeem20 HTTP",
+    "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST",
+    "enabled": true
+  },
+  {
+    "name": "stormsia HTTP",
+    "url": "https://raw.githubusercontent.com/stormsia/proxy-list/main/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/stormsia/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "proxyspace.pro SOCKS5",
+    "url": "https://proxyspace.pro/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://proxyspace.pro",
+    "enabled": true
+  },
+  {
+    "name": "jetkai/proxy-list SOCKS4",
+    "url": "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/jetkai/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "proxyspace.pro HTTPS",
+    "url": "https://proxyspace.pro/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://proxyspace.pro",
+    "enabled": true
+  },
+  {
+    "name": "VMHeaven HTTP Anonymous",
+    "url": "https://raw.githubusercontent.com/vmheaven/VMHeaven.io-Free-Proxy-List/main/http_anonymous.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/vmheaven/VMHeaven.io-Free-Proxy-List",
+    "enabled": true
+  },
+  {
+    "name": "Thordata SOCKS5",
+    "url": "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Thordata/awesome-free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "zloi-user hideip SOCKS4",
+    "url": "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/zloi-user/hideip.me",
+    "enabled": true
+  },
+  {
+    "name": "pwnx0 checked HTTPS",
+    "url": "https://raw.githubusercontent.com/pwnx0/proxy/main/proxies/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/pwnx0/proxy",
+    "enabled": true
+  },
+  {
+    "name": "relayglass SOCKS4",
+    "url": "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks4/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/relayglass/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "monosans SOCKS4",
+    "url": "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/monosans/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "Zaeem20 SOCKS5",
+    "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST",
+    "enabled": true
+  },
+  {
+    "name": "TuanMinPay live SOCKS5",
+    "url": "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/TuanMinPay/live-proxy",
+    "enabled": true
+  },
+  {
+    "name": "TuanMinPay live HTTP",
+    "url": "https://raw.githubusercontent.com/TuanMinPay/live-proxy/master/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/TuanMinPay/live-proxy",
+    "enabled": true
+  },
+  {
+    "name": "spys.me SOCKS5",
+    "url": "https://spys.me/socks.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://spys.me",
+    "enabled": true
+  },
+  {
+    "name": "TheSpeedX SOCKS4",
+    "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/TheSpeedX/PROXY-List",
+    "enabled": true
+  },
+  {
+    "name": "Thordata HTTP",
+    "url": "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Thordata/awesome-free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "Proxifly All",
+    "url": "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/all/data.txt",
+    "protocol": "MIXED",
+    "parser": "regex",
+    "origin_repo": "https://github.com/proxifly/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "proxyspace.pro HTTP",
+    "url": "https://proxyspace.pro/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://proxyspace.pro",
+    "enabled": true
+  },
+  {
+    "name": "TheSpeedX SOCKS5",
+    "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/TheSpeedX/PROXY-List",
+    "enabled": true
+  },
+  {
+    "name": "dinoz0rg checked SOCKS4",
+    "url": "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/dinoz0rg/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "xyzs996 health HTTP",
+    "url": "https://raw.githubusercontent.com/xyzs996/free-proxy-health-list/main/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/xyzs996/free-proxy-health-list",
+    "enabled": true
+  },
+  {
+    "name": "Thordata HTTPS",
+    "url": "https://raw.githubusercontent.com/Thordata/awesome-free-proxy-list/main/proxies/https.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Thordata/awesome-free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "zevtyardt HTTP",
+    "url": "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/zevtyardt/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "KangProxy HTTP",
+    "url": "https://raw.githubusercontent.com/officialputuid/KangProxy/main/http/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/officialputuid/KangProxy",
+    "enabled": true
+  },
+  {
+    "name": "iPlocate SOCKS5",
+    "url": "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/iplocate/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "NikolaiT HTTPS working",
+    "url": "https://raw.githubusercontent.com/NikolaiT/free-proxy-list/main/proxies/https_working.txt",
+    "protocol": "HTTPS",
+    "parser": "regex",
+    "origin_repo": "https://github.com/NikolaiT/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "noctiro/getproxy SOCKS4",
+    "url": "https://raw.githubusercontent.com/noctiro/getproxy/master/file/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/noctiro/getproxy",
+    "enabled": true
+  },
+  {
+    "name": "Zaeem20 SOCKS4",
+    "url": "https://raw.githubusercontent.com/Zaeem20/FREE_PROXIES_LIST/master/socks4.txt",
+    "protocol": "SOCKS4",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Zaeem20/FREE_PROXIES_LIST",
+    "enabled": true
+  },
+  {
     "name": "Dinoz0rg HTTP",
     "url": "https://raw.githubusercontent.com/dinoz0rg/proxy-list/main/checked_proxies/http.txt",
     "protocol": "HTTP",
     "parser": "regex",
     "origin_repo": "https://github.com/dinoz0rg/proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "relayglass SOCKS5",
+    "url": "https://raw.githubusercontent.com/relayglass/free-proxy-list/main/protocol/socks5/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/relayglass/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "r00tee SOCKS5",
+    "url": "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/r00tee/Proxy-List",
+    "enabled": true
+  },
+  {
+    "name": "sunny9577 HTTP",
+    "url": "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/sunny9577/proxy-scraper",
+    "enabled": true
+  },
+  {
+    "name": "hproxy-com SOCKS5",
+    "url": "https://raw.githubusercontent.com/hproxy-com/free-proxy-list/main/socks5.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/hproxy-com/free-proxy-list",
+    "enabled": true
+  },
+  {
+    "name": "Skillter ProxyGather working HTTP",
+    "url": "https://raw.githubusercontent.com/Skillter/ProxyGather/refs/heads/master/proxies/working-proxies-http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/Skillter/ProxyGather#live-proxy-lists",
+    "enabled": true
+  },
+  {
+    "name": "pwnx0 checked HTTP",
+    "url": "https://raw.githubusercontent.com/pwnx0/proxy/main/proxies/http.txt",
+    "protocol": "HTTP",
+    "parser": "regex",
+    "origin_repo": "https://github.com/pwnx0/proxy",
+    "enabled": true
+  },
+  {
+    "name": "dpangestuw SOCKS5",
+    "url": "https://raw.githubusercontent.com/dpangestuw/Free-Proxy/main/socks5_proxies.txt",
+    "protocol": "SOCKS5",
+    "parser": "regex",
+    "origin_repo": "https://github.com/dpangestuw/Free-Proxy",
     "enabled": true
   }
 ]

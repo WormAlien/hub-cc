@@ -216,7 +216,11 @@ def _parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     runtime_group = parser.add_mutually_exclusive_group()
     runtime_group.add_argument("--runtime-source-early-disable", dest="runtime_source_early_disable", action="store_true")
     runtime_group.add_argument("--no-runtime-source-early-disable", dest="runtime_source_early_disable", action="store_false")
-    parser.set_defaults(runtime_source_early_disable=True)
+    # A source's yield swings with public-proxy churn. Mutating the source
+    # registry from one runtime sample made each run permanently shrink its own
+    # input set (70 -> 21 sources was observed). Keep quarantine opt-in; a bad
+    # run remains visible in the log, but it no longer rewrites configuration.
+    parser.set_defaults(runtime_source_early_disable=False)
     return parser.parse_args(argv if argv is not None else [])
 
 

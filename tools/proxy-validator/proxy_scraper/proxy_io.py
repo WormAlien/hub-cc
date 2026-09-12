@@ -188,8 +188,29 @@ def parse_proxy_files(files: Iterable[tuple[str | Path, str]]) -> List[ProxyReco
     return result
 
 
+TUNNELABLE_PROTOCOLS = ("http", "https", "socks4", "socks5")
+
+
 def format_proxy_uri(record: ProxyRecord) -> str:
-    protocol = (record.protocol or "AUTO").strip().lower()
+    """Render a record as a ``scheme://[auth@]host:port`` URI.
+
+    The scheme is written into *every* line on purpose: a consumer reading a
+    mixed HTTP+SOCKS list must decide per address, not per filename.
+
+    Raises ``ValueError`` when the record carries no usable protocol. The old
+    behaviour substituted ``AUTO``, which produced ``auto://host:port`` lines
+    that no consumer understands -- ``routing/lib/proxy-pool.js`` only knows
+    http/https/socks/socks4/socks5, so such a line was silently binned as junk
+    and the proxy was lost without a word. A mixed run makes that more likely
+    than a single-protocol one, because unclassified records are exactly the
+    ones that survive a pass without pinning down their protocol.
+    """
+    protocol = (record.protocol or "").strip().lower()
+    if protocol not in TUNNELABLE_PROTOCOLS:
+        raise ValueError(
+            f"proxy {record.address}: protocol {record.protocol!r} is not tunnelable "
+            f"(need one of {', '.join(TUNNELABLE_PROTOCOLS)})"
+        )
     auth = ""
     if record.username or record.password:
         auth = f"{record.username}:{record.password}@"

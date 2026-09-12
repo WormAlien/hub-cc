@@ -246,6 +246,7 @@ const HOST_AUTH = {
     // Отсюда же второе: любой запрос в панель обязан нести `New-Api-User: <id>`,
     // иначе 401 «не предоставлен New-Api-User» — на classic-ветке это уже учтено.
     'api.wisdomsatan.club': 'classic',
+    'www.aikeysapi.com': 'classic',
 };
 
 function authKind(host) {
@@ -991,7 +992,56 @@ function clearHostStrikes(host) {
     if (HOST_COOLDOWN.has(host)) HOST_COOLDOWN.delete(host);
 }
 
-async function apiFetch(host, pathQuery, { method = 'GET', body = null, cookie = '', userId = null, bearer = null, timeoutMs = TIMEOUT_MS, jar = null, jarK = null, proxy = null } = {}) {
+function transportFailure(error) {
+    const message = (error && error.cause && error.cause.code) || (error && error.message) || String(error);
+    return { status: 0, ok: false, json: null, text: null, waf: false, viaProxy: false,
+        error: message, transportError: true };
+}
+
+function retryableDirectFailure(result) {
+    return !!(result && (result.transportError || result.waf || result.status === 429));
+}
+
+function directFailureLabel(result) {
+    if (!result) return 'неизвестный direct-отказ';
+    if (result.transportError) return `direct transport: ${result.error || 'ошибка транспорта'}`;
+    if (result.waf) return `direct WAF HTML (HTTP ${result.status})`;
+    return `direct HTTP ${result.status}`;
+}
+
+async function directFirstRequest({ host, accountId = null, profileDir = null, force = false,
+    direct, viaProxy }) {
+    let original;
+    try { original = await direct(); }
+    catch (e) { original = transportFailure(e); }
+    if (!retryableDirectFailure(original)) return original;
+
+    const originalFailure = directFailureLabel(original);
+    const px = await accountProxy({ host, accountId, profileDir, force });
+    if (!px.ok) {
+        return { ...original, proxyError: true, originalFailure,
+            proxyFallbackError: px.error || 'прокси fallback недоступен' };
+    }
+    if (!px.proxy) {
+        return { ...original, originalFailure,
+            proxyFallbackError: 'прокси fallback не настроен' };
+    }
+    try {
+        const retry = await viaProxy(px.proxy);
+        const out = { ...retry, viaProxy: true, originalFailure };
+        if (!retry.ok) out.proxyFallbackError = retry.waf
+            ? `proxy fallback WAF HTML (HTTP ${retry.status})`
+            : `proxy fallback HTTP ${retry.status}`;
+        return out;
+    } catch (e) {
+        const proxyFallbackError = (e && e.cause && e.cause.code) || (e && e.message) || String(e);
+        return { ...original, proxyError: true, originalFailure, proxyFallbackError };
+    }
+}
+
+async function apiFetch(host, pathQuery, { method = 'GET', body = null, cookie = '', userId = null,
+    bearer = null, timeoutMs = TIMEOUT_MS, jar = null, jarK = null,
+    accountId = null, profileDir = null, force = false } = {}) {
     const headers = {
         'accept': 'application/json',
         'user-agent': UA,
@@ -1004,41 +1054,35 @@ async function apiFetch(host, pathQuery, { method = 'GET', body = null, cookie =
     return hostGate(host, async () => {
         const url = `https://${host}${pathQuery}`;
         const payload = body != null ? JSON.stringify(body) : undefined;
-        // 🪤 Ветка БЕЗ прокси оставлена буква в букву: это путь всего флота, и менять его
-        // ради опции нельзя. Прокси-ветка отдаёт объект той же формы (status / ok /
-        // headers.get / headers.getSetCookie / text), поэтому весь разбор ниже — общий.
-        const res = proxy
-            ? await PROXY.fetchVia(proxy, url, { method, headers, body: payload, timeoutMs })
-            : await fetch(url, {
-                method,
-                headers,
-                body: payload,
-                redirect: 'manual',
+        const parse = async (res, viaProxy) => {
+            const setCookie = extractSetCookie(res);
+            if (jarK && setCookie.length) {
+                const fresh = loadJar();
+                if (mergeSetCookie(fresh, jarK, setCookie)) saveJar(fresh);
+                if (jar) mergeSetCookie(jar, jarK, setCookie);
+            }
+            let json = null, text = null;
+            try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
+            return { status: res.status, ok: res.ok, json, text,
+                waf: wafBlocked(res, text), viaProxy: !!viaProxy };
+        };
+        return directFirstRequest({
+            host, accountId, profileDir, force,
+            direct: async () => parse(await fetch(url, {
+                method, headers, body: payload, redirect: 'manual',
                 signal: AbortSignal.timeout(timeoutMs),
-            });
-        // Ротируемые куки (refresh-токен на jwt-инстансах) сохраняем сразу: пропустим —
-        // и следующий запрос пойдёт с уже погашенным значением.
-        // Пишем ЧЕРЕЗ ПЕРЕЧИТЫВАНИЕ диска и только свой ключ. Пачка балансов идёт по
-        // 3 аккаунта параллельно, у каждого свой снимок jar — при записи снимка целиком
-        // последний писатель затирал чужие свежие куки, и аккаунты «теряли» сессию
-        // на ровном месте (та же грабля, что лечит arSaveMerge для пулов).
-        const setCookie = extractSetCookie(res);
-        if (jarK && setCookie.length) {
-            const fresh = loadJar();
-            if (mergeSetCookie(fresh, jarK, setCookie)) saveJar(fresh);
-            if (jar) mergeSetCookie(jar, jarK, setCookie);   // и в свой снимок, для этого же вызова
-        }
-        let json = null, text = null;
-        try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
-        const waf = wafBlocked(res, text);
-        return { status: res.status, ok: res.ok, json, text, waf };
+            }), false),
+            viaProxy: async proxy => parse(await PROXY.fetchVia(proxy, url, {
+                method, headers, body: payload, timeoutMs,
+            }), true),
+        });
     });
 }
 
 // quota_per_unit хоста. Публичный эндпоинт, без авторизации; кешируем на процесс.
 const QPU_CACHE = new Map();   // host → number
-async function quotaPerUnit(host, proxy = null) {
-    return (await statusMeta(host, proxy)).qpu;
+async function quotaPerUnit(host, request = {}) {
+    return (await statusMeta(host, request)).qpu;
 }
 
 // Валютная карточка хоста из того же `/api/status`, одним запросом на процесс.
@@ -1055,11 +1099,11 @@ async function quotaPerUnit(host, proxy = null) {
 // то есть заполнено «для галочки». Символ выбираем по displayType, а не по этому полю.
 const META_CACHE = new Map();  // host → { qpu, rate, symbol, displayType }
 const SYMBOLS = { CNY: '¥', USD: '$', EUR: '€', RUB: '₽', TOKENS: '' };
-async function statusMeta(host, proxy = null) {
+async function statusMeta(host, request = {}) {
     if (META_CACHE.has(host)) return META_CACHE.get(host);
     const meta = { qpu: QUOTA_PER_UNIT_DEFAULT, rate: 1, symbol: '$', displayType: 'USD' };
     try {
-        const r = await apiFetch(host, '/api/status', { timeoutMs: 10000, proxy });
+        const r = await apiFetch(host, '/api/status', { timeoutMs: 10000, ...request });
         const d = (r.json && (r.json.data || r.json)) || {};
         if (process.env.NEWAPI_DEBUG) {
             console.error(`[newapi] statusMeta ${host}: HTTP ${r.status} waf=${!!r.waf}`
@@ -1101,11 +1145,15 @@ function usdToLocal(usd, rate) {
 // Путь найден в публичном бандле консоли tabitoken.com. Кука одноразовая:
 // новое значение приходит в set-cookie и уезжает в jar внутри apiFetch.
 // Ответ уже содержит user с quota и used_quota — отдельный /api/user/self не нужен.
-async function refreshAccessToken(host, cookie, jar = null, jarK = null, proxy = null) {
-    const r = await apiFetch(host, '/api/user/auth/refresh', { method: 'POST', body: {}, cookie, jar, jarK, proxy });
+async function refreshAccessToken(host, cookie, jar = null, jarK = null, request = {}) {
+    const r = await apiFetch(host, '/api/user/auth/refresh', {
+        method: 'POST', body: {}, cookie, jar, jarK, ...request,
+    });
     if (r.waf || r.status === 429) {
-        coolDownHost(host);
-        return { ok: false, status: r.status, error: r.waf ? 'WAF-заглушка (слишком часто)' : 'слишком часто (429)' };
+        return { ok: false, status: r.status,
+            error: r.proxyFallbackError
+                ? `${r.waf ? 'WAF-заглушка' : 'слишком часто (429)'}; proxy fallback: ${r.proxyFallbackError}`
+                : (r.waf ? 'WAF-заглушка (слишком часто)' : 'слишком часто (429)') };
     }
     if (r.status !== 200 || !r.json || r.json.success === false) {
         return { ok: false, status: r.status, error: (r.json && r.json.message) || `HTTP ${r.status}` };
@@ -1183,20 +1231,12 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     if (cooling && !force) return { ok: false, error: `шлюз отбивает по частоте, пауза ещё ${cooling}с` };
     if (cooling && force) console.log(`[newapi] ${host}: пауза ещё ${cooling}с, но клик владельца — пробую один раз`);
 
-    // Прокси решается ОДИН раз и до первого запроса — включая `/api/status`.
-    //
-    // 🪤 Порядок принципиален. `statusMeta` кеширует результат по хосту, и если бы прокси
-    // брался внутри него, ключом липкости стал бы `host:agentrouter.org` — общий на весь
-    // пул. Тогда двадцать аккаунтов снова ходили бы с одного адреса, только теперь через
-    // прокси. Ключ обязан быть от accountId, поэтому резолв живёт здесь.
-    const px = await accountProxy({ host, profileDir, accountId, force });
-    if (!px.ok) return { ok: false, error: px.error, proxyError: true };
-    const proxy = px.proxy;
+    const request = { host, profileDir, accountId, force };
 
     // Одним запросом и делитель квоты, и валюта показа: у панели с `quota_display_type`
     // не-USD цифра из /api/user/self всё равно в долларах, а показывать её надо в её
     // валюте (у api.hcnsec.cn это юани по курсу 7.3 — см. statusMeta).
-    const meta = await statusMeta(host, proxy);
+    const meta = await statusMeta(host, request);
     const qpu = meta.qpu;
     const jar = loadJar();
     const jarK = jarKey(host, profileDir);
@@ -1210,8 +1250,8 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     if (token) {
         try {
             const r = kind === 'jwt'
-                ? await apiFetch(host, '/api/user/self', { bearer: token, jar, jarK, proxy })
-                : await apiFetchRawAuth(host, '/api/user/self', token, proxy);
+                ? await apiFetch(host, '/api/user/self', { bearer: token, jar, jarK, ...request })
+                : await apiFetchRawAuth(host, '/api/user/self', token, request);
             if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
         } catch { /* токен протух — ниже пробуем куки профиля */ }
     }
@@ -1235,7 +1275,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     const kindEff = kind !== 'jwt' && /(?:^|;\s*)new_api_refresh=/.test(cookie) ? 'jwt' : kind;
 
     if (kindEff === 'jwt') {
-        const rt = await refreshAccessToken(host, cookie, jar, jarK, proxy);
+        const rt = await refreshAccessToken(host, cookie, jar, jarK, request);
         if (!rt.ok) {
             const expired = rt.status === 401 || rt.status === 403;
             return {
@@ -1254,7 +1294,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         if (rt.user && rt.user.quota != null && rt.user.used_quota != null) {
             return selfOk(host, rt.user, qpu, meta);
         }
-        const r = await apiFetch(host, '/api/user/self', { bearer: rt.token, proxy });
+        const r = await apiFetch(host, '/api/user/self', { bearer: rt.token, ...request });
         if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
         if (rt.user && rt.user.quota != null) return selfOk(host, rt.user, qpu, meta);
         return { ok: false, error: `self: HTTP ${r.status}` };
@@ -1266,7 +1306,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     const cookieUid = sess ? sessionUserId(sess.value) : null;
     const uid = userId || cookieUid;
     if (!uid) return { ok: false, error: 'не удалось определить New-Api-User id' };
-    let r = await apiFetch(host, '/api/user/self', { cookie, userId: uid, jar, jarK, proxy });
+    let r = await apiFetch(host, '/api/user/self', { cookie, userId: uid, jar, jarK, ...request });
     // Переданный id мог протухнуть: в записи пула лежит id прежнего аккаунта, а куки в
     // профиле — уже от нового. New-API на такую пару отвечает 401, и это неотличимо от
     // мёртвой сессии: точный баланс пропадает навсегда, владелец вписывает цифру руками.
@@ -1274,10 +1314,11 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     // Успех вернёт настоящие userId/username, и вызывающая сторона перепишет запись.
     // Поймано живьём: gorouter WormAlien, запись 26601/impeccableso против куки 18063.
     if ((r.status === 401 || r.status === 403) && cookieUid && Number(cookieUid) !== Number(uid)) {
-        r = await apiFetch(host, '/api/user/self', { cookie, userId: cookieUid, jar, jarK, proxy });
+        r = await apiFetch(host, '/api/user/self', { cookie, userId: cookieUid, jar, jarK, ...request });
     }
     if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
     if (r.waf || r.status === 429) {
+        // Cooldown only after the one allowed proxy retry also failed (or no fallback exists).
         coolDownHost(host);
         // 🪤 Текст «слишком часто» был догадкой и уводил разбор в частоту запросов.
         // Замер 25.08 (`lustrouscult`, agentrouter): одиночный запрос через минуты после
@@ -1307,7 +1348,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
 // 🪤 Прокси здесь обязателен наравне с apiFetch: это единственный оставшийся путь, которым
 // запрос аккаунта мог уйти мимо туннеля. Один такой промах показывает панели два адреса в
 // одном сеансе — сигнал заметнее, чем общий IP, ради ухода от которого пул и заводили.
-async function apiFetchRawAuth(host, pathQuery, token, proxy = null) {
+async function apiFetchRawAuth(host, pathQuery, token, request = {}) {
     const url = `https://${host}${pathQuery}`;
     const headers = {
         'accept': 'application/json',
@@ -1315,17 +1356,21 @@ async function apiFetchRawAuth(host, pathQuery, token, proxy = null) {
         'referer': `https://${host}/console`,
         'authorization': token,
     };
-    const res = proxy
-        ? await PROXY.fetchVia(proxy, url, { method: 'GET', headers, timeoutMs: TIMEOUT_MS })
-        : await fetch(url, {
-            method: 'GET',
-            headers,
-            redirect: 'manual',
-            signal: AbortSignal.timeout(TIMEOUT_MS),
-        });
-    let json = null, text = null;
-    try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
-    return { status: res.status, ok: res.ok, json, text };
+    const parse = async (res, viaProxy) => {
+        let json = null, text = null;
+        try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
+        return { status: res.status, ok: res.ok, json, text,
+            waf: wafBlocked(res, text), viaProxy: !!viaProxy };
+    };
+    return directFirstRequest({
+        ...request, host,
+        direct: async () => parse(await fetch(url, {
+            method: 'GET', headers, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS),
+        }), false),
+        viaProxy: async proxy => parse(await PROXY.fetchVia(proxy, url, {
+            method: 'GET', headers, timeoutMs: TIMEOUT_MS,
+        }), true),
+    });
 }
 
 // Выпуск долгоживущего access-токена аккаунта (classic-инстансы: GET /api/user/token).
@@ -1432,26 +1477,27 @@ async function listAccountKeysInner({ host, profileDir, userId, reveal }) {
 async function accountFetch({ host, accountId = null, profileDir = null, url, options = {}, force = false }) {
     if (!host) return { ok: false, status: 0, error: 'host обязателен', proxyError: false };
     if (!url) return { ok: false, status: 0, error: 'url обязателен', proxyError: false };
-    const px = await accountProxy({ host, profileDir, accountId, force });
-    if (!px.ok) return { ok: false, status: 0, error: px.error, proxyError: true };
 
     const { method = 'GET', headers = {}, body = null, timeoutMs = TIMEOUT_MS } = options || {};
     const h = { 'accept': 'application/json', 'user-agent': UA, ...headers };
     const payload = body == null ? undefined : (typeof body === 'string' ? body : JSON.stringify(body));
     if (payload != null && !h['content-type'] && !h['Content-Type']) h['content-type'] = 'application/json';
-
-    const res = px.proxy
-        ? await PROXY.fetchVia(px.proxy, url, { method, headers: h, body: payload, timeoutMs })
-        : await fetch(url, {
-            method,
-            headers: h,
-            body: payload,
-            redirect: 'manual',
+    const parse = async (res, viaProxy) => {
+        let json = null, text = null;
+        try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
+        return { status: res.status, ok: res.ok, json, text,
+            waf: wafBlocked(res, text), viaProxy: !!viaProxy };
+    };
+    return directFirstRequest({
+        host, accountId, profileDir, force,
+        direct: async () => parse(await fetch(url, {
+            method, headers: h, body: payload, redirect: 'manual',
             signal: AbortSignal.timeout(timeoutMs),
-        });
-    let json = null, text = null;
-    try { text = await res.text(); json = text ? JSON.parse(text) : null; } catch {}
-    return { status: res.status, ok: res.ok, json, text, viaProxy: !!px.proxy };
+        }), false),
+        viaProxy: async proxy => parse(await PROXY.fetchVia(proxy, url, {
+            method, headers: h, body: payload, timeoutMs,
+        }), true),
+    });
 }
 
 module.exports = {

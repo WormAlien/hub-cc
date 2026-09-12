@@ -993,7 +993,9 @@ t('дефолтный набор вкладок дашборда — как на
     // 04.09 пропали из дефолта не по решению, а откатом: код лежал незакоммиченным.
     // 10–11.09: добавились 'aipm' (десятый шлюз), 'models' (здоровье моделей), 'media'
     // (генерация картинок/видео) и 'routes' (шпаргалка префиксного роутинга).
-    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+    // 12.09: добавилась 'aikeysapi' (AIKeysAPI/ZhiFlow, New API без GitHub-входа) —
+    // сразу за 'hcnsec', рядом со своим поколением панели.
+    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'aikeysapi', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

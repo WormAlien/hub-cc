@@ -32,7 +32,11 @@ DEFAULT_PASSES = 3
 MIN_INTERVAL_SECONDS = 20
 MAX_INTERVAL_SECONDS = 30
 DEFAULT_INTERVAL_SECONDS = 25
-MAX_PER_SUBNET = 2
+# Сколько адресов максимум брать из одной /24. Лимит существует потому, что один блок-бан
+# подсети уносит сразу все её адреса — но 2 оказалось слишком строго: на прогоне 12.09 так
+# срезало 18 живых прокси из 96 SOCKS5. 10 — компромисс владельца: подсеть ещё не «одна
+# точка отказа», но и потери заметно меньше.
+MAX_PER_SUBNET = 10
 DIALABLE_PROTOCOLS = ("HTTP", "HTTPS", "SOCKS4", "SOCKS5")
 DEFAULT_PROTOCOL = "http"
 
@@ -204,7 +208,20 @@ def run_stability(
             per_subnet[subnet] = per_subnet.get(subnet, 0) + 1
         kept.append(record)
 
-    stable_uris = [format_proxy_uri(record) for record in kept]
+    # A record whose protocol never got pinned down cannot be tunnelled by any
+    # consumer, so it is dropped here with a reason in the report instead of
+    # being written as an ``auto://`` line that the pool bins as junk.
+    stable_uris: List[str] = []
+    kept_tunnelable: List[ProxyRecord] = []
+    for record in kept:
+        try:
+            stable_uris.append(format_proxy_uri(record))
+        except ValueError as exc:
+            failures[_key(record)] = str(exc)
+            continue
+        kept_tunnelable.append(record)
+    dropped_no_protocol = len(kept) - len(kept_tunnelable)
+    kept = kept_tunnelable
     kept_latencies = [medians.get(_key(record), 0.0) for record in kept]
 
     report: Dict[str, object] = {
@@ -219,6 +236,7 @@ def run_stability(
         "candidates": len(candidates),
         "stable_count": len(kept),
         "dropped_by_subnet": dropped_by_subnet,
+        "dropped_no_protocol": dropped_no_protocol,
         "max_per_subnet": MAX_PER_SUBNET,
         "failures": failures,
         "source_urls": list(source_urls or []),

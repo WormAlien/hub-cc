@@ -105,6 +105,10 @@ const HAIKU_GPT_PROXY = process.env.HAIKU_GPT_PROXY || 'http://127.0.0.1:20132';
 // читает свой tabi-modelmap.json; первый (AgentRouter) — как раньше, ar-modelmap.json.
 const AR_MODELMAP_FILE = process.env.MODELMAP_FILE
     || path.join(__dirname, 'ar-modelmap.json');
+// Карта ПРЕФИКСНОГО пути: её правит вкладка «Маршруты», а обычную — вкладка шлюза.
+// До 12.09 файл был один на оба смысла, поэтому правка на одной вкладке молча меняла
+// поведение другой (владелец: «маршруты работают нелогично»).
+const AR_ROUTES_MODELMAP_FILE = AR_MODELMAP_FILE.replace(/-modelmap\.json$/, '-routes-modelmap.json');
 
 // Заголовки, по которым WAF agentrouter узнаёт Claude Code. Ставим только те,
 // которых нет в запросе клиента (см. makeUpstream). Копия CC_HEADERS из
@@ -115,23 +119,29 @@ const CC_FALLBACK_HEADERS = {
     'x-app': 'cli',
 };
 
-const modelMapCache = { data: null, mtime: 0 };
-function readModelMap() {
+// 🪤 Кеш на КАЖДЫЙ файл, а не один слот: карт теперь две (обычная и routes), и на
+// чередующихся запросах одиночный слот промахивался бы всегда, то есть читал бы диск
+// на каждый запрос. Та же правка, что во front-door (`mapCache`, frontdoor-proxy.js:261).
+const modelMapCache = new Map();          // путь → { data, mtime }
+const EMPTY_TIERS = { default: '', opus: '', sonnet: '', haiku: '', gpt: '' };
+function readModelMap(routes) {
+    const file = routes ? AR_ROUTES_MODELMAP_FILE : AR_MODELMAP_FILE;
     try {
-        const st = fs.statSync(AR_MODELMAP_FILE);
-        if (modelMapCache.data && st.mtimeMs === modelMapCache.mtime) return modelMapCache.data;
-        const raw = fs.readFileSync(AR_MODELMAP_FILE, 'utf8');
-        const data = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
-        modelMapCache.data = { opus: '', sonnet: '', haiku: '', gpt: '', ...data };
-        modelMapCache.mtime = st.mtimeMs;
-        return modelMapCache.data;
-    } catch { return { opus: '', sonnet: '', haiku: '', gpt: '' }; }
+        const st = fs.statSync(file);
+        const hit = modelMapCache.get(file);
+        if (hit && st.mtimeMs === hit.mtime) return hit.data;
+        const raw = fs.readFileSync(file, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        const data = { ...EMPTY_TIERS, ...doc };
+        modelMapCache.set(file, { data, mtime: st.mtimeMs });
+        return data;
+    } catch { return { ...EMPTY_TIERS }; }
 }
 
 // Маппинг claude-тира → целевая модель (как в agentrouter-proxy.js).
 const TIER_RE = [{ tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i }, { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i }, { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i }];
-function tierTargetFor(model) {
-    const mm = readModelMap();
+function tierTargetFor(model, routes) {
+    const mm = readModelMap(routes);
     for (const { tier, re } of TIER_RE) {
         if (mm[tier] && re.test(String(model || ''))) {
             const target = mm[tier];
@@ -1247,7 +1257,7 @@ function wantsStream(method, reqPath, headers, body) {
 // на OpenAI-эндпоинте, и «выключенный ремап» означал бы gpt голым в /v1/messages —
 // т.е. ровно ту поломку, ради которой конвертер и написан.
 // Возвращает { body, requester, hostname, port, base, host } или null.
-function remapHaiku(method, reqPath, body) {
+function remapHaiku(method, reqPath, body, routes) {
   if (method !== 'POST') return null;
   const p = reqPath.replace(/\?.*$/, '');
   if (p !== '/v1/messages') return null;
@@ -1265,7 +1275,7 @@ function remapHaiku(method, reqPath, body) {
   if (isGptLike(model)) {
     // mm.gpt позволяет перенаправить GPT-запросы на произвольную цель через дашборд —
     // без правки конфига Claude Code. Пустая строка = старое поведение (конвертер).
-    const mmg = readModelMap();
+    const mmg = readModelMap(routes);
     if (mmg.gpt) {
       const target = mmg.gpt;
       const finalTarget = upstreamModelFor(target, model);
@@ -1296,7 +1306,7 @@ function remapHaiku(method, reqPath, body) {
   // Маппинг из ar-modelmap.json (вкладка AgentRouter) — приоритетнее env.
   // `[1m]` — клиентская метка окна. На claude-цель переносим её, а GPT-цель
   // отправляем голым model id: JustWoker и большинство шлюзов суффикс не публикуют.
-  const tm = tierTargetFor(model);
+  const tm = tierTargetFor(model, routes);
   if (tm && tm.target && tm.target !== bare) {
     const target = tm.target;
     const finalTarget = upstreamModelFor(target, model);
@@ -2215,7 +2225,7 @@ const server = http.createServer((req, res) => {
             log(`${req.method} ${reqPath} ${status} «нет модели ${wasModel}» — обновляю каталог шлюза и ищу замену`);
             refreshCatalog(true, () => {
               if (finished || aborted) return;
-              const again = remapHaiku(req.method, reqPath, rawBody);
+              const again = remapHaiku(req.method, reqPath, rawBody, String(req.headers['x-route-prefixed'] || '') === '1');
               const nextBody = again ? again.body : rawBody;
               const nextModel = modelInBody(nextBody);
               if (nextModel && nextModel !== wasModel) {
@@ -2308,7 +2318,11 @@ const server = http.createServer((req, res) => {
     if (catalogStale()) refreshCatalog(false);
     // Модель ДО ремапа — её ждёт клиент в ответе (см. rewriteModelJson).
     try { clientModel = String(JSON.parse(rawBody0.toString('utf8') || '{}').model || ''); } catch (e) { clientModel = ''; }
-    const remapped = remapHaiku(req.method, reqPath, rawBody0);
+    // Какую из двух карт брать, говорит front-door заголовком: разницу «запрос пришёл
+    // через префикс» видно только там (к нам префикс доезжает уже срезанным).
+    // Заголовка нет — обычный путь, карта активного шлюза, как было до 12.09.
+    const viaRoutes = String(req.headers['x-route-prefixed'] || '') === '1';
+    const remapped = remapHaiku(req.method, reqPath, rawBody0, viaRoutes);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
     echoName = echoModelFor(clientModel);

@@ -334,6 +334,38 @@ function remapForRemote(method, reqPath, body, mm, preserveGpt56Suffix) {
 // Широкий охват безопасен ровно потому, что чужой префикс — no-op.
 const MODEL_KEY = Buffer.from('"model"');
 
+// Тир запроса, когда имя модели НЕ названо (`/model agentrouter`).
+//
+// Клиент в этом случае прислал имя провайдера, а не модели, поэтому «что спросили»
+// определяется тем, КТО спросил: главное окно или сабагент. Claude Code зовёт сабагентов
+// отдельными именами моделей, и до среза префикса они видны — замер живого трафика
+// 12.09 (token-usage.jsonl, 4000 записей): claude-opus-5 1072, claude-sonnet-5 245,
+// claude-haiku-4-5 80. Здесь же имени нет вовсе, значит это главное окно → `default`.
+//
+// 🪤 `default` — ОТДЕЛЬНЫЙ ключ, а не переиспользованный `opus`. «CC попросил opus» и
+// «модель не названа» — разные события; их склейка и была причиной разбора 12.09.
+const ROUTE_TIER_RE = [
+    { tier: 'gpt', re: /gpt|o[0-9]|davinci|chatgpt/i },   // первым, как в keepalive (isGptLike до тиров)
+    { tier: 'opus', re: /opus/i },
+    { tier: 'sonnet', re: /sonnet/i },
+    { tier: 'haiku', re: /haiku/i },
+];
+function tierOfRequest(model) {
+    const s = String(model || '').trim();
+    if (!s) return 'default';
+    for (const { tier, re } of ROUTE_TIER_RE) if (re.test(s)) return tier;
+    return 'default';
+}
+
+// Тир-карта ПРЕФИКСНОГО пути. Файл свой (`<prefix>-routes-modelmap.json`), потому что
+// вкладка «Маршруты» и вкладка шлюза управляют разными путями: до 12.09 файл был один,
+// и правка на одной вкладке меняла поведение другой.
+// Читается тем же readModelMap() — кеш по mtime и разбор BOM уже там.
+function routesMapFor(state) {
+    if (!state || !state.modelmap) return null;
+    return readModelMap(String(state.modelmap).replace(/-modelmap\.json$/, '-routes-modelmap.json'));
+}
+
 function routeByModel(method, body, reg) {
     if (method !== 'POST' || !reg || !reg.size) return null;
     // Быстрый отсев без JSON.parse: нет байтов `"model"` — нет и поля model.
@@ -343,7 +375,37 @@ function routeByModel(method, body, reg) {
     try { j = JSON.parse(body.toString('utf8') || '{}'); } catch { return null; }
     if (typeof j.model !== 'string') return null;
     const slash = j.model.indexOf('/');
-    if (slash <= 0) return null;                       // нет префикса либо ведущий слэш
+
+    // ── Имя БЕЗ слэша: назван только шлюз, модель выбирает routes-карта ──────────
+    // `/model agentrouter` (заявка владельца 12.09). Раньше этот случай уходил в
+    // `return null`, то есть запрос молча ехал на АКТИВНЫЙ шлюз — тихий уход на чужой
+    // баланс. Теперь имя провайдера распознаётся, а модель берётся из карты.
+    if (slash < 0) {
+        // 🪤 Суффикс окна снимаем ПЕРЕД поиском в реестре. `agentrouter[1m]` возникает
+        // сам собой — normalizeCcModel вешает `[1m]` на всё, что похоже на 1M-модель, а
+        // человек может написать его руками. Без среза `reg.get()` промахнётся, и запрос
+        // молча уедет на активный шлюз: ровно тот тихий отказ, ради которого вся правка.
+        const bare = j.model.trim().replace(/\s*\[[^\]]*\]\s*$/, '');
+        const st = reg.get(bare.toLowerCase());
+        if (!st) return null;                          // обычное имя модели — не наше дело
+        const tier = 'default';                        // имени модели нет → главное окно
+        const mm = routesMapFor(st);
+        const target = mm && String(mm[tier] || '').trim();
+        // 🪤 Пустой `default` — честная ошибка, а не угадывание. Взять activeModel
+        // значило бы вернуться к угадыванию, от которого ушли в пользу явного префикса,
+        // а пропустить запрос дальше — отправить его на чужой шлюз молча.
+        if (!target) return { state: st, prefix: j.model, from: j.model, to: null, tier, body, noTarget: true };
+        return {
+            state: st,
+            prefix: j.model,
+            from: j.model,
+            to: target,
+            tier,
+            body: Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8'),
+        };
+    }
+
+    if (slash === 0) return null;                      // ведущий слэш
     const state = reg.get(j.model.slice(0, slash).toLowerCase());
     if (!state) return null;                           // чужое имя — не наше дело
     const model = j.model.slice(slash + 1);
@@ -353,6 +415,7 @@ function routeByModel(method, body, reg) {
         prefix: j.model.slice(0, slash),
         from: j.model,
         to: model,
+        tier: tierOfRequest(model),
         body: Buffer.from(JSON.stringify(Object.assign({}, j, { model })), 'utf8'),
     };
 }
@@ -473,6 +536,17 @@ function handle(req, res) {
         let body = Buffer.concat(chunks);
         const routed = routeByModel(req.method, body, readRegistry());
         if (routed) {
+            // Шлюз назван, а цели нет: `default` в «Маршрутах» не выбран. Отвечаем
+            // честной ошибкой вместо угадывания — подставить activeModel значило бы
+            // вернуть угадывание, а пропустить дальше — молча уехать на активный шлюз
+            // (и на чужой баланс). Текст называет и шлюз, и что именно чинить.
+            if (routed.noTarget) {
+                log(`${req.method} ${reqPath} ▸${routed.state.backend} (только шлюз): default не задан → 400`);
+                return apiError(res, 400,
+                    `front-door: шлюз «${routed.state.backend}» выбран префиксом, но модель по умолчанию у него не задана. `
+                    + `Открой дашборд :8200 → вкладка «Маршруты» → строка ${routed.state.backend} → селект «default». `
+                    + `Либо назови модель явно: /model ${routed.state.backend}/<модель>`);
+            }
             state = routed.state;
             body = routed.body;
             routedCounts[state.backend] = (routedCounts[state.backend] || 0) + 1;
@@ -499,6 +573,22 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
     // была только в ветке !state.local: у локальных апстримов тело не трогали вовсе.
     // 🪤 При transfer-encoding content-length ставить нельзя (RFC 9112 §6.2).
     if (routed && !headers['transfer-encoding']) headers['content-length'] = String(Buffer.byteLength(body));
+
+    // Разницу «пришло через префикс или нет» видит ТОЛЬКО front-door: к моменту
+    // keepalive префикс уже срезан, и отличить `/model agentrouter` от обычного запроса
+    // по телу невозможно. Поэтому говорим заголовком — по нему keepalive возьмёт
+    // routes-карту вместо карты активного шлюза.
+    // 🪤 Маппить здесь самим нельзя: keepalive применит свою карту ещё раз поверх нашей,
+    // и получится двойная подмена (модель → цель → цель цели).
+    if (routed) {
+        headers['x-route-prefixed'] = '1';
+        if (routed.tier) headers['x-route-tier'] = routed.tier;
+    } else {
+        // Клиент мог прислать заголовок сам — снимаем, иначе чужой запрос притворится
+        // префиксным и уведёт keepalive на не ту карту.
+        delete headers['x-route-prefixed'];
+        delete headers['x-route-tier'];
+    }
 
     if (!state.local) {
         // Ключ читаем на КАЖДЫЙ запрос: на этом стоит смена аккаунта без рестарта CC

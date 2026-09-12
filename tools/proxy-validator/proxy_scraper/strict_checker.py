@@ -296,27 +296,13 @@ class StrictProxyChecker:
         raise OSError(last_error)
 
     def _check_http_family(self, record: ProxyRecord) -> tuple[list[str], str]:
-        supported: list[str] = []
-        exit_ip = ""
-        errors: list[str] = []
-
-        try:
-            exit_ip = self._check_http_plain(record)
-            supported.append("HTTP")
-        except Exception as exc:
-            errors.append(f"http: {exc}")
-
-        try:
-            https_ip = self._check_https_via_http_proxy(record)
-            if not exit_ip:
-                exit_ip = https_ip
-            supported.append("HTTPS")
-        except Exception as exc:
-            errors.append(f"https: {exc}")
-
-        if supported:
-            return supported, exit_ip
-        raise OSError(" | ".join(errors) if errors else "http family failed")
+        # The hub only talks to HTTPS panels. A forward-only plain HTTP proxy
+        # cannot carry those requests, so it must not be exported as "valid".
+        # Keep HTTPS as the protocol label: downstream writes a per-line scheme
+        # and routes it through CONNECT (the transport for HTTP and HTTPS proxy
+        # labels is deliberately the same there).
+        https_ip = self._check_https_via_http_proxy(record)
+        return ["HTTPS"], https_ip
 
     def _check_socks5(self, record: ProxyRecord) -> str:
         last_error = "no tls target worked"

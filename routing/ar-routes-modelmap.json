@@ -1,0 +1,7 @@
+{
+  "default": "deepseek-v4-flash",
+  "opus": "deepseek-v4-flash",
+  "sonnet": "deepseek-v4-flash",
+  "haiku": "deepseek-v4-flash",
+  "gpt": "deepseek-v4-flash"
+}

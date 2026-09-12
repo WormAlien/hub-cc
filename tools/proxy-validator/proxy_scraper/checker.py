@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 
 from .models import ProxyRecord
+from .strict_checker import StrictProxyChecker
 
 
 FULL_IP_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
@@ -42,6 +43,16 @@ class ProxyChecker:
         self.prefilter_timeout = max(0.0, float(prefilter_timeout))
         self.last_interrupted = False
         self._partial_results: List[ProxyRecord] = []
+        # Public-mode used to call api.ipify.org over plain HTTP. That labelled
+        # forward-only web proxies as "alive", although every real consumer in
+        # this project connects to HTTPS panels and needs a working CONNECT/TLS
+        # tunnel. Reuse the strict transport probes here so the first-stage
+        # number means "usable by the hub", not merely "answered on a port".
+        self._strict = StrictProxyChecker(
+            workers=self.workers,
+            timeout=self.timeout,
+            retries=self.retries,
+        )
 
     def _http_body(self, text: str) -> str:
         marker = "\r\n\r\n"
@@ -217,11 +228,14 @@ class ProxyChecker:
         proto = record.protocol.upper()
 
         if proto in {"HTTP", "HTTPS"}:
-            exit_ip = self._check_http_like(record)
+            # A panel URL is HTTPS, therefore an HTTP-family proxy is useful
+            # only when CONNECT + TLS + an actual response body all work. A
+            # plain GET proxy is intentionally rejected here.
+            exit_ip = self._strict._check_https_via_http_proxy(record)
         elif proto == "SOCKS4":
-            exit_ip = self._check_socks4(record)
+            exit_ip = self._strict._check_socks4(record)
         elif proto == "SOCKS5":
-            exit_ip = self._check_socks5(record)
+            exit_ip = self._strict._check_socks5(record)
         else:
             raise OSError(f"unsupported protocol {proto}")
 

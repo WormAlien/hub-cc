@@ -629,6 +629,11 @@ function randomThemeId() {
         <span class="flex-1">HCNsec</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-hcnsec">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aikeysapi" title="AIKeysAPI на www.aikeysapi.com · owner-managed аккаунты с email+паролем, без GitHub и автоматизации регистрации">
+        <span class="w-5 text-center text-[14px]">🔑</span>
+        <span class="flex-1">AIKeysAPI</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-aikeysapi">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tabi">
         <span class="w-5 text-center text-[14px]">🎫</span>
         <span class="flex-1">Tabi Token</span>
@@ -4462,6 +4467,13 @@ window.finNavCount = async () => {
          давали вписывание с сохранением пропорций и по 350 px пустоты по бокам. */
       #leagueTab .lgplot svg{display:block;width:100%;height:auto;
         overflow:visible;touch-action:none}
+      /* Пока срез считает журналы, держим место НАСТОЯЩЕГО графика. Одна строка высотой
+         75 px выглядела как сломанная вкладка и после ответа прыгала на пол-экрана. */
+      #leagueTab .lgskel{min-height:300px;display:grid;place-items:center;border-radius:12px;
+        color:var(--lg-muted);background:color-mix(in oklab,var(--lg-ink) 4%,transparent);
+        animation:lgskelpulse 1.2s ease-in-out infinite}
+      @keyframes lgskelpulse{0%,100%{opacity:.58}50%{opacity:1}}
+      @media (prefers-reduced-motion:reduce){#leagueTab .lgskel{animation:none}}
       #leagueTab .lggrid{stroke:color-mix(in oklab,var(--lg-line) 60%,transparent);stroke-width:1}
       #leagueTab .lgax{font:10.5px var(--lg-mono);fill:var(--lg-faint);letter-spacing:.02em}
       #leagueTab .lgserie{fill:none;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
@@ -7332,6 +7344,96 @@ window.finNavCount = async () => {
       </div>
     </div>
 
+    <!-- ═════════ TAB: AIKEYSAPI ═════════ -->
+    <div data-tab-content="aikeysapi">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-teal">🔑</span> <a href="https://www.aikeysapi.com/" target="_blank" rel="noopener" class="text-ink underline underline-offset-4 hover:text-teal">AIKeysAPI</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">owner-managed аккаунты <code class="font-mono text-teal text-xs">www.aikeysapi.com</code> · keepalive <code class="font-mono text-cyan text-xs">:20165</code> · вход email+пароль · пароль никогда не отображается</p>
+          </div>
+        </header>
+
+        <div id="ak-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <div id="ak-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров · применяется при следующей активации</h2>
+            <button onclick="loadAkModelMap()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ak-modelmap-sel" class="flex gap-2 items-end flex-wrap"><span class="text-[10px] text-faint">загрузка…</span></div>
+        </div>
+
+        <div id="ak-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20165 · применяется без рестарта</h2>
+            <button onclick="akLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="ak-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек)</span><input id="ak-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">дублей максимум</span><input id="ak-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-40"><span class="text-[10px] text-faint leading-tight">попыток на запрос</span><input id="ak-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">пре-коммит (сек)</span><input id="ak-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <div class="flex items-center gap-2"><button onclick="akApplyKeepalive()" class="text-xs px-4 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">Применить</button><button onclick="akResetKeepalive()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button><span id="ak-keepalive-status" class="text-xs text-faint font-mono">—</span></div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="ak-lat-box"><div class="flex-1 min-w-0"><div id="ak-lat-chart" class="w-full"></div><div id="ak-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div></div><div class="flex flex-col gap-1 shrink-0" id="ak-lat-windows"></div></div>
+          <div id="ak-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="ak-stat-requests" class="text-ink">—</b></span><span>ремапов: <b id="ak-stat-remaps" class="text-ink">—</b></span><span>keepalive: <b id="ak-stat-keepalives" class="text-ink">—</b></span><span>мульти-запросов: <b id="ak-stat-hedges" class="text-ink">—</b></span><span>ретраев: <b id="ak-stat-retries" class="text-ink">—</b></span><span>ошибок: <b id="ak-stat-errors" class="text-ink">—</b></span><span>ответ: <b id="ak-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <div id="ak-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><button onclick="loadAkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          <div id="ak-models-list" class="flex flex-wrap gap-1.5"><span class="text-[10px] text-faint">загрузка…</span></div>
+        </div>
+
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadAkSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadAkSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="akCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="akShowAdd()" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">➕ Добавить</button>
+          <button id="ak-autoreg-start" onclick="akAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Чистый HTTP: почта → OTP → регистрация → ключ → cookie-сессия → эта таблица">🤖 Авторег</button>
+          <button id="ak-autoreg-stop" onclick="akAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+          <span id="ak-autoreg-status" class="text-[10px] font-mono text-faint"></span>
+          <button onclick="akShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код аккаунта владельца с другой машины">📥 Вставить аккаунт</button>
+          <input id="ak-filter" oninput="newapiFilterChange('ak')" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-teal/60">
+          <select id="ak-sort" onchange="newapiSortChange('ak')" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-teal/60"><option value="date-desc">📅 дата ↓</option><option value="date-asc">📅 дата ↑</option><option value="bal-desc">💰 баланс ↓</option><option value="bal-asc">💰 баланс ↑</option><option value="status">⚡ статус</option><option value="email">📧 email A→Z</option></select>
+        </div>
+
+        <div id="ak-add-form" class="hidden rounded-xl bg-surface border border-teal/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1"><span class="text-[10px] text-faint">email (логин)</span><input id="ak-add-email" type="email" autocomplete="off" placeholder="owner@example.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-teal/60"></label>
+            <label class="flex flex-col gap-1"><span class="text-[10px] text-faint">пароль панели</span><input id="ak-add-pass" type="password" autocomplete="new-password" placeholder="••••••••" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-teal/60"></label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]"><span class="text-[10px] text-faint">API key · можно пустым</span><input id="ak-add-key" autocomplete="off" placeholder="пусто = добавить позже кнопкой 🔑" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-teal/60"></label>
+            <button onclick="akAdd()" class="text-xs px-4 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">Сохранить</button><button onclick="akShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <p class="text-[10px] text-faint mt-2">Только существующие аккаунты владельца. Пароль передаётся серверу для входа, но не возвращается и не отображается в таблице.</p>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию). Переносит существующий аккаунт владельца
+             между машинами: base64 из 🔗 несёт email, api_key и cookie-сессию. Пароля
+             в share-коде нет — после импорта его ставят заново кнопкой ✏️/🔑. -->
+        <div id="ak-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт по share-коду</h3>
+            <button onclick="akShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь base64-строку, снятую кнопкой 🔗 на другой машине — запись появится с email, API-ключом и cookie-сессией. Пароль в коде не передаётся.</p>
+          <textarea id="ak-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="ak-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="akImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="akShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="ak-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto"><div class="p-12 text-center text-faint text-xs">загрузка…</div></div>
+        <div class="text-xs text-faint"><span>base → <code class="text-ink">http://localhost:20165</code> → <code class="text-ink">www.aikeysapi.com</code></span><span class="mx-2 opacity-40">·</span><span>грант <code class="text-ink">$5</code> на аккаунт</span><span class="mx-2 opacity-40">·</span><span>авторег сам сохраняет API-ключ и cookie-сессию; GitHub не нужен</span></div>
+      </div>
+    </div>
+
     <!-- ═════════ TAB: TABI TOKEN ═════════ -->
     <div data-tab-content="tabi">
       <div class="px-6 py-8 space-y-4">
@@ -8422,7 +8524,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, aipm: false, hcnsec: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, aipm: false, hcnsec: false, aikeysapi: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -8464,6 +8566,10 @@ const state = {
   hnModels: [],
   hnActiveModel: '',
   hnModelMap: {},
+  aikeysapi: [],
+  akModels: [],
+  akActiveModel: '',
+  akModelMap: {},
   tabi: [],
   tbModels: [],
   tbActiveModel: '',
@@ -8657,6 +8763,7 @@ function showTab(name) {
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
     if (name === 'aipm') { if (!state.loaded.aipm) { state.loaded.aipm = true; loadApSessions(false); } apLoadKeepalive(); }
   if (name === 'hcnsec') { if (!state.loaded.hcnsec) { state.loaded.hcnsec = true; loadHnSessions(false); } hnLoadKeepalive(); }
+  if (name === 'aikeysapi') { if (!state.loaded.aikeysapi) { state.loaded.aikeysapi = true; loadAkSessions(false); } akLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   // Маршруты перечитываем на КАЖДЫЙ заход, без ленивой загрузки: тир-карту правят на
@@ -8726,9 +8833,9 @@ function jumpTo(id) {
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
 const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken',
-      aipm: 'AIPM', hcnsec: 'HCNsec', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+      aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
 const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald',
-      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -9049,9 +9156,9 @@ async function loadRoutes(force) {
   routesLoadCatalogs(visible);
 }
 
-// Каждая строка «Маршрутов» редактируема: четыре `<select>` (opus/sonnet/haiku/gpt),
-// сохранение сразу при выборе. Держим `p`-объекты и каталоги в модуле, чтобы
-// перерисовывать одну строку после подгрузки каталога, не дёргая весь список.
+// Каждая строка «Маршрутов» редактируема: пять `<select>` (default + opus/sonnet/
+// haiku/gpt), сохранение сразу при выборе. Держим `p`-объекты и каталоги в модуле,
+// чтобы перерисовывать одну строку после подгрузки каталога, не дёргая весь список.
 let routesProviders = {};
 const routesCatalog = {};
 
@@ -9085,8 +9192,8 @@ async function routesSaveTier(sel) {
     sel.dataset.prev = value;
     if (routesProviders[name]) routesProviders[name].tiers = r.tiers;
     if (st) { st.textContent = '✓'; st.className = 'text-[10px] text-emerald ml-1'; setTimeout(() => { if (st.textContent === '✓') st.textContent = ''; }, 2000); }
-    // Команда копирования опирается на активную модель, а при её отсутствии — на opus.
-    // Значит правка opus без активной модели меняет и команду: перерисуем её.
+    // Рядом с командой показан итог развёртки (`→ glm-5.3`), а он берётся из
+    // `tiers.default` — значит смена ЛЮБОГО тира может его поменять. Перерисовываем.
     routesRefreshCmd(name);
   } catch (e) {
     sel.value = prev;                          // откат: на диск не легло — и в UI не оставляем
@@ -9096,7 +9203,7 @@ async function routesSaveTier(sel) {
   }
 }
 
-// Перерисовать только команду копирования строки (после смены opus).
+// Перерисовать только команду копирования строки (после смены любого тира).
 function routesRefreshCmd(name) {
   const box = document.getElementById(`routes-cmd-${routesId(name)}`);
   const p = routesProviders[name];
@@ -9115,7 +9222,7 @@ async function routesLoadCatalogs(names) {
       if (!models.length) return;                        // нечем обогащать — оставляем как есть
       routesCatalog[name] = models;
       // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.
-      for (const tier of ['opus', 'sonnet', 'haiku', 'gpt']) {
+      for (const tier of ['default', 'opus', 'sonnet', 'haiku', 'gpt']) {
         const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
         if (sel) sel.innerHTML = routesOptions(name, sel.value);
       }
@@ -9124,19 +9231,35 @@ async function routesLoadCatalogs(names) {
 }
 
 // HTML команды копирования (отдельно, чтобы перерисовывать при смене opus).
+//
+// Копируем ЛОГИЧЕСКОЕ имя шлюза (`/model agentrouter`), а не физическую модель.
+// 🪤 Раньше здесь стояло `p.activeModel || p.tiers.opus`, и это был корень заявки
+// 12.09: кнопка подставляла `agentrouter/gpt-6-astra`, имя классифицировалось как
+// gpt-тир, ветка `mm.gpt` в keepalive стоит ДО маппинга тиров — выбранный на этой же
+// вкладке `opus → glm-5.3` не применялся никогда. То есть вкладка управления
+// маппингом предлагала команду, этот маппинг обходящую (владелец поймал по 402).
+// Теперь модель выбирает тир-карта, и строка ниже показывает, во что она развернётся.
 function routesCmdHtml(p) {
   const id = routesId(p.name);
-  const model = p.activeModel || (p.tiers && p.tiers.opus) || '';
-  const cmd = model ? '/model ' + withCtxSuffix(`${p.name}/${model}`) : '';
+  const cmd = p.tiers ? '/model ' + p.name : '';
+  const dflt = p.tiers && String(p.tiers.default || '').trim();
   // 🪤 Одинарная кавычка. `esc()` (:8504) её НЕ трогает — экранирует только & < > " —
   // а onclick здесь в одинарных кавычках. Имя модели приходит из `<p>-modelmap.json`
   // без валидации символов: цель вида `a'onmouseover='alert(1)//` закрыла бы атрибут.
   const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
-  return cmd
-    ? `<button id="routes-cmd-${id}" onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
-         class="shrink-0 px-2 py-1 rounded text-[11px] font-mono bg-elevated hover:bg-surface border border-line-soft transition"
-         title="Скопировать готовую команду для окна Claude Code">📋 ${esc(cmd)}</button>`
-    : `<span id="routes-cmd-${id}" class="shrink-0 text-[11px] text-faint" title="ни активной модели, ни цели тира opus — копировать нечего">нечего копировать</span>`;
+  if (!cmd) {
+    return `<span id="routes-cmd-${id}" class="shrink-0 text-[11px] text-faint" title="у провайдера нет тир-карты — модель уходит как есть, адресовать префиксом нечем">нечего копировать</span>`;
+  }
+  // Показываем итог развёртки рядом с командой: без этого непонятно, какая модель
+  // поедет, и пришлось бы держать соответствие в голове.
+  const arrow = dflt
+    ? `<span class="text-[10px] text-faint ml-1">→ ${esc(dflt)}</span>`
+    : `<span class="text-[10px] text-amber ml-1" title="default не выбран — такой запрос вернёт 400 с подсказкой">→ default не задан</span>`;
+  return `<span id="routes-cmd-${id}" class="shrink-0 inline-flex items-center">
+      <button onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
+         class="px-2 py-1 rounded text-[11px] font-mono bg-elevated hover:bg-surface border border-line-soft transition"
+         title="Скопировать команду для окна Claude Code: модель выберет тир-карта этой строки">📋 ${esc(cmd)}</button>${arrow}
+    </span>`;
 }
 
 // Одна строка провайдера: префиксы, четыре редактируемых тира, кнопка копирования.
@@ -9147,14 +9270,26 @@ function routesRow(p) {
     .join(' ');
   // Провайдер без тир-карты (omniroute, notion, custom) не редактируется: показываем
   // факт, а не пустые селекты, которым некуда писать.
+  //
+  // `default` идёт первым и подписан отдельно: это модель для запроса, назвавшего
+  // только шлюз (`/model agentrouter`). Остальные четыре — сабагенты, которых Claude
+  // Code зовёт своими именами; они остаются дешёвыми независимо от `default`.
+  const TIER_TITLE = {
+    default: 'модель для /model ' + p.name + ' — то есть для главного окна',
+    opus: 'сабагенты, попросившие opus',
+    sonnet: 'сабагенты, попросившие sonnet',
+    haiku: 'сабагенты и служебные запросы (самые частые — держи дешёвым)',
+    gpt: 'запросы с gpt-именами (проверяется раньше остальных тиров)',
+  };
   const tiers = p.tiers
-    ? ['opus', 'sonnet', 'haiku', 'gpt'].map(t => {
+    ? ['default', 'opus', 'sonnet', 'haiku', 'gpt'].map(t => {
         const v = (p.tiers[t] || '');
-        return `<label class="inline-flex flex-col gap-0.5 mr-3 mb-1 align-top">
-          <span class="text-[10px] text-faint">${t}<span id="routes-st-${id}-${t}"></span></span>
+        const isDflt = t === 'default';
+        return `<label class="inline-flex flex-col gap-0.5 mr-3 mb-1 align-top" title="${esc(TIER_TITLE[t] || '')}">
+          <span class="text-[10px] ${isDflt ? 'text-ink font-semibold' : 'text-faint'}">${isDflt ? 'default (окно)' : t}<span id="routes-st-${id}-${t}"></span></span>
           <select id="routes-sel-${id}-${t}" data-provider="${esc(p.name)}" data-tier="${t}" data-prev="${esc(v)}"
             onchange="routesSaveTier(this)"
-            class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1 min-w-[9rem] max-w-[13rem]">${routesOptions(p.name, v)}</select>
+            class="text-xs bg-elevated border ${isDflt ? 'border-azure/40' : 'border-line-soft'} rounded-lg px-2 py-1 min-w-[9rem] max-w-[13rem]">${routesOptions(p.name, v)}</select>
         </label>`;
       }).join('')
     : '<span class="text-faint text-[11px]">тир-карты нет — модель уходит как есть</span>';
@@ -12380,6 +12515,7 @@ const KEEPALIVE_API = {
   kk: '/__switch/api/kk/keepalive',
   ap: '/__switch/api/ap/keepalive',
   hn: '/__switch/api/hn/keepalive',
+  ak: '/__switch/api/ak/keepalive',
 };
 const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
@@ -12746,6 +12882,8 @@ const tsLoadKeepalive   = () => loadKeepaliveCard('ts', KEEPALIVE_API.ts);
 const tsApplyKeepalive  = () => applyKeepaliveCard('ts', KEEPALIVE_API.ts);
 const hnLoadKeepalive   = () => loadKeepaliveCard('hn', KEEPALIVE_API.hn);
 const hnApplyKeepalive  = () => applyKeepaliveCard('hn', KEEPALIVE_API.hn);
+const akLoadKeepalive   = () => loadKeepaliveCard('ak', KEEPALIVE_API.ak);
+const akApplyKeepalive  = () => applyKeepaliveCard('ak', KEEPALIVE_API.ak);
 const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
 const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
 const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
@@ -12765,6 +12903,7 @@ const apResetKeepalive  = () => resetKeepaliveCard('ap', KEEPALIVE_API.ap);
 // проверять сверкой, а не глазами.
 const tsResetKeepalive  = () => resetKeepaliveCard('ts', KEEPALIVE_API.ts);
 const hnResetKeepalive  = () => resetKeepaliveCard('hn', KEEPALIVE_API.hn);
+const akResetKeepalive  = () => resetKeepaliveCard('ak', KEEPALIVE_API.ak);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -12777,6 +12916,7 @@ const KEEPALIVE_POLL_TABS = {
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
   aipm: ['ap', '/__switch/api/ap/keepalive'],
   hcnsec: ['hn', '/__switch/api/hn/keepalive'],
+  aikeysapi: ['ak', '/__switch/api/ak/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
   xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
@@ -12904,7 +13044,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn(), ak: () => renderAk() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -13620,17 +13760,20 @@ function newapiGhBadge(s, prov) {
   if (gh) {
     const nick = gh.nickname || gh.login;
     const age = gh.snapAgeDays === null || gh.snapAgeDays === undefined ? null : gh.snapAgeDays;
-    // hasSnap === null → бэкенд не смог посмотреть (модуль сессий недоступен): молчим и
-    // красим как раньше, врать про «протух» на неизвестности нельзя.
-    const bad = gh.hasSnap === false || gh.status === 'dead';
-    const stale = !bad && gh.snapStale === true;
+    // hasSession === null → бэкенд не смог посмотреть: молчим и красим как раньше.
+    // Источника два: общий снимок и user_session в индексированном профиле. До 12.09
+    // второй игнорировался, поэтому десять реально готовых аккаунтов красились как пустые.
+    const bad = gh.hasSession === false || gh.status === 'dead';
+    const stale = !bad && !gh.profileSource && gh.snapStale === true;
     const tone = bad ? 'crimson' : stale ? 'amber' : 'teal';
     const mark = bad ? ' ⚠' : stale ? ' ⚠' : '';
     const note = bad
-      ? (gh.status === 'dead' ? 'помечен dead в менеджере' : 'снимка сессии нет вовсе')
-      : stale
-        ? `снимок ${age} дн — старше TTL 7 сут, автоподарок попробует, но GitHub может попросить пароль`
-        : age === null ? 'снимок есть' : `снимок свежий (${age} дн)`;
+      ? (gh.status === 'dead' ? 'помечен dead в менеджере' : 'сессии нет ни в общем снимке, ни в профилях')
+      : gh.sessionSource === 'profile'
+        ? `сессия в профиле ${gh.profileSource}`
+        : stale
+          ? `снимок ${age} дн — старше TTL 7 сут, автоподарок попробует, но GitHub может попросить пароль`
+          : age === null ? 'сессия есть' : `снимок свежий (${age} дн)`;
     return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="${esc(`GitHub: ${gh.login} · ${note} · клик — сменить/отвязать`)}"
       class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-${tone}/10 border border-${tone}/40 text-${tone} rounded font-mono hover:bg-${tone}/20 whitespace-nowrap">🐙 ${esc(nick)}${mark}</button>`;
   }
@@ -16917,6 +17060,316 @@ async function hnSaveModelMap() {
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
+
+// ═══════════════════ AIKEYSAPI ══════════════════════════════════════
+// Safe owner-managed surface only: existing email/password accounts. There are deliberately
+// no registration, disposable-email, referral, GitHub/Outlook, sharing, or proxy controls.
+const AK_MODELS = ['gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna'];
+
+function akPoolStats(sessions) {
+  let live = 0, dead = 0, sumBalance = 0, withBalance = 0;
+  for (const s of (sessions || [])) {
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) { sumBalance += s.balance; withBalance++; }
+  }
+  const total = (sessions || []).length;
+  const grant = total * 5;
+  return { live, dead, total, sumBalance, withBalance,
+    remPct: grant ? Math.round((sumBalance / grant) * 100) : 0 };
+}
+
+function renderAkGauge() {
+  moneyAutoFetch('aikeysapi').then(() => moneyRotateToHistory('aikeysapi')).catch(() => {});
+  const st = akPoolStats(state.aikeysapi);
+  renderEnergyGauge($('ak-energy'), {
+    title: 'AIKeysAPI · запас пула', pct: st.remPct,
+    sub: [`<span><span class="text-ink font-semibold">${st.total}</span> аккаунтов</span>`,
+      `<span class="text-teal">${st.live} 🟢 LIVE</span>`,
+      st.dead ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.withBalance ? `<span class="text-cyan">$${st.sumBalance.toFixed(2)} доступно</span>` : ''].filter(Boolean).join(''),
+    note: 'Грант $5 на аккаунт. Активация → keepalive http://localhost:20165 → www.aikeysapi.com.',
+  });
+}
+
+async function loadAkSessions(probe) {
+  if (probe) $('ak-list').innerHTML = '<div class="p-12 text-center text-cyan text-xs">📡 пингую ключи…</div>';
+  try {
+    const res = await fetch('/__switch/api/ak/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.aikeysapi = data.sessions || [];
+    if ($('nav-count-aikeysapi')) $('nav-count-aikeysapi').textContent = state.aikeysapi.length;
+    renderAk(); renderAkGauge(); loadAkModels(); loadAkModelMap(); akAutoregStatus({ quiet: true });
+    if (probe) toast('✓ AIKeysAPI: статусы обновлены', 'success');
+  } catch (e) { $('ak-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`; }
+}
+
+async function loadAkSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/ak/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.aikeysapi = data.sessions || [];
+    if ($('nav-count-aikeysapi')) $('nav-count-aikeysapi').textContent = state.aikeysapi.length;
+    renderAk(); renderAkGauge(); paintSideBalance();
+  } catch {}
+}
+
+async function loadAkModels(force) {
+  const key = state.aikeysapi.find(s => s.active && akIsRealKey(s.api_key))?.api_key
+    || state.aikeysapi.find(s => akIsRealKey(s.api_key))?.api_key;
+  if (!key) { state.akModels = AK_MODELS.map(id => ({ id })); return renderAkModels(); }
+  try {
+    const res = await fetch('/__switch/api/ak/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+    const data = await res.json();
+    state.akModels = data.ok && data.models?.length
+      ? data.models.filter(m => AK_MODELS.includes(m.id)) : AK_MODELS.map(id => ({ id }));
+  } catch { state.akModels = AK_MODELS.map(id => ({ id })); }
+  renderAkModels();
+}
+
+async function renderAkModels() {
+  const list = state.akModels?.length ? state.akModels : AK_MODELS.map(id => ({ id }));
+  let active = state.akActiveModel || '';
+  try {
+    const d = await fetch('/__switch/api/ak/active-model').then(r => r.json());
+    if (d.ok && d.model) state.akActiveModel = active = d.model;
+  } catch {}
+  $('ak-models-list').innerHTML = list.map(({ id }) => `<span onclick='akSelectModel(${JSON.stringify(id)})'
+    class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer border ${id === active ? 'bg-teal/15 border-teal/50 text-teal' : 'bg-cyan/10 border-cyan/30 text-cyan'}">
+    ${esc(id)}<button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id" class="text-faint hover:text-ink px-1">📋</button></span>`).join('');
+  renderAkModelMap();
+}
+
+async function akSelectModel(id) {
+  if (!AK_MODELS.includes(id)) return toast('неизвестная модель AIKeysAPI', 'error');
+  try {
+    const res = await fetch('/__switch/api/ak/set-model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id, modelMap: state.akModelMap || {} }) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'ошибка');
+    state.akActiveModel = data.model || id; renderAkModels();
+    toast('✓ модель ' + state.akActiveModel + ' применена', 'success');
+  } catch (e) { toast('model: ' + e.message, 'error'); }
+}
+
+function akIsRealKey(k) {
+  const s = String(k || '').trim();
+  return s.length >= 20 && !/^no-key-/.test(s);
+}
+
+function renderAk() {
+  const { list, total, q } = newapiRows(state.aikeysapi, 'ak');
+  if (!list.length) {
+    $('ak-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q ? `по фильтру «${esc(q)}» ничего — 0 из ${total}` : 'пусто — запусти авторег или добавь существующий аккаунт'}</div>`;
+    return;
+  }
+  const rows = list.map(s => {
+    const idJ = JSON.stringify(s.id || '');
+    const keyJ = JSON.stringify(s.api_key || '');
+    const noKey = !akIsRealKey(s.api_key);
+    const mask = noKey ? '' : (s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key);
+    const status = noKey ? NO_KEY_BADGE : s.status === 'live'
+      ? '<span class="text-teal text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead' ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const keyCell = noKey ? noKeyCell(`akSetKey(${idJ})`) : `<button onclick='akActivate(${keyJ})' title="Сделать активным через :20165" class="font-mono text-[11px] px-2 py-1 rounded border ${s.active ? 'bg-teal/10 border-teal/50 text-teal' : 'bg-surface border-line-soft text-cyan hover:border-cyan/50'}">${esc(mask)}</button>`;
+    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${s.status === 'dead' ? 'bg-crimson/5' : s.active ? 'bg-teal/5' : ''}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(s.email || s.name || '')}">${s.active ? '<span class="text-teal mr-1">🌟</span>' : ''}${esc(s.email || s.name || '')}</td>
+      <td class="px-3 py-2.5">${keyCell}</td><td class="px-3 py-2.5 text-center">${status}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${akBalanceCell(s, keyJ)}</td><td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">${noKey ? '' : actBtn(`akCopyKey(${keyJ})`, 'Скопировать API-ключ', '📋', 'cyan')}${noKey ? '' : actBtn(`akShare(${idJ})`, 'Поделиться аккаунтом (base64 для другой машины владельца)', '🔗', 'violet')}${actBtn(`akSetKey(${idJ})`, 'Вставить/сменить API-ключ', '🔑', 'cyan')}${actBtn(`akRename(${idJ})`, 'Редактировать email и подпись', '✏️', 'sky')}${noKey ? '' : actBtn(`akActivate(${keyJ})`, 'Сделать активным', '🤝', 'amber')}${actBtn(`akOpenLk(${idJ})`, 'Открыть сессию аккаунта', '🌐', 'teal')}${actBtn(`akDelete(${idJ})`, 'Удалить запись', '🗑', 'crimson')}</td></tr>`;
+  }).join('');
+  $('ak-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'ak', q), { sortProv: 'ak', accent: 'teal' });
+}
+
+async function akAutoregStatus({ quiet = false } = {}) {
+  try {
+    const r = await fetch('/__switch/api/ak/autoreg/status');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'status HTTP ' + r.status);
+    const running = !!d.running;
+    $('ak-autoreg-start').classList.toggle('hidden', running);
+    $('ak-autoreg-stop').classList.toggle('hidden', !running);
+    const result = d.result || {};
+    $('ak-autoreg-status').textContent = running
+      ? `идёт ${d.count || 1} · pid ${d.pid || '—'}`
+      : result.created != null
+        ? `готово ${result.created}, в пул ${result.written}, ошибок ${result.failed}`
+        : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
+    if (!running && result.created > 0) await loadAkSessions(false);
+    return running;
+  } catch (e) {
+    if (!quiet) toast('Авторег status: ' + e.message, 'error');
+    return false;
+  }
+}
+
+async function akAutoregStart() {
+  const raw = prompt('Сколько AIKeysAPI-аккаунтов создать? (1–50)', '1');
+  if (raw === null) return;
+  const count = Math.max(1, Math.min(50, parseInt(raw, 10) || 1));
+  try {
+    const r = await fetch('/__switch/api/ak/autoreg/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(`🤖 AIKeysAPI: запущено ${count}`, 'success');
+    await akAutoregStatus({ quiet: true });
+    if (state.akAutoregTimer) clearInterval(state.akAutoregTimer);
+    state.akAutoregTimer = setInterval(async () => {
+      const running = await akAutoregStatus({ quiet: true });
+      if (!running) { clearInterval(state.akAutoregTimer); state.akAutoregTimer = null; }
+    }, 2500);
+  } catch (e) { toast('Авторег: ' + e.message, 'error'); }
+}
+
+async function akAutoregStop() {
+  if (!confirm('Остановить авторег AIKeysAPI? Текущий незавершённый аккаунт может не попасть в пул.')) return;
+  try {
+    const r = await fetch('/__switch/api/ak/autoreg/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка отправлена' : 'авторег уже завершён', 'info');
+    await akAutoregStatus({ quiet: true });
+  } catch (e) { toast('Стоп: ' + e.message, 'error'); }
+}
+
+function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak'); }
+function akShowAdd(show = true) {
+  $('ak-add-form').classList.toggle('hidden', !show);
+  if (show) { $('ak-add-email').value = ''; $('ak-add-pass').value = ''; $('ak-add-key').value = ''; $('ak-add-email').focus(); }
+}
+
+async function akAdd() {
+  const email = $('ak-add-email').value.trim(), password = $('ak-add-pass').value, api_key = $('ak-add-key').value.trim();
+  if (!email || !password) return toast('email и пароль обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ak/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, api_key }) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'ошибка');
+    $('ak-add-pass').value = ''; akShowAdd(false); await loadAkSessions(false); toast('✓ аккаунт добавлен', 'success');
+  } catch (e) { $('ak-add-pass').value = ''; toast('Add: ' + e.message, 'error'); }
+}
+
+async function akDelete(id) {
+  if (!id || !confirm('Удалить запись AIKeysAPI?')) return;
+  try { const r = await fetch('/__switch/api/ak/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); await loadAkSessions(false); toast('удалён', 'info'); } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function akSetKey(id) {
+  const cur = state.aikeysapi.find(x => x.id === id); if (!cur) return toast('аккаунт не найден', 'error');
+  const val = prompt(`API-ключ для ${cur.email || cur.name || '?'} (пароль здесь не показывается):`, '');
+  if (val === null || !val.trim()) return;
+  try { const r = await fetch('/__switch/api/ak/key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, api_key: val.trim() }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); await loadAkSessions(false); toast('✓ ключ обновлён', 'success'); } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+async function akRename(id) {
+  const cur = state.aikeysapi.find(x => x.id === id); if (!cur) return toast('аккаунт не найден', 'error');
+  const e = prompt('Email:', cur.email || ''); if (e === null || !e.trim()) return;
+  const n = prompt('Подпись:', cur.name || e.trim()); if (n === null || !n.trim()) return;
+  try { const r = await fetch('/__switch/api/ak/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, email: e.trim(), name: n.trim() }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); await loadAkSessions(false); toast('✓ аккаунт обновлён', 'success'); } catch (err) { toast('rename: ' + err.message, 'error'); }
+}
+
+async function akActivate(api_key) {
+  try { const r = await fetch('/__switch/api/ak/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key }) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); state.current = 'aikeysapi'; state.urls.aikeysapi = 'http://localhost:20165'; paintStatus(); await loadAkSessions(false); toast('🌟 AIKeysAPI активирован', 'success'); } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+async function akOpenLk(id) {
+  try { const r = await fetch('/__switch/api/ak/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); toast(d.already ? '🌐 сессия уже открыта' : '🌐 сессия аккаунта открыта', 'success'); } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+// Перенос аккаунта владельца между машинами. Бэк (handleAkShare) снимает cookie-сессию
+// профиля и отдаёт компактный base64: email + api_key + meta + session. Пароля в коде нет —
+// он в share-payload не кладётся, поэтому на второй машине его ставят заново.
+// Ответ здесь беднее hcnsec: только { ok, share, hasSession }, без счётчиков cookies/origins,
+// поэтому подпись в окне их не показывает.
+async function akShare(id) {
+  const cur = state.aikeysapi.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/ak/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession ? ' (с cookie-сессией)' : ' (без сессии — на второй машине понадобится вход)';
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'AIKeysAPI',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : '')
+        + ' · пароль в код не входит',
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован — вставь его на второй машине кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function akShowImport(show = true) {
+  $('ak-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('ak-import-text').value = '';
+    $('ak-import-preview').innerHTML = '';
+    $('ak-import-text').focus();
+  }
+}
+
+// Импорт share-кода: бэк (handleAkImport) разбирает base64, кладёт запись в пул и пишет
+// её cookie-сессию в aikeysapi/sessions/acct_<id>.json — 🌐 сразу открывает залогиненную
+// консоль. Пароля в коде нет, так что для повторного логина его добавляют вручную.
+async function akImport() {
+  const share = $('ak-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('ak-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/ak/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('ak-import-text').value = '';
+    $('ak-import-preview').innerHTML = '';
+    akShowImport(false);
+    toast(`✓ импортирован ${data.email || '—'}${data.hasSession ? ' (с сессией)' : ''}`, 'success', 4000);
+    await loadAkSessions(false);
+  } catch (e) {
+    $('ak-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+async function akCopyKey(api_key) { const ok = await copyToClipboard(api_key, '', { silent: true }); toast(ok ? '📋 ключ скопирован' : 'не удалось скопировать', ok ? 'success' : 'error'); }
+async function akCheckBalance(api_key) {
+  try { const r = await fetch('/__switch/api/ak/balance?api_key=' + encodeURIComponent(api_key)); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'ошибка'); const s = state.aikeysapi.find(x => x.api_key === api_key); if (s) Object.assign(s, { status: d.status, spent: d.spent, balance: d.balance, granted: d.granted ?? 5, balanceSource: d.balanceSource, balanceCheckedAt: new Date().toISOString() }); renderAk(); renderAkGauge(); toast(d.status === 'live' ? `💰 баланс $${Number(d.balance || 0).toFixed(2)}` : 'ключ недоступен', d.status === 'live' ? 'success' : 'warn'); } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function akCheckAllBalances() {
+  try { const r = await fetch('/__switch/api/ak/sessions?balance=1'); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); state.aikeysapi = d.sessions || []; renderAk(); renderAkGauge(); balanceBatchToast(state.aikeysapi); } catch (e) { toast('балансы: ' + e.message, 'error'); }
+}
+function akSetBalance(api_key) { return newapiSetBalanceUI('ak', api_key, () => state.aikeysapi, () => { renderAk(); renderAkGauge(); }); }
+
+async function loadAkModelMap() {
+  try { const r = await fetch('/__switch/api/ak/modelmap'); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'ошибка'); state.akModelMap = d.modelMap || {}; } catch {} renderAkModelMap();
+}
+function renderAkModelMap() {
+  const host = $('ak-modelmap-sel'); if (!host) return;
+  const mm = state.akModelMap || {};
+  const sel = tier => `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${tier}</span><select id="ak-mm-${tier}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5">${AK_MODELS.map(id => `<option value="${id}"${(mm[tier] || 'gpt-5.6-terra') === id ? ' selected' : ''}>${id}</option>`).join('')}</select></label>`;
+  host.innerHTML = `${sel('opus')}${sel('sonnet')}${sel('haiku')}<button onclick="akSaveModelMap()" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">💾 Сохранить</button>`;
+}
+async function akSaveModelMap() {
+  const mm = { opus: $('ak-mm-opus').value, sonnet: $('ak-mm-sonnet').value, haiku: $('ak-mm-haiku').value };
+  try { const r = await fetch('/__switch/api/ak/modelmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mm) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); state.akModelMap = d.modelMap || mm; toast('✓ маппинг сохранён', 'success'); } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
 
 // ═══════════════════ JUSTWOKER ══════════════════════════════════════
 // Провайдер api.justwoker.icu (тот же форк New-API, что gorouter/tabi). Пятый шлюз и
@@ -22627,6 +23080,7 @@ const MONEY_PROVIDERS = {
   // на что»: процент запаса считается по live/total, пока балансы не приедут из ЛК. Любое
   // выдуманное число обещало бы деньги, которых мы не видели (та же логика, что у TrueSOTA).
   hcnsec:      { id: 'hcnsec',      p: 'hn', stateKey: 'hcnsec',      base: 0,   sym: '$',  label: 'HCNsec',      icon: '🛡️', color: 'emerald', reload: () => loadHnSessionsLight() },
+  aikeysapi:   { id: 'aikeysapi',   p: 'ak', stateKey: 'aikeysapi',   base: 5,   sym: '$',  label: 'AIKeysAPI',   icon: '🔑', color: 'teal',    reload: () => loadAkSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -26160,7 +26614,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'aikeysapi', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -26554,6 +27008,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
   { tab: 'aipm', fn: () => loadApSessionsLight() },
   { tab: 'hcnsec',      fn: () => loadHnSessionsLight() },
+  { tab: 'aikeysapi',   fn: () => loadAkSessionsLight() },
   { tab: 'tabi',        fn: () => loadTbSessionsLight() },
   { tab: 'xpeach',      fn: () => loadXpSessionsLight() },
   { tab: 'aerolink',    fn: () => loadAlSessions(false),        mark: 'aerolink' },
@@ -29133,17 +29588,13 @@ function lgRender() {
       <b class="text-crimson">Лига не собралась:</b> ${lgEsc(LG.err)}
       <div class="lgcap" style="margin-top:8px">ручка /__switch/api/league — нужен рестарт хаба,
         если он поднят на сборке без неё</div></div></div>`;
-    // Оболочку только что стёрли — значит «построено» больше не правда. Без этой строки
-    // после единственной осечки среза вкладка оставалась заглушкой навсегда: следующий
-    // успешный lgRender шёл по короткому пути и падал на отсутствующем #lg-lede.
+    // Ошибка стирает оболочку осознанно: это терминальное состояние, а не ожидание.
     delete host.dataset.built;
     return;
   }
-  if (!LG.data) {
-    host.innerHTML = '<div class="px-6 py-8 lgcap">срез считается…</div>';
-    delete host.dataset.built;
-    return;
-  }
+  // 🔴 Оболочка строится ДО данных. Пока срез летит, кэш чата уже прочитан синхронно из
+  // localStorage, но прежнему lgChatPaint некуда было его рисовать: #lg-feed появлялся
+  // лишь после ответа рейтинга. Заодно повторный lgRender(!data) больше не сносит чат.
   if (!host.dataset.built) {
     host.innerHTML = LG_SHELL;
     host.dataset.built = '1';
@@ -29159,6 +29610,16 @@ function lgRender() {
       lgRender();
     });
     lgChatBoot();
+    // Кэш чата лежит локально и читается синхронно — рейтинг ему не нужен. Пускаем здесь,
+    // пока оболочка уже есть, но ветка `!LG.data` ещё не вернула управление.
+    lgChatStart();
+  }
+  if (!LG.data) {
+    const plot = document.getElementById('lg-plot');
+    if (plot) plot.innerHTML = '<div class="lgskel"><span>считаю срез по журналам…</span></div>';
+    const lede = document.getElementById('lg-lede');
+    if (lede) lede.textContent = 'Рейтинг появится после подсчёта; сохранённый чат уже доступен ниже.';
+    return;
   }
   const rows = lgRows(), me = LG.data.me, m = LG_M[LG.metric];
   const _rh = LG.metric + '|' + LG.range + '|' + LG.cum + '|' + (me.stamp || 0) + '|' + rows.length + '|' + (me.nick || '') + '|' + (me.avatar || '');
@@ -31432,9 +31893,6 @@ async function lgLoad(force = false) {
   // Заодно уточняем свою роль: её могли выдать или снять, пока дашборд открыт, и узнать
   // об этом иначе неоткуда — кнопка «Админка» появляется и исчезает по этому ответу.
   if (typeof ladProbeRole === 'function') ladProbeRole();
-  // Чат опрашивается НЕ из вкладки: бейдж непрочитанных обязан появляться, пока человек
-  // сидит на другой вкладке дашборда, а там DOM'а чата ещё нет. Отсюда — только пуск.
-  if (LG.data) lgChatStart();
   if (document.querySelector('[data-tab-content="league"]')?.classList.contains('active')
       || LG.err) lgRender();
 }

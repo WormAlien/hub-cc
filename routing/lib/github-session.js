@@ -253,6 +253,18 @@ function profilesFromIndex() {
     return out;
 }
 
+// Найти готовый переносимый источник по одному из известных имён GitHub-аккаунта.
+// Только индекс на диске: функция вызывается из :8200 и не имеет права запускать DPAPI.
+function transferableProfile(aliases, profiles = null) {
+    const names = new Set((aliases || [])
+        .map(x => String(x || '').trim().toLowerCase())
+        .filter(Boolean));
+    if (!names.size) return null;
+    return (profiles || profilesFromIndex())
+        .filter(p => p.hasUserSession && names.has(String(p.login || '').toLowerCase()))
+        .sort((a, b) => (b.lastUpdate || 0) - (a.lastUpdate || 0))[0] || null;
+}
+
 // Свежесть индекса относительно диска: у каких профилей mtime банки кук разошёлся с
 // записью. Не расшифровывает ничего — только stat. Нужно, чтобы дашборд мог сказать
 // «индекс устарел, перестраиваю», не платя за DPAPI.
@@ -397,7 +409,7 @@ module.exports = {
     PROFILE_ROOTS, SESSIONS_DIR, HARVEST_SCRIPT, CACHE_TTL_MS, INDEX_FILE,
     tagToHost, hostToTag,
     scanProfiles, scanProfilesCached, invalidateScan, scanStats, dropIndex,
-    indexInfo, profilesFromIndex, indexOutdatedDirs,
+    indexInfo, profilesFromIndex, transferableProfile, indexOutdatedDirs,
     indexByLogin, usedOnHost, freshnessMs,
     cachePath, readCache, writeCache, cacheAgeMs, cacheStale,
     seedPayload,

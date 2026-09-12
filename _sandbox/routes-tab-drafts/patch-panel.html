@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Маршруты — патч-панель</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Патч-панель. Один шлюз — одна планка: крупная ручка «окно» плюс триммеры
+   сабагентов. Тира gpt здесь нет: через префикс gpt-имя приходит только если
+   его назвал человек, а перезаписывать явно названную модель — это тот самый
+   баг, из-за которого выбранный glm-5.3 обходился.
+
+   Ширина страницы = ширине контента вкладки в дашборде (1052px), чтобы то,
+   что видно здесь, было ровно тем, что получится в бою.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:oklch(21% 0.028 258); --surface:oklch(25.5% 0.03 258); --elevated:oklch(30% 0.032 258);
+  --line:oklch(38% 0.03 258); --line-soft:oklch(33% 0.028 258);
+  --ink:oklch(96% 0.006 258); --muted:oklch(74% 0.02 258); --faint:oklch(58% 0.02 258);
+  --azure:oklch(72% 0.15 235); --emerald:oklch(74% 0.15 162); --amber:oklch(80% 0.13 75);
+  --r-sm:6px; --r-md:10px; --r-lg:14px;
+  --sans:ui-sans-serif,"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
+
+  /* Одна сетка на шапку и все планки — колонки не могут разъехаться.
+     Минимумы посчитаны по самому длинному имени каталога (claude-haiku-4-5,
+     16 знаков моноширинным 12px ≈ 115px) плюс паддинги и стрелка селекта.
+     Ниже этих чисел текст начнёт обрезаться — поэтому они минимумы, а не fit-content. */
+  --grid:26px minmax(160px,.9fr) minmax(170px,1.1fr) repeat(3,minmax(164px,1fr)) minmax(172px,1.05fr);
+}
+[data-theme="light"]{
+  --bg:oklch(96.5% 0.006 258); --surface:oklch(100% 0 0); --elevated:oklch(97.5% 0.008 258);
+  --line:oklch(85% 0.012 258); --line-soft:oklch(90% 0.01 258);
+  --ink:oklch(23.5% 0.02 258); --muted:oklch(45% 0.02 258); --faint:oklch(60% 0.018 258);
+  --azure:oklch(52% 0.15 235); --emerald:oklch(52% 0.14 162); --amber:oklch(56% 0.13 65);
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--ink); font-family:var(--sans); font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased}
+.mono,select,.cmdbtn{font-variant-numeric:tabular-nums}
+button,select{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--azure); outline-offset:2px; border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.wrap{max-width:1052px; margin:0 auto; padding:26px 0 70px}
+.topbar{display:flex; align-items:center; gap:10px; margin-bottom:20px}
+.topbar .sp{flex:1}
+.ghost{border:1px solid var(--line); background:transparent; color:var(--muted); padding:6px 12px; border-radius:var(--r-sm); font-size:12px; cursor:pointer; transition:.14s; white-space:nowrap}
+.ghost:hover{color:var(--ink); border-color:var(--azure)}
+.ghost[hidden]{display:none}
+
+.head{display:flex; align-items:flex-start; gap:14px}
+.head-ic{width:38px; height:38px; flex:none; border-radius:var(--r-md); background:color-mix(in oklab,var(--azure) 18%,transparent); color:var(--azure); display:grid; place-items:center; font-size:18px}
+.head h2{margin:0; font-size:21px; font-weight:650; letter-spacing:-.015em}
+.head p{margin:3px 0 0; color:var(--faint); font-size:12.5px}
+.count{color:var(--faint); font-size:12px; margin:0 0 12px 52px}
+.count b{color:var(--muted); font-weight:600}
+.count i{font-style:normal; color:var(--faint)}
+
+/* ── Шапка колонок ───────────────────────────────────────────────────────── */
+.cols{display:grid; grid-template-columns:var(--grid); padding:0 14px; align-items:end}
+.cols div{font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--faint); font-weight:600; padding:0 8px}
+.cols .k{color:var(--azure)}
+.cols .k i{display:block; font-style:normal; text-transform:none; letter-spacing:0; font-size:10.5px; color:var(--faint); font-weight:400; margin-top:2px}
+.cols .grp{grid-column:span 3; border-bottom:1px solid var(--line-soft); padding-bottom:5px; margin-bottom:3px; text-align:center}
+.cols.sub{padding-bottom:7px}
+
+/* ── Планка ──────────────────────────────────────────────────────────────── */
+.strip{
+  display:grid; grid-template-columns:var(--grid); align-items:center;
+  border:1px solid var(--line-soft); border-radius:var(--r-lg); background:var(--surface);
+  margin-bottom:8px; padding:11px 14px; transition:border-color .15s, opacity .15s, box-shadow .15s;
+}
+.strip:hover{border-color:color-mix(in oklab,var(--azure) 40%,var(--line))}
+.strip[data-off="1"]{opacity:.55}
+.strip[data-off="1"]:hover{opacity:1}
+/* Планка под курсором во время переноса: приподнята и полупрозрачна, чтобы
+   было видно, что именно едет, и куда встанет место под ней. */
+/* Источник после снимка drag-image уходит из потока. Место занимает `.drop-slot`,
+   поэтому соседние планки ФИЗИЧЕСКИ раздвигаются, а не получают полоску поверх себя. */
+.strip.dragging{
+  position:absolute!important; visibility:hidden!important; pointer-events:none!important;
+  width:1px!important; height:1px!important; padding:0!important; margin:0!important;
+  border:0!important; overflow:hidden!important;
+}
+.drop-slot{
+  border:1px dashed color-mix(in oklab,var(--azure) 72%,var(--line));
+  border-radius:var(--r-lg); margin-bottom:8px;
+  background:color-mix(in oklab,var(--azure) 9%,transparent);
+  box-shadow:inset 0 0 0 1px color-mix(in oklab,var(--azure) 12%,transparent);
+  transition:height .12s ease, background .12s ease;
+}
+/* Кастомный drag-image: реальная планка может уйти из потока, но под курсором
+   остаётся её полноценная полупрозрачная копия. */
+.drag-ghost{position:fixed; left:-5000px; top:-5000px; opacity:.82; pointer-events:none; z-index:9999}
+
+.cell{padding:0 8px; min-width:0}
+
+/* Ручка переноса. Отдельной кнопкой, а не всей планкой: иначе перенос начнётся
+   с попытки открыть селект. Она же — клавиатурный путь (стрелки). */
+.grip{
+  width:22px; height:30px; border:0; background:transparent; color:var(--faint);
+  cursor:grab; border-radius:var(--r-sm); display:grid; place-items:center;
+  font-size:13px; line-height:1; transition:.14s; touch-action:none;
+}
+.grip:hover{color:var(--ink); background:var(--elevated)}
+.grip:active{cursor:grabbing}
+
+.id b{display:block; font-size:14px; font-weight:600; letter-spacing:-.01em}
+.id .note{display:block; color:var(--faint); font-size:11px; font-weight:400; margin-top:1px}
+.id .pre{display:flex; gap:4px; margin-top:5px; flex-wrap:wrap}
+.chip{font-family:var(--mono); font-size:10.5px; padding:1px 6px; border-radius:4px; background:var(--elevated); border:1px solid var(--line-soft); color:var(--muted)}
+
+.master{border-left:1px solid var(--line-soft); border-right:1px dashed var(--line-soft); padding:2px 12px}
+select.sel{
+  width:100%; background:var(--elevated); border:1px solid var(--line-soft);
+  border-radius:var(--r-sm); padding:6px 9px; font-size:12px; cursor:pointer;
+  font-family:var(--mono); transition:.14s;
+}
+select.sel:hover{border-color:var(--azure)}
+select.sel.big{padding:9px 11px; font-size:14px; font-weight:550; background:var(--surface); border-color:color-mix(in oklab,var(--azure) 45%,var(--line))}
+select.sel.empty{color:var(--faint); font-family:var(--sans); font-style:italic}
+
+.cmd{border-left:1px solid var(--line-soft); padding:2px 0 2px 12px; display:flex; flex-direction:column; gap:5px}
+.cmdbtn{
+  font-family:var(--mono); font-size:12px; text-align:left; background:var(--elevated);
+  border:1px solid var(--line-soft); color:var(--ink); padding:7px 10px; border-radius:var(--r-sm);
+  cursor:pointer; transition:.14s; display:flex; align-items:center; gap:7px;
+}
+.cmdbtn:hover{border-color:var(--azure); background:color-mix(in oklab,var(--azure) 12%,var(--elevated))}
+.cmdbtn.copied{border-color:var(--emerald); color:var(--emerald)}
+/* Итог развёртки переносится по словам, а не режется многоточием: имя модели
+   обрезанным бесполезно — ради него строка и существует. */
+.resolve{font-size:11px; color:var(--faint); display:flex; gap:5px; line-height:1.35}
+.resolve b{color:var(--emerald); font-family:var(--mono); font-weight:500; font-size:11.5px; word-break:break-all}
+.resolve.warn b{color:var(--amber)}
+
+.strip.nomap{grid-template-columns:26px minmax(178px,1.05fr) 1fr}
+.nomap .msg{padding:0 8px; color:var(--faint); font-size:12.5px; border-left:1px solid var(--line-soft)}
+
+@media (max-width:1000px){
+  :root{--grid:26px minmax(160px,1fr) minmax(168px,1.2fr) repeat(3,minmax(150px,1fr)) minmax(176px,1.1fr)}
+  .wrap{padding-left:16px; padding-right:16px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="head">
+      <div class="head-ic">⇄</div>
+      <div>
+        <h2>Маршруты</h2>
+        <p>чем адресовать шлюз в <span class="mono">/model</span> и во что развернётся имя</p>
+      </div>
+    </div>
+    <div class="sp"></div>
+    <button class="ghost" id="reset" hidden>↺ порядок по алфавиту</button>
+    <button class="ghost" id="theme">☾ тема</button>
+    <button class="ghost">↻ Обновить</button>
+  </div>
+
+  <div class="count"><b>7 провайдеров</b> · 9 скрыто · <i>тяни за ⠿, чтобы переставить</i></div>
+
+  <div class="cols">
+    <div></div>
+    <div>Шлюз</div>
+    <div class="k">Окно<i>что получит /model &lt;шлюз&gt;</i></div>
+    <div class="grp">Сабагенты</div>
+    <div>Команда</div>
+  </div>
+  <div class="cols sub">
+    <div></div><div></div><div></div>
+    <div>opus</div><div>sonnet</div><div>haiku</div>
+    <div></div>
+  </div>
+
+  <div id="rows"></div>
+</div>
+
+<script>
+/* Данные — снимок живой вкладки. Бэкенда нет: селекты пишут в этот объект. */
+const CAT = {
+  agentrouter:['glm-5.3','gpt-6-astra','claude-opus-5','claude-sonnet-5','gpt-5.6-sol','deepseek-v4-pro'],
+  aikeysapi:['glm-5.3','kimi-k3','step-3.7-flash'],
+  gorouter:['claude-opus-5','claude-opus-4-8','claude-sonnet-5','claude-haiku-4-5'],
+  justwoker:['gpt-5.6-sol','gpt-5.6-luna','gpt-5.6-terra'],
+  kktoken:['claude-opus-5','claude-opus-4-8'],
+  tabi:['claude-opus-5','claude-opus-4-8','claude-sonnet-5'],
+};
+const SUB = ['opus','sonnet','haiku'];
+const P = [
+  {n:'agentrouter', label:'AgentRouter', note:'opus-5 1M', al:['ar'],
+   t:{default:'glm-5.3', opus:'glm-5.3', sonnet:'gpt-6-astra', haiku:'gpt-6-astra'}},
+  {n:'aikeysapi', label:'AIKeysAPI', note:'', al:['ak'], t:{default:'',opus:'',sonnet:'',haiku:''}},
+  {n:'custom', label:'custom', note:'', al:[], t:null},
+  {n:'gorouter', label:'GoRouter', note:'', al:['go'], t:{default:'',opus:'',sonnet:'',haiku:''}},
+  {n:'justwoker', label:'JustWoker', note:'', al:['jw'], t:{default:'',opus:'',sonnet:'',haiku:''}},
+  {n:'kktoken', label:'KKtoken', note:'', al:['kk'], t:{default:'',opus:'',sonnet:'',haiku:''}},
+  {n:'tabi', label:'Tabi Token', note:'', al:['tb'], t:{default:'',opus:'',sonnet:'',haiku:''}},
+];
+const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* Порядок — отдельно от данных: перестановка не должна трогать сами маршруты.
+   Хранится в localStorage, поэтому переживает F5; кнопка «по алфавиту» — откат. */
+const ORDER_KEY = 'routes-order';
+let order = [];
+try { order = JSON.parse(localStorage.getItem(ORDER_KEY) || '[]'); } catch(_) { order = []; }
+const sorted = () => {
+  const ix = n => { const i = order.indexOf(n); return i < 0 ? 1e6 : i; };   // новый шлюз — в конец
+  return [...P].sort((a,b) => ix(a.n) - ix(b.n));
+};
+function saveOrder(names){
+  order = names;
+  try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)); } catch(_){}
+  document.getElementById('reset').hidden = false;
+}
+
+function opts(n,cur){
+  const seen=new Set();
+  return ['',...(CAT[n]||[]),cur].filter(v=>typeof v==='string'&&!seen.has(v)&&(seen.add(v),true))
+    .map(v=>`<option value="${esc(v)}"${v===(cur||'')?' selected':''}>${v?esc(v):'— как есть —'}</option>`).join('');
+}
+const sel = (p,t,cls) => {
+  const cur = p.t[t]||'';
+  // title — страховка на случай очень длинного имени из чужого каталога
+  return `<select class="sel ${cls||''} ${cur?'':'empty'}" data-p="${p.n}" data-t="${t}"
+    title="${esc(cur || 'не задан — модель уходит как есть')}">${opts(p.n,cur)}</select>`;
+};
+
+function render(){
+  document.getElementById('rows').innerHTML = sorted().map(p=>{
+    const pre = [p.n,...p.al].map(a=>`<span class="chip">${esc(a)}/</span>`).join('');
+    const grip = `<button class="grip" data-grip title="Перетащить. Или стрелки ↑↓ с клавиатуры"
+      aria-label="Переставить ${esc(p.label)}">⠿</button>`;
+    const id = `<div class="cell id"><b>${esc(p.label)}</b>${p.note?`<span class="note">${esc(p.note)}</span>`:''}<div class="pre">${pre}</div></div>`;
+    if(!p.t) return `<div class="strip nomap" data-off="1" data-n="${p.n}">${grip}${id}<div class="msg">тир-карты нет — модель уходит на шлюз как есть</div></div>`;
+    const d = p.t.default;
+    return `<div class="strip" data-off="${d?0:1}" data-n="${p.n}">
+      ${grip}
+      ${id}
+      <div class="cell master">${sel(p,'default','big')}</div>
+      ${SUB.map(t=>`<div class="cell">${sel(p,t)}</div>`).join('')}
+      <div class="cell cmd">
+        <button class="cmdbtn" data-cmd="/model ${esc(p.n)}">📋 /model ${esc(p.n)}</button>
+        ${d?`<div class="resolve">→ <b>${esc(d)}</b></div>`
+           :`<div class="resolve warn">⚠ <b>окно не задано</b></div>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+render();
+document.getElementById('reset').hidden = order.length === 0;
+
+/* ── Перенос планок ────────────────────────────────────────────────────────
+   Тянем ТОЛЬКО за ручку: draggable включается на время нажатия на неё, иначе
+   браузер начнёт перенос при попытке открыть селект или выделить текст.
+   Во время переноса ререндер не зовём — он бы убил перетаскиваемый узел. */
+const rows = document.getElementById('rows');
+let dragEl = null;
+let dragSlot = null;
+let dragGhost = null;
+
+function finishDrag(){
+  if(!dragEl) return;
+  // Реальный узел занимает место placeholder — порядок в DOM уже окончательный.
+  if(dragSlot && dragSlot.parentNode) dragSlot.parentNode.insertBefore(dragEl, dragSlot);
+  if(dragSlot) dragSlot.remove();
+  if(dragGhost) dragGhost.remove();
+  dragEl.classList.remove('dragging');
+  dragEl.draggable = false;
+  const moved = dragEl;
+  dragEl = dragSlot = dragGhost = null;
+  saveOrder([...rows.querySelectorAll('.strip')].map(s => s.dataset.n));
+  const grip = moved.querySelector('[data-grip]');
+  if(grip) grip.focus();
+}
+
+rows.addEventListener('pointerdown', e => {
+  const g = e.target.closest('[data-grip]'); if(!g) return;
+  g.closest('.strip').draggable = true;
+});
+rows.addEventListener('dragstart', e => {
+  const s = e.target.closest('.strip'); if(!s || !s.draggable) return;
+  dragEl = s;
+  const r = s.getBoundingClientRect();
+
+  // Копия под курсором. Реальную строку после снимка убираем из потока, иначе
+  // placeholder добавит вторую высоту и список сначала подпрыгнет вниз.
+  dragGhost = s.cloneNode(true);
+  dragGhost.classList.add('drag-ghost');
+  dragGhost.style.width = r.width + 'px';
+  dragGhost.style.height = r.height + 'px';
+  document.body.appendChild(dragGhost);
+  e.dataTransfer.setDragImage(dragGhost, 18, Math.min(24, r.height / 2));
+
+  dragSlot = document.createElement('div');
+  dragSlot.className = 'drop-slot';
+  dragSlot.style.height = r.height + 'px';
+  s.parentNode.insertBefore(dragSlot, s.nextSibling);
+
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', s.dataset.n);   // Firefox без этого не начнёт
+  // Drag-image уже назначен кастомной копией — настоящий узел можно убрать из потока.
+  requestAnimationFrame(() => s.classList.add('dragging'));
+});
+rows.addEventListener('dragover', e => {
+  if(!dragEl || !dragSlot) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const over = e.target.closest('.strip');
+  if(!over || over === dragEl) return;
+  const r = over.getBoundingClientRect();
+  const after = e.clientY > r.top + r.height / 2;
+  const anchor = after ? over.nextSibling : over;
+  // Если anchor — скрытый dragEl, ставим перед его следующим видимым соседом.
+  if(anchor === dragEl) rows.insertBefore(dragSlot, dragEl.nextSibling);
+  else rows.insertBefore(dragSlot, anchor);
+});
+rows.addEventListener('drop', e => {
+  if(!dragEl) return;
+  e.preventDefault();
+  finishDrag();
+});
+rows.addEventListener('dragend', finishDrag);
+
+/* Клавиатура: та же ручка, стрелки вверх/вниз. Без этого переставить мышью
+   можно, а с клавиатуры нельзя — это не «мелочь доступности», а просто
+   половина работающего элемента. */
+rows.addEventListener('keydown', e => {
+  const g = e.target.closest('[data-grip]'); if(!g) return;
+  if(e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  const s = g.closest('.strip');
+  const sib = e.key === 'ArrowUp' ? s.previousElementSibling : s.nextElementSibling;
+  if(!sib) return;
+  s.parentNode.insertBefore(e.key === 'ArrowUp' ? s : sib, e.key === 'ArrowUp' ? sib : s);
+  saveOrder([...rows.querySelectorAll('.strip')].map(x => x.dataset.n));
+  g.focus();                                           // фокус едет вместе с планкой
+});
+
+/* ── Правка и мелочи ──────────────────────────────────────────────────────── */
+document.addEventListener('change',e=>{
+  const s=e.target.closest('select.sel'); if(!s) return;
+  const p=P.find(x=>x.n===s.dataset.p); if(!p||!p.t) return;
+  p.t[s.dataset.t]=s.value; render();
+});
+document.addEventListener('click',e=>{
+  const c=e.target.closest('[data-cmd]');
+  if(c){ try{navigator.clipboard&&navigator.clipboard.writeText(c.dataset.cmd)}catch(_){}
+    c.classList.add('copied'); setTimeout(()=>c.classList.remove('copied'),1200); return; }
+  if(e.target.id==='theme'){ const r=document.documentElement;
+    r.dataset.theme = r.dataset.theme==='dark'?'light':'dark'; return; }
+  if(e.target.id==='reset'){ order=[];
+    try{ localStorage.removeItem(ORDER_KEY) }catch(_){}
+    e.target.hidden = true; render(); }
+});
+</script>
+</body>
+</html>

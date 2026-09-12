@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="ru" data-theme="dark" data-variant="a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Маршруты — четыре варианта вкладки</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   ТОКЕНЫ. Одни на все четыре варианта — иначе сравниваешь палитры, а не макеты.
+   OKLCH как в боевом дашборде; смеси только in oklab (иначе hue едет по кругу).
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root{
+  --bg:        oklch(21% 0.028 258);
+  --surface:   oklch(25.5% 0.03 258);
+  --elevated:  oklch(30% 0.032 258);
+  --line:      oklch(38% 0.03 258);
+  --line-soft: oklch(33% 0.028 258);
+  --ink:       oklch(96% 0.006 258);
+  --muted:     oklch(74% 0.02 258);
+  --faint:     oklch(58% 0.02 258);
+  --azure:     oklch(72% 0.15 235);
+  --emerald:   oklch(74% 0.15 162);
+  --amber:     oklch(80% 0.13 75);
+  --crimson:   oklch(68% 0.19 18);
+  --violet:    oklch(70% 0.15 295);
+
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --sans: ui-sans-serif, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+}
+[data-theme="light"]{
+  --bg:        oklch(96.5% 0.006 258);
+  --surface:   oklch(100% 0 0);
+  --elevated:  oklch(97.5% 0.008 258);
+  --line:      oklch(85% 0.012 258);
+  --line-soft: oklch(90% 0.01 258);
+  --ink:       oklch(23.5% 0.02 258);
+  --muted:     oklch(45% 0.02 258);
+  --faint:     oklch(60% 0.018 258);
+  --azure:     oklch(52% 0.15 235);
+  --emerald:   oklch(52% 0.14 162);
+  --amber:     oklch(58% 0.13 65);
+  --crimson:   oklch(52% 0.19 18);
+  --violet:    oklch(52% 0.16 295);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:var(--sans); font-size:14px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+/* Цифры и идентификаторы не пляшут по ширине */
+.mono{font-family:var(--mono); font-variant-numeric:tabular-nums}
+button,select{font:inherit; color:inherit}
+:focus-visible{outline:2px solid var(--azure); outline-offset:2px; border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+
+/* ── Стенд: переключатель вариантов ──────────────────────────────────────── */
+.stage{max-width:1180px; margin:0 auto; padding:28px 20px 80px}
+.stagebar{
+  position:sticky; top:0; z-index:20; margin:-28px -20px 26px; padding:14px 20px;
+  background:color-mix(in oklab, var(--bg) 88%, transparent);
+  backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line-soft);
+  display:flex; gap:14px; align-items:center; flex-wrap:wrap;
+}
+.stagebar h1{font-size:13px; font-weight:600; margin:0; letter-spacing:.02em}
+.stagebar h1 span{color:var(--faint); font-weight:400}
+.tabs{display:flex; gap:4px; background:var(--elevated); padding:3px; border-radius:var(--r-md); border:1px solid var(--line-soft)}
+.tabs button{
+  border:0; background:transparent; color:var(--muted); cursor:pointer;
+  padding:6px 13px; border-radius:7px; font-size:12.5px; font-weight:500; transition:.14s;
+}
+.tabs button:hover{color:var(--ink)}
+.tabs button[aria-selected="true"]{background:var(--azure); color:oklch(16% 0.02 258); font-weight:600}
+.spacer{flex:1}
+.ghost{
+  border:1px solid var(--line); background:transparent; color:var(--muted);
+  padding:6px 12px; border-radius:var(--r-sm); font-size:12px; cursor:pointer; transition:.14s;
+}
+.ghost:hover{color:var(--ink); border-color:var(--azure)}
+.pitch{
+  margin:0 0 24px; padding:12px 15px; border-left:2px solid var(--azure);
+  background:color-mix(in oklab, var(--azure) 7%, transparent);
+  border-radius:0 var(--r-sm) var(--r-sm) 0; font-size:13px; color:var(--muted); max-width:72ch;
+}
+.pitch b{color:var(--ink); font-weight:600}
+.panel{display:none}
+[data-variant="a"] #v-a,[data-variant="b"] #v-b,[data-variant="c"] #v-c,[data-variant="d"] #v-d{display:block}
+
+/* ── Общая шапка вкладки ─────────────────────────────────────────────────── */
+.head{display:flex; align-items:flex-start; gap:14px; margin-bottom:22px}
+.head-ic{
+  width:38px; height:38px; flex:none; border-radius:var(--r-md);
+  background:color-mix(in oklab, var(--azure) 18%, transparent);
+  color:var(--azure); display:grid; place-items:center; font-size:18px;
+}
+.head h2{margin:0; font-size:21px; font-weight:650; letter-spacing:-.015em}
+.head p{margin:3px 0 0; color:var(--faint); font-size:12.5px}
+.head .spacer{flex:1}
+.count{color:var(--faint); font-size:12px; margin-bottom:14px}
+.count b{color:var(--muted); font-weight:600}
+
+/* ═══ ВАРИАНТ A — «Патч-панель» ══════════════════════════════════════════════
+   Канал микшера: одна большая ручка (default) + четыре триммера (сабагенты).
+   Ненастроенные каналы гаснут — взгляд идёт туда, где есть сигнал.        */
+.pb-strip{
+  display:grid; grid-template-columns:186px 1fr; gap:0;
+  border:1px solid var(--line-soft); border-radius:var(--r-lg);
+  background:var(--surface); margin-bottom:9px; overflow:hidden;
+  transition:border-color .15s;
+}
+.pb-strip:hover{border-color:color-mix(in oklab, var(--azure) 40%, var(--line))}
+.pb-strip[data-off="1"]{opacity:.58}
+.pb-strip[data-off="1"]:hover{opacity:1}
+.pb-id{
+  padding:14px 15px; border-right:1px solid var(--line-soft);
+  background:color-mix(in oklab, var(--elevated) 55%, transparent);
+  display:flex; flex-direction:column; gap:7px; justify-content:center;
+}
+.pb-name{font-weight:600; font-size:14px; letter-spacing:-.01em}
+.pb-note{color:var(--faint); font-size:11px; font-weight:400}
+.pb-pre{display:flex; gap:4px; flex-wrap:wrap}
+.chip{
+  font-family:var(--mono); font-size:10.5px; padding:1px 6px; border-radius:4px;
+  background:var(--elevated); border:1px solid var(--line-soft); color:var(--muted);
+}
+.pb-body{display:flex; align-items:stretch; gap:0}
+/* Мастер-секция: единственное, что должно бросаться в глаза */
+.pb-master{
+  padding:12px 16px; min-width:274px; border-right:1px dashed var(--line-soft);
+  display:flex; flex-direction:column; gap:6px; justify-content:center;
+  background:color-mix(in oklab, var(--azure) 5%, transparent);
+}
+.pb-strip[data-off="1"] .pb-master{background:transparent}
+.pb-lab{
+  font-size:10px; text-transform:uppercase; letter-spacing:.09em; font-weight:650;
+  color:var(--azure); display:flex; align-items:center; gap:6px;
+}
+.pb-lab i{font-style:normal; color:var(--faint); font-weight:400; letter-spacing:0; text-transform:none; font-size:10.5px}
+.pb-trims{padding:12px 16px; display:flex; gap:9px; flex-wrap:wrap; align-items:center; flex:1}
+.pb-trims .pb-lab{
+  color:var(--faint); writing-mode:vertical-rl; transform:rotate(180deg);
+  font-size:9px; letter-spacing:.12em; align-self:stretch; justify-content:center;
+  border-right:1px solid var(--line-soft); padding-right:8px; margin-right:2px;
+}
+.trim{display:flex; flex-direction:column; gap:3px}
+.trim > span{font-size:10px; color:var(--faint); letter-spacing:.03em}
+.pb-cmd{
+  padding:12px 15px; border-left:1px solid var(--line-soft); min-width:212px;
+  display:flex; flex-direction:column; gap:6px; justify-content:center;
+  background:color-mix(in oklab, var(--elevated) 35%, transparent);
+}
+sel, .sel{display:block}
+select.sel{
+  width:100%; background:var(--elevated); border:1px solid var(--line-soft);
+  border-radius:var(--r-sm); padding:6px 9px; font-size:12.5px; cursor:pointer;
+  font-family:var(--mono); transition:.14s;
+}
+select.sel:hover{border-color:var(--azure)}
+select.sel.big{
+  padding:9px 11px; font-size:14px; font-weight:550;
+  border-color:color-mix(in oklab, var(--azure) 45%, var(--line));
+  background:var(--surface);
+}
+select.sel.empty{color:var(--faint); font-family:var(--sans); font-style:italic}
+select.sel.tiny{width:118px; padding:4px 7px; font-size:11.5px}
+.cmdbtn{
+  font-family:var(--mono); font-size:12px; text-align:left;
+  background:var(--elevated); border:1px solid var(--line-soft); color:var(--ink);
+  padding:7px 10px; border-radius:var(--r-sm); cursor:pointer; transition:.14s;
+  display:flex; align-items:center; gap:7px;
+}
+.cmdbtn:hover{border-color:var(--azure); background:color-mix(in oklab, var(--azure) 12%, var(--elevated))}
+.cmdbtn.copied{border-color:var(--emerald); color:var(--emerald)}
+.resolve{font-size:11px; color:var(--faint); display:flex; align-items:center; gap:5px}
+.resolve b{color:var(--emerald); font-family:var(--mono); font-weight:500; font-size:11.5px}
+.resolve.warn b{color:var(--amber)}
+.pb-nomap{padding:16px; color:var(--faint); font-size:12.5px; display:flex; align-items:center; gap:8px}
+
+/* ═══ ВАРИАНТ B — «Матрица» ══════════════════════════════════════════════════
+   Всё на экране разом. Таблица: строки — шлюзы, столбцы — что кого спросило. */
+.mx{width:100%; border-collapse:separate; border-spacing:0; font-size:13px}
+.mx th{
+  text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.09em;
+  color:var(--faint); font-weight:600; padding:0 10px 9px; white-space:nowrap;
+}
+.mx th.key{color:var(--azure)}
+.mx th small{display:block; text-transform:none; letter-spacing:0; font-size:10px; color:var(--faint); font-weight:400; margin-top:2px}
+.mx td{padding:0; border-top:1px solid var(--line-soft)}
+.mx tbody tr:hover td{background:color-mix(in oklab, var(--azure) 5%, transparent)}
+.mx .c{padding:8px 10px}
+.mx .c-gw{padding:10px 10px 10px 12px; min-width:180px}
+.mx .c-key{background:color-mix(in oklab, var(--azure) 7%, transparent)}
+.mx tbody tr:hover .c-key{background:color-mix(in oklab, var(--azure) 11%, transparent)}
+.mx-gw{display:flex; flex-direction:column; gap:4px}
+.mx-gw b{font-weight:600; font-size:13.5px}
+.mx-pre{display:flex; gap:4px}
+.cell{
+  width:100%; text-align:left; background:transparent; border:1px solid transparent;
+  border-radius:var(--r-sm); padding:5px 8px; cursor:pointer; font-family:var(--mono);
+  font-size:12px; transition:.12s; display:flex; align-items:center; gap:6px;
+}
+.cell:hover{border-color:var(--line); background:var(--elevated)}
+.cell.set{color:var(--ink)}
+.cell.unset{color:var(--faint); font-family:var(--sans); font-size:12px}
+.cell.unset::before{content:"—"; color:var(--line); font-family:var(--mono)}
+.cell.warn{color:var(--amber)}
+.mx-cmd{
+  font-family:var(--mono); font-size:11.5px; color:var(--muted); background:transparent;
+  border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:5px 9px; cursor:pointer;
+  white-space:nowrap; transition:.14s;
+}
+.mx-cmd:hover{border-color:var(--azure); color:var(--ink)}
+.mx-cmd.copied{border-color:var(--emerald); color:var(--emerald)}
+.mx-legend{margin-top:16px; display:flex; gap:18px; flex-wrap:wrap; font-size:11.5px; color:var(--faint)}
+.mx-legend span{display:flex; align-items:center; gap:6px}
+.dot{width:7px; height:7px; border-radius:50%; flex:none}
+
+/* ═══ ВАРИАНТ C — «Стойка» ═══════════════════════════════════════════════════
+   Список слева, один шлюз крупно справа. Меньше на экране, больше ясности.  */
+.rack{display:grid; grid-template-columns:236px 1fr; gap:18px; align-items:start}
+.rack-list{display:flex; flex-direction:column; gap:3px}
+.rack-item{
+  width:100%; text-align:left; background:transparent; border:1px solid transparent;
+  border-radius:var(--r-md); padding:9px 11px; cursor:pointer; transition:.13s;
+  display:flex; align-items:center; gap:9px;
+}
+.rack-item:hover{background:var(--elevated)}
+.rack-item[aria-current="true"]{
+  background:color-mix(in oklab, var(--azure) 13%, transparent);
+  border-color:color-mix(in oklab, var(--azure) 40%, transparent);
+}
+.rack-item .dot{width:6px; height:6px}
+.rack-tx{flex:1; min-width:0}
+.rack-tx b{display:block; font-size:13px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.rack-tx span{display:block; font-size:11px; color:var(--faint); font-family:var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.rack-pane{border:1px solid var(--line-soft); border-radius:var(--r-lg); background:var(--surface); overflow:hidden}
+.rack-top{padding:18px 20px; border-bottom:1px solid var(--line-soft); display:flex; align-items:flex-start; gap:12px}
+.rack-top h3{margin:0; font-size:17px; font-weight:650; letter-spacing:-.01em}
+.rack-top p{margin:4px 0 0; font-size:12px; color:var(--faint)}
+.rack-sec{padding:18px 20px}
+.rack-sec + .rack-sec{border-top:1px solid var(--line-soft)}
+.rack-h{display:flex; align-items:baseline; gap:9px; margin-bottom:4px}
+.rack-h b{font-size:13px; font-weight:650}
+.rack-h span{font-size:11.5px; color:var(--faint)}
+.rack-hint{font-size:12px; color:var(--faint); margin:0 0 12px; max-width:62ch}
+.rack-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(158px,1fr)); gap:11px}
+.rack-field{display:flex; flex-direction:column; gap:4px}
+.rack-field > span{font-size:11px; color:var(--faint)}
+.rack-field.key > span{color:var(--azure); font-weight:600}
+
+/* ═══ ВАРИАНТ D — «Команда-карточка» ═════════════════════════════════════════
+   Герой карточки — та строка, которую реально копируешь в окно.            */
+.cards{display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:13px}
+.card{
+  border:1px solid var(--line-soft); border-radius:var(--r-lg); background:var(--surface);
+  padding:16px 17px; display:flex; flex-direction:column; gap:13px; transition:.15s;
+}
+.card:hover{border-color:color-mix(in oklab, var(--azure) 42%, var(--line))}
+.card[data-off="1"]{opacity:.62}
+.card[data-off="1"]:hover{opacity:1}
+.card-top{display:flex; align-items:flex-start; gap:9px}
+.card-top b{font-size:13px; font-weight:600; flex:1; letter-spacing:-.005em}
+.card-cmd{
+  width:100%; text-align:left; cursor:pointer; transition:.15s;
+  background:color-mix(in oklab, var(--azure) 9%, transparent);
+  border:1px solid color-mix(in oklab, var(--azure) 32%, transparent);
+  border-radius:var(--r-md); padding:13px 15px;
+  display:flex; flex-direction:column; gap:7px;
+}
+.card-cmd:hover{background:color-mix(in oklab, var(--azure) 15%, transparent)}
+.card-cmd.copied{border-color:var(--emerald); background:color-mix(in oklab, var(--emerald) 12%, transparent)}
+.card-cmd.dead{background:color-mix(in oklab, var(--amber) 8%, transparent); border-color:color-mix(in oklab, var(--amber) 32%, transparent)}
+.card-cmd .line{font-family:var(--mono); font-size:14.5px; font-weight:550; letter-spacing:-.01em}
+.card-cmd .to{font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px}
+.card-cmd .to b{font-family:var(--mono); color:var(--emerald); font-weight:550}
+.card-cmd.dead .to b{color:var(--amber)}
+.card-sub{border-top:1px solid var(--line-soft); padding-top:11px}
+.card-sum{
+  width:100%; background:transparent; border:0; cursor:pointer; padding:0;
+  display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; text-align:left;
+}
+.card-sum:hover{color:var(--ink)}
+.card-sum .arrow{transition:transform .18s; color:var(--faint); font-size:10px}
+.card-sub[data-open="1"] .arrow{transform:rotate(90deg)}
+.card-sum .peek{flex:1; font-family:var(--mono); font-size:11px; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.card-fields{display:none; grid-template-columns:1fr 1fr; gap:9px; margin-top:11px}
+.card-sub[data-open="1"] .card-fields{display:grid}
+.card-nomap{font-size:12px; color:var(--faint); padding:6px 0}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <div class="stagebar">
+    <h1>Маршруты <span>— четыре варианта, ткни и выбери</span></h1>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-v="a" aria-selected="true">A · Патч-панель</button>
+      <button role="tab" data-v="b" aria-selected="false">B · Матрица</button>
+      <button role="tab" data-v="c" aria-selected="false">C · Стойка</button>
+      <button role="tab" data-v="d" aria-selected="false">D · Команда</button>
+    </div>
+    <div class="spacer"></div>
+    <button class="ghost" id="theme">☾ тема</button>
+  </div>
+
+  <!-- ВАРИАНТ A -->
+  <section class="panel" id="v-a">
+    <p class="pitch"><b>A · Патч-панель.</b> Канал микшера: одна крупная ручка — то, что получит окно,
+      рядом мелкие триммеры для сабагентов. Ненастроенные шлюзы приглушены, поэтому взгляд сам идёт
+      туда, где есть сигнал. Плотно, но иерархия читается с одного взгляда.</p>
+    <div class="head">
+      <div class="head-ic">⇄</div>
+      <div>
+        <h2>Маршруты</h2>
+        <p>чем адресовать шлюз в <span class="mono">/model</span> и во что развернётся имя</p>
+      </div>
+      <div class="spacer"></div>
+      <button class="ghost">↻ Обновить</button>
+    </div>
+    <div class="count"><b>7 провайдеров</b> · 9 скрыто</div>
+    <div id="a-rows"></div>
+  </section>
+
+  <!-- ВАРИАНТ B -->
+  <section class="panel" id="v-b">
+    <p class="pitch"><b>B · Матрица.</b> Все семь шлюзов и все тиры на одном экране, без прокрутки.
+      Настроенное — сплошным, пустое — прочерком, поэтому «что вообще настроено» видно мгновенно.
+      Правка по клику в ячейку. Самый плотный вариант; берите, если вкладка для сверки, а не для чтения.</p>
+    <div class="head">
+      <div class="head-ic">⇄</div>
+      <div>
+        <h2>Маршруты</h2>
+        <p>строка — шлюз, столбец — кто спросил</p>
+      </div>
+      <div class="spacer"></div>
+      <button class="ghost">↻ Обновить</button>
+    </div>
+    <div class="count"><b>7 провайдеров</b> · 9 скрыто</div>
+    <table class="mx">
+      <thead><tr>
+        <th>Шлюз</th>
+        <th class="key">default<small>что получит окно</small></th>
+        <th>opus<small>сабагенты</small></th>
+        <th>sonnet<small>сабагенты</small></th>
+        <th>haiku<small>сабагенты</small></th>
+        <th>gpt<small>gpt-имена</small></th>
+        <th>Команда</th>
+      </tr></thead>
+      <tbody id="b-rows"></tbody>
+    </table>
+    <div class="mx-legend">
+      <span><i class="dot" style="background:var(--emerald)"></i> маршрут задан</span>
+      <span><i class="dot" style="background:var(--line)"></i> пусто — модель уходит как есть</span>
+      <span><i class="dot" style="background:var(--amber)"></i> default не задан — <span class="mono">/model &lt;шлюз&gt;</span> вернёт 400</span>
+    </div>
+  </section>
+
+  <!-- ВАРИАНТ C -->
+  <section class="panel" id="v-c">
+    <p class="pitch"><b>C · Стойка.</b> Слева список шлюзов, справа один — крупно и с объяснением.
+      На экране мало всего, зато «что такое default» понятно без догадок. Берите, если вкладку открывают
+      редко и каждый раз заново вспоминают, как она устроена.</p>
+    <div class="head">
+      <div class="head-ic">⇄</div>
+      <div>
+        <h2>Маршруты</h2>
+        <p>выбери шлюз слева — справа его маршруты</p>
+      </div>
+      <div class="spacer"></div>
+      <button class="ghost">↻ Обновить</button>
+    </div>
+    <div class="rack">
+      <div class="rack-list" id="c-list"></div>
+      <div class="rack-pane" id="c-pane"></div>
+    </div>
+  </section>
+
+  <!-- ВАРИАНТ D -->
+  <section class="panel" id="v-d">
+    <p class="pitch"><b>D · Команда.</b> Герой карточки — та строка, которую реально копируешь в окно,
+      и сразу под ней во что она развернётся. Сабагенты свёрнуты в одну строку и раскрываются по клику:
+      их правят раз в месяц, а команду копируют каждый день.</p>
+    <div class="head">
+      <div class="head-ic">⇄</div>
+      <div>
+        <h2>Маршруты</h2>
+        <p>карточка = готовая команда для окна Claude Code</p>
+      </div>
+      <div class="spacer"></div>
+      <button class="ghost">↻ Обновить</button>
+    </div>
+    <div class="count"><b>7 провайдеров</b> · 9 скрыто</div>
+    <div class="cards" id="d-cards"></div>
+  </section>
+
+</div>
+
+<script>
+/* ───────────────────────────────────────────────────────────────────────────
+   Данные — снимок живой вкладки. Бэкенда нет: селекты работают, но пишут
+   только в этот объект, чтобы поведение было честным при клике.
+   ─────────────────────────────────────────────────────────────────────────── */
+const AR_CAT = ['glm-5.3','gpt-6-astra','claude-opus-5','claude-sonnet-5','gpt-5.6-sol','deepseek-v4-pro'];
+const GO_CAT = ['claude-opus-5','claude-opus-4-8','claude-sonnet-5','claude-haiku-4-5'];
+const JW_CAT = ['gpt-5.6-sol','gpt-5.6-luna','gpt-5.6-terra'];
+const KK_CAT = ['claude-opus-5','claude-opus-4-8'];
+const TB_CAT = ['claude-opus-5','claude-opus-4-8','claude-sonnet-5'];
+const AK_CAT = ['glm-5.3','kimi-k3','step-3.7-flash'];
+
+const TIERS = ['default','opus','sonnet','haiku','gpt'];
+const SUB = ['opus','sonnet','haiku','gpt'];
+
+const P = [
+  { n:'agentrouter', label:'AgentRouter', note:'opus-5 1M', al:['ar'], cat:AR_CAT,
+    t:{ default:'glm-5.3', opus:'glm-5.3', sonnet:'gpt-6-astra', haiku:'gpt-6-astra', gpt:'gpt-6-astra' } },
+  { n:'aikeysapi', label:'AIKeysAPI', note:'', al:['ak'], cat:AK_CAT,
+    t:{ default:'', opus:'', sonnet:'', haiku:'', gpt:'' } },
+  { n:'custom', label:'custom', note:'', al:[], cat:[], t:null },
+  { n:'gorouter', label:'GoRouter', note:'', al:['go'], cat:GO_CAT,
+    t:{ default:'', opus:'', sonnet:'', haiku:'', gpt:'' } },
+  { n:'justwoker', label:'JustWoker', note:'', al:['jw'], cat:JW_CAT,
+    t:{ default:'', opus:'', sonnet:'', haiku:'', gpt:'' } },
+  { n:'kktoken', label:'KKtoken', note:'', al:['kk'], cat:KK_CAT,
+    t:{ default:'', opus:'', sonnet:'', haiku:'', gpt:'' } },
+  { n:'tabi', label:'Tabi Token', note:'', al:['tb'], cat:TB_CAT,
+    t:{ default:'', opus:'', sonnet:'', haiku:'', gpt:'' } },
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const isOff = p => !p.t || !String(p.t.default || '').trim();
+
+function opts(p, cur){
+  const seen = new Set(); const list = ['', ...p.cat, cur];
+  return list.filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true))
+    .map(v => `<option value="${esc(v)}"${v === (cur||'') ? ' selected':''}>${v ? esc(v) : '— как есть —'}</option>`).join('');
+}
+function selEl(p, tier, cls){
+  const cur = p.t[tier] || '';
+  return `<select class="sel ${cls||''} ${cur ? '' : 'empty'}" data-p="${p.n}" data-t="${tier}">${opts(p,cur)}</select>`;
+}
+// Клик по команде: показать, что скопировалось. Буфер в file:// может быть
+// недоступен — состояние всё равно меняем, иначе кнопка кажется мёртвой.
+function copyCmd(el, text){
+  try { navigator.clipboard && navigator.clipboard.writeText(text); } catch(e){}
+  el.classList.add('copied');
+  const prev = el.dataset.label || el.textContent;
+  setTimeout(() => el.classList.remove('copied'), 1200);
+}
+
+/* ── A ─────────────────────────────────────────────────────────────────────── */
+function renderA(){
+  document.getElementById('a-rows').innerHTML = P.map(p => {
+    const pre = [p.n, ...p.al].map(a => `<span class="chip">${esc(a)}/</span>`).join('');
+    if (!p.t) return `
+      <div class="pb-strip" data-off="1">
+        <div class="pb-id">
+          <div><span class="pb-name">${esc(p.label)}</span></div>
+          <div class="pb-pre">${pre}</div>
+        </div>
+        <div class="pb-body"><div class="pb-nomap">тир-карты нет — модель уходит на шлюз как есть</div></div>
+      </div>`;
+    const d = p.t.default;
+    return `
+      <div class="pb-strip" data-off="${isOff(p)?1:0}">
+        <div class="pb-id">
+          <div><span class="pb-name">${esc(p.label)}</span>${p.note?` <span class="pb-note">${esc(p.note)}</span>`:''}</div>
+          <div class="pb-pre">${pre}</div>
+        </div>
+        <div class="pb-body">
+          <div class="pb-master">
+            <div class="pb-lab">окно <i>— что получит /model ${esc(p.n)}</i></div>
+            ${selEl(p,'default','big')}
+          </div>
+          <div class="pb-trims">
+            <div class="pb-lab">сабагенты</div>
+            ${SUB.map(t => `<label class="trim"><span>${t}</span>${selEl(p,t,'tiny')}</label>`).join('')}
+          </div>
+          <div class="pb-cmd">
+            <button class="cmdbtn" data-cmd="/model ${esc(p.n)}">📋 /model ${esc(p.n)}</button>
+            ${d ? `<div class="resolve">развернётся в <b>${esc(d)}</b></div>`
+                : `<div class="resolve warn">⚠ <b>default не задан</b></div>`}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ── B ─────────────────────────────────────────────────────────────────────── */
+function renderB(){
+  document.getElementById('b-rows').innerHTML = P.map(p => {
+    const pre = [p.n, ...p.al].map(a => `<span class="chip">${esc(a)}/</span>`).join('');
+    const gw = `<td class="c c-gw"><div class="mx-gw"><b>${esc(p.label)}</b><div class="mx-pre">${pre}</div></div></td>`;
+    if (!p.t) return `<tr>${gw}<td class="c" colspan="5"><span class="cell unset">тир-карты нет — модель уходит как есть</span></td><td class="c"></td></tr>`;
+    const cells = TIERS.map(t => {
+      const v = p.t[t] || '';
+      const key = t === 'default';
+      const cls = v ? 'set' : (key ? 'unset warn' : 'unset');
+      const txt = v ? esc(v) : (key ? 'не задан' : 'как есть');
+      return `<td class="c ${key?'c-key':''}"><button class="cell ${cls}" data-p="${p.n}" data-t="${t}">${txt}</button></td>`;
+    }).join('');
+    return `<tr>${gw}${cells}<td class="c"><button class="mx-cmd" data-cmd="/model ${esc(p.n)}">/model ${esc(p.n)}</button></td></tr>`;
+  }).join('');
+}
+
+/* ── C ─────────────────────────────────────────────────────────────────────── */
+let cSel = 'agentrouter';
+function renderC(){
+  document.getElementById('c-list').innerHTML = P.map(p => {
+    const col = !p.t ? 'var(--line)' : (isOff(p) ? 'var(--amber)' : 'var(--emerald)');
+    const sub = !p.t ? 'нет карты' : (p.t.default || 'default не задан');
+    return `<button class="rack-item" data-p="${p.n}" aria-current="${p.n===cSel}">
+        <i class="dot" style="background:${col}"></i>
+        <span class="rack-tx"><b>${esc(p.label)}</b><span>${esc(sub)}</span></span>
+      </button>`;
+  }).join('');
+
+  const p = P.find(x => x.n === cSel);
+  const pre = [p.n, ...p.al].map(a => `<span class="chip">${esc(a)}/</span>`).join('');
+  const pane = document.getElementById('c-pane');
+  if (!p.t){
+    pane.innerHTML = `<div class="rack-top"><div><h3>${esc(p.label)}</h3><p>тир-карты нет — модель уходит на шлюз как есть</p></div></div>`;
+    return;
+  }
+  const d = p.t.default;
+  pane.innerHTML = `
+    <div class="rack-top">
+      <div style="flex:1">
+        <h3>${esc(p.label)}${p.note?` <span class="pb-note">${esc(p.note)}</span>`:''}</h3>
+        <p>адресуется как ${pre}</p>
+      </div>
+      <button class="cmdbtn" data-cmd="/model ${esc(p.n)}">📋 /model ${esc(p.n)}</button>
+    </div>
+    <div class="rack-sec">
+      <div class="rack-h"><b>Окно</b><span>то, что получишь ты</span></div>
+      <p class="rack-hint">Команда <span class="mono">/model ${esc(p.n)}</span> называет только шлюз.
+        Модель для неё берётся отсюда.</p>
+      <div style="max-width:320px">${selEl(p,'default','big')}</div>
+      ${d ? `<div class="resolve" style="margin-top:9px">развернётся в <b>${esc(d)}</b></div>`
+          : `<div class="resolve warn" style="margin-top:9px">⚠ <b>не задан</b> — такой запрос вернёт 400 с подсказкой</div>`}
+    </div>
+    <div class="rack-sec">
+      <div class="rack-h"><b>Сабагенты</b><span>их Claude Code зовёт своими именами</span></div>
+      <p class="rack-hint">Держи <span class="mono">haiku</span> дешёвым: это самые частые запросы.</p>
+      <div class="rack-grid">
+        ${SUB.map(t => `<label class="rack-field"><span>${t}</span>${selEl(p,t)}</label>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* ── D ─────────────────────────────────────────────────────────────────────── */
+function renderD(){
+  document.getElementById('d-cards').innerHTML = P.map(p => {
+    const pre = [p.n, ...p.al].map(a => `<span class="chip">${esc(a)}/</span>`).join('');
+    if (!p.t) return `<div class="card" data-off="1">
+        <div class="card-top"><b>${esc(p.label)}</b>${pre}</div>
+        <div class="card-nomap">тир-карты нет — модель уходит как есть</div>
+      </div>`;
+    const d = p.t.default;
+    const peek = SUB.map(t => p.t[t] || '—').join(' · ');
+    return `<div class="card" data-off="${isOff(p)?1:0}">
+        <div class="card-top"><b>${esc(p.label)}</b>${pre}</div>
+        <button class="card-cmd ${d?'':'dead'}" data-cmd="/model ${esc(p.n)}">
+          <span class="line">/model ${esc(p.n)}</span>
+          ${d ? `<span class="to">→ <b>${esc(d)}</b></span>`
+              : `<span class="to">⚠ <b>default не задан</b></span>`}
+        </button>
+        <div class="card-sub" data-open="0">
+          <button class="card-sum"><span class="arrow">▶</span> сабагенты <span class="peek">${esc(peek)}</span></button>
+          <div class="card-fields">
+            ${SUB.map(t => `<label class="rack-field"><span>${t}</span>${selEl(p,t)}</label>`).join('')}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderAll(){ renderA(); renderB(); renderC(); renderD(); }
+renderAll();
+
+/* ── Поведение ─────────────────────────────────────────────────────────────── */
+document.addEventListener('change', e => {
+  const s = e.target.closest('select.sel'); if (!s) return;
+  const p = P.find(x => x.n === s.dataset.p); if (!p || !p.t) return;
+  p.t[s.dataset.t] = s.value;
+  renderAll();                       // правка одного тира меняет и сводку, и команду
+});
+
+document.addEventListener('click', e => {
+  const tab = e.target.closest('.tabs button');
+  if (tab){
+    document.documentElement.dataset.variant = tab.dataset.v;
+    document.querySelectorAll('.tabs button').forEach(b => b.setAttribute('aria-selected', b === tab));
+    return;
+  }
+  const cmd = e.target.closest('[data-cmd]');
+  if (cmd){ copyCmd(cmd, cmd.dataset.cmd); return; }
+
+  const cell = e.target.closest('.cell');
+  if (cell){                          // матрица: ячейка превращается в селект по месту
+    const p = P.find(x => x.n === cell.dataset.p); if (!p || !p.t) return;
+    const t = cell.dataset.t;
+    cell.outerHTML = selEl(p, t, t === 'default' ? '' : 'tiny');
+    const s = document.querySelector(`select[data-p="${p.n}"][data-t="${t}"]`);
+    if (s){ s.focus(); s.addEventListener('blur', () => renderB(), { once:true }); }
+    return;
+  }
+  const item = e.target.closest('.rack-item');
+  if (item){ cSel = item.dataset.p; renderC(); return; }
+
+  const sum = e.target.closest('.card-sum');
+  if (sum){ const box = sum.closest('.card-sub'); box.dataset.open = box.dataset.open === '1' ? '0' : '1'; return; }
+});
+
+document.getElementById('theme').addEventListener('click', () => {
+  const r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark';
+});
+</script>
+</body>
+</html>

@@ -9,13 +9,17 @@ const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const PORT = Number(process.env.PORT || 8399);
 
 // Реестр: редактируемый local, редактируемый remote, без тир-карты, и скрытый.
+// 🪤 Ключ `default` обязателен: с 12.09 ROUTE_TIERS начинается с него, и без него стенд
+// показывал бы «окно не задано» там, где в бою модель выбрана.
 const TIERS = {
-    agentrouter: { opus: 'claude-opus-5', sonnet: 'claude-opus-5', haiku: 'claude-opus-5', gpt: 'claude-opus-5' },
-    aipm: { opus: 'claude-opus-4-6', sonnet: 'claude-opus-4-6-thinking', haiku: 'claude-sonnet-4-6', gpt: '' },
-    justwoker: { opus: 'gpt-5.6-sol', sonnet: 'gpt-5.6-luna', haiku: 'gpt-5.6-terra', gpt: '' },
+    agentrouter: { default: 'glm-5.3', opus: 'glm-5.3', sonnet: 'gpt-6-astra', haiku: 'gpt-6-astra', gpt: 'gpt-6-astra' },
+    aipm: { default: '', opus: 'claude-opus-4-6', sonnet: 'claude-opus-4-6-thinking', haiku: 'claude-sonnet-4-6', gpt: '' },
+    justwoker: { default: 'gpt-5.6-sol', opus: 'gpt-5.6-sol', sonnet: 'gpt-5.6-luna', haiku: 'gpt-5.6-terra', gpt: '' },
 };
+// Самое длинное имя каталога — намеренно: короткие фикстуры не поймали бы обрезку
+// текста в селекте, ради которой панель и перерисовывается.
 const CATALOG = {
-    agentrouter: ['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5'],
+    agentrouter: ['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
     aipm: ['claude-opus-4-6', 'claude-opus-4-6-thinking', 'claude-sonnet-4-6'],
     justwoker: [],                                  // мёртвый шлюз: каталога нет
 };
@@ -23,13 +27,13 @@ const saves = [];
 
 function providers() {
     return [
-        { name: 'agentrouter', label: 'AgentRouter', upstream: 'http://localhost:20133', local: true, aliases: ['ar'], tiers: TIERS.agentrouter, activeModel: null },
-        { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, activeModel: null },
-        { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, activeModel: null },
+        { name: 'agentrouter', label: 'AgentRouter', upstream: 'http://localhost:20133', local: true, aliases: ['ar'], tiers: TIERS.agentrouter, gatewayTiers: TIERS.agentrouter, activeModel: null },
+        { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, gatewayTiers: TIERS.aipm, activeModel: null },
+        { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, gatewayTiers: TIERS.justwoker, activeModel: null },
         // Тир-карты нет — строка обязана остаться читаемой, без пустых селектов.
-        { name: 'notion', label: 'Notion (cheap)', upstream: 'http://localhost:8190', local: true, aliases: [], tiers: null, activeModel: null },
+        { name: 'notion', label: 'Notion (cheap)', upstream: 'http://localhost:8190', local: true, aliases: [], tiers: null, gatewayTiers: null, activeModel: null },
         // Вкладки в навигации нет вовсе → обязан попасть в «скрыто», а не в список.
-        { name: 'omniroute', label: 'FreeModel (OmniRoute)', upstream: 'http://localhost:20128/v1', local: true, aliases: ['om'], tiers: null, activeModel: null },
+        { name: 'omniroute', label: 'FreeModel (OmniRoute)', upstream: 'http://localhost:20128/v1', local: true, aliases: ['om'], tiers: null, gatewayTiers: null, activeModel: null },
     ];
 }
 
@@ -61,7 +65,7 @@ http.createServer((req, res) => {
         res.writeHead(404); return res.end('');
     }
     if (p === '/__switch/api/routes') {
-        return json(res, 200, { ok: true, providers: providers(), updatedAt: Date.now(), tiers: ['opus', 'sonnet', 'haiku', 'gpt'] });
+        return json(res, 200, { ok: true, providers: providers(), updatedAt: Date.now(), tiers: ['default', 'opus', 'sonnet', 'haiku', 'gpt'] });
     }
     if (p === '/__switch/api/routes/models') {
         const prov = u.searchParams.get('provider') || '';

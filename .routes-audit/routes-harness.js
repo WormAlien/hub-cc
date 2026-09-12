@@ -8,13 +8,21 @@ const path = require('path');
 const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const PORT = Number(process.env.PORT || 8399);
 
-// Реестр: редактируемый local, редактируемый remote, без тир-карты, и скрытый.
-// 🪤 Ключ `default` обязателен: с 12.09 ROUTE_TIERS начинается с него, и без него стенд
-// показывал бы «окно не задано» там, где в бою модель выбрана.
-const TIERS = {
+// Карт ДВЕ на каждый шлюз (решение 12.09): обычная, которую правит вкладка шлюза, и
+// routes — которую правит эта вкладка.
+const GATEWAY_TIERS = {
     agentrouter: { default: 'glm-5.3', opus: 'glm-5.3', sonnet: 'gpt-6-astra', haiku: 'gpt-6-astra', gpt: 'gpt-6-astra' },
     aipm: { default: '', opus: 'claude-opus-4-6', sonnet: 'claude-opus-4-6-thinking', haiku: 'claude-sonnet-4-6', gpt: '' },
     justwoker: { default: 'gpt-5.6-sol', opus: 'gpt-5.6-sol', sonnet: 'gpt-5.6-luna', haiku: 'gpt-5.6-terra', gpt: '' },
+};
+// 🪤 Ключ `default` обязателен: с 12.09 ROUTE_TIERS начинается с него, и без него стенд
+// показывал бы «окно не задано» там, где в бою модель выбрана.
+// У justwoker routes-карта ПУСТАЯ, а обычная заполнена — ровно случай GoRouter/KKtoken/Tabi
+// 12.09: шлюз не отдаёт каталог (пусто даже на его сайте), и строка оставалась без единого
+// варианта. Из этого состояния и выросли варианты из обычной карты.
+const TIERS = {
+    ...GATEWAY_TIERS,
+    justwoker: { default: '', opus: '', sonnet: '', haiku: '', gpt: '' },
 };
 // Самое длинное имя каталога — намеренно: короткие фикстуры не поймали бы обрезку
 // текста в селекте, ради которой панель и перерисовывается.
@@ -27,9 +35,9 @@ const saves = [];
 
 function providers() {
     return [
-        { name: 'agentrouter', label: 'AgentRouter', upstream: 'http://localhost:20133', local: true, aliases: ['ar'], tiers: TIERS.agentrouter, gatewayTiers: TIERS.agentrouter, activeModel: null },
-        { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, gatewayTiers: TIERS.aipm, activeModel: null },
-        { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, gatewayTiers: TIERS.justwoker, activeModel: null },
+        { name: 'agentrouter', label: 'AgentRouter', upstream: 'http://localhost:20133', local: true, aliases: ['ar'], tiers: TIERS.agentrouter, gatewayTiers: GATEWAY_TIERS.agentrouter, activeModel: null },
+        { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, gatewayTiers: GATEWAY_TIERS.aipm, activeModel: null },
+        { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, gatewayTiers: GATEWAY_TIERS.justwoker, activeModel: null },
         // Тир-карты нет — строка обязана остаться читаемой, без пустых селектов.
         // `custom` намеренно с ВИДИМОЙ вкладкой: notion прячется (его вкладка в
         // свёрнутой группе), а ветку «тир-карты нет» надо кому-то показывать.

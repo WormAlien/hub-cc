@@ -56,6 +56,10 @@ const ok = (name, cond, extra = '') => {
             })),
             master: rows.length ? Math.round((rows[0].querySelector('select[data-tier="default"]') || { getBoundingClientRect: () => ({ width: 0 }) }).getBoundingClientRect().width) : 0,
             groups: rows.filter(r => ((r.querySelector('.rt-glab') || {}).textContent || '').trim() === 'сабагенты').length,
+            // Шлюз, который не отдаёт каталог (пусто даже на его сайте): строку обязаны
+            // наполнять модели из ЕГО ЖЕ обычной тир-карты, иначе выбирать нечего.
+            noCatOpts: [...document.querySelectorAll('#routes-rows .rt-row[data-provider="justwoker"] select[data-tier="opus"] option')]
+                .map(o => o.value).filter(Boolean),
         };
     });
     console.log('замер:', JSON.stringify(m));
@@ -80,6 +84,8 @@ const ok = (name, cond, extra = '') => {
     ok('сабагенты сгруппированы под общим заголовком', m.groups === m.withMap, `${m.groups}/${m.withMap}`);
     ok('ручка «окно» крупнее триммеров', m.master > (m.col.opus[0] || {}).w,
         `мастер ${m.master} против триммера ${(m.col.opus[0] || {}).w}`);
+    ok('шлюз без каталога наполнен моделями из своей обычной карты',
+        m.noCatOpts.includes('gpt-5.6-luna') && m.noCatOpts.length >= 3, m.noCatOpts.join(','));
 
     // ── Перестановка ─────────────────────────────────────────────────────────
     const order = () => page.$$eval('#routes-rows .rt-row', rs => rs.map(r => r.dataset.provider));

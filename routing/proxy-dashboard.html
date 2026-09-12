@@ -7446,6 +7446,7 @@ window.finNavCount = async () => {
           <button onclick="loadAkSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
           <button onclick="akCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
           <button onclick="akShowAdd()" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">➕ Добавить</button>
+          <input id="ak-autoreg-count" type="number" min="1" max="50" value="1" class="text-xs font-mono bg-surface border border-line-soft rounded-lg px-2 py-2 w-14 text-center focus:outline-none focus:border-violet/60" title="Сколько аккаунтов создать">
           <button id="ak-autoreg-start" onclick="akAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Чистый HTTP: почта → OTP → регистрация → ключ → cookie-сессия → эта таблица">🤖 Авторег</button>
           <button id="ak-autoreg-stop" onclick="akAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
           <label id="ak-autoreg-proxy-wrap" class="inline-flex items-center gap-1.5 cursor-pointer select-none" title="Снять галочку — регистрация пойдёт с домашнего IP. Нужно, когда пул прокси пуст или адреса мертвы; поток регистраций с одного адреса упирается в 429, поэтому для пачки лучше держать прокси">
@@ -7453,6 +7454,7 @@ window.finNavCount = async () => {
             <span class="relative w-8 h-[18px] rounded-full bg-line-soft transition peer-checked:bg-teal/70 peer-focus-visible:ring-2 peer-focus-visible:ring-teal/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-[14px] after:h-[14px] after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-[14px]"></span>
             <span id="ak-autoreg-proxy-label" class="text-[10px] font-medium text-teal">прокси</span>
           </label>
+          <button id="ak-autoreg-find" onclick="akAutoregFindProxy()" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium" title="Публичные прокси живут минуты, поэтому список пересобирается перед прогоном: скрап всех источников, проверка туннеля и TLS до панели, стоп как только набрано нужное число">🔎 Найти прокси</button>
           <span id="ak-autoreg-status" class="text-[10px] font-mono text-faint"></span>
           <button onclick="akShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код аккаунта владельца с другой машины">📥 Вставить аккаунт</button>
           <input id="ak-filter" oninput="newapiFilterChange('ak')" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-teal/60">
@@ -9237,12 +9239,22 @@ const routesCatalog = {};
 // Безопасный id из имени провайдера. Имена в реестре — [a-z0-9_], но не рискуем.
 function routesId(name) { return String(name).replace(/[^a-z0-9_-]/gi, '_'); }
 
-// Опции одного тира: '' («как есть») + каталог провайдера + текущее значение (всегда
-// в списке, даже если его нет в каталоге — иначе выбор молча слетел бы на пустой).
+// Опции одного тира: '' («как есть») + каталог провайдера + модели, уже стоящие на ЕГО
+// вкладке + текущее значение (всегда в списке, даже если его нет в каталоге — иначе выбор
+// молча слетел бы на пустой).
+//
+// 🎯 Зачем сюда `gatewayTiers`. Каталог приходит от самого шлюза и у него же бывает пустым —
+// замер 12.09: GoRouter, KKtoken и Tabi не отдают список моделей даже на своём сайте, и
+// строка на вкладке превращалась в селект с единственным «— как есть —»: выбирать нечего,
+// выглядит как выключенное. А модели этих шлюзов известны локально — в обычной тир-карте,
+// которую правит вкладка шлюза. Предлагаем их как варианты: это не перенос значений
+// (карты остаются разными, как и решено 12.09), а подсказка без похода в сеть.
 function routesOptions(name, current) {
   const cat = routesCatalog[name] || [];
+  const gw = Object.values(routesProviders[name] && routesProviders[name].gatewayTiers || {})
+    .filter(v => typeof v === 'string' && v.trim()).map(v => v.trim());
   const seen = new Set();
-  const opts = ['', ...cat, current].filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true));
+  const opts = ['', ...cat, ...gw, current].filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true));
   return opts.map(id =>
     `<option value="${esc(id)}"${id === (current || '') ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
 }
@@ -17359,6 +17371,41 @@ function akAutoregProxyToggle() {
   if (!on) toast('🏠 авторег пойдёт с домашнего IP — для пачки аккаунтов это упрётся в 429', 'warn', 5000);
 }
 
+// Публичные прокси живут минуты, поэтому список пересобирается ПЕРЕД прогоном, а не
+// берётся из вчерашнего файла. Сколько искать — считаем от числа аккаунтов: по одному
+// прокси на аккаунт плюс запас на то, что часть умрёт за время прогона.
+async function akAutoregFindProxy() {
+  const want = Math.max(2, Math.min(30, (parseInt($('ak-autoreg-count').value, 10) || 1) + 2));
+  const btn = $('ak-autoreg-find');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '🔎 ищу…';
+  $('ak-autoreg-status').textContent = `поиск ${want} живых прокси — скрап + проверка до панели…`;
+  try {
+    const r = await fetch('/__switch/api/ak/autoreg/find-proxy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ want }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    const found = d.found || [];
+    $('ak-autoreg-status').textContent = found.length
+      ? `✓ живых ${found.length} из ${want} — пул обновлён`
+      : `живых не нашлось (проверено ${d.checked || 0})`;
+    toast(found.length
+      ? `✓ прокси: найдено ${found.length} — пул перезаписан`
+      : 'не нашлось живых прокси — можно снять галочку и работать напрямую',
+      found.length ? 'success' : 'warn', 6000);
+    if (!found.length) $('ak-autoreg-status').textContent += ' · сними галочку «прокси» или попробуй ещё';
+  } catch (e) {
+    $('ak-autoreg-status').textContent = '';
+    toast('Поиск прокси: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 async function akAutoregStatus({ quiet = false } = {}) {
   try {
     const r = await fetch('/__switch/api/ak/autoreg/status');
@@ -17384,9 +17431,9 @@ async function akAutoregStatus({ quiet = false } = {}) {
 }
 
 async function akAutoregStart() {
-  const raw = prompt('Сколько AIKeysAPI-аккаунтов создать? (1–50)', '1');
-  if (raw === null) return;
+  const raw = $('ak-autoreg-count').value;
   const count = Math.max(1, Math.min(50, parseInt(raw, 10) || 1));
+  $('ak-autoreg-count').value = String(count);
   const useProxy = $('ak-autoreg-proxy').checked;
   try {
     const r = await fetch('/__switch/api/ak/autoreg/start', {

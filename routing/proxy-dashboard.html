@@ -123,6 +123,43 @@
 *::-webkit-scrollbar-thumb   { background: var(--color-line); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--color-dim); border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-track   { background: transparent; }
+
+/* ── Патч-панель «Маршрутов» ──────────────────────────────────────────────
+   Две строки на шлюз, потому что в одну всё не влезает: замерено на вьюпорте
+   1920 — #routes-box = 976px, а четыре селекта под длинные имена каталога
+   (claude-haiku-4-5-20251001 = 165px текста + паддинги + стрелка ≈ 203px) плюс
+   ручка, имя шлюза и блок команды требуют ≈ 1000px. В одну строку это давало
+   обрезку — ровно то, что владелец видел в черновике.
+   Сетка одна на все карточки, поэтому колонки селектов выровнены по строкам. */
+.rt-line1 { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.rt-line2 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.rt-grip {
+  width: 22px; height: 26px; border: 0; background: transparent; color: var(--color-faint);
+  cursor: grab; border-radius: 6px; font-size: 13px; line-height: 1;
+}
+.rt-grip:hover { color: var(--color-ink); background: var(--color-elevated); }
+.rt-grip:active { cursor: grabbing; }
+/* Подпись тира НАД селектом: сбоку она съедала 45px из 235, и длинное имя каталога
+   переставало влезать. */
+.rt-tier { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rt-tier > span { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-faint); white-space: nowrap; }
+.rt-sel {
+  width: 100%; font-size: 12px; font-family: ui-monospace, Consolas, monospace;
+  background: var(--color-elevated); border: 1px solid var(--color-line-soft);
+  border-radius: 6px; padding: 6px 8px; cursor: pointer;
+}
+.rt-sel-big { font-size: 13px; padding: 8px 9px; border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
+.rt-cmd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.rt-badge {
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 3px 7px; border-radius: 5px;
+  background: var(--color-elevated); border: 1px solid var(--color-line-soft); color: var(--color-muted); white-space: nowrap;
+}
+.rt-copy {
+  font-size: 11px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--color-line-soft);
+  background: var(--color-elevated); color: var(--color-ink); cursor: pointer; white-space: nowrap;
+}
+.rt-copy:hover { border-color: var(--color-azure); background: color-mix(in oklab, var(--color-azure) 12%, var(--color-elevated)); }
+.rt-resolve { font-size: 11px; color: var(--color-faint); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 </style>
 <!-- ═══════════ ЦВЕТОВЫЕ ТЕМЫ ═══════════
      Тема = набор оверрайдов тех же --color-* из @theme выше, навешенных инлайном
@@ -7430,7 +7467,7 @@ window.finNavCount = async () => {
         </div>
 
         <div id="ak-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto"><div class="p-12 text-center text-faint text-xs">загрузка…</div></div>
-        <div class="text-xs text-faint"><span>base → <code class="text-ink">http://localhost:20165</code> → <code class="text-ink">www.aikeysapi.com</code></span><span class="mx-2 opacity-40">·</span><span>грант <code class="text-ink">$5</code> на аккаунт</span><span class="mx-2 opacity-40">·</span><span>авторег сам сохраняет API-ключ и cookie-сессию; GitHub не нужен</span></div>
+        <div class="text-xs text-faint"><span>base → <code class="text-ink">http://localhost:20165</code> → <code class="text-ink">www.aikeysapi.com</code></span><span class="mx-2 opacity-40">·</span><span>грант <code class="text-ink">$5</code> на аккаунт</span><span class="mx-2 opacity-40">·</span><span>авторег сам сохраняет API-ключ и cookie-сессию — ручной шаг не нужен</span></div>
       </div>
     </div>
 
@@ -9150,7 +9187,7 @@ async function loadRoutes(force) {
   }
   el.innerHTML = `
     <div class="text-xs text-muted mb-3">${rows.length} провайдер(ов) ${note}</div>
-    <div class="space-y-2">${rows.join('')}</div>`;
+    <div id="routes-rows" class="space-y-2">${rows.join('')}</div>`;
   // Каталоги — после разметки: селекты уже в DOM, дополним их опциями. Не ждём (await
   // выше уже отрисовал строки с текущими значениями), мёртвый шлюз просто не обогатит.
   routesLoadCatalogs(visible);
@@ -9222,7 +9259,9 @@ async function routesLoadCatalogs(names) {
       if (!models.length) return;                        // нечем обогащать — оставляем как есть
       routesCatalog[name] = models;
       // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.
-      for (const tier of ['default', 'opus', 'sonnet', 'haiku', 'gpt']) {
+      // Обогащаем только те тиры, что есть в разметке: `gpt` на этой вкладке не
+      // рендерится (см. routesRow), его селекта в DOM нет.
+      for (const tier of ['default', 'opus', 'sonnet', 'haiku']) {
         const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
         if (sel) sel.innerHTML = routesOptions(name, sel.value);
       }
@@ -9242,69 +9281,77 @@ async function routesLoadCatalogs(names) {
 function routesCmdHtml(p) {
   const id = routesId(p.name);
   const cmd = p.tiers ? '/model ' + p.name : '';
-  const dflt = p.tiers && String(p.tiers.default || '').trim();
-  // 🪤 Одинарная кавычка. `esc()` (:8504) её НЕ трогает — экранирует только & < > " —
-  // а onclick здесь в одинарных кавычках. Имя модели приходит из `<p>-modelmap.json`
-  // без валидации символов: цель вида `a'onmouseover='alert(1)//` закрыла бы атрибут.
-  const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
   if (!cmd) {
     return `<span id="routes-cmd-${id}" class="shrink-0 text-[11px] text-faint" title="у провайдера нет тир-карты — модель уходит как есть, адресовать префиксом нечем">нечего копировать</span>`;
   }
-  // Показываем итог развёртки рядом с командой: без этого непонятно, какая модель
-  // поедет, и пришлось бы держать соответствие в голове.
-  const arrow = dflt
-    ? `<span class="text-[10px] text-faint ml-1">→ ${esc(dflt)}</span>`
-    : `<span class="text-[10px] text-amber ml-1" title="default не выбран — такой запрос вернёт 400 с подсказкой">→ default не задан</span>`;
-  return `<span id="routes-cmd-${id}" class="shrink-0 inline-flex items-center">
-      <button onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
-         class="px-2 py-1 rounded text-[11px] font-mono bg-elevated hover:bg-surface border border-line-soft transition"
-         title="Скопировать команду для окна Claude Code: модель выберет тир-карта этой строки">📋 ${esc(cmd)}</button>${arrow}
+  // 🪤 Одинарная кавычка. `esc()` (:8602) её НЕ трогает — экранирует только & < > " —
+  // а onclick здесь в одинарных кавычках. Имя модели приходит из `<p>-modelmap.json`
+  // без валидации символов: цель вида `a'onmouseover='alert(1)//` закрыла бы атрибут.
+  const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
+  // Итог развёртки рядом с командой: без него непонятно, какая модель поедет, и
+  // соответствие пришлось бы держать в голове.
+  const dflt = String(p.tiers.default || '').trim();
+  const resolve = dflt
+    ? `<span class="rt-resolve" title="во что развернётся модель из окна">→ ${esc(dflt)}</span>`
+    : `<span class="rt-resolve text-amber" title="default не выбран — такой запрос вернёт 400 с подсказкой">⚠ окно не задано</span>`;
+  return `<span id="routes-cmd-${id}" class="rt-cmd">
+      <code class="rt-badge">${esc(cmd)}</code>
+      <button class="rt-copy" onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
+         title="Скопировать команду для окна Claude Code: модель выберет тир-карта этой строки">Скопировать</button>${resolve}
     </span>`;
 }
 
-// Одна строка провайдера: префиксы, четыре редактируемых тира, кнопка копирования.
+// Одна карточка = один шлюз: сверху кто это и чем адресовать, снизу четыре модели.
+//
+// 🎯 `gpt` здесь НЕ рендерится (решение владельца 12.09): физическое gpt-имя приходит
+// только когда его назвал человек, а переписывать явно названную модель — тот самый баг,
+// из-за которого выбранный `opus → glm-5.3` не применялся никогда. Ключ в файле карты
+// остаётся (его читает keepalive), селект живёт на вкладке шлюза.
+//
+// Ручка — отдельная кнопка, а не вся карточка: иначе перенос начинался бы с попытки
+// открыть селект или выделить текст.
 function routesRow(p) {
   const id = routesId(p.name);
   const prefixes = [p.name, ...(p.aliases || [])]
     .map(a => `<code class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-elevated border border-line-soft">${esc(a)}/</code>`)
     .join(' ');
+  const grip = `<button class="rt-grip" data-grip title="Перетащить. Или стрелки ↑↓ с клавиатуры"
+      aria-label="Переставить ${esc(p.label || p.name)}">⠿</button>`;
+  const head = `<div class="rt-line1">
+      ${grip}
+      <div class="flex items-center gap-2 flex-wrap min-w-0">
+        <span class="font-medium">${esc(p.label || p.name)}</span>
+        ${prefixes}
+        ${p.local ? '' : '<span class="text-[10px] text-faint" title="удалённый шлюз: ключ инжектит front-door">remote</span>'}
+      </div>
+      ${routesCmdHtml(p)}
+    </div>`;
+  const shell = inner => `<div id="routes-row-${id}" class="rt-row p-3 rounded-md bg-surface border border-line-soft" data-provider="${esc(p.name)}">${head}${inner}</div>`;
   // Провайдер без тир-карты (omniroute, notion, custom) не редактируется: показываем
   // факт, а не пустые селекты, которым некуда писать.
-  //
-  // `default` идёт первым и подписан отдельно: это модель для запроса, назвавшего
-  // только шлюз (`/model agentrouter`). Остальные четыре — сабагенты, которых Claude
-  // Code зовёт своими именами; они остаются дешёвыми независимо от `default`.
+  if (!p.tiers) {
+    return shell('<div class="text-faint text-[11px] mt-2 pl-9">тир-карты нет — модель уходит на шлюз как есть</div>');
+  }
+  // `default` идёт первым и подписан отдельно: это модель для запроса, назвавшего только
+  // шлюз (`/model agentrouter`). Остальные три — сабагенты, которых Claude Code зовёт
+  // своими именами; они остаются дешёвыми независимо от `default`.
   const TIER_TITLE = {
     default: 'модель для /model ' + p.name + ' — то есть для главного окна',
     opus: 'сабагенты, попросившие opus',
     sonnet: 'сабагенты, попросившие sonnet',
     haiku: 'сабагенты и служебные запросы (самые частые — держи дешёвым)',
-    gpt: 'запросы с gpt-именами (проверяется раньше остальных тиров)',
   };
-  const tiers = p.tiers
-    ? ['default', 'opus', 'sonnet', 'haiku', 'gpt'].map(t => {
-        const v = (p.tiers[t] || '');
-        const isDflt = t === 'default';
-        return `<label class="inline-flex flex-col gap-0.5 mr-3 mb-1 align-top" title="${esc(TIER_TITLE[t] || '')}">
-          <span class="text-[10px] ${isDflt ? 'text-ink font-semibold' : 'text-faint'}">${isDflt ? 'default (окно)' : t}<span id="routes-st-${id}-${t}"></span></span>
+  const tiers = ['default', 'opus', 'sonnet', 'haiku'].map(t => {
+    const v = (p.tiers[t] || '');
+    const isDflt = t === 'default';
+    return `<label class="rt-tier" title="${esc(TIER_TITLE[t] || '')}">
+          <span class="${isDflt ? 'text-azure font-semibold' : ''}">${isDflt ? 'окно' : t}<span id="routes-st-${id}-${t}"></span></span>
           <select id="routes-sel-${id}-${t}" data-provider="${esc(p.name)}" data-tier="${t}" data-prev="${esc(v)}"
             onchange="routesSaveTier(this)"
-            class="text-xs bg-elevated border ${isDflt ? 'border-azure/40' : 'border-line-soft'} rounded-lg px-2 py-1 min-w-[9rem] max-w-[13rem]">${routesOptions(p.name, v)}</select>
+            class="rt-sel${isDflt ? ' rt-sel-big' : ''}">${routesOptions(p.name, v)}</select>
         </label>`;
-      }).join('')
-    : '<span class="text-faint text-[11px]">тир-карты нет — модель уходит как есть</span>';
-  return `
-    <div id="routes-row-${id}" class="p-3 rounded-md bg-surface border border-line-soft">
-      <div class="flex items-center justify-between gap-3 flex-wrap">
-        <div class="flex items-center gap-2 flex-wrap min-w-0">
-          <span class="font-medium">${esc(p.label || p.name)}</span>
-          ${prefixes}
-          ${p.local ? '' : '<span class="text-[10px] text-faint" title="удалённый шлюз: ключ инжектит front-door">remote</span>'}
-        </div>
-        ${routesCmdHtml(p)}
-      </div>
-      <div class="mt-2 flex flex-wrap items-end">${tiers}</div>
-    </div>`;
+  }).join('');
+  return shell(`<div class="rt-line2">${tiers}</div>`);
 }
 
 // ── Front-door: тумблер на вкладке «Настройки» ───────────────────────────────

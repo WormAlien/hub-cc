@@ -31,6 +31,9 @@ function providers() {
         { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, gatewayTiers: TIERS.aipm, activeModel: null },
         { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, gatewayTiers: TIERS.justwoker, activeModel: null },
         // Тир-карты нет — строка обязана остаться читаемой, без пустых селектов.
+        // `custom` намеренно с ВИДИМОЙ вкладкой: notion прячется (его вкладка в
+        // свёрнутой группе), а ветку «тир-карты нет» надо кому-то показывать.
+        { name: 'custom', label: 'custom', upstream: 'http://localhost:8199', local: true, aliases: [], tiers: null, gatewayTiers: null, activeModel: null },
         { name: 'notion', label: 'Notion (cheap)', upstream: 'http://localhost:8190', local: true, aliases: [], tiers: null, gatewayTiers: null, activeModel: null },
         // Вкладки в навигации нет вовсе → обязан попасть в «скрыто», а не в список.
         { name: 'omniroute', label: 'FreeModel (OmniRoute)', upstream: 'http://localhost:20128/v1', local: true, aliases: ['om'], tiers: null, gatewayTiers: null, activeModel: null },

@@ -44,6 +44,9 @@ const ok = (name, cond, extra = '') => {
             copies: rows.map(r => (r.querySelector('.rt-copy') || {}).textContent || '')
                 .filter(t => t.trim() === 'Скопировать').length,
             badges: rows.map(r => (r.querySelector('.rt-badge') || {}).textContent || '').filter(Boolean),
+            nomap: rows.filter(r => !r.querySelector('select')).length,
+            nomapMsg: rows.filter(r => !r.querySelector('select'))
+                .map(r => r.textContent.includes('тир-карты нет')).filter(Boolean).length,
         };
     });
     console.log('замер:', JSON.stringify(m));
@@ -60,6 +63,8 @@ const ok = (name, cond, extra = '') => {
     ok('кнопка «Скопировать» в каждой редактируемой', m.copies === m.withMap, `${m.copies}/${m.withMap}`);
     ok('бейдж команды без физической модели', m.badges.every(b => /^\/model [a-z0-9_-]+$/i.test(b.trim())),
         m.badges.join(' '));
+    ok('карточка без тир-карты читается текстом, без пустых селектов',
+        m.nomap > 0 && m.nomapMsg === m.nomap, `nomap=${m.nomap}, с пояснением=${m.nomapMsg}`);
 
     await browser.close();
     console.log(failed ? `\n${failed} провалов` : '\nвсё зелёное');

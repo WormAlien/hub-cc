@@ -235,6 +235,19 @@ function rewriteModelJson(text, clientModel) {
     if (!MODEL_FIELD_RE.test(text)) return text;
     return text.replace(MODEL_FIELD_RE, `"model":${JSON.stringify(clientModel)}`);
 }
+// 🎯 12.09, решение владельца («1m работает везде, не убеждайся»): эхо-инъекция [1m].
+// Оркестраторы (Orca-спавны, сабагенты CC) и иногда новое окно CC создают модель
+// БЕЗ суффикса — клиент верит в 200k и живёт в нём (живой случай:
+// sonnet→gpt-5.6-luna усох до 121k/200k). В ответном имени всегда дописываем
+// [1m], если суффикса нет: это управляет окном КЛИЕНТА и не меняет model id,
+// отправленный шлюзу. Явный суффикс ([200k], [1m]) уважаем и не переписываем.
+// РЕВЕРС: MODEL_ECHO_INJECT=0 при запуске возвращает старое поведение.
+const INJECT_1M = process.env.MODEL_ECHO_INJECT !== '0';
+function echoModelFor(clientModel) {
+    if (!INJECT_1M || !clientModel) return clientModel;
+    if (/\[[^\]]*\]\s*$/.test(clientModel)) return clientModel;
+    return clientModel + '[1m]';
+}
 
 const upstream = new URL(UPSTREAM);
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
@@ -1444,6 +1457,7 @@ const server = http.createServer((req, res) => {
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
+  let echoName = '';              // имя для ответа клиенту: clientModel + [1m]-инъекция (echoModelFor)
   let modelEchoDone = false;      // имя модели в ответе уже подменено (message_start)
 
   if (req.method === 'POST' && reqPath.replace(/\?.*$/, '') === '/__drain') return startDrain(res);
@@ -1629,7 +1643,7 @@ const server = http.createServer((req, res) => {
   const ECHO_MAX_HOLD = 65536;   // страховка: не придерживать поток бесконечно
   let echoBuf = null;
   const patchSseChunk = (chunk) => {
-    if (!MODEL_ECHO || modelEchoDone || !clientModel) return chunk;
+    if (!MODEL_ECHO || modelEchoDone || !echoName) return chunk;
     echoBuf = echoBuf ? Buffer.concat([echoBuf, chunk]) : chunk;
     const boundary = echoBuf.indexOf('\n\n');
     if (boundary < 0) {
@@ -1644,7 +1658,7 @@ const server = http.createServer((req, res) => {
     const head = echoBuf.subarray(0, boundary + 2);
     const tailRaw = echoBuf.subarray(boundary + 2);
     echoBuf = null;
-    const patched = Buffer.from(rewriteModelJson(head.toString('utf8'), clientModel), 'utf8');
+    const patched = Buffer.from(rewriteModelJson(head.toString('utf8'), echoName), 'utf8');
     return tailRaw.length ? Buffer.concat([patched, tailRaw]) : patched;
   };
   // Поток кончился, границы события так и не было — отдаём придержанное как есть.
@@ -1740,8 +1754,8 @@ const server = http.createServer((req, res) => {
         let body = Buffer.concat(bufs);
         // Сжатое тело (gzip/zstd/br) — только сквозняком: toString('utf8') по бинарю
         // подменяет невалидные байты на U+FFFD и клиент получает битый архив.
-        if (MODEL_ECHO && clientModel && !isCompressedBody(hdrs) && /json/i.test(String(hdrs['content-type'] || ''))) {
-          const patched = Buffer.from(rewriteModelJson(body.toString('utf8'), clientModel), 'utf8');
+        if (MODEL_ECHO && echoName && !isCompressedBody(hdrs) && /json/i.test(String(hdrs['content-type'] || ''))) {
+          const patched = Buffer.from(rewriteModelJson(body.toString('utf8'), echoName), 'utf8');
           if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
           body = patched;
         }
@@ -2297,6 +2311,10 @@ const server = http.createServer((req, res) => {
     const remapped = remapHaiku(req.method, reqPath, rawBody0);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
+    echoName = echoModelFor(clientModel);
+    if (echoName !== clientModel) {
+      log(`${req.method} ${reqPath} model-echo: ${clientModel} → ${echoName} (окно клиента 1M)`);
+    }
     if (remapped) stats.remaps += 1;
     // 🪤 11.09, живой бой: AgentRouter отвергает запросы к НЕ-claude моделям с новыми
     // полями Claude Code v2.1.220 — `context_management` и `output_config` — ответом
@@ -2491,6 +2509,16 @@ if (process.argv[2] === 'selftest') {
     rewriteModelJson('event: message_start\ndata: {"type":"message_start","message":{"id":"x","model":"anthropic/claude-opus-5-ps-aws-dst"}}\n\n', 'claude-opus-5[1m]')
       .includes('"model":"claude-opus-5[1m]"'),
     'подмена работает в message_start');
+  // Эхо-инъекция 1M: голое имя от оркестратора получает [1m], явное окно уважаем.
+  assert.strictEqual(echoModelFor('claude-sonnet-5'), 'claude-sonnet-5[1m]',
+    'голый sonnet от оркестратора получает 1M-окно');
+  assert.strictEqual(echoModelFor('gpt-5.6-sol'), 'gpt-5.6-sol[1m]',
+    'голая gpt-модель нового окна получает 1M-окно');
+  assert.strictEqual(echoModelFor('claude-opus-5[1m]'), 'claude-opus-5[1m]',
+    'готовый [1m] не дублируется');
+  assert.strictEqual(echoModelFor('gpt-5.6-luna[200k]'), 'gpt-5.6-luna[200k]',
+    'явный [200k] не переписывается за спиной пользователя');
+  assert.strictEqual(echoModelFor(''), '', 'пустое имя не трогаем');
   // патчим ТОЛЬКО первое вхождение (имя модели), остальной JSON не трогаем
   assert.strictEqual(
     rewriteModelJson('{"model":"up","messages":[{"model":"nested"}]}', 'req'),

@@ -1109,6 +1109,25 @@ async function main() {
     /chat\?mine=1\$\{gid \? '&gid=' \+ gid : ''\}/.test(HTML));
   check('в наследуемом режиме группы в запросе НЕТ — сегодняшний контракт цел',
     /LGC_GID_RE\.test\(LGC\.gid\) \? LGC\.gid : ''/.test(sendFn));
+  // 🔴 `disabled` на СФОКУСИРОВАННОМ поле уводит фокус в body — курсор пропадал после
+  // каждой отправки. Возврат обязан быть по признаку, а не безусловным: иначе фокус
+  // прыгает в поле после сетевой ошибки и смены группы, когда человек ушёл мышью.
+  const busy = fnBody('function lgChatBusy', 'function lgChatPaint');
+  check('отправка возвращает фокус в поле, если он был там до временного disabled',
+    /document\.activeElement === i/.test(busy)
+      && /if \(!off && refocus\) i\.focus\(\)/.test(busy));
+  // Вложение одно на сообщение, поэтому картинка/файл/Ctrl+V затирали неотправленную
+  // запись молча — тост о замене гас за четыре секунды и показывался ДО потери.
+  const attPut = fnBody('function lgChatAttPut', 'function lgChatChip');
+  check('новое вложение не удаляет записанное голосовое без подтверждения',
+    /LGC\.att/.test(attPut) && /confirm\(/.test(attPut)
+      && /URL\.revokeObjectURL\(att\.url\)/.test(attPut));
+  // Срез приезжает фоном, пока вкладка display:none: график мерит нулевую ширину, берёт
+  // запасную и ЗАПОМИНАЕТ хеш — первое настоящее открытие пересчёт не делало, лечил F5.
+  const tabLeague = HTML.slice(HTML.indexOf("if (name === 'league'"),
+    HTML.indexOf("if (name === 'ladmin'"));
+  check('первое открытие Лиги пересчитывает график после скрытой предзагрузки',
+    /LG\._lastHash = ''/.test(tabLeague) && tabLeague.indexOf("LG._lastHash = ''") < tabLeague.indexOf('lgRender()'));
 
   console.log('\nаватарка во вкладке:');
   const avPick = fnBody('async function lgAvPick', 'function lgAvSheet');
@@ -1206,7 +1225,7 @@ async function main() {
       && player.indexOf('data-dur') < player.indexOf('a.duration'), player.length);
   // Первое нажатие тянет файл с ноды. Без видимого признака тишина читается как поломка.
   check('у первого нажатия есть видимый признак «грузится»',
-    /lgVoiceMark\(box, 'load'\);\n  const p = a\.play\(\)/.test(player)
+    /lgVoiceMark\(box, 'load'\);\s*const p = a\.play\(\)/.test(player)
       && /st === 'load' \? '…'/.test(player) && /'waiting'/.test(HTML));
   check('скорость переключается, и 0.75 идёт сразу за обычной (замедление нужнее)',
     /const LGC_VOICE_RATES = \[1, 0\.75, 1\.5\];/.test(HTML)
@@ -2191,10 +2210,10 @@ async function main() {
     catch (e) { broken.push(`строка ${at}: ${String(e.stderr || '').split('\n').slice(0, 3).join(' ')}`); }
   }
   check(`все ${blocks} inline-блока страницы разбираются как JS`, blocks > 0 && !broken.length, broken);
-  // Второй DOMContentLoaded в этом файле уже ломал инициализацию: исключение в одном
-  // обработчике съедало соседний. Новые обработчики вешаются в существующий поток.
+  // Три обработчика: два основных плюс init внешнего media-tab.js (пришёл 10.09). Число
+  // не увеличивать: исключение в новом обработчике съедает соседнюю инициализацию.
   const dcl = (HTML.match(/addEventListener\('DOMContentLoaded'/g) || []).length;
-  check('обработчиков DOMContentLoaded по-прежнему два, третий не завёлся', dcl === 2, dcl);
+  check('обработчиков DOMContentLoaded по-прежнему три, четвёртый не завёлся', dcl === 3, dcl);
 
   srv.close(); stub.close(); child.kill();
   // Свои временные каталоги — можно удалять напрямую: правило про корзину о чужих данных.

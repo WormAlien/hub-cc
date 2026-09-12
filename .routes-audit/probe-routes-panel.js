@@ -47,6 +47,15 @@ const ok = (name, cond, extra = '') => {
             nomap: rows.filter(r => !r.querySelector('select')).length,
             nomapMsg: rows.filter(r => !r.querySelector('select'))
                 .map(r => r.textContent.includes('тир-карты нет')).filter(Boolean).length,
+            // Приглушение ненастроенных — иерархия варианта A: взгляд должен идти туда,
+            // где сигнал есть. Один раз это уже потерялось при переносе.
+            off: rows.map(r => ({
+                p: r.dataset.provider,
+                off: r.dataset.off,
+                dflt: ((r.querySelector('select[data-tier="default"]') || {}).value || '').trim(),
+            })),
+            master: rows.length ? Math.round((rows[0].querySelector('select[data-tier="default"]') || { getBoundingClientRect: () => ({ width: 0 }) }).getBoundingClientRect().width) : 0,
+            groups: rows.filter(r => ((r.querySelector('.rt-glab') || {}).textContent || '').trim() === 'сабагенты').length,
         };
     });
     console.log('замер:', JSON.stringify(m));
@@ -65,6 +74,12 @@ const ok = (name, cond, extra = '') => {
         m.badges.join(' '));
     ok('карточка без тир-карты читается текстом, без пустых селектов',
         m.nomap > 0 && m.nomapMsg === m.nomap, `nomap=${m.nomap}, с пояснением=${m.nomapMsg}`);
+    ok('ненастроенные шлюзы приглушены, настроенные — нет',
+        m.off.every(r => (r.dflt ? r.off === '0' : r.off === '1')),
+        m.off.map(r => `${r.p}:${r.off}`).join(' '));
+    ok('сабагенты сгруппированы под общим заголовком', m.groups === m.withMap, `${m.groups}/${m.withMap}`);
+    ok('ручка «окно» крупнее триммеров', m.master > (m.col.opus[0] || {}).w,
+        `мастер ${m.master} против триммера ${(m.col.opus[0] || {}).w}`);
 
     // ── Перестановка ─────────────────────────────────────────────────────────
     const order = () => page.$$eval('#routes-rows .rt-row', rs => rs.map(r => r.dataset.provider));

@@ -132,7 +132,18 @@
    обрезку — ровно то, что владелец видел в черновике.
    Сетка одна на все карточки, поэтому колонки селектов выровнены по строкам. */
 .rt-line1 { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.rt-line2 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+/* Ручка «окно» — четверть ширины, сабагенты — остальные три четверти. Так сохранена
+   иерархия варианта A: канал микшера, где мастер крупный, а триммеры рядом и мелкие. */
+/* `align-items: end` — у сабагентов на строку подписи больше (общий заголовок + свой),
+   поэтому без выравнивания по низу селект «окно» висел бы выше триммеров. */
+.rt-line2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: 12px; margin-top: 10px; align-items: end; }
+.rt-trims { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.rt-glab { grid-column: 1 / -1; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-faint); }
+/* Ненастроенный шлюз приглушён — иначе пять пустых строк из семи спорят за внимание
+   с той единственной, где сигнал есть. Наведение возвращает полную яркость. */
+.rt-row[data-off="1"] { opacity: .6; }
+.rt-row[data-off="1"]:hover { opacity: 1; }
+.rt-row[data-off="1"] .rt-sel { background: transparent; }
 .rt-grip {
   width: 22px; height: 26px; border: 0; background: transparent; color: var(--color-faint);
   cursor: grab; border-radius: 6px; font-size: 13px; line-height: 1;
@@ -143,12 +154,13 @@
    переставало влезать. */
 .rt-tier { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .rt-tier > span { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-faint); white-space: nowrap; }
+.rt-tier > span i { font-style: normal; text-transform: none; letter-spacing: 0; opacity: .8; }
 .rt-sel {
   width: 100%; font-size: 12px; font-family: ui-monospace, Consolas, monospace;
   background: var(--color-elevated); border: 1px solid var(--color-line-soft);
   border-radius: 6px; padding: 6px 8px; cursor: pointer;
 }
-.rt-sel-big { font-size: 13px; padding: 8px 9px; border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
+.rt-sel-big { font-size: 13px; padding: 8px 9px; background: var(--color-surface); border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
 .rt-cmd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .rt-badge {
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 3px 7px; border-radius: 5px;
@@ -7436,6 +7448,11 @@ window.finNavCount = async () => {
           <button onclick="akShowAdd()" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">➕ Добавить</button>
           <button id="ak-autoreg-start" onclick="akAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Чистый HTTP: почта → OTP → регистрация → ключ → cookie-сессия → эта таблица">🤖 Авторег</button>
           <button id="ak-autoreg-stop" onclick="akAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+          <label id="ak-autoreg-proxy-wrap" class="inline-flex items-center gap-1.5 cursor-pointer select-none" title="Снять галочку — регистрация пойдёт с домашнего IP. Нужно, когда пул прокси пуст или адреса мертвы; поток регистраций с одного адреса упирается в 429, поэтому для пачки лучше держать прокси">
+            <input id="ak-autoreg-proxy" type="checkbox" checked onchange="akAutoregProxyToggle()" class="peer sr-only">
+            <span class="relative w-8 h-[18px] rounded-full bg-line-soft transition peer-checked:bg-teal/70 peer-focus-visible:ring-2 peer-focus-visible:ring-teal/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-[14px] after:h-[14px] after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-[14px]"></span>
+            <span id="ak-autoreg-proxy-label" class="text-[10px] font-medium text-teal">прокси</span>
+          </label>
           <span id="ak-autoreg-status" class="text-[10px] font-mono text-faint"></span>
           <button onclick="akShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код аккаунта владельца с другой машины">📥 Вставить аккаунт</button>
           <input id="ak-filter" oninput="newapiFilterChange('ak')" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-teal/60">
@@ -9344,7 +9361,7 @@ function routesRow(p) {
       </div>
       ${routesCmdHtml(p)}
     </div>`;
-  const shell = inner => `<div id="routes-row-${id}" class="rt-row p-3 rounded-md bg-surface border border-line-soft" data-provider="${esc(p.name)}">${head}${inner}</div>`;
+  const shell = inner => `<div id="routes-row-${id}" class="rt-row p-3 rounded-md bg-surface border border-line-soft" data-provider="${esc(p.name)}" data-off="${p.tiers && String(p.tiers.default || '').trim() ? 0 : 1}">${head}${inner}</div>`;
   // Провайдер без тир-карты (omniroute, notion, custom) не редактируется: показываем
   // факт, а не пустые селекты, которым некуда писать.
   if (!p.tiers) {
@@ -9359,17 +9376,29 @@ function routesRow(p) {
     sonnet: 'сабагенты, попросившие sonnet',
     haiku: 'сабагенты и служебные запросы (самые частые — держи дешёвым)',
   };
-  const tiers = ['default', 'opus', 'sonnet', 'haiku'].map(t => {
+  const tier = t => {
     const v = (p.tiers[t] || '');
-    const isDflt = t === 'default';
     return `<label class="rt-tier" title="${esc(TIER_TITLE[t] || '')}">
-          <span class="${isDflt ? 'text-azure font-semibold' : ''}">${isDflt ? 'окно' : t}<span id="routes-st-${id}-${t}"></span></span>
+          <span>${t}<span id="routes-st-${id}-${t}"></span></span>
           <select id="routes-sel-${id}-${t}" data-provider="${esc(p.name)}" data-tier="${t}" data-prev="${esc(v)}"
             onchange="routesSaveTier(this)"
-            class="rt-sel${isDflt ? ' rt-sel-big' : ''}">${routesOptions(p.name, v)}</select>
+            class="rt-sel">${routesOptions(p.name, v)}</select>
         </label>`;
-  }).join('');
-  return shell(`<div class="rt-line2">${tiers}</div>`);
+  };
+  // Мастер — отдельным блоком с подсказкой, сабагенты — группой под общим заголовком:
+  // это и есть иерархия «канал микшера» из выбранного варианта A.
+  return shell(`<div class="rt-line2">
+      <label class="rt-tier" title="${esc(TIER_TITLE.default)}">
+        <span>окно <i>— что получит /model ${esc(p.name)}</i><span id="routes-st-${id}-default"></span></span>
+        <select id="routes-sel-${id}-default" data-provider="${esc(p.name)}" data-tier="default"
+          data-prev="${esc(p.tiers.default || '')}" onchange="routesSaveTier(this)"
+          class="rt-sel rt-sel-big">${routesOptions(p.name, p.tiers.default || '')}</select>
+      </label>
+      <div class="rt-trims">
+        <span class="rt-glab">сабагенты</span>
+        ${['opus', 'sonnet', 'haiku'].map(tier).join('')}
+      </div>
+    </div>`);
 }
 
 // ── Порядок карточек «Маршрутов» ─────────────────────────────────────────────
@@ -17322,6 +17351,14 @@ function renderAk() {
   $('ak-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'ak', q), { sortProv: 'ak', accent: 'teal' });
 }
 
+function akAutoregProxyToggle() {
+  const on = $('ak-autoreg-proxy').checked;
+  const label = $('ak-autoreg-proxy-label');
+  label.textContent = on ? 'прокси' : 'напрямую';
+  label.className = on ? 'text-[10px] font-medium text-teal' : 'text-[10px] font-medium text-amber';
+  if (!on) toast('🏠 авторег пойдёт с домашнего IP — для пачки аккаунтов это упрётся в 429', 'warn', 5000);
+}
+
 async function akAutoregStatus({ quiet = false } = {}) {
   try {
     const r = await fetch('/__switch/api/ak/autoreg/status');
@@ -17330,9 +17367,11 @@ async function akAutoregStatus({ quiet = false } = {}) {
     const running = !!d.running;
     $('ak-autoreg-start').classList.toggle('hidden', running);
     $('ak-autoreg-stop').classList.toggle('hidden', !running);
+    $('ak-autoreg-proxy-wrap').classList.toggle('opacity-40', running);
+    $('ak-autoreg-proxy').disabled = running;
     const result = d.result || {};
     $('ak-autoreg-status').textContent = running
-      ? `идёт ${d.count || 1} · pid ${d.pid || '—'}`
+      ? `идёт ${d.count || 1}${d.useProxy === false ? ' · напрямую' : ''} · pid ${d.pid || '—'}`
       : result.created != null
         ? `готово ${result.created}, в пул ${result.written}, ошибок ${result.failed}`
         : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
@@ -17348,14 +17387,15 @@ async function akAutoregStart() {
   const raw = prompt('Сколько AIKeysAPI-аккаунтов создать? (1–50)', '1');
   if (raw === null) return;
   const count = Math.max(1, Math.min(50, parseInt(raw, 10) || 1));
+  const useProxy = $('ak-autoreg-proxy').checked;
   try {
     const r = await fetch('/__switch/api/ak/autoreg/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ count }),
+      body: JSON.stringify({ count, useProxy }),
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
-    toast(`🤖 AIKeysAPI: запущено ${count}`, 'success');
+    toast(`🤖 AIKeysAPI: запущено ${count}${useProxy ? '' : ' (напрямую)'}`, 'success');
     await akAutoregStatus({ quiet: true });
     if (state.akAutoregTimer) clearInterval(state.akAutoregTimer);
     state.akAutoregTimer = setInterval(async () => {

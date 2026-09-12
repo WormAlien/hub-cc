@@ -9298,11 +9298,45 @@ function routesRefreshCmd(name) {
 // берёт из `<prefix>-active-key.txt`, каталог — из кеша `/<ep>/models`, поэтому вкладку
 // шлюза открывать не нужно. Мёртвый шлюз вернёт пустой список — селект останется с
 // текущими значениями, а не опустеет.
+//
+// 🎯 Каталог шлюза, у которого ещё НЕТ файла активного ключа. `<prefix>-active-key.txt`
+// пишется при активации аккаунта, поэтому у только что заведённого шлюза его нет: AIKeysAPI
+// 12.09 — четыре живых аккаунта, ни один не активирован, и каталог приходил пустым, хотя
+// шлюз отдаёт восемь моделей. Требовать активацию только ради списка неправильно ещё и
+// потому, что активация переключает активный шлюз Claude Code целиком.
+//
+// Ключ для запроса каталога берём из списка аккаунтов шлюза: ничего не переключаем и никуда
+// не пишем — только читаем. Карта эндпоинтов узкая и намеренно: у остальных шлюзов файл
+// ключа есть (их активировали хотя бы раз), выдумывать им фолбэк незачем.
+const ROUTES_EP_OF = { aikeysapi: 'ak' };
+async function routesCatalogFromAccounts(name) {
+  const ep = ROUTES_EP_OF[name];
+  if (!ep) return [];
+  const s = await (await fetch(`/__switch/api/${ep}/sessions`)).json();
+  const list = (s && s.sessions) || [];
+  const pick = list.find(a => a && a.active && a.api_key)
+    || list.find(a => a && a.api_key && a.status === 'live');
+  if (!pick) return [];
+  const d = await (await fetch(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(pick.api_key)}`)).json();
+  const arr = (d && Array.isArray(d.models)) ? d.models : [];
+  // В каталоге рядом с текстовыми моделями лежат картинки и видео — тиром им быть незачем.
+  // 🪤 Одного `openai` в типах мало: `gpt-image-2` заявляет и его, и `openai-video`, то есть
+  // прошёл бы фильтр и попал в тир. Поэтому отсекаем всё, что отдаёт ещё и видео-эндпоинт.
+  return arr.map(m => (typeof m === 'string' ? { id: m } : m))
+    .filter(m => !m.supported_endpoint_types
+      || (m.supported_endpoint_types.includes('openai')
+        && !m.supported_endpoint_types.some(t => t.includes('video'))))
+    .map(m => m.id).filter(Boolean);
+}
 async function routesLoadCatalogs(names) {
   await Promise.all(names.map(async (name) => {
     try {
       const d = await (await fetch(`/__switch/api/routes/models?provider=${encodeURIComponent(name)}`)).json();
-      const models = (d && Array.isArray(d.models)) ? d.models : [];
+      let models = (d && Array.isArray(d.models)) ? d.models : [];
+      // Серверный путь молчит, когда файла ключа нет — тогда спрашиваем по ключу аккаунта.
+      if (!models.length) {
+        try { models = await routesCatalogFromAccounts(name); } catch (e) { /* нет списка аккаунтов — не беда */ }
+      }
       if (!models.length) return;                        // нечем обогащать — оставляем как есть
       routesCatalog[name] = models;
       // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.

@@ -60,6 +60,11 @@ const ok = (name, cond, extra = '') => {
             // наполнять модели из ЕГО ЖЕ обычной тир-карты, иначе выбирать нечего.
             noCatOpts: [...document.querySelectorAll('#routes-rows .rt-row[data-provider="justwoker"] select[data-tier="opus"] option')]
                 .map(o => o.value).filter(Boolean),
+            // Шлюз без файла активного ключа: каталог берётся по ключу из его сессий, и в тир
+            // обязаны попасть только текстовые модели — картинка с `openai` в типах тоже
+            // заявляет чат-эндпоинт, но тиром быть не может.
+            noKeyOpts: [...document.querySelectorAll('#routes-rows .rt-row[data-provider="aikeysapi"] select[data-tier="opus"] option')]
+                .map(o => o.value).filter(Boolean),
         };
     });
     console.log('замер:', JSON.stringify(m));
@@ -86,6 +91,9 @@ const ok = (name, cond, extra = '') => {
         `мастер ${m.master} против триммера ${(m.col.opus[0] || {}).w}`);
     ok('шлюз без каталога наполнен моделями из своей обычной карты',
         m.noCatOpts.includes('gpt-5.6-luna') && m.noCatOpts.length >= 3, m.noCatOpts.join(','));
+    ok('без файла ключа каталог берётся из аккаунтов шлюза — только текстовые модели',
+        m.noKeyOpts.includes('gpt-5.6-sol') && m.noKeyOpts.includes('gpt-5.6-terra')
+        && !m.noKeyOpts.some(v => v.includes('image') || v.includes('video')), m.noKeyOpts.join(','));
 
     // ── Перестановка ─────────────────────────────────────────────────────────
     const order = () => page.$$eval('#routes-rows .rt-row', rs => rs.map(r => r.dataset.provider));

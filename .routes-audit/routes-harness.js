@@ -14,6 +14,7 @@ const GATEWAY_TIERS = {
     agentrouter: { default: 'glm-5.3', opus: 'glm-5.3', sonnet: 'gpt-6-astra', haiku: 'gpt-6-astra', gpt: 'gpt-6-astra' },
     aipm: { default: '', opus: 'claude-opus-4-6', sonnet: 'claude-opus-4-6-thinking', haiku: 'claude-sonnet-4-6', gpt: '' },
     justwoker: { default: 'gpt-5.6-sol', opus: 'gpt-5.6-sol', sonnet: 'gpt-5.6-luna', haiku: 'gpt-5.6-terra', gpt: '' },
+    aikeysapi: { default: 'gpt-5.6-terra', opus: 'gpt-5.6-terra', sonnet: 'gpt-5.6-terra', haiku: 'gpt-5.6-terra', gpt: '' },
 };
 // 🪤 Ключ `default` обязателен: с 12.09 ROUTE_TIERS начинается с него, и без него стенд
 // показывал бы «окно не задано» там, где в бою модель выбрана.
@@ -23,6 +24,7 @@ const GATEWAY_TIERS = {
 const TIERS = {
     ...GATEWAY_TIERS,
     justwoker: { default: '', opus: '', sonnet: '', haiku: '', gpt: '' },
+    aikeysapi: { default: '', opus: '', sonnet: '', haiku: '', gpt: '' },
 };
 // Самое длинное имя каталога — намеренно: короткие фикстуры не поймали бы обрезку
 // текста в селекте, ради которой панель и перерисовывается.
@@ -38,6 +40,8 @@ function providers() {
         { name: 'agentrouter', label: 'AgentRouter', upstream: 'http://localhost:20133', local: true, aliases: ['ar'], tiers: TIERS.agentrouter, gatewayTiers: GATEWAY_TIERS.agentrouter, activeModel: null },
         { name: 'aipm', label: 'AIPM', upstream: 'http://localhost:20163', local: true, aliases: ['ap'], tiers: TIERS.aipm, gatewayTiers: GATEWAY_TIERS.aipm, activeModel: null },
         { name: 'justwoker', label: 'JustWoker', upstream: 'http://localhost:20158', local: true, aliases: ['jw'], tiers: TIERS.justwoker, gatewayTiers: GATEWAY_TIERS.justwoker, activeModel: null },
+        // Живой шлюз без активированного аккаунта: каталог берётся по ключу из его сессий.
+        { name: 'aikeysapi', label: 'AIKeysAPI', upstream: 'http://localhost:20165', local: true, aliases: ['ak'], tiers: TIERS.aikeysapi, gatewayTiers: GATEWAY_TIERS.aikeysapi, activeModel: null },
         // Тир-карты нет — строка обязана остаться читаемой, без пустых селектов.
         // `custom` намеренно с ВИДИМОЙ вкладкой: notion прячется (его вкладка в
         // свёрнутой группе), а ветку «тир-карты нет» надо кому-то показывать.
@@ -102,6 +106,25 @@ http.createServer((req, res) => {
     }
     // Журнал сохранений для утверждений теста.
     if (p === '/__test/saves') return json(res, 200, { saves, tiers: TIERS });
+
+    // AIKeysAPI: файла активного ключа нет (аккаунт не активирован) — ровно случай 12.09.
+    // Панель обязана сама сходить за ключом в список аккаунтов и спросить каталог.
+    if (p === '/__switch/api/ak/sessions') {
+        return json(res, 200, { ok: true, sessions: [
+            { id: 'acct_1', email: 'a@b.c', api_key: '', status: 'no_key', active: false },
+            { id: 'acct_2', email: 'd@e.f', api_key: 'ak-live-key', status: 'live', active: false },
+        ] });
+    }
+    if (p === '/__switch/api/ak/models') {
+        return json(res, 200, { ok: true, models: [
+            { id: 'gpt-5.6-sol', supported_endpoint_types: ['openai'] },
+            { id: 'gpt-5.6-luna', supported_endpoint_types: ['openai'] },
+            { id: 'gpt-5.6-terra', supported_endpoint_types: ['openai'] },
+            // Картинка, которая тоже заявляет `openai` — в тир попасть не должна.
+            { id: 'gpt-image-2', supported_endpoint_types: ['openai', 'openai-video'] },
+            { id: 'omni_flash_10s', supported_endpoint_types: ['openai-video'] },
+        ] });
+    }
 
     // Всё остальное — благонадёжная заглушка, чтобы загрузочный JS не падал.
     if (p.startsWith('/__switch/api/')) return json(res, 200, { ok: true, data: [], items: [], sessions: [], models: [], providers: [] });

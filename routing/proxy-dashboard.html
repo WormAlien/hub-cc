@@ -5088,6 +5088,9 @@ window.finNavCount = async () => {
           </div>
           <div class="flex gap-2 items-center flex-wrap">
             <button onclick="loadRoutes(true)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+            <button id="routes-reset-order" hidden onclick="resetRoutesOrder()"
+              class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line"
+              title="Вернуть порядок шлюзов по алфавиту">↺ По алфавиту</button>
           </div>
         </header>
         <div id="routes-box" class="text-sm text-muted">загружаю…</div>
@@ -9159,7 +9162,7 @@ async function loadRoutes(force) {
   // их тоже не показывает. То есть пять мёртвых шлюзов в списке «куда слать».
   const navTabs = new Set([...document.querySelectorAll('#main-nav > button[data-tab]')].map(b => b.dataset.tab));
   let hiddenCount = 0;
-  const rows = [];
+  const shown = [];
   const visible = [];
   routesProviders = {};
   for (const p of (d.providers || [])) {
@@ -9168,9 +9171,15 @@ async function loadRoutes(force) {
     // его не существует, и показывать строку без хозяина хуже, чем не показать.
     if (!navTabs.has(tab) || hidden.has(tab)) { hiddenCount++; continue; }
     routesProviders[p.name] = p;
-    rows.push(routesRow(p));
+    shown.push(p);
     if (p.tiers) visible.push(p.name);          // каталог есть только у редактируемых
   }
+  // Порядок карточек — тот, что владелец натаскал руками; незнакомый шлюз встаёт в конец.
+  // Сортируем ОБЪЕКТЫ, а не готовый HTML: строки ещё не собраны.
+  const ord = routesOrderList();
+  const ix = n => { const i = ord.indexOf(n); return i < 0 ? 1e6 : i; };
+  shown.sort((a, b) => ix(a.name) - ix(b.name));
+  const rows = shown.map(routesRow);
   const cnt = $('nav-count-routes');
   if (cnt) cnt.textContent = String(rows.length);
   const note = hiddenCount
@@ -9188,6 +9197,15 @@ async function loadRoutes(force) {
   el.innerHTML = `
     <div class="text-xs text-muted mb-3">${rows.length} провайдер(ов) ${note}</div>
     <div id="routes-rows" class="space-y-2">${rows.join('')}</div>`;
+  // Обвязка — после отрисовки: контейнер только что создан, Sortable вешается на него,
+  // а не на прежний (тот умер вместе со старым innerHTML).
+  const rowsBox = $('routes-rows');
+  wireRoutesReorder(rowsBox);
+  rowsBox.addEventListener('keydown', e => routesKeyReorder(rowsBox, e));
+  // 🪤 Кнопку сброса показывает не только перенос: при заходе с уже сохранённым порядком
+  // её тоже надо показать, иначе сбросить можно лишь перетащив что-нибудь ещё раз.
+  const resetBtn = $('routes-reset-order');
+  if (resetBtn) resetBtn.hidden = routesOrderList().length === 0;
   // Каталоги — после разметки: селекты уже в DOM, дополним их опциями. Не ждём (await
   // выше уже отрисовал строки с текущими значениями), мёртвый шлюз просто не обогатит.
   routesLoadCatalogs(visible);
@@ -9352,6 +9370,80 @@ function routesRow(p) {
         </label>`;
   }).join('');
   return shell(`<div class="rt-line2">${tiers}</div>`);
+}
+
+// ── Порядок карточек «Маршрутов» ─────────────────────────────────────────────
+// Порядок шлюзов — настройка рабочего места, а не маршрут: живёт в localStorage и на диск
+// не пишется. Схема та же, что у списка вкладок (wireTabsReorder), включая нативный
+// фолбэк: страница обязана работать, даже если /vendor/sortable почему-то не отдался.
+const ROUTES_ORDER_KEY = 'routes-order';
+function routesOrderList() {
+  try { return JSON.parse(_lsGet(ROUTES_ORDER_KEY) || '[]'); } catch (e) { return []; }
+}
+function routesSaveOrder(container) {
+  _lsSet(ROUTES_ORDER_KEY, JSON.stringify([...container.children].map(r => r.dataset.provider).filter(Boolean)));
+  const btn = $('routes-reset-order');
+  if (btn) btn.hidden = false;
+}
+// 🪤 Обвязка вешается на контейнер ПОСЛЕ каждой отрисовки: loadRoutes заменяет innerHTML,
+// значит Sortable на старом узле умирает вместе с ним. Флаг `_wired` защищает от повторной
+// навески на ТОТ ЖЕ узел, а не от повторной отрисовки — новый узел обвязывается заново.
+function wireRoutesReorder(container) {
+  if (!container || container._wired) return;
+  container._wired = true;
+  if (window.Sortable) {
+    Sortable.create(container, {
+      animation: 150,
+      handle: '.rt-grip',                 // тащим ТОЛЬКО за ручку
+      ghostClass: 'opacity-30',
+      filter: 'select, .rt-copy',         // клик по селекту не должен начинать перенос
+      onEnd: () => routesSaveOrder(container),
+    });
+    return;
+  }
+  container.addEventListener('dragstart', e => {
+    const row = e.target.closest('.rt-row');
+    if (!row || !e.target.closest('.rt-grip')) { e.preventDefault(); return; }
+    container._dragFrom = row;
+    row.classList.add('opacity-30');
+    try { e.dataTransfer.setData('text/plain', row.dataset.provider); } catch (err) {}
+  });
+  container.addEventListener('dragover', e => {
+    const row = e.target.closest('.rt-row');
+    if (row && row !== container._dragFrom) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; }
+  });
+  container.addEventListener('drop', e => {
+    e.preventDefault();
+    const from = container._dragFrom, to = e.target.closest('.rt-row');
+    if (from && to && from !== to) {
+      const after = (from.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      to.insertAdjacentElement(after ? 'afterend' : 'beforebegin', from);
+    }
+  });
+  container.addEventListener('dragend', () => {
+    if (container._dragFrom) container._dragFrom.classList.remove('opacity-30');
+    container._dragFrom = null;
+    routesSaveOrder(container);
+  });
+}
+// Клавиатурный путь к той же ручке. Без него переставить мышью можно, а с клавиатуры
+// нельзя — это половина работающего элемента, а не «мелочь доступности».
+function routesKeyReorder(container, e) {
+  const grip = e.target.closest('.rt-grip');
+  if (!grip || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault();
+  const row = grip.closest('.rt-row');
+  const sib = e.key === 'ArrowUp' ? row.previousElementSibling : row.nextElementSibling;
+  if (!sib) return;
+  row.parentNode.insertBefore(e.key === 'ArrowUp' ? row : sib, e.key === 'ArrowUp' ? sib : row);
+  routesSaveOrder(container);
+  grip.focus();                              // фокус едет вместе с карточкой
+}
+function resetRoutesOrder() {
+  _lsSet(ROUTES_ORDER_KEY, '[]');
+  const btn = $('routes-reset-order');
+  if (btn) btn.hidden = true;
+  loadRoutes(true).catch(() => {});
 }
 
 // ── Front-door: тумблер на вкладке «Настройки» ───────────────────────────────

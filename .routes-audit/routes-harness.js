@@ -82,6 +82,9 @@ http.createServer((req, res) => {
             saves.push(j);
             // justwoker навсегда падает — проверяем откат выбора в UI.
             if (j.provider === 'justwoker') return json(res, 400, { ok: false, error: 'шлюз отклонил' });
+            // Значение-маркер: у мёртвого шлюза каталога нет, и выбрать там нечего, поэтому
+            // откат проверяем на живом шлюзе — стенд отклоняет конкретную модель.
+            if (j.value === 'claude-haiku-4-5-20251001') return json(res, 400, { ok: false, error: 'стенд: значение отклонено' });
             const t = TIERS[j.provider];
             if (!t) return json(res, 400, { ok: false, error: 'нет такого' });
             t[j.tier] = String(j.value || '');       // слияние: остальные тиры не трогаем

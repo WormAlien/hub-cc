@@ -66,6 +66,76 @@ const ok = (name, cond, extra = '') => {
     ok('карточка без тир-карты читается текстом, без пустых селектов',
         m.nomap > 0 && m.nomapMsg === m.nomap, `nomap=${m.nomap}, с пояснением=${m.nomapMsg}`);
 
+    // ── Перестановка ─────────────────────────────────────────────────────────
+    const order = () => page.$$eval('#routes-rows .rt-row', rs => rs.map(r => r.dataset.provider));
+    const savedOrder = () => page.evaluate(() => {
+        try { return JSON.parse(localStorage.getItem('routes-order') || '[]'); } catch (e) { return []; }
+    });
+    const before = await order();
+    ok('есть что переставлять', before.length > 1, before.join(','));
+
+    // Мышь: тянем за ручку ПЕРВОЙ карточки ниже середины второй. Sortable на десктопе
+    // работает нативным HTML5 drag&drop, поэтому mouse.down + move, а не click.
+    const g = await page.$('#routes-rows .rt-row:first-child .rt-grip');
+    const t = await page.$('#routes-rows .rt-row:nth-child(2)');
+    const gb = await g.boundingBox(), tb = await t.boundingBox();
+    await page.mouse.move(gb.x + gb.width / 2, gb.y + gb.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height * 0.9, { steps: 15 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    const afterDrag = await order();
+    ok('мышь: карточка едет за ручку', afterDrag.join(',') !== before.join(','),
+        `${before.join(',')} → ${afterDrag.join(',')}`);
+    // 🪤 Порядок после переноса НЕалфавитный — именно на нём и надо проверять F5: на
+    // алфавитном «пережил перезагрузку» проходило бы и со сломанным хранилищем.
+    ok('порядок сохранён в localStorage', (await savedOrder()).join(',') === afterDrag.join(','),
+        JSON.stringify(await savedOrder()));
+    ok('кнопка «По алфавиту» стала видна', await page.isVisible('#routes-reset-order'));
+
+    // F5: порядок обязан пережить перезагрузку — иначе он не «рабочее место», а игрушка.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(
+        () => !document.documentElement.classList.contains('tw-boot'), null, { timeout: 15000 });
+    await page.click('#main-nav > button[data-tab="routes"]');
+    await page.waitForSelector('#routes-rows .rt-row', { timeout: 8000 });
+    ok('порядок пережил F5', (await order()).join(',') === afterDrag.join(','), (await order()).join(','));
+    ok('кнопка сброса видна и после F5', await page.isVisible('#routes-reset-order'));
+
+    // Клавиатура: фокус на ручке первой карточки, стрелка вниз.
+    await page.focus('#routes-rows .rt-row:first-child .rt-grip');
+    await page.keyboard.press('ArrowDown');
+    await page.waitForTimeout(250);
+    const afterKey = await order();
+    ok('клавиатура ↑↓ меняет порядок', afterKey[1] === afterDrag[0],
+        `${afterDrag.join(',')} → ${afterKey.join(',')}`);
+
+    // Сброс: возвращается алфавитный порядок, и хранилище очищается.
+    await page.click('#routes-reset-order');
+    await page.waitForTimeout(700);
+    const afterReset = await order();
+    ok('«По алфавиту» вернул исходный порядок', afterReset.join(',') === before.join(','), afterReset.join(','));
+    ok('сброс очистил хранилище', (await savedOrder()).length === 0, JSON.stringify(await savedOrder()));
+
+    // ── Автосохранение тира ──────────────────────────────────────────────────
+    // Разметку селектов переписали (Task 2), а на ней держится вся запись — проверяем,
+    // что смена уходит на сервер и что отказ сервера возвращает прежний выбор.
+    const arSel = await page.$('#routes-rows .rt-row[data-provider="agentrouter"] select[data-tier="default"]');
+    await arSel.selectOption('claude-opus-5');
+    await page.waitForTimeout(600);
+    const testSaves = await (await page.request.get(`${URL}__test/saves`)).json();
+    ok('смена тира ушла на сервер',
+        (testSaves.saves || []).some(s => s.provider === 'agentrouter' && s.tier === 'default' && s.value === 'claude-opus-5'),
+        JSON.stringify((testSaves.saves || []).slice(-1)));
+    ok('селект остался на новом значении', (await arSel.inputValue()) === 'claude-opus-5');
+
+    const arOpus = await page.$('#routes-rows .rt-row[data-provider="agentrouter"] select[data-tier="opus"]');
+    const prevOpus = await arOpus.inputValue();
+    await arOpus.selectOption('claude-haiku-4-5-20251001');   // стенд отвечает 400
+    await page.waitForTimeout(800);
+    ok('отказ сервера откатил выбор', (await arOpus.inputValue()) === prevOpus,
+        `${prevOpus} → ${await arOpus.inputValue()}`);
+
     await browser.close();
     console.log(failed ? `\n${failed} провалов` : '\nвсё зелёное');
     process.exit(failed ? 1 : 0);

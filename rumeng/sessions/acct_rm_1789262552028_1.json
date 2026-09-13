@@ -1,0 +1,30 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://api.rumeng-ai.com",
+      "localStorage": [
+        {
+          "name": "auth_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxOTMsImVtYWlsIjoibGEud3hyZW5jLmV2ZWxhc2Mub0BnbWFpbC5jb20iLCJyb2xlIjoidXNlciIsInRva2VuX3ZlcnNpb24iOjgxNjMzNzY2NDkxMTIxNjk0NTAsInNpZCI6ImNlZWQzZWFiMWE2YjRlMzVlNWI1ZjRiMzEyOTc5Yzg3IiwiYm5kIjoiNDE0NDJjZDVmMjgyOGU3MWU4M2I3ZjRiYmE3OTQyYzQiLCJleHAiOjE3ODkzNDg5NTAsIm5iZiI6MTc4OTI2MjU1MCwiaWF0IjoxNzg5MjYyNTUwfQ.ddv8N8aQL1Vj14sc7MSEz8WXoHJNbfIZ-_9Rc4YN6p0"
+        },
+        {
+          "name": "refresh_token",
+          "value": "rt_54c8ac88480cff035d51ec67be198dca43cf8b63ea74a5a8bc91e7be0c6e4a19"
+        },
+        {
+          "name": "token_expires_at",
+          "value": "1789348952035"
+        },
+        {
+          "name": "auth_user",
+          "value": "{\"id\":193,\"email\":\"la.wxrenc.evelasc.o@gmail.com\",\"username\":\"\",\"role\":\"user\",\"balance\":1,\"frozen_balance\":0,\"concurrency\":15,\"status\":\"active\",\"allowed_groups\":null,\"created_at\":\"2026-09-13T09:22:30.707521948+08:00\",\"updated_at\":\"2026-09-13T09:22:30.707522147+08:00\",\"balance_notify_enabled\":false,\"balance_notify_threshold_type\":\"\",\"balance_notify_threshold\":null,\"balance_notify_extra_emails\":null,\"total_recharged\":0,\"rpm_limit\":0}"
+        },
+        {
+          "name": "sub2api_login_agreement_consent",
+          "value": "{\"revision\":\"515ed00e0aa9f5e6\",\"accepted_at\":\"2026-09-13T01:22:32.035Z\"}"
+        }
+      ]
+    }
+  ]
+}

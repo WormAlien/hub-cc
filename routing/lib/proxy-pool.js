@@ -477,9 +477,18 @@ function preflightVerdict(status, text) {
     return { ok: true };
 }
 
-// Проверка прокси на конкретном шлюзе. `/api/status` публичный — аккаунт не тратится и
-// сессия не жжётся, ровно как в preflight() авторега.
-async function preflight(proxy, { host, path: urlPath = '/api/status', timeoutMs = PREFLIGHT_TIMEOUT_MS } = {}) {
+// Проверка прокси на конкретном шлюзе. Путь должен быть ПУБЛИЧНЫМ — аккаунт не тратится
+// и сессия не жжётся, ровно как в preflight() авторега.
+//
+// 🔴 `/api/status` — это соглашение New API, а НЕ общий стандарт. У sub2api-панелей
+// (`api.rumeng-ai.com`, `true-sota.com`) такого пути нет: он отдаёт 404, вердикт всегда
+// «HTTP 404», и НИ ОДИН прокси не проходит проверку — при полностью живом прокси и живой
+// панели. Замер 13.09: `/api/status` → 404, `/api/v1/settings/public` → 200 за 1,85 с
+// через тот же socks5. Снаружи это выглядело как «все прокси мёртвые».
+// ⇒ Движку с другим API путь передавать явно, параметром `path`.
+const DEFAULT_PREFLIGHT_PATH = '/api/status';
+
+async function preflight(proxy, { host, path: urlPath = DEFAULT_PREFLIGHT_PATH, timeoutMs = PREFLIGHT_TIMEOUT_MS } = {}) {
     if (!host) return { ok: false, error: 'preflight без host' };
     const t0 = Date.now();
     try {
@@ -497,15 +506,21 @@ async function preflight(proxy, { host, path: urlPath = '/api/status', timeoutMs
 
 // Кеш здоровья на процесс. Держим в памяти, а не в файле: состояние протухает за минуты,
 // а файл привязок пишут параллельные чеки — лишняя запись только добавит гонок.
-const HEALTH = new Map();   // `${proxyId}|${host}` → { ok, error, at, ms }
+//
+// 🪤 Ключ кеша включает ПУТЬ, а не только хост. Иначе проба `/api/status` и проба
+// `/api/v1/settings/public` по одному хосту затирали бы вердикт друг друга, и прокси
+// то «живой», то «мёртвый» без всякой связи с сетью.
+const HEALTH = new Map();   // `${proxyId}|${host}|${path}` → { ok, error, at, ms }
 
-async function health(proxy, host, { ttlMs = null, force = false } = {}) {
+// `path` необязателен и по умолчанию прежний — соседние вкладки (New API: aikeysapi,
+// agentrouter) ничего не замечают. Нужен он движкам, где `/api/status` не существует.
+async function health(proxy, host, { ttlMs = null, force = false, path: urlPath = DEFAULT_PREFLIGHT_PATH } = {}) {
     const ttl = ttlMs == null ? config().preflightTtlMs : ttlMs;
     if (ttl === 0) return { ok: true, skipped: true };      // проверка выключена настройкой
-    const key = `${proxy.id}|${host}`;
+    const key = `${proxy.id}|${host}|${urlPath}`;
     const hit = HEALTH.get(key);
     if (!force && hit && (Date.now() - hit.at) < ttl) return { ...hit, cached: true };
-    const r = await preflight(proxy, { host });
+    const r = await preflight(proxy, { host, path: urlPath });
     const rec = { ok: r.ok, error: r.error || null, status: r.status, ms: r.ms, at: Date.now() };
     HEALTH.set(key, rec);
     return rec;
@@ -583,7 +598,7 @@ function leastLoaded(proxies, assign) {
 //   { ok:true,  proxy:null, direct:true } — пул не настроен/выключен на этом хосте
 //   { ok:true,  proxy:{…}, how:'sticky'|'new' } — идти через него
 //   { ok:false, error }                   — назначен и мёртв → НЕ ХОДИТЬ ВООБЩЕ
-async function forAccount(key, { host = null, force = false, usePreflight = true } = {}) {
+async function forAccount(key, { host = null, force = false, usePreflight = true, preflightPath = DEFAULT_PREFLIGHT_PATH } = {}) {
     const cfg = config();
     if (!cfg.enabled) return { ok: true, proxy: null, direct: true, reason: 'пул прокси не настроен' };
     if (cfg.hosts.length && (!host || !cfg.hosts.includes(String(host)))) {
@@ -629,7 +644,7 @@ async function forAccount(key, { host = null, force = false, usePreflight = true
     }
 
     if (usePreflight && host) {
-        const h = await health(proxy, host, { force });
+        const h = await health(proxy, host, { force, path: preflightPath });
         if (!h.ok) {
             return {
                 ok: false,

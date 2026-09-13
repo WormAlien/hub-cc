@@ -44,6 +44,15 @@ const ok = (name, cond, extra = '') => {
             copies: rows.map(r => (r.querySelector('.rt-copy') || {}).textContent || '')
                 .filter(t => t.trim() === 'Скопировать').length,
             badges: rows.map(r => (r.querySelector('.rt-badge') || {}).textContent || '').filter(Boolean),
+            // Что РЕАЛЬНО уедет в буфер: первый аргумент copyToClipboard из onclick кнопки.
+            // Сверять с бейджем обязательно — владелец смотрит на бейдж, а вставляет буфер,
+            // и расхождение в один суффикс `[1m]` это тихое окно 200k вместо 1M.
+            clips: rows.map(r => {
+                const b = r.querySelector('.rt-copy');
+                const m2 = b && (b.getAttribute('onclick') || '').match(/copyToClipboard\(\s*"((?:[^"\\]|\\.)*)"/);
+                return m2 ? JSON.parse(`"${m2[1]}"`) : '';
+            }).filter(Boolean),
+            rowNames: rows.map(r => r.dataset.provider),
             nomap: rows.filter(r => !r.querySelector('select')).length,
             nomapMsg: rows.filter(r => !r.querySelector('select'))
                 .map(r => r.textContent.includes('тир-карты нет')).filter(Boolean).length,
@@ -79,8 +88,26 @@ const ok = (name, cond, extra = '') => {
         `w=${m.col.default.map(c => c.w).join(',')}`);
     ok('gpt-тира на вкладке нет', !m.hasGpt);
     ok('кнопка «Скопировать» в каждой редактируемой', m.copies === m.withMap, `${m.copies}/${m.withMap}`);
-    ok('бейдж команды без физической модели', m.badges.every(b => /^\/model [a-z0-9_-]+$/i.test(b.trim())),
+    // 🪤 Проверка была `/^\/model [a-z0-9_-]+$/` — то есть КОДИФИЦИРОВАЛА баг: голое имя без
+    // `[1m]`. Заявка владельца 13.09 ровно про это («надо чтобы копировалась с префиксом
+    // [1m]»), а сервер тому же имени суффикс вешает (normalizeCcModel, ветка
+    // CC_MODEL_PREFIX). Теперь проверяем настоящий инвариант: физической модели в команде
+    // нет, суффикс окна есть, а у AIKeysAPI его нет — исключение владельца 12.09.
+    ok('бейдж команды без физической модели',
+        m.badges.every(b => /^\/model [a-z0-9_-]+(\[1m\])?$/i.test(b.trim())), m.badges.join(' '));
+    ok('команда шлюза копируется с суффиксом окна [1m]',
+        m.badges.filter(b => !/\baikeysapi\b/i.test(b)).every(b => /\[1m\]$/.test(b.trim())),
         m.badges.join(' '));
+    // 🎯 Исключение владельца 12.09: у AIKeysAPI запросы дорогие, окно 1M не заявляем,
+    // чтобы автокомпакт срабатывал раньше. Кнопка обязана отдавать ГОЛОЕ имя.
+    ok('у AIKeysAPI суффикса нет (решение владельца 12.09)',
+        m.badges.filter(b => /\baikeysapi\b/i.test(b)).every(b => !/\[1m\]/.test(b)),
+        m.badges.filter(b => /\baikeysapi\b/i.test(b)).join(' ') || '(строки нет)');
+    // Бейдж и буфер — из одной строки. Расхождение здесь и есть жалоба «вижу одно, вставляю
+    // другое», и поймать его можно ТОЛЬКО сверкой пары, а не проверкой одного бейджа.
+    ok('бейдж и буфер совпадают',
+        m.clips.length === m.badges.length && m.badges.every((b, i) => b.trim() === m.clips[i].trim()),
+        `бейджи=[${m.badges.join(' | ')}] буфер=[${m.clips.join(' | ')}]`);
     ok('карточка без тир-карты читается текстом, без пустых селектов',
         m.nomap > 0 && m.nomapMsg === m.nomap, `nomap=${m.nomap}, с пояснением=${m.nomapMsg}`);
     ok('ненастроенные шлюзы приглушены, настроенные — нет',
@@ -186,6 +213,40 @@ const ok = (name, cond, extra = '') => {
     const bg = await page.$eval('#routes-rows .rt-row[data-provider="aikeysapi"] .rt-sel',
         el => getComputedStyle(el).backgroundColor);
     ok('у селекта пустой строки есть фон', !!bg && !/rgba\(0, 0, 0, 0\)|transparent/.test(bg), bg);
+
+    // 🪤 Настоящий клик, а НЕ selectOption. Прошлая версия пробы ставила значение программно,
+    // поэтому не видела, что до селекта не доходит нативный клик: Sortable с
+    // `preventOnFilter:true` гасил `pointerdown` на элементе, попавшем в `filter`
+    // (`select, .rt-copy`), а по спецификации Pointer Events это подавляет совместимые
+    // мышиные события — `mousedown` не рождался, и выпадающий список не открывался.
+    // Владелец описал это как «некликабельная хуйня» (12.09), при том что `elementFromPoint`
+    // честно показывал селект верхним элементом: он и был верхним, клик гасился выше.
+    await page.evaluate(() => {
+        window.__clickProbe = [];
+        const note = phase => e => window.__clickProbe.push({
+            type: e.type, phase, prevented: e.defaultPrevented,
+        });
+        for (const t of ['pointerdown', 'mousedown']) {
+            window.addEventListener(t, note('capture'), true);
+            window.addEventListener(t, note('bubble'), false);
+        }
+    });
+    const clickSel = await page.$('#routes-rows .rt-row[data-provider="agentrouter"] select[data-tier="default"]');
+    const clickBox = await clickSel.boundingBox();
+    await page.mouse.move(clickBox.x + clickBox.width / 2, clickBox.y + clickBox.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.up();
+    await page.waitForTimeout(250);
+    const clickEv = await page.evaluate(() => {
+        const pd = window.__clickProbe.filter(e => e.type === 'pointerdown' && e.phase === 'bubble');
+        const md = window.__clickProbe.filter(e => e.type === 'mousedown');
+        return { pdPrevented: pd.length ? pd[0].prevented : null, mdFired: md.length > 0 };
+    });
+    ok('настоящий клик доходит до селекта: pointerdown не гасится',
+        clickEv.pdPrevented === false, `defaultPrevented=${clickEv.pdPrevented}`);
+    ok('настоящий клик рождает mousedown — иначе нативный список не откроется',
+        clickEv.mdFired === true, clickEv.mdFired ? '' : 'mousedown НЕ родился');
 
     await browser.close();
     console.log(failed ? `\n${failed} провалов` : '\nвсё зелёное');

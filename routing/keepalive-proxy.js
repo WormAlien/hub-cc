@@ -1769,6 +1769,20 @@ const server = http.createServer((req, res) => {
           if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
           body = patched;
         }
+        // 🪤 `content-length` и `transfer-encoding` вместе — невалидная пара (RFC 9112
+        // §6.2), и HTTP-парсер Node роняет её как `HPE_INVALID_CONTENT_LENGTH`.
+        // Как ловилось (12.09): `/model agentrouter/gpt-6-astra` отвечал 502
+        // «front-door → agentrouter: HPE_INVALID_CONTENT_LENGTH», хотя прямой запрос к
+        // :20133 давал 200. Разницу делает заголовок `x-route-prefixed` от front-door:
+        // с ним gpt-модель уходит на конвертер :20132, а тот отдаёт ответ **chunked**
+        // (длину он в момент заголовков не знает). Тело мы здесь буферизуем целиком и
+        // дописываем `content-length` — так в одном ответе оказывались оба заголовка.
+        // Длина у нас теперь точная, поэтому chunked снимаем: он взаимоисключающий.
+        if (hdrs['content-length'] && (hdrs['transfer-encoding'] || hdrs['Transfer-Encoding'])) {
+          hdrs = Object.assign({}, hdrs);
+          delete hdrs['transfer-encoding'];
+          delete hdrs['Transfer-Encoding'];
+        }
         // JSON-ответ уже открыт пробелами — заголовки писать нельзя, дописываем тело.
         // Пробелы перед значением легальны, поэтому клиент разберёт это как обычный JSON.
         if (clientJSON) {
@@ -2862,6 +2876,14 @@ if (process.argv[2] === 'selftest') {
   // обработчик timeout под этим флагом выходит молча. Значит страховка обязана быть своя.
   assert.ok(/upReq\.on\('timeout', \(\) => \{\s*if \(finished \|\| aborted\) return;/.test(holdSrc),
     'upstreamTimeoutMs не спасает начатый поток — это и есть причина отдельной страховки');
+
+  // `content-length` + `transfer-encoding` в одном ответе = HPE_INVALID_CONTENT_LENGTH
+  // у клиента (RFC 9112 §6.2). Живой случай 12.09: gpt-модель через префикс уходит на
+  // конвертер :20132, тот отвечает chunked, а echo-патч дописывает длину — front-door
+  // отдавал 502. Сторожим сам код: chunked обязан сниматься там, где ставится длина.
+  const clSrc = fs.readFileSync(__filename, 'utf8');
+  assert.ok(/delete hdrs\['transfer-encoding'\]/.test(clSrc),
+    'при выставлении content-length chunked не снимается — вернётся HPE_INVALID_CONTENT_LENGTH');
 
   // ВОССТАНОВЛЕНИЕ — строго последним: любой applyPatch выше пишет в CONFIG_FILE,
   // и если восстановить раньше, прогон затрёт живую настройку дашборда.

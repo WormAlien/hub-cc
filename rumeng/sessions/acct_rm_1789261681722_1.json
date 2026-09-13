@@ -1,0 +1,30 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://api.rumeng-ai.com",
+      "localStorage": [
+        {
+          "name": "auth_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxOTEsImVtYWlsIjoiYWFudC5vbmlvMS4xLjEyMTNAZ21haWwuY29tIiwicm9sZSI6InVzZXIiLCJ0b2tlbl92ZXJzaW9uIjo1NTcxMTM4Mjk4NTUwMTI3NTczLCJzaWQiOiIwMzEzYjM2ZTA0NzE4N2NkMDU5NmM3MDY2NmYzNTFkNyIsImJuZCI6IjllNzQwZDQzMmRiMjVmYmE5YjA2ODYxYzQ4MWQyMjQzIiwiZXhwIjoxNzg5MzQ4MDgwLCJuYmYiOjE3ODkyNjE2ODAsImlhdCI6MTc4OTI2MTY4MH0.4QZzRE3fuu9AVrKT76jOgYakqZqLHoRsZIrjUhxn_mc"
+        },
+        {
+          "name": "refresh_token",
+          "value": "rt_2b74f73d616a6fd1bf141a6b6053957fd60e4a0c3f2849fbd9f43972aca032d1"
+        },
+        {
+          "name": "token_expires_at",
+          "value": "1789349155740"
+        },
+        {
+          "name": "auth_user",
+          "value": "{\"id\":191,\"email\":\"aant.onio1.1.1213@gmail.com\",\"username\":\"\",\"role\":\"user\",\"balance\":1,\"frozen_balance\":0,\"concurrency\":15,\"status\":\"active\",\"allowed_groups\":null,\"last_active_at\":\"2026-09-13T09:18:51.436176+08:00\",\"created_at\":\"2026-09-13T09:08:00.458736+08:00\",\"updated_at\":\"2026-09-13T09:18:51.436181+08:00\",\"balance_notify_enabled\":true,\"balance_notify_threshold_type\":\"fixed\",\"balance_notify_threshold\":null,\"balance_notify_extra_emails\":null,\"total_recharged\":0,\"rpm_limit\":0,\"identities\":{\"email\":{\"provider\":\"email\",\"bound\":true,\"bound_count\":1,\"display_name\":\"aant.onio1.1.1213@gmail.com\",\"subject_hint\":\"a***3@gmail.com\",\"provider_key\":\"email\",\"verified_at\":\"2026-09-13T09:08:00.460184+08:00\",\"can_bind\":false,\"can_unbind\":false,\"note_key\":\"profile.authBindings.notes.emailManagedFromProfile\",\"note\":\"Primary account email is managed from the profile form.\"},\"linuxdo\":{\"provider\":\"linuxdo\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"oidc\":{\"provider\":\"oidc\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"wechat\":{\"provider\":\"wechat\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"dingtalk\":{\"provider\":\"dingtalk\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false}},\"auth_bindings\":{\"dingtalk\":{\"provider\":\"dingtalk\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"email\":{\"provider\":\"email\",\"bound\":true,\"bound_count\":1,\"display_name\":\"aant.onio1.1.1213@gmail.com\",\"subject_hint\":\"a***3@gmail.com\",\"provider_key\":\"email\",\"verified_at\":\"2026-09-13T09:08:00.460184+08:00\",\"can_bind\":false,\"can_unbind\":false,\"note_key\":\"profile.authBindings.notes.emailManagedFromProfile\",\"note\":\"Primary account email is managed from the profile form.\"},\"linuxdo\":{\"provider\":\"linuxdo\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"oidc\":{\"provider\":\"oidc\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"wechat\":{\"provider\":\"wechat\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false}},\"identity_bindings\":{\"dingtalk\":{\"provider\":\"dingtalk\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"email\":{\"provider\":\"email\",\"bound\":true,\"bound_count\":1,\"display_name\":\"aant.onio1.1.1213@gmail.com\",\"subject_hint\":\"a***3@gmail.com\",\"provider_key\":\"email\",\"verified_at\":\"2026-09-13T09:08:00.460184+08:00\",\"can_bind\":false,\"can_unbind\":false,\"note_key\":\"profile.authBindings.notes.emailManagedFromProfile\",\"note\":\"Primary account email is managed from the profile form.\"},\"linuxdo\":{\"provider\":\"linuxdo\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"oidc\":{\"provider\":\"oidc\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false},\"wechat\":{\"provider\":\"wechat\",\"bound\":false,\"bound_count\":0,\"can_bind\":false,\"can_unbind\":false}},\"email_bound\":true,\"linuxdo_bound\":false,\"oidc_bound\":false,\"wechat_bound\":false,\"dingtalk_bound\":false,\"run_mode\":\"standard\"}"
+        },
+        {
+          "name": "sub2api_login_agreement_consent",
+          "value": "{\"revision\":\"515ed00e0aa9f5e6\",\"accepted_at\":\"2026-09-13T01:25:55.741Z\"}"
+        }
+      ]
+    }
+  ]
+}

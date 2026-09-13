@@ -685,6 +685,11 @@ function randomThemeId() {
         <span class="flex-1">AIKeysAPI</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aikeysapi">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="rumeng" title="如梦AI (rumeng) на api.rumeng-ai.com · собственный движок, НЕ New API: база /api/v1, авторизация JWT (не кука), при создании ключа обязательна группа. Почта только @gmail.com / @qq.com / *.edu.cn — вайтлист сервера">
+        <span class="w-5 text-center text-[14px]">🌙</span>
+        <span class="flex-1">如梦AI</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-rumeng">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="tabi">
         <span class="w-5 text-center text-[14px]">🎫</span>
         <span class="flex-1">Tabi Token</span>
@@ -7448,7 +7453,7 @@ window.finNavCount = async () => {
           <button onclick="loadAkSessions(true)" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">📡 Пинг статусов</button>
           <button onclick="akCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
           <button onclick="akShowAdd()" class="text-xs px-3 py-2 bg-teal/10 border border-teal/50 text-teal rounded-lg hover:bg-teal/20 font-medium">➕ Добавить</button>
-          <input id="ak-autoreg-count" type="number" min="1" max="50" value="1" class="text-xs font-mono bg-surface border border-line-soft rounded-lg px-2 py-2 w-14 text-center focus:outline-none focus:border-violet/60" title="Сколько аккаунтов создать">
+          <input id="ak-autoreg-count" type="number" min="1" max="50" value="1" oninput="akProxyPool()" class="text-xs font-mono bg-surface border border-line-soft rounded-lg px-2 py-2 w-14 text-center focus:outline-none focus:border-violet/60" title="Сколько аккаунтов создать">
           <button id="ak-autoreg-start" onclick="akAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Чистый HTTP: почта → OTP → регистрация → ключ → cookie-сессия → эта таблица">🤖 Авторег</button>
           <button id="ak-autoreg-stop" onclick="akAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
           <label id="ak-autoreg-proxy-wrap" class="inline-flex items-center gap-1.5 cursor-pointer select-none" title="Снять галочку — регистрация пойдёт с домашнего IP. Нужно, когда пул прокси пуст или адреса мертвы; поток регистраций с одного адреса упирается в 429, поэтому для пачки лучше держать прокси">
@@ -7457,10 +7462,56 @@ window.finNavCount = async () => {
             <span id="ak-autoreg-proxy-label" class="text-[10px] font-medium text-teal">прокси</span>
           </label>
           <button id="ak-autoreg-find" onclick="akAutoregFindProxy()" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium" title="Публичные прокси живут минуты, поэтому список пересобирается перед прогоном: скрап всех источников, проверка туннеля и TLS до панели, стоп как только набрано нужное число">🔎 Найти прокси</button>
+          <button id="ak-proxy-stop" onclick="akAutoregFindProxyStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium" title="Прервать поиск. Пул и его конфиг останутся как были — валидатор пишет файл только в самом конце">■ Стоп</button>
+          <!-- Сколько адресов пул РЕАЛЬНО отдаст: берём count из describe(), а не строки
+               файла — неразбираемые строки пул отбрасывает в bad. Число живёт минуты,
+               поэтому подпись говорит «было при чтении», а не «есть сейчас». -->
+          <span id="ak-proxy-badge" class="text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help" onclick="akProxyPool({ toast: true })" title="Сколько прокси в пуле при последнем чтении файла">прокси: …</span>
           <span id="ak-autoreg-status" class="text-[10px] font-mono text-faint"></span>
           <button onclick="akShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код аккаунта владельца с другой машины">📥 Вставить аккаунт</button>
           <input id="ak-filter" oninput="newapiFilterChange('ak')" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-teal/60">
           <select id="ak-sort" onchange="newapiSortChange('ak')" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-teal/60"><option value="date-desc">📅 дата ↓</option><option value="date-asc">📅 дата ↑</option><option value="bal-desc">💰 баланс ↓</option><option value="bal-asc">💰 баланс ↑</option><option value="status">⚡ статус</option><option value="email">📧 email A→Z</option></select>
+        </div>
+
+        <!-- Лог поиска прокси. Владелец 12.09: «лог поиска должен тоже как-то быть» —
+             поиск идёт минутами, и до этого о нём было видно только «ищу…». Показываем
+             строки валидатора как есть плюс текущий список пула: «сколько» без «каких»
+             проверить нечем. Остаётся после завершения — разбирать надо по факту. -->
+        <div id="ak-find-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Поиск прокси</h3>
+              <span id="ak-find-mode" class="text-[10px] font-mono text-faint"></span>
+              <span id="ak-find-pool" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="akFindLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере и вернётся при следующем поиске">скрыть</button>
+            </div>
+          </div>
+          <pre id="ak-find-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-56 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <div id="ak-find-pool-list" class="text-[10px] font-mono text-faint mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all"></div>
+        </div>
+
+        <!-- Лог автореги. Бэкенд отдавал stdout/stderr с самого начала, а рисовать их было
+             негде: панель показывала одну строку «идёт N · pid …», и разбирать упавший
+             прогон было нечем. Блок остаётся видимым ПОСЛЕ завершения — именно тогда в
+             него и смотрят. Этап берётся из маркера AK_STAGE, не из русского текста. -->
+        <div id="ak-autoreg-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Лог автореги</h3>
+              <span id="ak-autoreg-stage" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="inline-flex items-center gap-1 text-[10px] text-faint cursor-pointer select-none" title="Прокручивать к последней строке по мере прогона">
+                <input id="ak-autoreg-log-follow" type="checkbox" checked class="accent-azure w-3 h-3">
+                <span>автоскролл</span>
+              </label>
+              <button onclick="akAutoregLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере — панель вернётся при следующем прогоне или обновлении статуса">скрыть</button>
+            </div>
+          </div>
+          <pre id="ak-autoreg-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <pre id="ak-autoreg-log-err" class="hidden text-[10px] font-mono leading-relaxed bg-crimson/5 border border-crimson/40 rounded-lg p-2.5 mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-crimson"></pre>
         </div>
 
         <div id="ak-add-form" class="hidden rounded-xl bg-surface border border-teal/40 p-4">
@@ -7492,6 +7543,160 @@ window.finNavCount = async () => {
 
         <div id="ak-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto"><div class="p-12 text-center text-faint text-xs">загрузка…</div></div>
         <div class="text-xs text-faint"><span>base → <code class="text-ink">http://localhost:20165</code> → <code class="text-ink">www.aikeysapi.com</code></span><span class="mx-2 opacity-40">·</span><span>грант <code class="text-ink">$5</code> на аккаунт</span><span class="mx-2 opacity-40">·</span><span>авторег сам сохраняет API-ключ и cookie-сессию — ручной шаг не нужен</span></div>
+      </div>
+    </div>
+
+    <!-- ═════════ TAB: RUMENG (如梦AI) ═════════ -->
+    <!-- Копия панели AIKeysAPI под собственный движок 如梦AI. Три места, где образец
+         НЕ переносится один в один и это видно прямо в разметке:
+           1. база `/api/v1`, а не `/api` — но для UI это неважно, все ручки идут через
+              наш бэкенд `/__rumeng/*`, который зеркалит `/__ak/*`;
+           2. авторизация JWT в localStorage, а не кука — подпись у 🌐 про это говорит;
+           3. при создании ключа ОБЯЗАТЕЛЬНА группа — про это подпись внизу вкладки.
+         Цвета: только токены из @theme (`violet`/`azure`/`amber`/`emerald`/`crimson`/`rose`).
+         🪤 `text-teal`/`text-cyan`/`text-sky`/`text-indigo` в этом файле МЁРТВЫЕ — классы
+         есть, а `--color-teal` в @theme нет, и на светлых темах получается тёмный остров. -->
+    <div data-tab-content="rumeng">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">🌙</span> <a href="https://api.rumeng-ai.com/" target="_blank" rel="noopener" class="text-ink underline underline-offset-4 hover:text-violet">如梦AI</a> <span class="text-sm font-normal text-faint">rumeng</span>
+            </h1>
+            <p class="text-sm text-muted mt-1">аккаунты <code class="font-mono text-violet text-xs">api.rumeng-ai.com</code> · keepalive <code class="font-mono text-azure text-xs">:20166</code> · база <code class="font-mono text-azure text-xs">/api/v1</code> · вход email+пароль, авторизация JWT · пароль никогда не отображается</p>
+          </div>
+        </header>
+
+        <div id="rm-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <div id="rm-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров · применяется при следующей активации</h2>
+            <button onclick="loadRmModelMap()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="rm-modelmap-sel" class="flex gap-2 items-end flex-wrap"><span class="text-[10px] text-faint">загрузка…</span></div>
+        </div>
+
+        <div id="rm-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20166 · применяется без рестарта</h2>
+            <button onclick="rmLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="rm-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек)</span><input id="rm-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">дублей максимум</span><input id="rm-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-40"><span class="text-[10px] text-faint leading-tight">попыток на запрос</span><input id="rm-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <label class="flex flex-col gap-1 w-32"><span class="text-[10px] text-faint leading-tight">пре-коммит (сек)</span><input id="rm-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full font-mono"></label>
+            <div class="flex items-center gap-2"><button onclick="rmApplyKeepalive()" class="text-xs px-4 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">Применить</button><button onclick="rmResetKeepalive()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button><span id="rm-keepalive-status" class="text-xs text-faint font-mono">—</span></div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="rm-lat-box"><div class="flex-1 min-w-0"><div id="rm-lat-chart" class="w-full"></div><div id="rm-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div></div><div class="flex flex-col gap-1 shrink-0" id="rm-lat-windows"></div></div>
+          <div id="rm-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="rm-stat-requests" class="text-ink">—</b></span><span>ремапов: <b id="rm-stat-remaps" class="text-ink">—</b></span><span>keepalive: <b id="rm-stat-keepalives" class="text-ink">—</b></span><span>мульти-запросов: <b id="rm-stat-hedges" class="text-ink">—</b></span><span>ретраев: <b id="rm-stat-retries" class="text-ink">—</b></span><span>ошибок: <b id="rm-stat-errors" class="text-ink">—</b></span><span>ответ: <b id="rm-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <div id="rm-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><button onclick="loadRmModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          <div id="rm-models-list" class="flex flex-wrap gap-1.5"><span class="text-[10px] text-faint">загрузка…</span></div>
+        </div>
+
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadRmSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadRmSessions(true)" class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="rmCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="rmShowAdd()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">➕ Добавить</button>
+          <input id="rm-autoreg-count" type="number" min="1" max="50" value="1" oninput="rmProxyPool()" class="text-xs font-mono bg-surface border border-line-soft rounded-lg px-2 py-2 w-14 text-center focus:outline-none focus:border-violet/60" title="Сколько аккаунтов создать">
+          <button id="rm-autoreg-start" onclick="rmAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Гибрид: браузер только за почтой emailnator (вайтлист сервера — @gmail.com), дальше чистый HTTP: код → регистрация → JWT → группа → ключ → эта таблица">🤖 Авторег</button>
+          <button id="rm-autoreg-stop" onclick="rmAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+          <label id="rm-autoreg-proxy-wrap" class="inline-flex items-center gap-1.5 cursor-pointer select-none" title="Снять галочку — регистрация пойдёт с домашнего IP. Нужно, когда пул прокси пуст или адреса мертвы; поток регистраций с одного адреса упирается в 429, поэтому для пачки лучше держать прокси">
+            <input id="rm-autoreg-proxy" type="checkbox" checked onchange="rmAutoregProxyToggle()" class="peer sr-only">
+            <span class="relative w-8 h-[18px] rounded-full bg-line-soft transition peer-checked:bg-violet/70 peer-focus-visible:ring-2 peer-focus-visible:ring-violet/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-[14px] after:h-[14px] after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-[14px]"></span>
+            <span id="rm-autoreg-proxy-label" class="text-[10px] font-medium text-violet">прокси</span>
+          </label>
+          <button id="rm-autoreg-find" onclick="rmAutoregFindProxy()" class="text-xs px-3 py-2 bg-azure/10 border border-azure/50 text-azure rounded-lg hover:bg-azure/20 font-medium" title="Публичные прокси живут минуты, поэтому список пересобирается перед прогоном: скрап всех источников, проверка туннеля и TLS до панели, стоп как только набрано нужное число">🔎 Найти прокси</button>
+          <button id="rm-proxy-stop" onclick="rmAutoregFindProxyStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium" title="Прервать поиск. Пул и его конфиг останутся как были — валидатор пишет файл только в самом конце">■ Стоп</button>
+          <!-- Сколько прокси пул РЕАЛЬНО отдаст: берём count из describe(), а не строки
+               файла — неразбираемые строки пул отбрасывает в bad. Число живёт минуты,
+               поэтому подпись говорит «было при чтении», а не «есть сейчас». -->
+          <span id="rm-proxy-badge" class="text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help" onclick="rmProxyPool({ toast: true })" title="Сколько прокси в пуле при последнем чтении файла">прокси: …</span>
+          <span id="rm-autoreg-status" class="text-[10px] font-mono text-faint"></span>
+          <button onclick="rmShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код аккаунта владельца с другой машины">📥 Вставить аккаунт</button>
+          <input id="rm-filter" oninput="newapiFilterChange('rm')" placeholder="фильтр…" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-violet/60">
+          <select id="rm-sort" onchange="newapiSortChange('rm')" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-violet/60"><option value="date-desc">📅 дата ↓</option><option value="date-asc">📅 дата ↑</option><option value="bal-desc">💰 баланс ↓</option><option value="bal-asc">💰 баланс ↑</option><option value="status">⚡ статус</option><option value="email">📧 email A→Z</option></select>
+        </div>
+
+        <!-- Лог поиска прокси. Владелец 12.09: «лог поиска должен тоже как-то быть» —
+             поиск идёт минутами, и до этого о нём было видно только «ищу…». Показываем
+             строки валидатора как есть плюс текущий список пула: «сколько» без «каких»
+             проверить нечем. Остаётся после завершения — разбирать надо по факту. -->
+        <div id="rm-find-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Поиск прокси</h3>
+              <span id="rm-find-mode" class="text-[10px] font-mono text-faint"></span>
+              <span id="rm-find-pool" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="rmFindLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере и вернётся при следующем поиске">скрыть</button>
+            </div>
+          </div>
+          <pre id="rm-find-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-56 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <div id="rm-find-pool-list" class="text-[10px] font-mono text-faint mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all"></div>
+        </div>
+
+        <!-- Лог автореги. Владелец про предыдущую вкладку: «я не вижу, что происходит».
+             Бэкенд отдаёт stdout/stderr, рисуем их как есть. Блок остаётся видимым ПОСЛЕ
+             завершения — именно тогда в него и смотрят. Этап берётся из маркера RM_STAGE
+             (`rumeng/auto-add.js`), а НЕ из русского текста лога: формулировки правятся,
+             и парсер текста однажды соврёт молча. -->
+        <div id="rm-autoreg-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Лог автореги</h3>
+              <span id="rm-autoreg-stage" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="inline-flex items-center gap-1 text-[10px] text-faint cursor-pointer select-none" title="Прокручивать к последней строке по мере прогона">
+                <input id="rm-autoreg-log-follow" type="checkbox" checked class="accent-azure w-3 h-3">
+                <span>автоскролл</span>
+              </label>
+              <button onclick="rmAutoregLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере — панель вернётся при следующем прогоне или обновлении статуса">скрыть</button>
+            </div>
+          </div>
+          <pre id="rm-autoreg-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <pre id="rm-autoreg-log-err" class="hidden text-[10px] font-mono leading-relaxed bg-crimson/5 border border-crimson/40 rounded-lg p-2.5 mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-crimson"></pre>
+        </div>
+
+        <div id="rm-add-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1"><span class="text-[10px] text-faint">email (логин)</span><input id="rm-add-email" type="email" autocomplete="off" placeholder="owner@gmail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-violet/60"></label>
+            <label class="flex flex-col gap-1"><span class="text-[10px] text-faint">пароль панели</span><input id="rm-add-pass" type="password" autocomplete="new-password" placeholder="••••••••" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-44 focus:outline-none focus:border-violet/60"></label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]"><span class="text-[10px] text-faint">API key · можно пустым</span><input id="rm-add-key" autocomplete="off" placeholder="пусто = добавить позже кнопкой 🔑" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></label>
+            <button onclick="rmAdd()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Сохранить</button><button onclick="rmShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <p class="text-[10px] text-faint mt-2">Только существующие аккаунты владельца. Пароль передаётся серверу для входа, но не возвращается и не отображается в таблице. 🪤 Панель принимает почту только с суффиксами <code class="font-mono">@gmail.com</code>, <code class="font-mono">@qq.com</code>, <code class="font-mono">*.edu.cn</code>.</p>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию). Переносит существующий аккаунт владельца
+             между машинами. 🪤 У 如梦AI в снимке НЕ куки, а JWT в localStorage
+             (`access_token` / `refresh_token` / `auth_user`) — формат снимка у бэкенда
+             свой, но для UI это та же base64-строка. Пароля в share-коде нет. -->
+        <div id="rm-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт по share-коду</h3>
+            <button onclick="rmShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь base64-строку, снятую кнопкой 🔗 на другой машине — запись появится с email, API-ключом и JWT-сессией. Пароль в коде не передаётся.</p>
+          <textarea id="rm-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="rm-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="rmImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="rmShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="rm-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto"><div class="p-12 text-center text-faint text-xs">загрузка…</div></div>
+        <div class="text-xs text-faint"><span>base → <code class="text-ink">http://localhost:20166</code> → <code class="text-ink">api.rumeng-ai.com/api/v1</code></span><span class="mx-2 opacity-40">·</span><span>почта только <code class="text-ink">@gmail.com</code> · <code class="text-ink">@qq.com</code> · <code class="text-ink">*.edu.cn</code></span><span class="mx-2 opacity-40">·</span><span>при создании ключа обязательна группа — авторег выбирает её сам</span></div>
       </div>
     </div>
 
@@ -8585,7 +8790,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, aipm: false, hcnsec: false, aikeysapi: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -8631,6 +8836,10 @@ const state = {
   akModels: [],
   akActiveModel: '',
   akModelMap: {},
+  rumeng: [],
+  rmModels: [],
+  rmActiveModel: '',
+  rmModelMap: {},
   tabi: [],
   tbModels: [],
   tbActiveModel: '',
@@ -8825,6 +9034,7 @@ function showTab(name) {
     if (name === 'aipm') { if (!state.loaded.aipm) { state.loaded.aipm = true; loadApSessions(false); } apLoadKeepalive(); }
   if (name === 'hcnsec') { if (!state.loaded.hcnsec) { state.loaded.hcnsec = true; loadHnSessions(false); } hnLoadKeepalive(); }
   if (name === 'aikeysapi') { if (!state.loaded.aikeysapi) { state.loaded.aikeysapi = true; loadAkSessions(false); } akLoadKeepalive(); }
+  if (name === 'rumeng') { if (!state.loaded.rumeng) { state.loaded.rumeng = true; loadRmSessions(false); } rmLoadKeepalive(); }
   if (name === 'tabi') { if (!state.loaded.tabi) { state.loaded.tabi = true; loadTbSessions(false); } tbLoadKeepalive(); }
   if (name === 'xpeach') { if (!state.loaded.xpeach) { state.loaded.xpeach = true; loadXpSessions(false); } xpLoadKeepalive(); }
   // Маршруты перечитываем на КАЖДЫЙ заход, без ленивой загрузки: тир-карту правят на
@@ -8894,9 +9104,9 @@ function jumpTo(id) {
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
 const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken',
-      aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
+      aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
 const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald',
-      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
+      aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
   try {
@@ -9368,9 +9578,17 @@ async function routesLoadCatalogs(names) {
 // вкладке `opus → glm-5.3` не применялся никогда. То есть вкладка управления
 // маппингом предлагала команду, этот маппинг обходящую (владелец поймал по 402).
 // Теперь модель выбирает тир-карта, и строка ниже показывает, во что она развернётся.
+//
+// 🪤 Суффикс окна обязателен, и это ВТОРАЯ половина той же заявки (13.09): имя шлюза
+// строилось конкатенацией, `withCtxSuffix()` здесь не вызывался вовсе — кнопка отдавала
+// голый `/model agentrouter`, а `normalizeCcModel()` тому же имени вешает `[1m]`
+// (transparent-proxy.js:370). То есть команда с вкладки молча роняла окно до 200k, ровно
+// против чего весь механизм и заведён. Имя шлюза передаём вторым аргументом: признак
+// «это шлюз, а не модель» здесь известен точно (`p.name` — ключ реестра), угадывать по
+// отсутствию дефиса не нужно.
 function routesCmdHtml(p) {
   const id = routesId(p.name);
-  const cmd = p.tiers ? '/model ' + p.name : '';
+  const cmd = p.tiers ? '/model ' + withCtxSuffix(p.name, p.name) : '';
   if (!cmd) {
     return `<span id="routes-cmd-${id}" class="shrink-0 text-[11px] text-faint" title="у провайдера нет тир-карты — модель уходит как есть, адресовать префиксом нечем">нечего копировать</span>`;
   }
@@ -9384,6 +9602,8 @@ function routesCmdHtml(p) {
   const resolve = dflt
     ? `<span class="rt-resolve" title="во что развернётся модель из окна">→ ${esc(dflt)}</span>`
     : `<span class="rt-resolve text-amber" title="default не выбран — такой запрос вернёт 400 с подсказкой">⚠ окно не задано</span>`;
+  // 🪤 Бейдж и буфер — из ОДНОЙ переменной `cmd`. Разойтись им нельзя: владелец видит
+  // бейдж, а вставляет буфер, и расхождение в один суффикс — это как раз тихий 200k.
   return `<span id="routes-cmd-${id}" class="rt-cmd">
       <code class="rt-badge">${esc(cmd)}</code>
       <button class="rt-copy" onclick='copyToClipboard(${cmdJ}, "команда скопирована")'
@@ -9481,6 +9701,16 @@ function wireRoutesReorder(container) {
       handle: '.rt-grip',                 // тащим ТОЛЬКО за ручку
       ghostClass: 'opacity-30',
       filter: 'select, .rt-copy',         // клик по селекту не должен начинать перенос
+      // 🪤 `preventOnFilter` по умолчанию `true`, и это ломало выбор модели: Sortable гасил
+      // `pointerdown` на элементе из `filter`, а по спецификации Pointer Events гашение
+      // `pointerdown` подавляет совместимые мышиные события — `mousedown` не рождался, и
+      // нативный выпадающий список НЕ открывался. Снаружи это выглядело как «селект не
+      // кликается», хотя `elementFromPoint` честно показывал его верхним в своей точке:
+      // он и был верхним, а клик гасился выше по дереву. Жалоба владельца 12.09.
+      // Сам `filter` при `false` не страдает: его ветка возвращается ДО старта переноса
+      // независимо от этой опции, поэтому перетаскивание строки с селекта по-прежнему
+      // не начинается, а перенос за ручку работает как раньше.
+      preventOnFilter: false,
       onEnd: () => routesSaveOrder(container),
     });
     return;
@@ -10010,15 +10240,57 @@ async function copyModelId(id) {
 // оставлял без суффикса. То есть кнопка «копировать» раздавала тихий 200k — ровно тот
 // симптом, от которого чокпоинт и заводили. Правится ТОЛЬКО парой, обе строки разом.
 const CC_1M_RE = /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/;
-function withCtxSuffix(id) {
+// Шлюзы, которым `[1m]` НЕ вешаем. Сейчас таких нет: AIKeysAPI и rumeng используют
+// тот же клиентский маркер 1M, что и остальные keepalive-провайдеры.
+const NO_1M_GATEWAYS = new Set();
+// Модель для /model и settings.json: у claude-opus/sonnet дотягиваем суффикс окна
+// [1m]. Без него Claude Code считает окно 200k и режет историю втрое раньше — а
+// шлюзы (agentrouter/gorouter/tabi) отдают эти модели с 1M.
+//
+// `gw` — ВКЛАДКА, с которой нажали кнопку (или строка «Маршрутов»). Аргумент
+// необязателен, и без него функция решает ровно тем же, чем сервер решает запрос без
+// контекста: одним regex. Третьей таблицы шлюзов во фронте не заводим — «чей это id»
+// знает только вызывающий, а копия реестра разъехалась бы с ним.
+//
+// Две ветки поверх regex, обе взяты у сервера, а не выдуманы:
+//   1. Голое имя шлюза (`/model agentrouter`) — модель выберет тир-карта, а окно
+//      клиента обязано быть 1M. У сервера это `slash < 0 && CC_MODEL_PREFIX[gw]`
+//      (transparent-proxy.js:370). Здесь тот же признак приходит аргументом.
+//   2. Любая модель на вкладке шлюза с keepalive: `echoModelFor()`
+//      (keepalive-proxy.js:256) при INJECT_1M дописывает `[1m]` в ответ клиенту
+//      БЕЗУСЛОВНО — решение владельца 12.09 «1m работает везде, не убеждайся».
+//      То есть окно 1M у `deepseek-v4-pro` фактически есть, и кнопка, отдававшая
+//      голое имя, противоречила живому поведению прокси (заявка 12.09).
+// Список шлюзов с keepalive — KEEPALIVE_POLL_TABS: он уже во фронте и содержит ровно те
+// 11 шлюзов, которым transparent-proxy.js спавнит keepalive-proxy.js (11 вызовов
+// KEEPALIVE_PROXY_FILE), и ни один спавн не гасит инъекцию через MODEL_ECHO_INJECT=0.
+//
+// 🪤 Вторая ветка работает ТОЛЬКО от явного `gw`, а не от префикса `<шлюз>/<модель>` в
+// самом имени. Для префиксных имён у сервера правило одно — regex, и `check-1m.js`
+// сверяет пару буквально: догадка по префиксу сделала бы `hcnsec/kimi-k3[1m]` там, где
+// сервер оставляет голое имя, то есть развела бы копии заново.
+function withCtxSuffix(id, gw) {
   const s = String(id || '').trim();
-  return CC_1M_RE.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+  if (!s) return s;
+  const bare = s.replace(/\s*\[[^\]]*\]\s*$/, '');
+  const slash = bare.indexOf('/');
+  // AIKeysAPI: суффикс не вешаем и СНИМАЕМ, если он уже там (ветка сервера :356).
+  // Признак ловим тремя способами, как сервер: вкладка, префикс в имени, голое имя.
+  const pfx = slash > 0 ? bare.slice(0, slash).toLowerCase() : bare.toLowerCase();
+  const tab = String(gw || '').trim().toLowerCase();
+  if (NO_1M_GATEWAYS.has(tab) || NO_1M_GATEWAYS.has(pfx)) return bare;
+  if (s.includes('[')) return s;                                  // чужой суффикс не трогаем
+  if (slash < 0 && tab && tab === bare.toLowerCase()) return `${s}[1m]`;   // голое имя шлюза
+  if (CC_1M_RE.test(s)) return `${s}[1m]`;
+  if (tab && typeof KEEPALIVE_POLL_TABS === 'object'
+      && Object.prototype.hasOwnProperty.call(KEEPALIVE_POLL_TABS, tab)) return `${s}[1m]`;
+  return s;
 }
 
-async function copyModelCmd(id) {
+async function copyModelCmd(id, gw) {
   // Копируем ВСЕГДА с суффиксом: юзер вставляет `/model claude-opus-5` без него и
   // молча получает 200k вместо 1M (реальная жалоба, 2026-08-17).
-  const cmd = '/model ' + withCtxSuffix(id);
+  const cmd = '/model ' + withCtxSuffix(id, gw);
   try {
     await navigator.clipboard.writeText(cmd);
     toast('📋 ' + cmd, 'success', 2500);
@@ -10547,15 +10819,16 @@ function cunSplitHypeModels(models) {
 }
 
 function cunNormalizeCcModel(m) {
-  const s = String(m || '').trim();
-  if (!s || s.includes('[')) return s;
-  // 🪤 Третья копия того же инвариантa. До 10.09 здесь стоял только
-  // `/^gpt-5\.6-(sol|luna|terra)$/` — без claude, без glm, без префикса провайдера, то
-  // есть 159 расхождений с сервером из 337 проверенных имён. Последствие видно на самой
-  // вкладке: сервер хранит активную модель через полный normalizeCcModel (с `[1m]`), а
-  // сравнение шло с голым именем — чип активной claude/glm-модели не подсвечивался
-  // никогда, а клик отправлял имя без суффикса, то есть окно 200k.
-  return CC_1M_RE.test(s) ? `${s}[1m]` : s;
+  // Дубля больше нет: делегируем в общий withCtxSuffix (:10264). До 13.09 здесь стояла
+  // своя строка `CC_1M_RE.test(s) ? s+'[1m]' : s` — regex уже был общий, а вот ветки
+  // вокруг него разошлись: на `aikeysapi/gpt-5.6-sol` эта копия вешала `[1m]`, который
+  // сервер (`normalizeCcModel`, ветка NO_1M_GATEWAYS) снимает. Одна функция — одно
+  // правило, и расхождение физически негде завести.
+  // Второй аргумент не передаём осознанно: у cun.ai keepalive-прокси нет (в
+  // KEEPALIVE_POLL_TABS его нет, спавна keepalive-proxy.js для него тоже нет), значит
+  // безусловной инъекции `[1m]` в ответ ему никто не делает — правило то же, что у
+  // сервера для запроса без контекста, один regex.
+  return withCtxSuffix(m);
 }
 
 function cunModelChip(id, tone) {
@@ -11927,6 +12200,12 @@ function arCheckinCell(s) {
   if (arAutoRunning.has(s.id)) {
     return `<span class="text-[11px] text-amber whitespace-nowrap" title="⚡ автоподарок идёт: разлогин через меню профиля, вход через GitHub, пересчёт баланса. До 3 минут.">⏳ идёт…</span>`;
   }
+  const failedRun = arCheckinRuns.get(s.id);
+  if (failedRun && failedRun.state === 'error' && failedRun.failureKind === 'rate_limit') {
+    const retry = failedRun.retryAt ? ` · повтор ${arLeftFmt(failedRun.retryAt - Date.now())}` : ' · повтор вручную';
+    return `<button onclick='arAutoCheckin(${kJ}, true)' title="${esc(failedRun.message || 'рейт-лимит')}. Нажми для ручного повтора"
+      class="text-[11px] text-amber whitespace-nowrap hover:opacity-70 transition">⚠️ лимит${esc(retry)}</button>`;
+  }
   if (st.ready) {
     const tip = (st.at
       ? `+$${bonus} можно забирать: забирали ${agoShort(st.at)} назад, но сутки сменились`
@@ -12076,9 +12355,15 @@ const AR_MANUAL_MAX_MS = 11 * 60 * 1000;
 // же профиль. Перезагрузил страницу посреди прогона — ⏳ пропадёт, а скрипт добежит сам
 // (итог приедет в баланс), поэтому терять тут нечего.
 const arAutoRunning = new Set();
+const arCheckinRuns = new Map(); // id → latest backend run state
 
-async function arAutoCheckin(id) {
+async function arAutoCheckin(id, forceRetry = false) {
   if (arAutoRunning.has(id)) return toast('⚡ по этому аккаунту автоподарок уже идёт', 'warn');
+  const prior = arCheckinRuns.get(id);
+  if (!forceRetry && prior && prior.state === 'error' && prior.failureKind === 'rate_limit' && prior.retryAt) {
+    const left = prior.retryAt - Date.now();
+    if (left > 0) return toast(`⚡ ${prior.name || id}: рейт-лимит, повтор через ${arLeftFmt(left)} (или смени IP)`, 'warn', 10000);
+  }
   arAutoRunning.add(id);
   renderAr();
   try {
@@ -12134,6 +12419,7 @@ async function arCheckinWatch(id, label, maxMs, icon) {
       continue;
     }
     misses = 0;
+    arCheckinRuns.set(id, run);
     // Стоим в очереди (залп по кнопкам): бэкенд пускает прогоны по одному с паузой.
     // Пока ждём — отсчёт таймаута НЕ идёт, иначе на пятом аккаунте наблюдатель сдался бы
     // до старта. Про очередь говорим один раз, чтобы не сыпать тостами каждые 3 с.
@@ -12150,7 +12436,10 @@ async function arCheckinWatch(id, label, maxMs, icon) {
     // Молчать тут нельзя: наблюдатель просто исчез бы, и владелец до сих пор ждал бы
     // окна, которого уже не будет.
     if (run.state === 'cancelled') return toast(`${icon} ${run.message || 'отменено'}`, 'warn', 10000);
-    if (run.state === 'error') return toast(icon + ' ' + (run.message || 'не получилось'), 'error', 14000);
+    if (run.state === 'error') {
+      renderAr();
+      return toast(icon + ' ' + (run.message || 'не получилось'), 'error', 14000);
+    }
     await loadArSessionsLight();
     toast(run.checkedIn === false
       ? icon + ' вошёл, но чек-ин не зачтён — суточное окно ещё не сменилось'
@@ -12219,6 +12508,7 @@ async function arBatchSync(force) {
     const res = await fetch('/__switch/api/ar/checkin-status');
     const data = await res.json();
     const runs = data.runs || [];
+    runs.forEach(r => { if (r.id) arCheckinRuns.set(r.id, r); });
     arBatchLive = {
       queued: runs.filter(r => r.state === 'queued').length,
       running: runs.filter(r => r.state === 'running').length,
@@ -12421,7 +12711,7 @@ async function renderArModels(models) {
       onclick='arSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + ar-active-model.txt) · применяется к НОВЫМ сессиям; открытые — до перезапуска · 📋 = копия">
       ${esc(id)}${badge}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "agentrouter")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -12739,6 +13029,11 @@ const KEEPALIVE_API = {
   ap: '/__switch/api/ap/keepalive',
   hn: '/__switch/api/hn/keepalive',
   ak: '/__switch/api/ak/keepalive',
+  // 🪤 Namespace у rumeng — `/__switch/api/rm/…`, а НЕ `/__rumeng/…`. Это ровно зеркало
+  // ak: у всех шлюзов ручки живут под `/__switch/api/<ep>/`, и бэкенд уже завёл
+  // `ROUTE_EP.rumeng = 'rm'` (transparent-proxy.js). Отдельного корня `/__rumeng` в
+  // дашборде нет ни у одного шлюза — своих два во всём файле, `/__switch` и `/__fmrot`.
+  rm: '/__switch/api/rm/keepalive',
 };
 const LAT_WINDOWS = [[15, '15м'], [60, '1ч'], [360, '6ч'], [1440, '24ч']];
 const LAT_MIN = {};    // pfx → выбранное окно в минутах (помним в localStorage)
@@ -13107,6 +13402,8 @@ const hnLoadKeepalive   = () => loadKeepaliveCard('hn', KEEPALIVE_API.hn);
 const hnApplyKeepalive  = () => applyKeepaliveCard('hn', KEEPALIVE_API.hn);
 const akLoadKeepalive   = () => loadKeepaliveCard('ak', KEEPALIVE_API.ak);
 const akApplyKeepalive  = () => applyKeepaliveCard('ak', KEEPALIVE_API.ak);
+const rmLoadKeepalive   = () => loadKeepaliveCard('rm', KEEPALIVE_API.rm);
+const rmApplyKeepalive  = () => applyKeepaliveCard('rm', KEEPALIVE_API.rm);
 const arResetKeepalive  = () => resetKeepaliveCard('ar', KEEPALIVE_API.ar);
 const goResetKeepalive  = () => resetKeepaliveCard('go', KEEPALIVE_API.go);
 const tbResetKeepalive  = () => resetKeepaliveCard('tb', KEEPALIVE_API.tb);
@@ -13127,6 +13424,10 @@ const apResetKeepalive  = () => resetKeepaliveCard('ap', KEEPALIVE_API.ap);
 const tsResetKeepalive  = () => resetKeepaliveCard('ts', KEEPALIVE_API.ts);
 const hnResetKeepalive  = () => resetKeepaliveCard('hn', KEEPALIVE_API.hn);
 const akResetKeepalive  = () => resetKeepaliveCard('ak', KEEPALIVE_API.ak);
+// Тройка rm — вместе с `Load`/`Apply` выше. Правило «зовут ↔ объявлено» из шапки блока:
+// `rmLoadKeepalive()` зовётся из showTab и трёх кнопок карточки, `rmResetKeepalive()` —
+// из кнопки «Рекомендованные». Пропуск любого = ReferenceError и вкладка не открывается.
+const rmResetKeepalive  = () => resetKeepaliveCard('rm', KEEPALIVE_API.rm);
 
 // Живой поллинг статов: дёргает ТОЛЬКО цифры (инпуты не затирает), только на
 // активной keepalive-вкладке и не в фоновой вкладке браузера.
@@ -13140,6 +13441,7 @@ const KEEPALIVE_POLL_TABS = {
   aipm: ['ap', '/__switch/api/ap/keepalive'],
   hcnsec: ['hn', '/__switch/api/hn/keepalive'],
   aikeysapi: ['ak', '/__switch/api/ak/keepalive'],
+  rumeng: ['rm', '/__switch/api/rm/keepalive'],
   tabi: ['tb', '/__switch/api/tb/keepalive'],
   xpeach: ['xp', '/__switch/api/xp/keepalive'],
 };
@@ -13267,7 +13569,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn(), ak: () => renderAk() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -13331,11 +13633,18 @@ function newapiCreatedCell(s) {
 // намеренно: она в гейдже прямо над таблицей, дублировать — заводить второе место,
 // которое разъедется. Цифры в `text-ink`: подвал идёт классом `faint`, который не
 // проходит AA ни в одной из 22 тем, и так уже сделаны подвалы гейджей.
-function newapiFooter(list, total, prov, q) {
+//
+// 🪤 `keyOk` — параметром, ровно по той же причине, что у `newapiBalanceCell`: глобальный
+// `isRealKey()` это `/^sk-/`, а у ZhiFlow и 如梦AI ключи так НЕ начинаются, и подвал
+// объявлял «без ключа» все живые аккаунты подряд (замер 13.09 на живой вкладке AK:
+// «15 без ключа» при 14 аккаунтах с рабочими ключами). Ячейку ключа и ячейку баланса
+// это уже лечили своими `akIsRealKey`/`rmIsRealKey`, а подвал остался с глобальной.
+// Дефолт прежний — остальные вкладки ходят как ходили, их поведение не меняется.
+function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
   const n = (v) => `<span class="text-ink font-semibold">${v}</span>`;
   const live = list.filter((s) => s.status === 'live').length;
   const dead = list.filter((s) => s.status === 'dead').length;
-  const noKey = list.filter((s) => !isRealKey(s.api_key)).length;
+  const noKey = list.filter((s) => !keyOk(s.api_key)).length;
   const parts = [q
     ? `показано ${n(list.length)} из ${n(total)}`
     : `${n(total)} ${plural(total, 'ключ', 'ключа', 'ключей')}`];
@@ -13651,8 +13960,14 @@ function topUpSrcEl(prov) {
 // prov — 'ar' | 'go' | 'tb' | 'xp': из него собираются имена обработчиков вкладки.
 // sym — символ валюты шлюза. У ar/go/tb это $, у xpeach — 🍑 (курс к единице квоты
 // тот же 1:500000, отличается только вывеска), поэтому цифру не пересчитываем.
-function newapiBalanceCell(s, kJ, prov, sym = '$') {
-  if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
+function newapiBalanceCell(s, kJ, prov, sym = '$', keyOk = isRealKey) {
+  // 🪤 keyOk — параметром, потому что у AIKeysAPI (ZhiFlow) ключи НЕ начинаются с `sk-`,
+  // и общий isRealKey() объявлял живой ключ отсутствующим: ячейка баланса возвращала
+  // «—» и до цифр дело не доходило, хотя баланс к тому моменту был уже прочитан и
+  // записан в пул. Ячейку ключа это лечили своей akIsRealKey(), а ячейку баланса —
+  // забыли, поэтому вкладка показывала «—» у ВСЕХ десяти аккаунтов. Остальные 11
+  // шлюзов ходят по умолчанию, их поведение не меняется.
+  if (!keyOk(s.api_key)) return NO_KEY_BALANCE;   // ключа нет — считать нечего
   if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
 
   const editTip = s.balanceSource === 'anchor'
@@ -15056,7 +15371,7 @@ async function renderGoModels(models) {
       onclick='goSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + gorouter-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "gorouter")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -15596,7 +15911,7 @@ async function renderKkModels(models) {
       onclick='kkSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + kktoken-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "kktoken")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -16132,7 +16447,7 @@ async function renderApModels(models) {
       onclick='apSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + kktoken-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "aipm")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -16722,7 +17037,7 @@ async function renderHnModels(models) {
       onclick='hnSelectModel(${JSON.stringify(id)})'
       title="${esc(hint)}">
       ${bad ? '<span class="opacity-70">🚫</span>' : warn ? '<span class="opacity-70">⚠</span>' : ''}${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "hcnsec")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -17323,7 +17638,7 @@ async function loadAkSessions(probe) {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     state.aikeysapi = data.sessions || [];
     if ($('nav-count-aikeysapi')) $('nav-count-aikeysapi').textContent = state.aikeysapi.length;
-    renderAk(); renderAkGauge(); loadAkModels(); loadAkModelMap(); akAutoregStatus({ quiet: true });
+    renderAk(); renderAkGauge(); loadAkModels(); loadAkModelMap(); akAutoregStatus({ quiet: true }); akProxyPool(); akFindProxyPoll(true); akRenderPoolLines();
     if (probe) toast('✓ AIKeysAPI: статусы обновлены', 'success');
   } catch (e) { $('ak-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`; }
 }
@@ -17361,7 +17676,7 @@ async function renderAkModels() {
   } catch {}
   $('ak-models-list').innerHTML = list.map(({ id }) => `<span onclick='akSelectModel(${JSON.stringify(id)})'
     class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer border ${id === active ? 'bg-teal/15 border-teal/50 text-teal' : 'bg-cyan/10 border-cyan/30 text-cyan'}">
-    ${esc(id)}<button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id" class="text-faint hover:text-ink px-1">📋</button></span>`).join('');
+    ${esc(id)}<button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "aikeysapi")' title="Копировать /model id (AIKeysAPI — БЕЗ [1m], решение владельца 12.09)" class="text-faint hover:text-ink px-1">📋</button></span>`).join('');
   renderAkModelMap();
 }
 
@@ -17415,15 +17730,27 @@ function akAutoregProxyToggle() {
 }
 
 // Публичные прокси живут минуты, поэтому список пересобирается ПЕРЕД прогоном, а не
-// берётся из вчерашнего файла. Сколько искать — считаем от числа аккаунтов: по одному
-// прокси на аккаунт плюс запас на то, что часть умрёт за время прогона.
+// берётся из вчерашнего файла.
+//
+// 🎯 Цель поиска — НАПОЛНИТЬ пул, а не «набрать ровно под эту пачку». Раньше считалось
+// `аккаунтов + 2`: при поле «1» это три адреса, и пул из трёх опустошался за десять минут —
+// то есть к следующему прогону его не было. Теперь у цели есть ПОЛ: даже под один аккаунт
+// ищем заметно больше, потому что половина публичных прокси умирает по дороге.
+const AK_FIND_FLOOR = 20;
+function akFindProxyWant() {
+  const accounts = Math.max(1, parseInt($('ak-autoreg-count').value, 10) || 1);
+  return Math.max(AK_FIND_FLOOR, accounts + 2);
+}
+
+// Поиск идёт минуты, поэтому запуск возвращает управление сразу, а прогресс забираем
+// опросом. Счётчик живой: видно, сколько уже проверено и сколько найдено, — и есть чем
+// прервать (кнопка «■ Стоп»), а не «ищу…» без единой цифры на всё время.
 async function akAutoregFindProxy() {
-  const want = Math.max(2, Math.min(30, (parseInt($('ak-autoreg-count').value, 10) || 1) + 2));
+  const want = akFindProxyWant();
   const btn = $('ak-autoreg-find');
-  const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '🔎 ищу…';
-  $('ak-autoreg-status').textContent = `поиск ${want} живых прокси — скрап + проверка до панели…`;
+  $('ak-autoreg-status').textContent = `запускаю поиск ${want} живых прокси…`;
   try {
     const r = await fetch('/__switch/api/ak/autoreg/find-proxy', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -17431,22 +17758,279 @@ async function akAutoregFindProxy() {
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
-    const found = d.found || [];
-    $('ak-autoreg-status').textContent = found.length
-      ? `✓ живых ${found.length} из ${want} — пул обновлён`
-      : `живых не нашлось (проверено ${d.checked || 0})`;
-    toast(found.length
-      ? `✓ прокси: найдено ${found.length} — пул перезаписан`
-      : 'не нашлось живых прокси — можно снять галочку и работать напрямую',
-      found.length ? 'success' : 'warn', 6000);
-    if (!found.length) $('ak-autoreg-status').textContent += ' · сними галочку «прокси» или попробуй ещё';
+    $('ak-proxy-stop').classList.remove('hidden');
+    akFindProxyPoll(true);
   } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '🔎 Найти прокси';
     $('ak-autoreg-status').textContent = '';
     toast('Поиск прокси: ' + e.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = old;
   }
+}
+
+let akFindProxyPollPromise = null;
+
+function akFindProxyPoll(force = false) {
+  // The guard is synchronous: callers from startup, stop, and loadAkSessions all
+  // reuse the same lifecycle, including when the first request is still pending.
+  if (akFindProxyPollPromise) return akFindProxyPollPromise;
+
+  let timer = null;
+  let finished = false;
+  const clearPollTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const poller = (async () => {
+    const tick = async () => {
+      if (finished) return false;
+      try {
+        const d = await (await fetch('/__switch/api/ak/autoreg/find-proxy')).json();
+        const btn = $('ak-autoreg-find');
+        const stop = $('ak-proxy-stop');
+        const st = $('ak-autoreg-status');
+        akRenderFindLog(d);
+
+        if (d.running) {
+          stop.classList.remove('hidden');
+          btn.disabled = true;
+          btn.textContent = '🔎 ищу…';
+          const prog = d.total ? ` · проверено ${d.checked}/${d.total}` : '';
+          st.textContent = `🔎 найдено ${d.foundCount} из ${d.want}${prog} · ${d.phase || ''}`;
+          return true;
+        }
+
+        // Завершилось
+        finished = true;
+        clearPollTimer();
+        stop.classList.add('hidden');
+        btn.disabled = false;
+        btn.textContent = '🔎 Найти прокси';
+
+        const res = d.result;
+        if (d.stopRequested) {
+          st.textContent = `поиск остановлен вручную — в пуле осталось прежнее (найдено ${d.foundCount})`;
+          toast('Поиск прокси остановлен', 'info');
+        } else if (res) {
+          st.textContent = res.foundCount
+            ? `✓ живых ${res.foundCount} · пул ${res.switched ? 'обновлён' : 'не тронут'}`
+            : 'живых не нашлось';
+          toast(res.foundCount
+            ? `✓ прокси: найдено ${res.foundCount} — пул перезаписан`
+            : 'не нашлось живых прокси — можно снять галочку и работать напрямую',
+            res.foundCount ? 'success' : 'warn', 6000);
+        } else {
+          st.textContent = d.error ? `поиск не удался: ${d.error}` : '';
+          if (d.error) toast('Поиск прокси: ' + d.error, 'error');
+        }
+        await akProxyPool();          // список переписан — счётчик обязан показать новую цифру
+        await akRenderPoolLines();    // и сам список: «сколько» без «каких» не проверить
+        return false;
+      } catch (e) {
+        finished = true;
+        clearPollTimer();
+        return false;
+      }
+    };
+
+    const scheduleNext = () => {
+      if (finished) return;
+      timer = setTimeout(async () => {
+        timer = null;
+        if (await tick()) scheduleNext();
+      }, 1500);
+    };
+
+    if (await tick()) scheduleNext();
+  })();
+
+  // Assign before any caller can observe the first await, then release the guard
+  // only after terminal cleanup and the single final pool refresh complete.
+  akFindProxyPollPromise = poller.finally(() => {
+    clearPollTimer();
+    akFindProxyPollPromise = null;
+  });
+  return akFindProxyPollPromise;
+}
+
+async function akAutoregFindProxyStop() {
+  try {
+    const r = await fetch('/__switch/api/ak/autoreg/find-proxy/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка поиска отправлена' : 'поиск уже завершён', 'info');
+    await akFindProxyPoll(true);
+  } catch (e) { toast('Стоп поиска: ' + e.message, 'error'); }
+}
+
+// Счётчик прокси. Отвечает на вопрос «хватит ли пула на пачку», который до этого
+// приходилось выяснять запуском.
+//
+// 🪤 Берём count из describe(), а НЕ длину файла: пул отбрасывает неразбираемые строки,
+// и «в файле 41» при девяти рабочих обманывает ровно перед прогоном.
+// 🪤 Число живёт минуты (замер 12.09: из трёх найденных в 10:29 один мёртв к 10:45),
+// поэтому подпись — «было при чтении», а не «есть сейчас».
+async function akProxyPool({ toast: withToast = false } = {}) {
+  const badge = $('ak-proxy-badge');
+  if (!badge) return null;
+  try {
+    const r = await fetch('/__switch/api/ak/proxy-pool');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'HTTP ' + r.status);
+
+    const want = Math.max(1, parseInt($('ak-autoreg-count').value, 10) || 1);
+    const n = Number(d.count || 0);
+    const off = !d.enabledForHost;
+    badge.textContent = off ? `прокси: ${n} (выкл)` : `прокси: ${n}`;
+
+    // Три состояния, а не два: пул может быть полон и при этом выключен для хоста —
+    // тогда авторег всё равно пойдёт с домашнего IP, и зелёная цифра врала бы.
+    const tone = off || n === 0 ? 'faint'
+      : n < want ? 'amber'
+      : 'emerald';
+    badge.className = `text-[10px] font-mono px-2 py-1 rounded border cursor-help ${
+      tone === 'emerald' ? 'border-emerald/50 text-emerald bg-emerald/10'
+      : tone === 'amber' ? 'border-amber/50 text-amber bg-amber/10'
+      : 'border-line-soft text-faint'}`;
+
+    const readAt = d.readAt ? new Date(d.readAt).toLocaleTimeString('ru-RU') : '—';
+    // Список адресов — в подсказку: «сколько» без «каких» проверить нечем, а цифра
+    // протухает за минуты. Секретов тут нет, это публичные прокси из открытого файла.
+    const list = Array.isArray(d.proxies) ? d.proxies : [];
+    const shown = list.slice(0, 20);
+    badge.title = [
+      `Живых прокси в пуле: ${n}${d.bad ? ` · отброшено строк: ${d.bad}` : ''}`,
+      `Пул для www.aikeysapi.com: ${d.enabledForHost ? 'включён' : 'ВЫКЛЮЧЕН — авторег пойдёт напрямую'}`,
+      `Источник: ${String(d.source || '—').split(/[\\/]/).pop()}`,
+      `Прочитано в ${readAt} — публичные прокси живут минуты, перед прогоном жми 🔎`,
+      n < want && !off ? `⚠️ на ${want} аккаунт(ов) не хватит: часть сядет на повторный IP` : '',
+      d.fileError ? `Ошибка файла: ${d.fileError}` : '',
+      shown.length ? '' : '',
+      shown.length ? `Доступны (${list.length}):` : '',
+      ...shown.map((p, i) => `  ${i + 1}. ${p}`),
+      list.length > shown.length ? `  …и ещё ${list.length - shown.length}` : '',
+    ].filter(Boolean).join('\n');
+
+    if (withToast) {
+      toast(off
+        ? `прокси: ${n} в пуле, но для панели пул выключен — пойдёт напрямую`
+        : n < want
+          ? `прокси: ${n} на ${want} аккаунт(ов) — не хватит, жми 🔎`
+          : `прокси: ${n} — хватит на ${want}`,
+        off || n < want ? 'warn' : 'info', 5000);
+    }
+    return d;
+  } catch (e) {
+    badge.textContent = 'прокси: ?';
+    badge.className = 'text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help';
+    badge.title = 'счётчик недоступен: ' + e.message;
+    if (withToast) toast('Пул прокси: ' + e.message, 'error');
+    return null;
+  }
+}
+
+// Человекочитаемые подписи этапов. Ключи — ровно те, что шлёт `stage()` в
+// aikeysapi/auto-add.js; парсинг русского текста лога запрещён намеренно (формулировки
+// правятся, и индикатор соврал бы молча).
+const AK_STAGE_LABELS = {
+  mail:     ['📬', 'ящик'],
+  otp_wait: ['⏳', 'жду код'],
+  wait_proxy: ['⏳', 'жду прокси'],
+  register: ['📝', 'регистрация'],
+  login:    ['🔑', 'вход'],
+  token:    ['🎫', 'токен'],
+  key:      ['🗝️', 'ключ'],
+  self:     ['💳', 'квота'],
+  done:     ['✅', 'готово'],
+};
+
+function akRenderStage(d) {
+  const el = $('ak-autoreg-stage');
+  if (!el) return;
+  const s = d.stage;
+  if (!s || !s.stage) { el.textContent = ''; return; }
+  const [icon, label] = AK_STAGE_LABELS[s.stage] || ['•', s.stage];
+  const of = s.count > 1 && s.i ? ` · аккаунт ${s.i}/${s.count}` : '';
+  el.textContent = `${icon} ${label}${of}`;
+  // 🪤 Только токены из @theme. `text-teal`/`text-cyan` в этом файле МЁРТВЫЕ: классов
+  // 177, а токенов --color-teal/--color-cyan в @theme нет — замер в браузере даёт им
+  // ровно цвет текста по умолчанию. Здесь берём azure, он определён.
+  el.className = s.stage === 'done' || !d.running
+    ? 'text-[10px] font-mono text-faint'
+    : 'text-[10px] font-mono text-azure';
+}
+
+// Лог прогона. Показываем, как только есть что показать, и НЕ убираем после завершения:
+// разбирать упавший прогон надо именно тогда, когда он уже упал.
+function akRenderLog(d) {
+  const wrap = $('ak-autoreg-log-wrap');
+  const pre = $('ak-autoreg-log');
+  const err = $('ak-autoreg-log-err');
+  if (!wrap || !pre) return;
+  const out = Array.isArray(d.stdout) ? d.stdout : [];
+  const bad = Array.isArray(d.stderr) ? d.stderr : [];
+  if (!out.length && !bad.length) return;        // нечего рисовать — панель не дёргаем
+  if (state.akLogHidden) return;                 // владелец скрыл вручную
+
+  wrap.classList.remove('hidden');
+  const text = out.join('\n');
+  if (pre.textContent !== text) {
+    // Автоскролл только когда владелец сам не отлистал вверх читать середину прогона.
+    const follow = $('ak-autoreg-log-follow') ? $('ak-autoreg-log-follow').checked : true;
+    pre.textContent = text;
+    if (follow) pre.scrollTop = pre.scrollHeight;
+  }
+  const badText = bad.join('\n');
+  err.classList.toggle('hidden', !badText);
+  if (badText && err.textContent !== badText) {
+    err.textContent = badText;
+    err.scrollTop = err.scrollHeight;
+  }
+}
+
+function akAutoregLogHide() {
+  state.akLogHidden = true;
+  $('ak-autoreg-log-wrap').classList.add('hidden');
+}
+
+function akFindLogHide() {
+  state.akFindLogHidden = true;
+  $('ak-find-log-wrap').classList.add('hidden');
+}
+
+// Панель поиска: строки валидатора + текущий список пула.
+function akRenderFindLog(d) {
+  const wrap = $('ak-find-log-wrap');
+  if (!wrap || state.akFindLogHidden) return;
+  const lines = Array.isArray(d.log) ? d.log : [];
+  if (!lines.length && !d.running) return;      // нечего показывать — не дёргаем панель
+
+  wrap.classList.remove('hidden');
+  const pre = $('ak-find-log');
+  const text = lines.join('\n');
+  if (pre.textContent !== text) {
+    pre.textContent = text;
+    pre.scrollTop = pre.scrollHeight;           // идёт прогон — держим низ
+  }
+  $('ak-find-mode').textContent = d.mode === 'refill'
+    ? '· фон, докорм под прогоном'
+    : d.mode === 'manual' ? '· запущен кнопкой' : '';
+}
+
+// Список того, что РЕАЛЬНО лежит в пуле. Отдельно от счётчика: счётчик отвечает «сколько»,
+// а этот блок — «какие», и по нему видно, что докорм действительно доливает.
+async function akRenderPoolLines() {
+  const el = $('ak-find-pool-list');
+  if (!el) return;
+  try {
+    const d = await (await fetch('/__switch/api/ak/proxy-lines')).json();
+    if (!d.ok) return;
+    $('ak-find-pool').textContent = `· в пуле ${d.count}`;
+    el.textContent = (d.lines || []).join('\n');
+  } catch { /* пул недоступен — молчим, счётчик рядом скажет своё */ }
 }
 
 async function akAutoregStatus({ quiet = false } = {}) {
@@ -17460,12 +18044,24 @@ async function akAutoregStatus({ quiet = false } = {}) {
     $('ak-autoreg-proxy-wrap').classList.toggle('opacity-40', running);
     $('ak-autoreg-proxy').disabled = running;
     const result = d.result || {};
+    akRenderStage(d);
+    akRenderLog(d);
     $('ak-autoreg-status').textContent = running
       ? `идёт ${d.count || 1}${d.useProxy === false ? ' · напрямую' : ''} · pid ${d.pid || '—'}`
       : result.created != null
         ? `готово ${result.created}, в пул ${result.written}, ошибок ${result.failed}`
         : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
-    if (!running && result.created > 0) await loadAkSessions(false);
+    // 🪤 Здесь был БЕСКОНЕЧНЫЙ ЦИКЛ, и он делал вкладку нерабочей. `loadAkSessions()`
+    // в конце каскадом зовёт `akAutoregStatus()`, а тот после завершённого прогона
+    // (`!running && result.created > 0`) возвращался сюда же — и так по кругу, десяток
+    // раз в секунду. Снаружи это выглядело как «вкладка мерцает, клики теряются,
+    // маппинг не выбрать»: перерисовка шла быстрее, чем курсор успевал попасть по
+    // элементу, и DOM под мышью подменялся (замер: 171 мутация за 3 с в покое).
+    //
+    // Лечение — `loadAkSessionsLight()`: тот же fetch и тот же `renderAk()`, но БЕЗ
+    // каскада. Ровно для этого он и написан. Запускался цикл после любого успешного
+    // авторега, поэтому и проявлялся не сразу, а «когда что-то создашь».
+    if (!running && result.created > 0) await loadAkSessionsLight();
     return running;
   } catch (e) {
     if (!quiet) toast('Авторег status: ' + e.message, 'error');
@@ -17485,6 +18081,11 @@ async function akAutoregStart() {
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    // Новый прогон — новый лог: если панель была скрыта от прошлого раза, показываем снова.
+    state.akLogHidden = false;
+    $('ak-autoreg-log').textContent = '';
+    $('ak-autoreg-log-err').textContent = '';
+    $('ak-autoreg-log-err').classList.add('hidden');
     toast(`🤖 AIKeysAPI: запущено ${count}${useProxy ? '' : ' (напрямую)'}`, 'success');
     await akAutoregStatus({ quiet: true });
     if (state.akAutoregTimer) clearInterval(state.akAutoregTimer);
@@ -17506,7 +18107,7 @@ async function akAutoregStop() {
   } catch (e) { toast('Стоп: ' + e.message, 'error'); }
 }
 
-function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak'); }
+function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak', '$', akIsRealKey); }
 function akShowAdd(show = true) {
   $('ak-add-form').classList.toggle('hidden', !show);
   if (show) { $('ak-add-email').value = ''; $('ak-add-pass').value = ''; $('ak-add-key').value = ''; $('ak-add-email').focus(); }
@@ -17640,6 +18241,652 @@ async function akSaveModelMap() {
   try { const r = await fetch('/__switch/api/ak/modelmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mm) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); state.akModelMap = d.modelMap || mm; toast('✓ маппинг сохранён', 'success'); } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
 
+// ═══════════════════ RUMENG (如梦AI) ═══════════════════════════════
+// Провайдер `api.rumeng-ai.com` — десятый шлюз и структурная копия вкладки AIKeysAPI:
+// пул ключей + балансы + keepalive-активация через прокси :20166 + авторег с логом +
+// поиск прокси + share/import. Аккаунт идентифицируется id (не api_key).
+//
+// 🔴 ТРИ МЕСТА, ГДЕ 1:1 С ZhiFlow НЕ РАБОТАЕТ (и это НЕ про UI — бэкенд их прячет):
+//   1. авторизация JWT в localStorage, а не кука → снимок для 🌐 другой формы;
+//   2. база API `/api/v1`, а не `/api`;
+//   3. при создании ключа ОБЯЗАТЕЛЬНА группа (владелец проверил живьём: «создать» без
+//      группы = ошибка, ключ не создаётся).
+// Для фронта все три невидимы: ручки идут через `/__switch/api/rm/*`, которые зеркалят
+// `/__switch/api/ak/*` один в один. Если бэкенд поменяет форму ответа — ломаться будет
+// здесь, и разбираться надо по логу автореги, который ниже рисуется целиком.
+//
+// 🪤 Каталог моделей НЕ хардкодим списком, как `AK_MODELS`. У ZhiFlow каталог свой и
+// закрытый (три `gpt-5.6-*`), а тут в `custom-models-cache.json` лежат claude-имена, и
+// фиксировать их константой = соврать при первом же обновлении панели. Поэтому каталог
+// приезжает с бэкенда, а константа — только фолбэк на случай пустого ответа.
+const RM_MODELS_FALLBACK = ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'];
+
+function rmPoolStats(sessions) {
+  let live = 0, dead = 0, sumBalance = 0, withBalance = 0;
+  for (const s of (sessions || [])) {
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) { sumBalance += s.balance; withBalance++; }
+  }
+  const total = (sessions || []).length;
+  // 🪤 Знаменателя у 如梦AI НЕТ: грант при регистрации не заявлен (`/settings/public`
+  // о нём молчит), поэтому `base: 0` в MONEY_PROVIDERS. Делить не на что — процент
+  // считаем по доле живых, как у TrueSOTA/HCNsec. Выдуманный грант обещал бы деньги,
+  // которых мы не видели, и авторотация приняла бы пустой аккаунт за полный.
+  return { live, dead, total, sumBalance, withBalance,
+    remPct: total ? Math.round((live / total) * 100) : 0 };
+}
+
+function renderRmGauge() {
+  moneyAutoFetch('rumeng').then(() => moneyRotateToHistory('rumeng')).catch(() => {});
+  const st = rmPoolStats(state.rumeng);
+  renderEnergyGauge($('rm-energy'), {
+    title: '如梦AI · запас пула', pct: st.remPct,
+    sub: [`<span><span class="text-ink font-semibold">${st.total}</span> аккаунтов</span>`,
+      `<span class="text-emerald">${st.live} 🟢 LIVE</span>`,
+      st.dead ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.withBalance ? `<span class="text-azure">$${st.sumBalance.toFixed(2)} доступно</span>` : ''].filter(Boolean).join(''),
+    note: 'Грант не заявлен — шкала по доле живых. Активация → keepalive http://localhost:20166 → api.rumeng-ai.com.',
+  });
+}
+
+async function loadRmSessions(probe) {
+  if (probe) $('rm-list').innerHTML = '<div class="p-12 text-center text-azure text-xs">📡 пингую ключи…</div>';
+  try {
+    const res = await fetch('/__switch/api/rm/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.rumeng = data.sessions || [];
+    if ($('nav-count-rumeng')) $('nav-count-rumeng').textContent = state.rumeng.length;
+    renderRm(); renderRmGauge(); loadRmModels(); loadRmModelMap(); rmAutoregStatus({ quiet: true }); rmProxyPool(); rmFindProxyPoll(true); rmRenderPoolLines();
+    if (probe) toast('✓ 如梦AI: статусы обновлены', 'success');
+  } catch (e) { $('rm-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`; }
+}
+
+// 🔴 ОБЛЕГЧЁННАЯ загрузка — НЕ «то же самое, только короче». Она существует ровно затем,
+// чтобы разорвать цикл перерисовки: тот же fetch и тот же `renderRm()`, но БЕЗ каскада
+// (`loadRmModels` / `rmAutoregStatus` / `rmProxyPool` / …). Подробный разбор бага — в
+// `rmAutoregStatus()` ниже. Не «упрощать» обратно в вызов `loadRmSessions()`.
+async function loadRmSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/rm/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    state.rumeng = data.sessions || [];
+    if ($('nav-count-rumeng')) $('nav-count-rumeng').textContent = state.rumeng.length;
+    renderRm(); renderRmGauge(); paintSideBalance();
+  } catch {}
+}
+
+async function loadRmModels(force) {
+  const key = state.rumeng.find(s => s.active && rmIsRealKey(s.api_key))?.api_key
+    || state.rumeng.find(s => rmIsRealKey(s.api_key))?.api_key;
+  const fallback = () => RM_MODELS_FALLBACK.map(id => ({ id }));
+  if (!key) { state.rmModels = fallback(); return renderRmModels(); }
+  try {
+    const res = await fetch('/__switch/api/rm/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+    const data = await res.json();
+    // Каталог берём как есть: фильтровать по белому списку, как у AK, тут нельзя —
+    // список моделей панели мы не знаем и он меняется. Пустой ответ → фолбэк.
+    state.rmModels = data.ok && data.models?.length
+      ? data.models.map(m => (typeof m === 'string' ? { id: m } : m)) : fallback();
+  } catch { state.rmModels = fallback(); }
+  renderRmModels();
+}
+
+async function renderRmModels() {
+  const list = state.rmModels?.length ? state.rmModels : RM_MODELS_FALLBACK.map(id => ({ id }));
+  let active = state.rmActiveModel || '';
+  try {
+    const d = await fetch('/__switch/api/rm/active-model').then(r => r.json());
+    if (d.ok && d.model) state.rmActiveModel = active = d.model;
+  } catch {}
+  $('rm-models-list').innerHTML = list.map(({ id }) => `<span onclick='rmSelectModel(${JSON.stringify(id)})'
+    class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer border ${id === active ? 'bg-violet/15 border-violet/50 text-violet' : 'bg-azure/10 border-azure/30 text-azure'}">
+    ${esc(id)}<button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "rumeng")' title="Копировать /model id[1m]" class="text-faint hover:text-ink px-1">📋</button></span>`).join('');
+  renderRmModelMap();
+}
+
+async function rmSelectModel(id) {
+  try {
+    const res = await fetch('/__switch/api/rm/set-model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id, modelMap: state.rmModelMap || {} }) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'ошибка');
+    state.rmActiveModel = data.model || id; renderRmModels();
+    toast('✓ модель ' + state.rmActiveModel + ' применена', 'success');
+  } catch (e) { toast('model: ' + e.message, 'error'); }
+}
+
+function rmIsRealKey(k) {
+  const s = String(k || '').trim();
+  return s.length >= 20 && !/^no-key-/.test(s);
+}
+
+function renderRm() {
+  const { list, total, q } = newapiRows(state.rumeng, 'rm');
+  if (!list.length) {
+    $('rm-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q ? `по фильтру «${esc(q)}» ничего — 0 из ${total}` : 'пусто — запусти авторег или добавь существующий аккаунт'}</div>`;
+    return;
+  }
+  const rows = list.map(s => {
+    const idJ = JSON.stringify(s.id || '');
+    const keyJ = JSON.stringify(s.api_key || '');
+    const noKey = !rmIsRealKey(s.api_key);
+    const mask = noKey ? '' : (s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key);
+    const status = noKey ? NO_KEY_BADGE : s.status === 'live'
+      ? '<span class="text-emerald text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead' ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const keyCell = noKey ? noKeyCell(`rmSetKey(${idJ})`) : `<button onclick='rmActivate(${keyJ})' title="Сделать активным через :20166" class="font-mono text-[11px] px-2 py-1 rounded border ${s.active ? 'bg-violet/10 border-violet/50 text-violet' : 'bg-surface border-line-soft text-azure hover:border-azure/50'}">${esc(mask)}</button>`;
+    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${s.status === 'dead' ? 'bg-crimson/5' : s.active ? 'bg-violet/5' : ''}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(s.email || s.name || '')}">${s.active ? '<span class="text-violet mr-1">🌟</span>' : ''}${esc(s.email || s.name || '')}</td>
+      <td class="px-3 py-2.5">${keyCell}</td><td class="px-3 py-2.5 text-center">${status}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${rmBalanceCell(s, keyJ)}</td><td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">${noKey ? '' : actBtn(`rmCopyKey(${keyJ})`, 'Скопировать API-ключ', '📋', 'azure')}${noKey ? '' : actBtn(`rmShare(${idJ})`, 'Поделиться аккаунтом (base64 для другой машины владельца)', '🔗', 'violet')}${actBtn(`rmSetKey(${idJ})`, 'Вставить/сменить API-ключ', '🔑', 'azure')}${actBtn(`rmRename(${idJ})`, 'Редактировать email и подпись', '✏️', 'azure')}${noKey ? '' : actBtn(`rmActivate(${keyJ})`, 'Сделать активным', '🤝', 'amber')}${actBtn(`rmOpenLk(${idJ})`, 'Открыть сессию аккаунта (JWT в localStorage, не кука)', '🌐', 'violet')}${actBtn(`rmDelete(${idJ})`, 'Удалить запись', '🗑', 'crimson')}</td></tr>`;
+  }).join('');
+  $('rm-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'rm', q, rmIsRealKey), { sortProv: 'rm', accent: 'violet' });
+}
+
+function rmAutoregProxyToggle() {
+  const on = $('rm-autoreg-proxy').checked;
+  const label = $('rm-autoreg-proxy-label');
+  label.textContent = on ? 'прокси' : 'напрямую';
+  label.className = on ? 'text-[10px] font-medium text-violet' : 'text-[10px] font-medium text-amber';
+  if (!on) toast('🏠 авторег пойдёт с домашнего IP — для пачки аккаунтов это упрётся в 429', 'warn', 5000);
+}
+
+// Публичные прокси живут минуты, поэтому список пересобирается ПЕРЕД прогоном, а не
+// берётся из вчерашнего файла. У цели есть ПОЛ: даже под один аккаунт ищем заметно
+// больше, потому что половина публичных прокси умирает по дороге (разбор — у AK).
+const RM_FIND_FLOOR = 20;
+function rmFindProxyWant() {
+  const accounts = Math.max(1, parseInt($('rm-autoreg-count').value, 10) || 1);
+  return Math.max(RM_FIND_FLOOR, accounts + 2);
+}
+
+// Поиск идёт минуты, поэтому запуск возвращает управление сразу, а прогресс забираем
+// опросом. Владелец про предыдущую вкладку: «не видно лога прокси» — здесь видно и
+// счётчик, и строки валидатора, и чем прервать.
+async function rmAutoregFindProxy() {
+  const want = rmFindProxyWant();
+  const btn = $('rm-autoreg-find');
+  btn.disabled = true;
+  btn.textContent = '🔎 ищу…';
+  $('rm-autoreg-status').textContent = `запускаю поиск ${want} живых прокси…`;
+  try {
+    const r = await fetch('/__switch/api/rm/autoreg/find-proxy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ want }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    $('rm-proxy-stop').classList.remove('hidden');
+    rmFindProxyPoll(true);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '🔎 Найти прокси';
+    $('rm-autoreg-status').textContent = '';
+    toast('Поиск прокси: ' + e.message, 'error');
+  }
+}
+
+let rmFindProxyTimer = null;
+
+async function rmFindProxyPoll(force = false) {
+  if (rmFindProxyTimer && !force) return;      // уже опрашиваем
+  const tick = async () => {
+    try {
+      const d = await (await fetch('/__switch/api/rm/autoreg/find-proxy')).json();
+      const btn = $('rm-autoreg-find');
+      const stop = $('rm-proxy-stop');
+      const st = $('rm-autoreg-status');
+      rmRenderFindLog(d);
+
+      if (d.running) {
+        stop.classList.remove('hidden');
+        btn.disabled = true;
+        btn.textContent = '🔎 ищу…';
+        const prog = d.total ? ` · проверено ${d.checked}/${d.total}` : '';
+        st.textContent = `🔎 найдено ${d.foundCount} из ${d.want}${prog} · ${d.phase || ''}`;
+        return true;
+      }
+
+      // Завершилось
+      clearInterval(rmFindProxyTimer);
+      rmFindProxyTimer = null;
+      stop.classList.add('hidden');
+      btn.disabled = false;
+      btn.textContent = '🔎 Найти прокси';
+
+      const res = d.result;
+      if (d.stopRequested) {
+        st.textContent = `поиск остановлен вручную — в пуле осталось прежнее (найдено ${d.foundCount})`;
+        toast('Поиск прокси остановлен', 'info');
+      } else if (res) {
+        st.textContent = res.foundCount
+          ? `✓ живых ${res.foundCount} · пул ${res.switched ? 'обновлён' : 'не тронут'}`
+          : 'живых не нашлось';
+        toast(res.foundCount
+          ? `✓ прокси: найдено ${res.foundCount} — пул перезаписан`
+          : 'не нашлось живых прокси — можно снять галочку и работать напрямую',
+          res.foundCount ? 'success' : 'warn', 6000);
+      } else {
+        st.textContent = d.error ? `поиск не удался: ${d.error}` : '';
+        if (d.error) toast('Поиск прокси: ' + d.error, 'error');
+      }
+      await rmProxyPool();          // список переписан — счётчик обязан показать новую цифру
+      await rmRenderPoolLines();    // и сам список: «сколько» без «каких» не проверить
+      return false;
+    } catch (e) {
+      clearInterval(rmFindProxyTimer);
+      rmFindProxyTimer = null;
+      return false;
+    }
+  };
+  if (await tick()) rmFindProxyTimer = setInterval(tick, 1500);
+}
+
+async function rmAutoregFindProxyStop() {
+  try {
+    const r = await fetch('/__switch/api/rm/autoreg/find-proxy/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка поиска отправлена' : 'поиск уже завершён', 'info');
+    await rmFindProxyPoll(true);
+  } catch (e) { toast('Стоп поиска: ' + e.message, 'error'); }
+}
+
+// Счётчик прокси. Отвечает на вопрос «хватит ли пула на пачку», который до этого
+// приходилось выяснять запуском.
+//
+// 🪤 Берём count из describe(), а НЕ длину файла: пул отбрасывает неразбираемые строки.
+// 🪤 Число живёт минуты, поэтому подпись — «было при чтении», а не «есть сейчас».
+// 🪤 `api.rumeng-ai.com` в `routing/proxy-pool.json` может ещё отсутствовать — файл общий
+//    с параллельными сессиями. Тогда `enabledForHost` = false, и бейдж обязан сказать
+//    «выкл»: зелёная цифра при выключенном пуле врала бы ровно перед прогоном.
+async function rmProxyPool({ toast: withToast = false } = {}) {
+  const badge = $('rm-proxy-badge');
+  if (!badge) return null;
+  try {
+    const r = await fetch('/__switch/api/rm/proxy-pool');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'HTTP ' + r.status);
+
+    const want = Math.max(1, parseInt($('rm-autoreg-count').value, 10) || 1);
+    const n = Number(d.count || 0);
+    const off = !d.enabledForHost;
+    badge.textContent = off ? `прокси: ${n} (выкл)` : `прокси: ${n}`;
+
+    // Три состояния, а не два: пул может быть полон и при этом выключен для хоста.
+    const tone = off || n === 0 ? 'faint'
+      : n < want ? 'amber'
+      : 'emerald';
+    badge.className = `text-[10px] font-mono px-2 py-1 rounded border cursor-help ${
+      tone === 'emerald' ? 'border-emerald/50 text-emerald bg-emerald/10'
+      : tone === 'amber' ? 'border-amber/50 text-amber bg-amber/10'
+      : 'border-line-soft text-faint'}`;
+
+    const readAt = d.readAt ? new Date(d.readAt).toLocaleTimeString('ru-RU') : '—';
+    const list = Array.isArray(d.proxies) ? d.proxies : [];
+    const shown = list.slice(0, 20);
+    badge.title = [
+      `Живых прокси в пуле: ${n}${d.bad ? ` · отброшено строк: ${d.bad}` : ''}`,
+      `Пул для api.rumeng-ai.com: ${d.enabledForHost ? 'включён' : 'ВЫКЛЮЧЕН — авторег пойдёт напрямую'}`,
+      `Источник: ${String(d.source || '—').split(/[\\/]/).pop()}`,
+      `Прочитано в ${readAt} — публичные прокси живут минуты, перед прогоном жми 🔎`,
+      n < want && !off ? `⚠️ на ${want} аккаунт(ов) не хватит: часть сядет на повторный IP` : '',
+      d.fileError ? `Ошибка файла: ${d.fileError}` : '',
+      shown.length ? `Доступны (${list.length}):` : '',
+      ...shown.map((p, i) => `  ${i + 1}. ${p}`),
+      list.length > shown.length ? `  …и ещё ${list.length - shown.length}` : '',
+    ].filter(Boolean).join('\n');
+
+    if (withToast) {
+      toast(off
+        ? `прокси: ${n} в пуле, но для панели пул выключен — пойдёт напрямую`
+        : n < want
+          ? `прокси: ${n} на ${want} аккаунт(ов) — не хватит, жми 🔎`
+          : `прокси: ${n} — хватит на ${want}`,
+        off || n < want ? 'warn' : 'info', 5000);
+    }
+    return d;
+  } catch (e) {
+    badge.textContent = 'прокси: ?';
+    badge.className = 'text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help';
+    badge.title = 'счётчик недоступен: ' + e.message;
+    if (withToast) toast('Пул прокси: ' + e.message, 'error');
+    return null;
+  }
+}
+
+// Человекочитаемые подписи этапов. Ключи — ровно те, что шлёт `stage()` в
+// `rumeng/auto-add.js` (там массив `STAGES`), плюс `done` из финального маркера.
+// Парсинг русского текста лога запрещён намеренно: формулировки правятся, и индикатор
+// соврал бы молча. Тот же приём, что `AK_STAGE_LABELS` у ZhiFlow.
+//
+// 🪤 Набор совпадает с AK не случайно и не полностью «просто так»: у 如梦AI авторега —
+// ГИБРИД (браузер только за почтой emailnator, дальше чистый HTTP), поэтому `mail` тут
+// самый долгий этап, а `login` — страховка, а не шаг: `POST /auth/register` отдаёт JWT
+// сразу. `key` включает выбор группы — без неё ключ не создаётся.
+const RM_STAGE_LABELS = {
+  mail:     ['📬', 'ящик'],
+  otp_wait: ['⏳', 'жду код'],
+  wait_proxy: ['⏳', 'жду прокси'],
+  register: ['📝', 'регистрация'],
+  login:    ['🔑', 'вход'],
+  token:    ['🎫', 'токен'],
+  key:      ['🗝️', 'ключ'],
+  self:     ['💳', 'квота'],
+  done:     ['✅', 'готово'],
+};
+
+function rmRenderStage(d) {
+  const el = $('rm-autoreg-stage');
+  if (!el) return;
+  const s = d.stage;
+  if (!s || !s.stage) { el.textContent = ''; return; }
+  const [icon, label] = RM_STAGE_LABELS[s.stage] || ['•', s.stage];
+  const of = s.count > 1 && s.i ? ` · аккаунт ${s.i}/${s.count}` : '';
+  // `note` из `stage()` несёт причину ожидания («пул пуст») — без неё «жду прокси»
+  // выглядит как зависание.
+  const note = s.note ? ` · ${s.note}` : '';
+  el.textContent = `${icon} ${label}${of}${note}`;
+  // 🪤 Только токены из @theme. `text-teal`/`text-cyan` в этом файле МЁРТВЫЕ: классы
+  // есть, а `--color-teal`/`--color-cyan` в @theme нет — в браузере им достаётся ровно
+  // цвет текста по умолчанию, а на светлых темах вышел бы тёмный остров. Берём azure.
+  el.className = s.stage === 'done' || !d.running
+    ? 'text-[10px] font-mono text-faint'
+    : 'text-[10px] font-mono text-azure';
+}
+
+// 🔴 ТРЕБОВАНИЕ ВЛАДЕЛЬЦА: лог прогона виден в UI. Дословно про предыдущую вкладку —
+// «я не вижу, что происходит». Показываем, как только есть что показать, и НЕ убираем
+// после завершения: разбирать упавший прогон надо именно тогда, когда он уже упал.
+function rmRenderLog(d) {
+  const wrap = $('rm-autoreg-log-wrap');
+  const pre = $('rm-autoreg-log');
+  const err = $('rm-autoreg-log-err');
+  if (!wrap || !pre) return;
+  const out = Array.isArray(d.stdout) ? d.stdout : [];
+  const bad = Array.isArray(d.stderr) ? d.stderr : [];
+  if (!out.length && !bad.length) return;        // нечего рисовать — панель не дёргаем
+  if (state.rmLogHidden) return;                 // владелец скрыл вручную
+
+  wrap.classList.remove('hidden');
+  const text = out.join('\n');
+  // 🪤 Сравнение с текущим текстом — не микро-оптимизация, а защита от мерцания: без него
+  // каждый тик поллинга переписывал бы `<pre>` целиком и сбрасывал выделение мышью.
+  if (pre.textContent !== text) {
+    // Автоскролл только когда владелец сам не отлистал вверх читать середину прогона.
+    const follow = $('rm-autoreg-log-follow') ? $('rm-autoreg-log-follow').checked : true;
+    pre.textContent = text;
+    if (follow) pre.scrollTop = pre.scrollHeight;
+  }
+  const badText = bad.join('\n');
+  err.classList.toggle('hidden', !badText);
+  if (badText && err.textContent !== badText) {
+    err.textContent = badText;
+    err.scrollTop = err.scrollHeight;
+  }
+}
+
+function rmAutoregLogHide() {
+  state.rmLogHidden = true;
+  $('rm-autoreg-log-wrap').classList.add('hidden');
+}
+
+function rmFindLogHide() {
+  state.rmFindLogHidden = true;
+  $('rm-find-log-wrap').classList.add('hidden');
+}
+
+// 🔴 ТРЕБОВАНИЕ ВЛАДЕЛЬЦА: лог поиска прокси виден. Панель поиска — строки валидатора
+// как есть плюс текущий список пула.
+function rmRenderFindLog(d) {
+  const wrap = $('rm-find-log-wrap');
+  if (!wrap || state.rmFindLogHidden) return;
+  const lines = Array.isArray(d.log) ? d.log : [];
+  if (!lines.length && !d.running) return;      // нечего показывать — не дёргаем панель
+
+  wrap.classList.remove('hidden');
+  const pre = $('rm-find-log');
+  const text = lines.join('\n');
+  if (pre.textContent !== text) {
+    pre.textContent = text;
+    pre.scrollTop = pre.scrollHeight;           // идёт прогон — держим низ
+  }
+  $('rm-find-mode').textContent = d.mode === 'refill'
+    ? '· фон, докорм под прогоном'
+    : d.mode === 'manual' ? '· запущен кнопкой' : '';
+}
+
+// 🔴 ТРЕБОВАНИЕ ВЛАДЕЛЬЦА: «список прокси не вижу, чтобы пополнялся». Это то, что
+// РЕАЛЬНО лежит в пуле. Отдельно от счётчика: счётчик отвечает «сколько», а этот блок —
+// «какие», и по нему видно, что докорм действительно доливает.
+async function rmRenderPoolLines() {
+  const el = $('rm-find-pool-list');
+  if (!el) return;
+  try {
+    const d = await (await fetch('/__switch/api/rm/proxy-lines')).json();
+    if (!d.ok) return;
+    $('rm-find-pool').textContent = `· в пуле ${d.count}`;
+    el.textContent = (d.lines || []).join('\n');
+  } catch { /* пул недоступен — молчим, счётчик рядом скажет своё */ }
+}
+
+async function rmAutoregStatus({ quiet = false } = {}) {
+  try {
+    const r = await fetch('/__switch/api/rm/autoreg/status');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'status HTTP ' + r.status);
+    const running = !!d.running;
+    $('rm-autoreg-start').classList.toggle('hidden', running);
+    $('rm-autoreg-stop').classList.toggle('hidden', !running);
+    $('rm-autoreg-proxy-wrap').classList.toggle('opacity-40', running);
+    $('rm-autoreg-proxy').disabled = running;
+    const result = d.result || {};
+    rmRenderStage(d);
+    rmRenderLog(d);
+    $('rm-autoreg-status').textContent = running
+      ? `идёт ${d.count || 1}${d.useProxy === false ? ' · напрямую' : ''} · pid ${d.pid || '—'}`
+      : result.created != null
+        ? `готово ${result.created}, в пул ${result.written}, ошибок ${result.failed}`
+        : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
+    // 🪤🔴 ЗДЕСЬ ЖИВЁТ БАГ, КОТОРЫЙ УБИЛ ПРЕДЫДУЩУЮ ВКЛАДКУ. Развязка скопирована из
+    // AIKeysAPI дословно и «упрощать» её обратно в один вызов НЕЛЬЗЯ.
+    //
+    // Было так: `loadRmSessions()` в конце каскадом зовёт `rmAutoregStatus()`, а тот
+    // после завершённого прогона (`!running && result.created > 0`) возвращался в
+    // `loadRmSessions()` — и так по кругу, десяток раз в секунду. Снаружи это выглядело
+    // как «вкладка мерцает, клики теряются, маппинг не выбрать»: перерисовка шла быстрее,
+    // чем курсор успевал попасть по элементу, и DOM под мышью подменялся.
+    // Замер на AK живьём: 171 мутация DOM за 3 секунды В ПОКОЕ.
+    //
+    // Лечение — `loadRmSessionsLight()`: тот же fetch и тот же `renderRm()`, но БЕЗ
+    // каскада. Ровно для этого он и написан. Цикл заводился после любого успешного
+    // авторега, поэтому проявлялся не сразу, а «когда что-то создашь» — и проверять
+    // починку надо НАСТОЯЩИМ КЛИКОМ по кнопке, а не вызовом функции из консоли:
+    // из консоли цикла не видно, он завёлся именно кликом.
+    if (!running && result.created > 0) await loadRmSessionsLight();
+    return running;
+  } catch (e) {
+    if (!quiet) toast('Авторег status: ' + e.message, 'error');
+    return false;
+  }
+}
+
+async function rmAutoregStart() {
+  const raw = $('rm-autoreg-count').value;
+  const count = Math.max(1, Math.min(50, parseInt(raw, 10) || 1));
+  $('rm-autoreg-count').value = String(count);
+  const useProxy = $('rm-autoreg-proxy').checked;
+  try {
+    const r = await fetch('/__switch/api/rm/autoreg/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count, useProxy }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    // Новый прогон — новый лог: если панель была скрыта от прошлого раза, показываем снова.
+    state.rmLogHidden = false;
+    $('rm-autoreg-log').textContent = '';
+    $('rm-autoreg-log-err').textContent = '';
+    $('rm-autoreg-log-err').classList.add('hidden');
+    toast(`🤖 如梦AI: запущено ${count}${useProxy ? '' : ' (напрямую)'}`, 'success');
+    await rmAutoregStatus({ quiet: true });
+    if (state.rmAutoregTimer) clearInterval(state.rmAutoregTimer);
+    state.rmAutoregTimer = setInterval(async () => {
+      const running = await rmAutoregStatus({ quiet: true });
+      if (!running) { clearInterval(state.rmAutoregTimer); state.rmAutoregTimer = null; }
+    }, 2500);
+  } catch (e) { toast('Авторег: ' + e.message, 'error'); }
+}
+
+async function rmAutoregStop() {
+  if (!confirm('Остановить авторег 如梦AI? Текущий незавершённый аккаунт может не попасть в пул.')) return;
+  try {
+    const r = await fetch('/__switch/api/rm/autoreg/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка отправлена' : 'авторег уже завершён', 'info');
+    await rmAutoregStatus({ quiet: true });
+  } catch (e) { toast('Стоп: ' + e.message, 'error'); }
+}
+
+function rmBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'rm', '$', rmIsRealKey); }
+function rmShowAdd(show = true) {
+  $('rm-add-form').classList.toggle('hidden', !show);
+  if (show) { $('rm-add-email').value = ''; $('rm-add-pass').value = ''; $('rm-add-key').value = ''; $('rm-add-email').focus(); }
+}
+
+async function rmAdd() {
+  const email = $('rm-add-email').value.trim(), password = $('rm-add-pass').value, api_key = $('rm-add-key').value.trim();
+  if (!email || !password) return toast('email и пароль обязательны', 'warn');
+  try {
+    const res = await fetch('/__switch/api/rm/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password, api_key }) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || 'ошибка');
+    $('rm-add-pass').value = ''; rmShowAdd(false); await loadRmSessions(false); toast('✓ аккаунт добавлен', 'success');
+  } catch (e) { $('rm-add-pass').value = ''; toast('Add: ' + e.message, 'error'); }
+}
+
+async function rmDelete(id) {
+  if (!id || !confirm('Удалить запись 如梦AI?')) return;
+  try { const r = await fetch('/__switch/api/rm/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); await loadRmSessions(false); toast('удалён', 'info'); } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+
+async function rmSetKey(id) {
+  const cur = state.rumeng.find(x => x.id === id); if (!cur) return toast('аккаунт не найден', 'error');
+  const val = prompt(`API-ключ для ${cur.email || cur.name || '?'} (пароль здесь не показывается):`, '');
+  if (val === null || !val.trim()) return;
+  try { const r = await fetch('/__switch/api/rm/key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, api_key: val.trim() }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); await loadRmSessions(false); toast('✓ ключ обновлён', 'success'); } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+
+async function rmRename(id) {
+  const cur = state.rumeng.find(x => x.id === id); if (!cur) return toast('аккаунт не найден', 'error');
+  const e = prompt('Email:', cur.email || ''); if (e === null || !e.trim()) return;
+  const n = prompt('Подпись:', cur.name || e.trim()); if (n === null || !n.trim()) return;
+  try { const r = await fetch('/__switch/api/rm/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, email: e.trim(), name: n.trim() }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); await loadRmSessions(false); toast('✓ аккаунт обновлён', 'success'); } catch (err) { toast('rename: ' + err.message, 'error'); }
+}
+
+async function rmActivate(api_key) {
+  try { const r = await fetch('/__switch/api/rm/activate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key }) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); state.current = 'rumeng'; state.urls.rumeng = 'http://localhost:20166'; paintStatus(); await loadRmSessions(false); toast('🌟 如梦AI активирован', 'success'); } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+
+// 🪤 У 如梦AI сессия — это НЕ куки, а три ключа в `localStorage` (`access_token`,
+// `refresh_token`, `auth_user`). Форму снимка знает бэкенд; фронт лишь просит открыть.
+async function rmOpenLk(id) {
+  try { const r = await fetch('/__switch/api/rm/session/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); toast(d.already ? '🌐 сессия уже открыта' : '🌐 сессия аккаунта открыта', 'success'); } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+// Перенос аккаунта владельца между машинами: email + api_key + meta + снимок сессии
+// (у 如梦AI это JWT из localStorage, а не куки). Пароля в share-коде нет.
+async function rmShare(id) {
+  const cur = state.rumeng.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/rm/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession ? ' (с JWT-сессией)' : ' (без сессии — на второй машине понадобится вход)';
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: '如梦AI',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : '')
+        + ' · пароль в код не входит',
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован — вставь его на второй машине кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function rmShowImport(show = true) {
+  $('rm-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('rm-import-text').value = '';
+    $('rm-import-preview').innerHTML = '';
+    $('rm-import-text').focus();
+  }
+}
+
+async function rmImport() {
+  const share = $('rm-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('rm-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/rm/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('rm-import-text').value = '';
+    $('rm-import-preview').innerHTML = '';
+    rmShowImport(false);
+    toast(`✓ импортирован ${data.email || '—'}${data.hasSession ? ' (с сессией)' : ''}`, 'success', 4000);
+    await loadRmSessions(false);
+  } catch (e) {
+    $('rm-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+async function rmCopyKey(api_key) { const ok = await copyToClipboard(api_key, '', { silent: true }); toast(ok ? '📋 ключ скопирован' : 'не удалось скопировать', ok ? 'success' : 'error'); }
+async function rmCheckBalance(api_key) {
+  try { const r = await fetch('/__switch/api/rm/balance?api_key=' + encodeURIComponent(api_key)); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'ошибка'); const s = state.rumeng.find(x => x.api_key === api_key); if (s) Object.assign(s, { status: d.status, spent: d.spent, balance: d.balance, granted: d.granted, balanceSource: d.balanceSource, balanceCheckedAt: new Date().toISOString() }); renderRm(); renderRmGauge(); toast(d.status === 'live' ? `💰 баланс $${Number(d.balance || 0).toFixed(2)}` : 'ключ недоступен', d.status === 'live' ? 'success' : 'warn'); } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function rmCheckAllBalances() {
+  try { const r = await fetch('/__switch/api/rm/sessions?balance=1'); const d = await r.json(); if (!r.ok || d.error) throw new Error(d.error || 'ошибка'); state.rumeng = d.sessions || []; renderRm(); renderRmGauge(); balanceBatchToast(state.rumeng); } catch (e) { toast('балансы: ' + e.message, 'error'); }
+}
+function rmSetBalance(api_key) { return newapiSetBalanceUI('rm', api_key, () => state.rumeng, () => { renderRm(); renderRmGauge(); }); }
+
+async function loadRmModelMap() {
+  try { const r = await fetch('/__switch/api/rm/modelmap'); const d = await r.json(); if (!r.ok) throw new Error(d.error || 'ошибка'); state.rmModelMap = d.modelMap || {}; } catch {} renderRmModelMap();
+}
+function renderRmModelMap() {
+  const host = $('rm-modelmap-sel'); if (!host) return;
+  const mm = state.rmModelMap || {};
+  // 🪤 Список опций — из ЖИВОГО каталога (`state.rmModels`), а не из константы: у 如梦AI
+  // каталог отдаёт панель и он меняется. Фолбэк — на случай, если каталог ещё не приехал.
+  const opts = (state.rmModels?.length ? state.rmModels.map(m => m.id) : RM_MODELS_FALLBACK);
+  const def = opts[0] || '';
+  const sel = tier => `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${tier}</span><select id="rm-mm-${tier}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5">${opts.map(id => `<option value="${esc(id)}"${(mm[tier] || def) === id ? ' selected' : ''}>${esc(id)}</option>`).join('')}</select></label>`;
+  host.innerHTML = `${sel('opus')}${sel('sonnet')}${sel('haiku')}<button onclick="rmSaveModelMap()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">💾 Сохранить</button>`;
+}
+async function rmSaveModelMap() {
+  const mm = { opus: $('rm-mm-opus').value, sonnet: $('rm-mm-sonnet').value, haiku: $('rm-mm-haiku').value };
+  try { const r = await fetch('/__switch/api/rm/modelmap', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mm) }); const d = await r.json(); if (!r.ok || !d.ok) throw new Error(d.error || 'ошибка'); state.rmModelMap = d.modelMap || mm; toast('✓ маппинг сохранён', 'success'); } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
 // ═══════════════════ JUSTWOKER ══════════════════════════════════════
 // Провайдер api.justwoker.icu (тот же форк New-API, что gorouter/tabi). Пятый шлюз и
 // структурная копия вкладки GoRouter: пул ключей + балансы + keepalive-активация через
@@ -17759,7 +19006,7 @@ async function renderJwModels(models) {
       onclick='jwSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + justwoker-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "justwoker")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -18303,7 +19550,7 @@ async function renderSkModels(models) {
       onclick='skSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + seekai-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "seekai")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -18864,7 +20111,7 @@ async function renderTsModels(models) {
       onclick='tsSelectModel(${JSON.stringify(id)})'
       title="${esc(hint)}">
       ${bad ? '<span class="opacity-70">🚫</span>' : ''}${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "truesota")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -19451,7 +20698,7 @@ async function renderTbModels(models) {
       onclick='tbSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + tabi-active-model.txt) · 📋 = копия">
       ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "tabi")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -19995,7 +21242,7 @@ async function renderXpModels(models) {
       onclick='xpSelectModel(${JSON.stringify(id)})'
       title="клик = применить модель (settings.json + xpeach-active-model.txt) · 📋 = копия">
       ${esc(id)}${badge}${deadBadge}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)})' title="Копировать /model id"
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "xpeach")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');
@@ -23171,7 +24418,7 @@ function paintSideAuto() {
     const flag = st || moneyAutoAnyKnown();
     on = !!(flag && flag.enabled);
     // А вот ЦИФРЫ пула — только свои: чужие соврали бы про этот шлюз.
-    lbl.textContent = 'авторотация';
+    lbl.textContent = `авторотация · rotate ${st && Number.isFinite(st.switches) ? st.switches : 0}`;
     const ready = st && typeof st.poolReady === 'number' ? st.poolReady : null;
     title = `${mp.label}: авторотация аккаунтов внутри этого шлюза.\n`
       + `Шлюз отказал «нет баланса» или ключ мёртв → прокси уходит на следующий аккаунт с деньгами и повторяет запрос, `
@@ -23350,6 +24597,11 @@ const MONEY_PROVIDERS = {
   // выдуманное число обещало бы деньги, которых мы не видели (та же логика, что у TrueSOTA).
   hcnsec:      { id: 'hcnsec',      p: 'hn', stateKey: 'hcnsec',      base: 0,   sym: '$',  label: 'HCNsec',      icon: '🛡️', color: 'emerald', reload: () => loadHnSessionsLight() },
   aikeysapi:   { id: 'aikeysapi',   p: 'ak', stateKey: 'aikeysapi',   base: 5,   sym: '$',  label: 'AIKeysAPI',   icon: '🔑', color: 'teal',    reload: () => loadAkSessionsLight() },
+  // base: 0 — про выдачу 如梦AI ничего не известно: грант при регистрации не заявлен
+  // (`/settings/public` о нём молчит), а живой аккаунт до конца не прогнан. Ноль значит
+  // «делить не на что»: процент запаса считается по live/total, пока балансы не приедут.
+  // Любое выдуманное число обещало бы деньги, которых мы не видели (логика TrueSOTA/HCNsec).
+  rumeng:      { id: 'rumeng',      p: 'rm', stateKey: 'rumeng',      base: 0,   sym: '$',  label: '如梦AI',       icon: '🌙', color: 'violet',  reload: () => loadRmSessionsLight() },
   tabi:        { id: 'tabi',        p: 'tb', stateKey: 'tabi',        base: 100, sym: '$',  label: 'Tabi Token',  icon: '🎫', color: 'violet', reload: () => loadTbSessionsLight() },
   xpeach:      { id: 'xpeach',      p: 'xp', stateKey: 'xpeach',      base: 10,  sym: '🍑', label: 'XPeach',      icon: '🍑', color: 'rose',   reload: () => loadXpSessionsLight() },
 };
@@ -26883,7 +28135,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'aikeysapi', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -27206,6 +28458,7 @@ function autoRefreshTick() {
       case 'kktoken':       loadKkSessionsLight(); break;
       case 'aipm': loadApSessionsLight(); break;
       case 'hcnsec':        loadHnSessionsLight(); break;
+      case 'rumeng':        loadRmSessionsLight(); break;
       case 'tabi':          loadTbSessionsLight(); break;
       case 'xpeach':        loadXpSessionsLight(); break;
       case 'svrtr':         loadSvrtrSessions(false); break;
@@ -27278,6 +28531,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'aipm', fn: () => loadApSessionsLight() },
   { tab: 'hcnsec',      fn: () => loadHnSessionsLight() },
   { tab: 'aikeysapi',   fn: () => loadAkSessionsLight() },
+  { tab: 'rumeng',      fn: () => loadRmSessionsLight() },
   { tab: 'tabi',        fn: () => loadTbSessionsLight() },
   { tab: 'xpeach',      fn: () => loadXpSessionsLight() },
   { tab: 'aerolink',    fn: () => loadAlSessions(false),        mark: 'aerolink' },
@@ -32286,6 +33540,9 @@ const ANCHOR = Date.UTC(1970, 0, 1, 16, 0, 0);
    сброшен всем — дефолтом стали «Сутки»; дальше выбор снова сохраняется. */
 const KEY = 'ar-quota-dial2';
 const KEY_OLD = 'ar-quota-dial';
+/* Кеш результата ручной проверки квоты. Отдельный ключ от выбора вида: у них разное
+   время жизни — вид живёт вечно, состояние умирает со следующей партией. */
+const KEY_ST = 'ar-quota-state';
 const R = 84, CIRC = 2 * Math.PI * R;
 
 const pad = n => String(n).padStart(2, '0');
@@ -32494,6 +33751,7 @@ function paint() {
   hosts.forEach(h => v.tick(h.el, c, h.mini));
   const txt = document.querySelector('#arq-mini .arq-txt');
   if (txt) txt.textContent = `${c.h}:${c.m} до долива`;
+  stExpire(c.t);
 }
 /* 1 Гц, а не requestAnimationFrame: дашборд открыт постоянно, платить кадрами не за что.
    На скрытой вкладке таймер снимается совсем. */
@@ -32502,8 +33760,85 @@ function stop()  { clearInterval(timer); timer = null; }
 document.addEventListener('visibilitychange', () => document.hidden ? stop() : start());
 
 /* Цвет состояния меняет и большие, и мини-часы. Ручная проба ниже вызывает его
-   только при доказанном 2xx или каноническом 402; прочие ошибки цвет не меняют. */
-window.arqState = s => document.querySelectorAll('.arq').forEach(n => n.dataset.arqState = s);
+   только при доказанном 2xx или каноническом 402; прочие ошибки цвет не меняют.
+   Пустая строка СНИМАЕТ атрибут, а не ставит пустой: селекторы в CSS сравнивают
+   значение, и `data-arq-state=""` остался бы висеть мусором в разметке. */
+window.arqState = s => document.querySelectorAll('.arq').forEach(n => {
+  if (s) n.dataset.arqState = s; else delete n.dataset.arqState; });
+
+/* ── Кеш результата проверки ──────────────────────────────────────────────
+   Без него любой F5 сбрасывал цвет и строку, и чтобы снова узнать состояние —
+   жечь ещё одну живую пробу Opus. Два слоя: localStorage работает сразу, файл
+   на сервере (`~/.claude/ar-quota-state.json`, ручка ниже) — общий для всех окон
+   и виден статуслайну, но появляется только после рестарта :8200.
+   Инвалидация по ПАРТИИ, а не по TTL: пока идёт та же партия, ответ актуален
+   сколько угодно; после налива запись мертва — красить часы вчерашним
+   «квота закончилась» хуже, чем не красить вовсе.
+   Числа сетки — те же CYCLE/ANCHOR, что у циферблата выше, поэтому берутся оттуда,
+   а не дублируются. Серверная копия логики — routing/lib/ar-quota-probe.js. */
+const dropAt = t => t - (((t - ANCHOR) % CYCLE + CYCLE) % CYCLE);
+const stFresh = (e, now) => {
+  if (!e || (e.state !== 'available' && e.state !== 'exhausted')) return false;
+  const ch = Date.parse(e.checkedAt);
+  if (!Number.isFinite(ch) || ch > now + 60000) return false;   // запись из будущего — часы уехали
+  return Date.parse(e.dropAt) === dropAt(now);
+};
+const stFresher = (a, b) => {
+  const ta = a && Date.parse(a.checkedAt), tb = b && Date.parse(b.checkedAt);
+  if (!Number.isFinite(ta)) return Number.isFinite(tb) ? b : null;
+  if (!Number.isFinite(tb)) return a;
+  return tb > ta ? b : a;
+};
+function stLoad() {
+  try { return JSON.parse(localStorage.getItem(KEY_ST)); } catch (e) { return null; } }
+function stSave(e) {
+  try { localStorage.setItem(KEY_ST, JSON.stringify(e)); } catch (e2) { /* живёт до перезагрузки */ } }
+
+/* Показ восстановленной записи. Строка честно говорит, что это прошлая проверка и
+   когда она была: выдавать кеш за свежий ответ шлюза нельзя — партия «用完即止»
+   может кончиться в любой момент, и «Квота есть» часовой давности вводит в заблуждение. */
+function stApply(e) {
+  if (!stFresh(e, Date.now())) return false;
+  arqState(e.state === 'available' ? 'fresh' : 'burned');
+  const out = document.getElementById('arq-check-result');
+  if (out) {
+    const d = new Date(e.checkedAt);
+    const at = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    out.className = e.state === 'available' ? 'text-xs text-emerald font-mono'
+                                            : 'text-xs text-amber font-mono';
+    out.textContent = (e.state === 'available' ? 'Квота есть' : 'Квота закончилась') + ` · проверено в ${at}`;
+  }
+  return true;
+}
+
+/* Гашение по наливу, пока вкладка открыта. Дашборд висит сутками, и без этого
+   пересечение партии оставляло бы на часах цвет от прошлой — то есть ровно то
+   вранье, от которого защищает инвалидация при загрузке. Зовётся из тика 1 Гц;
+   срабатывает один раз на партию, дальше запись уже удалена. */
+function stExpire(now) {
+  const e = stLoad();
+  if (!e || stFresh(e, now)) return;
+  try { localStorage.removeItem(KEY_ST); } catch (e2) { /* хранилище закрыто */ }
+  arqState('');
+  const out = document.getElementById('arq-check-result');
+  if (out) { out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; }
+}
+
+/* Слои сверяются по checkedAt, а НЕ по приоритету слоя: иначе браузер с устаревшей
+   записью затирал бы свежую серверную, и наоборот сразу после рестарта :8200.
+   404 — это ещё не перезапущенный сервер, штатная ситуация, а не ошибка. */
+async function stSync() {
+  const local = stLoad();
+  stApply(local);
+  let remote = null;
+  try {
+    const r = await fetch('/__switch/api/ar/quota-state');
+    if (r.ok) { const j = await r.json(); if (j && j.state) remote = j; }
+  } catch (e) { /* ручки ещё нет — живём на localStorage */ }
+  const best = stFresher(local, remote);
+  if (best && best !== local) stSave(best);
+  if (best && best !== local) stApply(best);
+}
 
 window.arqCheckQuota = async function arqCheckQuota() {
   const btn = document.getElementById('arq-check');
@@ -32519,10 +33854,14 @@ window.arqCheckQuota = async function arqCheckQuota() {
       arqState('fresh');
       out.className = 'text-xs text-emerald font-mono';
       out.textContent = 'Квота есть';
+      stSave({ state: 'available', checkedAt: data.checkedAt || new Date().toISOString(),
+               dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
     } else if (data.state === 'exhausted') {
       arqState('burned');
       out.className = 'text-xs text-amber font-mono';
       out.textContent = 'Квота закончилась';
+      stSave({ state: 'exhausted', checkedAt: data.checkedAt || new Date().toISOString(),
+               dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
     } else {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
@@ -32551,6 +33890,8 @@ function init() {
   if (next) next.addEventListener('click', () => step(1));
   build();
   start();
+  /* После build(): stApply красит уже существующие узлы, а build() их пересобирает. */
+  stSync();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();

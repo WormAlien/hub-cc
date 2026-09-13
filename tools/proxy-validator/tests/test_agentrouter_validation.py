@@ -518,3 +518,29 @@ class ResponseReadingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PoolSchemeTranslationTest(unittest.TestCase):
+    """The live-proxy search must emit schemes the pool can actually dial.
+
+    The strict checker labels a CONNECT-capable HTTP-family proxy as HTTPS —
+    meaning "this proxy tunnels TLS". The pool reads https:// as "speak TLS to
+    the proxy itself", which public proxies do not do. Passing the label
+    through unchanged made 41 freshly verified proxies fail in the pool, so the
+    translation is locked down here.
+    """
+
+    def test_https_label_becomes_http_in_pool_output(self) -> None:
+        from proxy_scraper.find_for_host import write_pool
+
+        records = [
+            ProxyRecord(ip="1.2.3.4", port=8080, protocol="HTTPS", source="t"),
+            ProxyRecord(ip="5.6.7.8", port=1080, protocol="SOCKS5", source="t"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = write_pool(records, Path(tmp) / "pool.txt")
+            lines = out.read_text(encoding="utf-8").splitlines()
+
+        self.assertIn("http://1.2.3.4:8080", lines)
+        self.assertNotIn("https://1.2.3.4:8080", lines)
+        self.assertIn("socks5://5.6.7.8:1080", lines)

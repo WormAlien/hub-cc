@@ -1,0 +1,76 @@
+# Approved scraper/autoreg reliability review
+
+## Point 1 — scope and baseline
+
+Read-only review of the canonical wiki, live project docs, current autoreg/proxy code, and static guards. No source code, config, or wiki pages were edited. Findings are written incrementally here as required.
+
+Canonical sources reviewed:
+- wiki/abuse-hub/aikeysapi — вкладка ZhiFlow (дизайн).md
+- wiki/entities/AIKeysAPI.md
+- wiki/abuse-hub/rumeng — вкладка 如梦AI (разведка и план).md
+- wiki/entities/Одноразовые почты — арсенал для авторегов.md
+- wiki/entities/NianhuaAPI.md
+- wiki/meta/Known Issues.md
+- wiki/abuse-hub/hub-tasks.md
+- live Autoreger_Clean: aikeysapi/auto-add.js, rumeng/auto-add.js, routing/lib/proxy-pool.js, find_for_host.py, static guards, and _research notes.
+
+Initial conclusion: most of the approved reliability design is already implemented on disk, but several wiki/task statements are stale or operationally unresolved. The main validation risk is account creation itself, not lack of static protections.
+
+## Point 2 — protections already implemented
+
+### AIKeysAPI/ZhiFlow
+- Per-account sticky proxy key is `aikeysapi:<email>`, not a slot. Email is created before proxy acquisition. This fixes the slot-reuse correlation bug.
+- Fail-closed is explicit: an enabled/assigned dead proxy does not fall back to the home IP. `--no-proxy` is the explicit exception.
+- Successful accounts are merged and atomically persisted immediately before the next loop iteration; balance failure is a patch/error, not account deletion.
+- Stage protocol is machine-readable (`AK_STAGE`) and separate from human logs; terminal `done` and malformed-marker tolerance are covered by the design/tests.
+- Scraper output is target-specific, checks real HTTPS to the panel, translates checker `HTTPS` to pool `http://` at the boundary, and writes to a temporary file before merge. `live-for-host.txt` is not blindly replaced during refill.
+- Refill is bounded by remaining accounts + reserve 10, runs every 45s, waits up to 5m when the pool is empty, and uses `-u`/streamed progress. Stop preserves already-found entries through merge.
+- Static guard is present (`tools/check-aikeysapi-safe.js`); wiki records 122 checks in the live tree, while the entity page still says 122 and the design page records 111/older counts. This is a count-history discrepancy, not evidence of missing protection.
+
+### Rumeng
+- Separate panel `/api/v1` and gateway `/v1` bases are enforced.
+- Panel calls use each account's recorded browser UA; gateway probes retain Claude-compatible headers. UA binding, `auth_token` snapshot naming, `/auth/me` liveness, one-use refresh fallback to password login, and wallet balance are guarded by `tools/check-rumeng-safe.js`.
+- Shared proxy pool and shared live file are deliberate; refill checks both AK and RM searches to avoid concurrent scraper jobs overwriting a shared temporary/output file.
+- Account/session records are merged atomically and snapshots use one canonical localStorage format.
+- - Current config already lists `api.rumeng-ai.com` in the shared host allowlist; this contradicts the older rumeng comments/task saying it is absent and registrations are currently direct.
+
+7. **Legacy proxy guidance conflicts with approved boundary.** `HANDOFF-AGENTROUTER-PROXY.md` proposes routing the entire Chromium/GitHub flow through one sticky proxy. Current `Known Issues.md` records the approved change: browser direct, proxy only for HTTP balance check, retry once on network/WAF/429 and never retry 401/403. That older handoff must not drive new changes.
+
+## Point 4 — operational constraints for validation without mass registration
+
+- Do not run a 5/10/20/50-account validation batch. ZhiFlow hit a panel-side `550 daily email sending quota` after 17 verification requests / 12 created accounts; rotating our proxy cannot fix a quota enforced by the panel's mail provider. The reset time and exact daily capacity remain an open task.
+- For ZhiFlow, use static guards plus no-registration tests first: parse/merge/atomic-write tests, fake HTTP responses for OTP/key masking/429/quota, proxy-pool assignment and fail-closed tests, and a mocked validator stream including early stop, malformed lines, and cancellation.
+- For live registration, cap at one sacrificial account per provider per validation window, only after checking public settings and current mail quota. Preserve the account record immediately; do not “repeat until green.”
+- For Rumeng, the emailnator Gmail address is reusable and contains old third-party messages. A live smoke must filter by provider sender (`如梦AI` / `2624952982@qq.com`) as well as freshness; otherwise a false invalid-code result consumes a registration attempt and misdiagnoses the provider.
+- Rumeng's panel session is UA-bound. Any balance/liveness validation must use the account's stored `userAgent`; a generic UA or Claude CLI UA creates a false 401. The gateway `/v1` probe and panel `/api/v1` probe must remain separate.
+- Current shared proxy file is used by both AK and RM. Never run AK and RM search/refill concurrently: the backend explicitly guards both jobs because their temporary/output files are shared. Use one host, one search, then inspect the merged pool and assignment file.
+- Public proxy addresses expire in minutes. A green count is a timestamped observation, not capacity. Validate `describe().count`, `enabledForHost`, assigned proxy identity, and the actual target path immediately before the one live smoke.
+- Validation should use `--dry-run` where available, but note that dry-run still exercises network/mail/panel flow up to persistence. It is not a zero-side-effect API probe. Prefer static/mock harnesses for all failure branches.
+- Never use the public scraper against thousands of candidates from the home IP for a validation claim. The approved scraper caps or stops early; if a broader run is needed, use the documented candidate cap/workers/timeouts and record the source/output separately.
+- Do not test “missing pool” by allowing an accidental direct request. With pool enabled and host assigned, the expected result is an explicit fail-closed error. `--no-proxy` is the only intentional direct mode and must be visible in the test label/log.
+
+## Point 5 — required log/wiki/task updates
+
+Required updates for the owner/implementing agent:
+
+1. Update `wiki/abuse-hub/rumeng — вкладка 如梦AI (разведка и план).md`: move current status to the top, mark the stale “next step / unfinished browser route / code-field unknown” text as historical, and record that the host is now in `routing/proxy-pool.json` but proxy-bound live acceptance is still pending.
+2. Update `wiki/entities/AIKeysAPI.md`: replace “file rebuilt” with the two-path distinction (manual search output vs refill merge), record floor 20 / reserve 10 / 45s refill / 5m wait, and keep old counts as dated history only.
+3. Update `wiki/meta/Known Issues.md`: either close the old “rumeng host absent/direct registration” issue or rewrite it as “proxy enabled on disk, live proxy acceptance pending.” Keep the separate restart issue until the owner actually restarts `:8200` and verifies live routes.
+4. Update `wiki/abuse-hub/hub-tasks.md`: do not mark proxy acceptance complete from static checks. Add/retain one short task for a one-account controlled proxy smoke and one for the dashboard restart/live route acceptance. Avoid a mass-registration task while the ZhiFlow mail quota is unknown.
+5. Add a `done`/review entry to `wiki/log.md` only after the implementing session records the exact commands and live/static results. Include the distinction between historical direct-IP Rumeng runs and the current proxy-enabled config, plus the quota constraint.
+6. Update the live project docs (`Autoreger_Clean` `ARCHITECTURE.md` or the relevant gateway handoff) to point away from the stale full-Chromium proxy handoff and toward the approved browser-direct / balance-check-only boundary. Do not treat `_research` notes as the only canonical implementation guidance.
+7. Preserve this review file as the incremental checkpoint artifact; it is not a substitute for the requested wiki updates. No wiki edits were made during this read-only review.
+
+## Final assessment
+
+The approved reliability design is substantially present: atomic per-account persistence, sticky/fail-closed proxy assignment, target-specific HTTPS validation, safe merge/refill, machine-readable stages, UA-bound Rumeng panel handling, and static sabotage-oriented guards. The highest-confidence contradictions are stale Rumeng direct-IP text, stale AIKeysAPI scraper semantics, historical guard-count drift, and the old whole-browser AgentRouter proxy plan.
+
+A defensible no-mass-registration acceptance is: current static guards; mock/fault-injection tests for scraper/pool/atomic persistence; one live Rumeng proxy-bound smoke after confirming the running process and target path; one live AIKeysAPI smoke only if the panel email quota is available; and a separately owner-approved dashboard restart. Do not claim “reliability accepted” from a green static battery or from the old direct-IP four-account Rumeng run.
+
+1. **Rumeng proxy status is internally inconsistent.** `routing/proxy-pool.json` currently has `api.rumeng-ai.com`, and `wiki/meta/Known Issues.md` says it was added. But `wiki/abuse-hub/rumeng — вкладка 如梦AI (разведка и план).md` still says the host is not listed and the four accepted accounts used home IP; `wiki/abuse-hub/hub-tasks.md` repeats that four accounts were created from home IP. Treat the four-account result as historical pre-enable evidence, and require a new controlled proxy-bound smoke before claiming proxy reliability.
+2. **Search goal/history differs.** The AIKeysAPI design says the target was raised to floor 20 and refill/merge is the current model. `wiki/entities/AIKeysAPI.md` still describes the old “stop at needed count” behavior and says the file is rebuilt by the button. The latter is misleading: manual search may write a result, but in-run refill must merge to preserve sticky assignments. Update canonical wording during the next wiki pass.
+3. **Wiki counts drift.** `AIKeysAPI.md` says 122 checks; the design page has older 111/92/81 counts; `rumeng` history has 117/118/115/110/81. These are historical checkpoints, but the current acceptance criterion should name the exact command and current count rather than a bare number.
+4. **Rumeng plan section is stale after implementation.** It still calls the code “in build,” lists finding the code field as the next step, and says the browser route was unfinished, while later sections correctly record `verify_code`, full live cycles, and a finished backend. The live `_research/rumeng-backend/progress.md` also has completed checkboxes followed by an old “backend ready” snapshot. Do not use the early plan paragraphs as current status.
+5. **Approved design vs live process.** The wiki repeatedly says new routes/server code need a `:8200` restart, and `hub-tasks.md` has that restart open. Static checks do not prove the running process uses the current implementation. A live acceptance must first identify the `transparent-proxy.js` process and restart only with owner approval.
+6. **The scraper's own documentation still says “write pool” output directly.** `find_for_host.py` writes its output file atomically only at completion, but dashboard refill has a separate temporary-file + merge contract. Validation must distinguish “search result file” from “live pool update”; stopping search must not be interpreted as replacing the live file.
+7. **Legacy proxy guidance conflicts with approved boundary.** `HANDOFF-AGENTROUTER-PROXY.md` proposes routing the entire Chromium/GitHub flow through one sticky proxy. Current `Known Issues.md` records the approved change: browser direct, proxy only for HTTP balance check, retry once on network/WAF/429 and never retry 401/403. That older handoff must not drive new changes.

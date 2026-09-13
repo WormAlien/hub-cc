@@ -599,50 +599,17 @@ async function passGithubGate(gh) {
 // вкладку на консоль и обрывал летящий запрос колбэка: сессия так и не создавалась,
 // точный баланс потом отвечал «сессия профиля недействительна (HTTP 401)».
 //
-// Запасной признак — прямой вопрос /api/user/self. Одной куки ему НЕ достаточно:
-// New-API требует ещё заголовок `New-Api-User` с id пользователя (тем же способом
-// ходит наш точный чек, см. newapi-account.js). id лежит в localStorage['user'],
-// который колбэк-компонент пишет после успешного входа — а localStorage у попапа и
-// исходной вкладки общий, домен один.
-// `timeoutMs > 0` ограничивает ОДИН запрос из страницы. Нужен там, где ответ может не
-// прийти вовсе (мёртвая сессия, заглушка WAF): без сигнала fetch висит до потолка
-// page.evaluate, и прогон растёт на ровном месте. По умолчанию 0 — прежнее поведение,
-// чтобы у остальных вызовов ничего не поменялось.
-async function siteSelfOk(page, userId = null, timeoutMs = 0) {
-  if (page.isClosed()) return null;
-  return await page.evaluate(async ({ uidArg, ms }) => {
-    try {
-      let uid = uidArg;
-      if (!uid) { try { uid = (JSON.parse(localStorage.getItem('user') || 'null') || {}).id; } catch {} }
-      if (!uid) return null;
-      const ac = ms > 0 && typeof AbortController === 'function' ? new AbortController() : null;
-      if (ac) setTimeout(() => ac.abort(), ms);
-      const r = await fetch('/api/user/self', {
-        credentials: 'include',
-        headers: { 'New-Api-User': String(uid) },
-        signal: ac ? ac.signal : undefined,
-      });
-      const j = await r.json();
-      if (!j || !j.success || !j.data) return null;
-      // Отдаём СЫРЫЕ поля шлюза: их же читает дашборд с диска (selfToBalance в
-      // newapi-account.js), и делить на quota_per_unit тут нельзя — множитель живёт
-      // в /api/status и у разных инстансов New-API отличается.
-      return { quota: j.data.quota, used: j.data.used_quota, id: j.data.id, username: j.data.username };
-    } catch { return null; }
-  }, { uidArg: userId, ms: Number(timeoutMs) || 0 }).catch(() => null);
-}
-
+// Для ручного режима после doCheckinLogout достаточно дождаться новой сессионной куки:
+// старые куки домена уже удалены, а точный /api/user/self оставляем исключительно
+// родительскому HTTP-пути после закрытия браузера. Браузер не читает и не сохраняет баланс.
 async function waitForSiteSession(context, page, timeoutMs, oauth, pollMs = 3000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (oauth && oauth.seen && oauth.success === false) return { ok: false, rejected: true, message: oauth.message };
-    // Ответ колбэка — самое надёжное: его нам отдал сам шлюз.
+    // `/api/oauth/state` itself creates a `session` cookie before GitHub returns. Only the
+    // gateway callback proves that login completed; accepting the cookie closes Chromium
+    // mid-OAuth, especially in manual mode.
     if (oauth && oauth.seen && oauth.success === true) return { ok: true };
-    // Дешёвый предфильтр: пока на домене нет ни одной сессионной куки, спрашивать
-    // /api/user/self незачем. Шлюз за Aliyun WAF — лишний трафик тут наказуем
-    // (залп чек-инов уже гасил точный баланс всему пулу на 10 минут).
-    const cookies = await context.cookies('https://agentrouter.org').catch(() => []);
-    if (hasSessionCookie(cookies) && await siteSelfOk(page)) return { ok: true };
     await page.waitForTimeout(pollMs).catch(() => {});
   }
   return { ok: false, rejected: false };
@@ -926,7 +893,7 @@ async function consoleGate(page, avatar, ms = CONSOLE_GATE_MS) {
 // на сервере уже мёртвое). Первый прогон ждал пропажи куки, не дождался и honestly ушёл
 // в фолбэк с удалением кук, хотя выход прошёл. Мёртвую куку убираем сами, но уже после —
 // не как способ разлогина, а чтобы не оставлять на диске ложный признак живой сессии.
-async function uiLogout(context, page, out = null) {
+async function uiLogout(context, page) {
   await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
   const before = await context.cookies('https://agentrouter.org').catch(() => []);
   if (!hasSessionCookie(before)) {
@@ -956,8 +923,6 @@ async function uiLogout(context, page, out = null) {
       + ' — похоже на белый экран или заглушку WAF');
     return false;
   }
-
-  if (out) out.baseline = null;
 
   const ack = watchLogoutAck(page);
   try {
@@ -1017,15 +982,12 @@ async function apiLogout(context, page, ghBefore) {
 // Чек-ин +$25: гасим сессию agentrouter и ставим браузер на страницу входа.
 // Сначала по-человечески (меню профиля), и только если шапка не поддалась — грубым
 // путём через удаление кук.
-// Возвращает эталон «до подарка» (или null): снять его можно только здесь, при живой
-// сессии, а нужен он потом — чтобы отличить налитую цифру от предподарочной.
 async function doCheckinLogout(context, page) {
   const ghBefore = (await context.cookies('https://github.com').catch(() => []));
   const saved = saveGhBackup(label, ghBefore);
   console.log(`🐙 GitHub-сессия: ${ghBefore.length} кук в профиле${saved ? `, копия сохранена (${saved} долгоживущих)` : ', сохранять нечего'}`);
 
-  const seen = { baseline: null };
-  if (!(await uiLogout(context, page, seen))) {
+  if (!(await uiLogout(context, page))) {
     console.log('↪️  выход через меню не вышел — гашу сессию удалением кук');
     await apiLogout(context, page, ghBefore);
   }
@@ -1036,7 +998,8 @@ async function doCheckinLogout(context, page) {
     await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
   }
   await reportRender(page);
-  return seen.baseline;
+  // UI logout returns only success/failure; balance is never read in Chromium.
+  return true;
 }
 
 // Страховка: сверяем GitHub-куки по ИМЕНАМ (а не по количеству — так видно, что именно
@@ -1169,6 +1132,20 @@ function uaMetadata(ua) {
   };
 }
 
+async function applyUserAgentOverride(context, page, ua) {
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.setUserAgentOverride', {
+      userAgent: ua,
+      acceptLanguage: 'en-US,en;q=0.9',
+      platform: /Macintosh/.test(ua) ? 'MacIntel' : /X11|Linux/.test(ua) ? 'Linux x86_64' : 'Win32',
+      userAgentMetadata: uaMetadata(ua),
+    });
+  } catch (e) {
+    console.log(`⚠️  client hints не синхронизированы: ${e.message}`);
+  }
+}
+
 async function main() {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const fresh = isFreshProfile();
@@ -1199,18 +1176,10 @@ async function main() {
   // 🔴 Без этого оверрайда `navigator.userAgentData.brands` остаётся ПУСТЫМ при подменённом
   // UA (замер 12.09) — пустые brands у «хрома» сами по себе детект. Метаданные выводим из
   // той же строки, чтобы версия в UA и в brands совпадала.
-  try {
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Network.setUserAgentOverride', {
-      userAgent: ua,
-      acceptLanguage: 'en-US,en;q=0.9',
-      platform: /Macintosh/.test(ua) ? 'MacIntel' : /X11|Linux/.test(ua) ? 'Linux x86_64' : 'Win32',
-      userAgentMetadata: uaMetadata(ua),
-    });
-  } catch (e) {
-    // Не падаем: UA в заголовках всё равно подменён, просто client hints останутся дефолтными.
-    console.log(`⚠️  client hints не синхронизированы: ${e.message}`);
-  }
+  // Apply the same override to every target. `userAgent` changes the popup's string, but
+  // CDP userAgentMetadata is target-scoped; without this GitHub sees empty brands.
+  context.on('page', p => { applyUserAgentOverride(context, p, ua); });
+  await applyUserAgentOverride(context, page, ua);
   await page.bringToFront();
   raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
   await disableHttpCache(context, page);
@@ -1222,7 +1191,7 @@ async function main() {
     const auto = mode === 'autocheckin';
     // Подписку на ответ колбэка вешаем ДО клика и на КОНТЕКСТ, а не на страницу:
     // колбэк уедет в попап, которого сейчас ещё нет.
-    const oauth = auto ? watchOauthResult(context) : null;
+    const oauth = watchOauthResult(context);
     // Browser only relogs and harvests cookies; balance is checked after exit by the parent.
     try {
       console.log(auto
@@ -1322,7 +1291,7 @@ async function main() {
         // Ждём по куке контекста, а не по URL этой вкладки: сайт уводит GitHub-вход в
         // попап, и вкладка так и остаётся на /login — проверка по URL давала бы ложный
         // таймаут «не дождался входа» при фактически забранном бонусе.
-        const res = await waitForSiteSession(context, page, LOGIN_TIMEOUT_MS, null);
+        const res = await waitForSiteSession(context, page, LOGIN_TIMEOUT_MS, oauth);
         if (!res.ok) {
           console.error('❌ Не дождался входа (10 мин). Закрываю — бонус не забран, зайди ещё раз.');
           await context.close().catch(() => {});

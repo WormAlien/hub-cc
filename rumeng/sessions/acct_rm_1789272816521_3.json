@@ -1,0 +1,30 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://api.rumeng-ai.com",
+      "localStorage": [
+        {
+          "name": "auth_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxOTksImVtYWlsIjoidC5lLnNzYXJvLm1iZXRhQGdtYWlsLmNvbSIsInJvbGUiOiJ1c2VyIiwidG9rZW5fdmVyc2lvbiI6MjcyNjM3NTY5NTY3MTA1NTcyOCwic2lkIjoiZWYzNDVkYTUxY2E4OTNiNTE4MThhYmM3NDFkMDEwYzQiLCJibmQiOiIxZmMwOGQ0NDk1ZjlkYWEyMmU5OGVhNmY3YzE4MGRhOSIsImV4cCI6MTc4OTM1OTIxNSwibmJmIjoxNzg5MjcyODE1LCJpYXQiOjE3ODkyNzI4MTV9.nvHRMyJauwPxtNxrScIYdlMRqpVDi2tCEi1HJD8KhCA"
+        },
+        {
+          "name": "refresh_token",
+          "value": "rt_f27d94a3602c086e512bfe8510e634753408ff2023706190e02e27fb78d1d15e"
+        },
+        {
+          "name": "token_expires_at",
+          "value": "1789359216525"
+        },
+        {
+          "name": "auth_user",
+          "value": "{\"id\":199,\"email\":\"t.e.ssaro.mbeta@gmail.com\",\"username\":\"\",\"role\":\"user\",\"balance\":1,\"frozen_balance\":0,\"concurrency\":15,\"status\":\"active\",\"allowed_groups\":null,\"created_at\":\"2026-09-13T12:13:35.047557587+08:00\",\"updated_at\":\"2026-09-13T12:13:35.047557774+08:00\",\"balance_notify_enabled\":false,\"balance_notify_threshold_type\":\"\",\"balance_notify_threshold\":null,\"balance_notify_extra_emails\":null,\"total_recharged\":0,\"rpm_limit\":0}"
+        },
+        {
+          "name": "sub2api_login_agreement_consent",
+          "value": "{\"revision\":\"515ed00e0aa9f5e6\",\"accepted_at\":\"2026-09-13T04:13:36.526Z\"}"
+        }
+      ]
+    }
+  ]
+}

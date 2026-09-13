@@ -18,7 +18,10 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const LISTEN_PORT = 20132;
+// Порт из env, дефолт прежний. Константа мешала проверять конвертер: поднять второй
+// экземпляр рядом с боевым было нельзя, и приёмка шла копией файла с правленым числом —
+// то есть мимо настоящего кода. Прод от этого не меняется: без LISTEN_PORT всё те же 20132.
+const LISTEN_PORT = Number(process.env.LISTEN_PORT || 20132);
 const UPSTREAM_BASE = 'https://agentrouter.org';
 const ACTIVE_KEY_FILE = path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
 const MAX_TOKENS_LIMIT = 64000;
@@ -240,6 +243,27 @@ const WAF_PHRASES = [
     // заголовка и обрывается на границе JSON-строки (`"`/`\`), максимум съедая свой
     // экранированный перевод строки — соседний текст промпта не задевается.
     { re: /x-anthropic-billing-header:[^"\\]*(?:\\n)?/gi, to: '' },
+    // 2026-09-12: шлюз держит в блок-листе литерал `ключевое` — обычное русское слово,
+    // и на нём легла живая сессия: ассистентская реплика «Ключевое доказательство…»
+    // уехала наверх в истории, и 500 ловил КАЖДЫЙ следующий запрос (1,6 МБ тело).
+    //
+    // 🪤 Почему прошлый заход это «опроверг» и откатил правку. Замена была написана как
+    // /Ключевое/g — с большой буквы и БЕЗ флага i. В том теле три вхождения: два
+    // «Ключевое» и одно строчное «ключевое». Правка сняла два и оставила третье, реплей
+    // остался красным — и из этого сделали вывод «дело не в слове». Вывод неверный:
+    // ошибка была в регистре замены, а не в гипотезе. Проверено заново регистронезависимо:
+    // полное тело 1,6 МБ с /ключевое/gi → `200`, контроль без замены → `500`.
+    //
+    // Берём в список, потому что замена безопасна: это целое русское слово (не огрызок
+    // идентификатора), а `важное` — его семантический синоним. Соседние формы шлюз
+    // пропускает (`ключ`, `ключев`, `ключевой` → 200), поэтому режем ровно эту форму.
+    //
+    // ⚠️ Список на стороне шлюза открытый: тем же замером найдены `ccH` и `cCheap`
+    // (проходят `ccX`, `cH`, `Cheap`, `Candidate`). Их в таблицу НЕ добавляем: трёхсимвольное
+    // ASCII-ядро встречается внутри обычных идентификаторов (`ccHeaders`, `macCheapCandidates`),
+    // и замена покалечила бы пользовательский код. Это известные мины, а не повод
+    // расширять список до бесконечности.
+    { re: /ключевое/gi, to: 'важное' },
 ];
 
 // ══════════════════════ CONTENT-FILTER: BASE64-ОБРАЗЫ ══════════════════════
@@ -366,7 +390,19 @@ function convertClaudeToOpenAI(claudeReq) {
     const openaiReq = {
         model: claudeReq.model,
         messages,
-        max_tokens: Math.max(1, Math.min(claudeReq.max_tokens || 4096, MAX_TOKENS_LIMIT)),
+        // 🪤 Astra не переживает крошечный max_tokens: на `max_tokens: 1` шлюз отвечает
+        // 400 «Could not finish the message because max_tokens or model output limit was
+        // reached». Проверено пробой: 1 → 400, 16 → 200, и `reasoning_effort: "none"`
+        // здесь НЕ помогает — дело именно в потолке вывода, а не в reasoning.
+        //
+        // Почему это ломало смену модели. Claude Code перед `/model <имя>` шлёт пробу
+        // валидации с `max_tokens: 1` (в логе видно дословно), и владелец вместо смены
+        // модели получал эту ошибку — то есть модель выглядела «нерабочей», хотя с
+        // обычным запросом отвечала. Поднимаем пол только для astra: остальным шлюзам
+        // единица законна, и трогать их незачем. Настоящие запросы идут с 32000
+        // и до пола не дотягиваются.
+        max_tokens: Math.max(/astra/i.test(String(claudeReq.model || '')) ? 16 : 1,
+            Math.min(claudeReq.max_tokens || 4096, MAX_TOKENS_LIMIT)),
         stream: !!claudeReq.stream,
     };
     if (claudeReq.stream) openaiReq.stream_options = { include_usage: true };
@@ -944,6 +980,22 @@ if (process.argv[2] === 'selftest') {
         wafSanitize(JSON.stringify({ system: 'см. billing header и cc_version' })).hits,
         0, 'похожий текст без анкера не режем');
 
+    // Литерал `ключевое` из блок-листа шлюза (12.09). Регресс держит РОВНО ту граблю,
+    // из-за которой первая правка была откачена: замена обязана быть регистронезависимой,
+    // иначе строчное вхождение переживает её и запрос продолжает падать.
+    const kv = wafSanitize(JSON.stringify({
+        messages: [
+            { role: 'assistant', content: 'Ключевое доказательство получено.' },
+            { role: 'assistant', content: 'ключевое подозрение: Sortable.' },
+        ],
+    }));
+    assert.strictEqual(kv.hits, 2, 'ловятся ОБА регистра, включая строчный');
+    assert.ok(!/ключевое/i.test(kv.text), 'ни одного вхождения не осталось');
+    assert.ok(/важное доказательство/.test(kv.text), 'замена вставлена');
+    // Соседние формы шлюз пропускает — их трогать нельзя (иначе правим то, что не режется).
+    assert.strictEqual(wafSanitize(JSON.stringify({ m: 'ключ ключев ключевой' })).hits, 0,
+        'соседние формы не задеваем');
+
     // Регистр и множественные вхождения (system + user + tool_result в одном теле).
     const s3 = wafSanitize(JSON.stringify({
         messages: [
@@ -1018,6 +1070,16 @@ if (process.argv[2] === 'selftest') {
     // обязан уйти как есть (ar-modelmap.json правится только руками).
     // Читает живой ar-modelmap.json — и это фича: упадёт, если в тир впишут gpt.
     assert.strictEqual(applyModelMap('gpt-5.6-sol'), 'gpt-5.6-sol', 'gpt-модель мимо тир-маппинга');
+
+    // Astra и крошечный max_tokens: проба валидации Claude Code (`/model <имя>`) шлёт
+    // `max_tokens: 1`, и шлюз отвечал 400 «Could not finish the message…» — смена модели
+    // выглядела как «модель не работает». Пол поднимает потолок только у astra.
+    const miniAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] });
+    assert.ok(miniAstra.max_tokens >= 16, `astra: max_tokens=1 должен подняться до 16, а не ${miniAstra.max_tokens}`);
+    const miniSol = convertClaudeToOpenAI({ model: 'gpt-5.6-sol', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] });
+    assert.strictEqual(miniSol.max_tokens, 1, 'остальным шлюзам единица законна — не трогаем');
+    const bigAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', max_tokens: 32000, messages: [{ role: 'user', content: 'hi' }] });
+    assert.strictEqual(bigAstra.max_tokens, 32000, 'настоящий запрос пол не задевает');
 
     console.log('agentrouter-proxy selftest: OK');
     process.exit(0);

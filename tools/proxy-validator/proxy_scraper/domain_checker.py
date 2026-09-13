@@ -305,7 +305,15 @@ class DomainProxyChecker(StrictProxyChecker):
         records: List[ProxyRecord],
         targets: Sequence[DomainTarget],
         progress_cb=None,
+        stop_after: int = 0,
     ) -> List[DomainCheckResult]:
+        """Check records, optionally stopping after enough successes.
+
+        Work is submitted through a bounded rolling window.  This matters for
+        host discovery: once the requested number of usable proxies is found,
+        queued checks can be cancelled and the caller does not wait for the
+        entire candidate list to drain.
+        """
         self.last_interrupted = False
         checked: List[DomainCheckResult] = []
         self._partial_results = checked
@@ -316,24 +324,46 @@ class DomainProxyChecker(StrictProxyChecker):
 
         max_workers = max(1, min(self.workers, total))
         pool = ThreadPoolExecutor(max_workers=max_workers)
-        futures = [pool.submit(self._check_once, rec, targets) for rec in records]
+        pending = set()
+        next_index = 0
+        stopped_early = False
+
+        def submit_one() -> bool:
+            nonlocal next_index
+            if next_index >= total:
+                return False
+            pending.add(pool.submit(self._check_once, records[next_index], targets))
+            next_index += 1
+            return True
+
+        for _ in range(max_workers):
+            submit_one()
 
         try:
             done = 0
-            for future in as_completed(futures):
+            successes = 0
+            while pending:
+                future = next(as_completed(pending))
+                pending.remove(future)
                 result = future.result()
                 checked.append(result)
                 done += 1
+                if result.passed_targets:
+                    successes += 1
                 if progress_cb:
                     progress_cb(done, total, result)
+                if stop_after > 0 and successes >= stop_after:
+                    stopped_early = True
+                    break
+                submit_one()
         except KeyboardInterrupt:
             self.last_interrupted = True
-            for future in futures:
-                future.cancel()
-            pool.shutdown(wait=False, cancel_futures=True)
-            return list(self._partial_results)
         finally:
-            if not self.last_interrupted:
+            if self.last_interrupted or stopped_early:
+                for future in pending:
+                    future.cancel()
+                pool.shutdown(wait=False, cancel_futures=True)
+            else:
                 pool.shutdown(wait=True, cancel_futures=False)
 
         return checked

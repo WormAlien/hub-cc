@@ -1,0 +1,28 @@
+Point 3 — verdict
+
+No patch is needed inside aikeysapi/auto-add.js or rumeng/auto-add.js solely to change acquireProxyFor's candidate limit: the current limit is deliberate and bounded at 3 total candidate checks, with no reuse and a 5-minute empty-pool wait. A future change should make the constant explicit (e.g. `PROXY_CANDIDATE_ATTEMPTS = 3`) and test it, but do not increase it silently: each check can include a preflight timeout and registration is already paid by the mailbox.
+
+Changes are needed for reliable stop semantics, but in routing/transparent-proxy.js rather than these two target files. Both parent stop handlers swallow taskkill failure and return `stopped:true` immediately. Recommended safe patch: set a stop-requested state, invoke `execFileAsync('taskkill.exe', ['/PID', String(pid), '/T', '/F'])` without a swallowing catch, and return an error/non-success response when taskkill fails. Then wait briefly for the child `exit` event (bounded timeout) before reporting stopped. Keep the existing process-tree kill for Windows and SIGTERM path for non-Windows. Do not add a new direct-network fallback in acquireProxyFor.
+
+Changes are also recommended for persistence if concurrent dashboard/refresh writers are in scope. `poolAppend` and `poolPatch` are read-modify-write temp+rename but have no interprocess lock; two writers can both read the same old pool and the later rename can erase the earlier account/patch. Safe patch: serialize writes per provider (or use a shared lock helper used by poolAppend and poolPatch), reload under the lock, apply the merge/patch, write a uniquely named temp file, rename, then release. Preserve duplicate-by-api_key behavior. A retry-on-rename is not enough to prevent lost updates.
+
+Point 4 — precise tests
+
+1. Unit-test acquireProxyFor in both providers with a mocked proxy-pool module and fake timers:
+   - initial candidate fails, second succeeds: exactly 2 `forAccount` calls and one `reassign`;
+   - three candidates fail: exactly 3 calls, returns error, never calls a fourth;
+   - candidate IDs are never retried;
+   - empty pool is re-read after each 8-second poll and a newly added candidate is used before the 5-minute deadline;
+   - deadline expiry returns an error and never returns `{agent: undefined}` when `enabledForHost` is true;
+   - `--no-proxy` returns direct without loading/consulting the pool.
+   Export `acquireProxyFor` from AIKeysAPI too, matching Rumeng, or test AIKeysAPI through a narrowly scoped rewire/mock harness.
+
+2. Stop integration test against the parent handlers with a fixture child process tree:
+   - stop returns only after the child tree exits;
+   - taskkill failure yields non-success and logs the failure;
+   - repeated stop is idempotent;
+   - stopped run cannot continue creating/persisting a later account.
+
+3. Persistence concurrency test using a temporary pool file and two child Node processes synchronized after both read the old file: both records must remain after concurrent `poolAppend`; concurrent `poolPatch` must preserve both patches. Also assert a successful account is persisted before the next account invocation, and that a failed snapshot/pool write is reported in the result.
+
+4. Run existing checks after the patch: `node tools/check-aikeysapi-safe.js`, `node tools/check-rumeng-safe.js`, plus `node --check aikeysapi/auto-add.js` and `node --check rumeng/auto-add.js`.

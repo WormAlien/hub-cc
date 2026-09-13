@@ -29,7 +29,8 @@ const execFileAsync = require('util').promisify(require('child_process').execFil
 // историю С ДИСКА, когда прокси провайдера не запущен — иначе график был бы только у
 // активного бэкенда, а у остальных «не отвечает» при готовых данных в файле рядом.
 const latencyStore = require('./latency-store.js');
-const { AR_QUOTA_BODY, classifyArQuotaProbe } = require('./lib/ar-quota-probe');
+const { AR_QUOTA_BODY, classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
+        arQuotaKeyTail } = require('./lib/ar-quota-probe');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
@@ -221,6 +222,18 @@ const BACKENDS = {
         model: null,
         clear_helper: true,
     },
+    rumeng: {
+        label: 'rumeng',
+        base_url: 'http://localhost:20166',
+        api_key: 'dummy',           // real key keepalive reads from rumeng-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20166) → api.rumeng-ai.com (БЕЗ /v1).
+        // 🪤 У этой панели ДВЕ базы, и путать их нельзя: шлюз живёт на `/v1`
+        // (`/v1/models` → 401 API_KEY_REQUIRED), а кабинет — на `/api/v1`
+        // (`/api/v1/settings/public` → 200). `GET /api/v1/models` отдаёт
+        // «404 page not found», то есть промах не крикнет, а тихо убьёт пинги.
+    },
     hcnsec: {
         label: 'HCNsec',
         base_url: 'http://localhost:20162',
@@ -320,10 +333,44 @@ const CC_DEFAULT_MODEL = 'claude-opus-5[1m]';
 // чокпоинт и создан ловить. Принимаем ЛЮБОЙ `<имя>/` — `anthropic/claude-opus-4-8`
 // остаётся 1M-моделью, кто бы её ни обслуживал; знать реестр функция не должна
 // (в песочнице check-1m.js нет ни fs, ни реестра).
-function normalizeCcModel(m) {
+// Шлюзы, которым `[1m]` НЕ вешаем. Сейчас таких нет: AIKeysAPI и rumeng используют
+// тот же клиентский маркер 1M, что и остальные keepalive-провайдеры.
+//
+// Константа остаётся extension point для будущего явного исключения.
+const NO_1M_GATEWAYS = new Set();
+
+// Необязательный префикс провайдера (`aipm/claude-opus-4-6`) обязан проходить: с ним
+// якорь ^ переставал матчиться, и модель, выбранная через `/model aipm/...`, молча
+// теряла [1m] — то есть окно падало до 200k ровно тем способом, который этот
+// чокпоинт и создан ловить. Принимаем ЛЮБОЙ `<имя>/` — `anthropic/claude-opus-4-8`
+// остаётся 1M-моделью, кто бы её ни обслуживал; знать реестр функция не должна
+// (в песочнице check-1m.js нет ни fs, ни реестра).
+function normalizeCcModel(m, activeBackend) {
     const s = String(m || '').trim();
     if (!s) return s;
-    return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/.test(s) && !s.includes('[') ? `${s}[1m]` : s;
+    // 🎯 AIKeysAPI — исключение владельца: суффикс не вешаем и СНИМАЕМ, если он уже там.
+    // У активного AIKeysAPI модель лежит в settings.json голой (`gpt-5.6-terra`), и без
+    // этой ветки регексп ниже вернул бы ей `[1m]` — то есть исключение не работало бы
+    // ровно в том окне, ради которого задумано. Проверяем и имя шлюза в строке
+    // (`ak/…` из «Маршрутов»), и активный бэкенд окна — случаи разные.
+    // Второй параметр необязателен: без него поведение прежнее, поэтому песочница
+    // check-1m.js, которая зовёт функцию с одним аргументом, продолжает работать.
+    const slash0 = s.indexOf('/');
+    const gw0 = (slash0 > 0 ? s.slice(0, slash0) : s).toLowerCase().replace(/\s*\[[^\]]*\]\s*$/, '');
+    if (s.includes('[')) return s;                     // суффикс уже есть — не трогаем
+    // Голое имя шлюза (`agentrouter`) — не модель, а выбор шлюза: модель за него берёт
+    // routes-карта. Раньше такой случай не матчился ничем и окно молча падало до 200k
+    // (заявка владельца 12.09: «выдаётся модель без 1m»). Суффикс безопасен: front-door
+    // срезает его перед разбором имени (routeByModel), keepalive — перед форвардом.
+    const slash = s.indexOf('/');
+    const gw = (slash > 0 ? s.slice(0, slash) : s).toLowerCase();
+    if (NO_1M_GATEWAYS.has(gw)) return s;              // extension point for future opt-outs
+    // Голое имя шлюза — только из настоящей таблицы префиксов, а не «любое слово без
+    // дефиса»: виртуальные модели шлюзов (`ComboWombo` у OmniRoute) выглядят так же,
+    // но суффикс им вешать нельзя — это чужое имя, а не наш шлюз. Тест подставляет
+    // таблицу в песочницу (tools/check-1m.js), поэтому копии здесь нет.
+    if (slash < 0 && typeof CC_MODEL_PREFIX === 'object' && Object.prototype.hasOwnProperty.call(CC_MODEL_PREFIX, gw)) return `${s}[1m]`;
+    return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/.test(s) ? `${s}[1m]` : s;
 }
 
 // ---- Отсутствие модели = 200k, поэтому пустой `model` тоже чиним здесь -------
@@ -365,6 +412,8 @@ const CC_MODEL_PREFIX = {
     kktoken: 'kktoken',
     aipm: 'aipm',
     aikeysapi: 'aikeysapi',
+    ak: 'aikeysapi',
+    rumeng: 'rumeng',
     hcnsec: 'hcnsec',
     ourtoken: 'ot',
     cun: 'cun',
@@ -452,13 +501,32 @@ function modelWindows() {
 
 // Сколько токенов заявить Claude Code для этой модели. null = не заявлять
 // (claude-* и всё незнакомое: у CC своя таблица, а врать наугад хуже, чем молчать).
-function ccContextTokensFor(model) {
+//
+// Какой шлюз у окна СЕЙЧАС активен — по active-backend.json, и только если base наш
+// (front-door). Нужен исключению AIKeysAPI: его модель лежит в settings.json БЕЗ
+// префикса (handleAkSetModel пишет `gpt-5.6-terra`), поэтому по имени строки шлюз не
+// узнать — узнаём по активному бэкенду. Официальный Claude и чужие конфиги не трогаем.
+function activeGatewayFor(obj) {
+    try {
+        if (!isFrontdoorBase((obj && obj.env && obj.env.ANTHROPIC_BASE_URL) || '')) return null;
+        const st = readActiveBackend();
+        return (st && st.backend) || null;
+    } catch { return null; }
+}
+
+function ccContextTokensFor(model, activeBackend) {
+    const raw = String(model || '').trim();
+    // All current gateway tabs, including AIKeysAPI and rumeng, use the 1M marker.
+    const gw = raw.split('/')[0].toLowerCase().replace(/\s*\[[^\]]*\]\s*$/, '');
+    if (false) return null;
+    // Prefixes are handled below; all gateway names use the normal 1M path.
     // Префикс провайдера (`aipm/glm-5.3`) снимаем ПЕРЕД таблицей окон: иначе
     // /^claude-/ не матчится, ключа в model-windows.json тоже нет → вернули бы null,
     // и glm-5.3 молча уехала бы с 1050000 на дефолтные 200k.
-    const m = String(model || '').trim().replace(/^[A-Za-z0-9_.-]+\//, '');
-    if (!m || /^claude-/.test(m)) return null;
+    const m = raw.replace(/^[A-Za-z0-9_.-]+\//, '');
     const bare = m.replace(/\s*\[[^\]]*\]\s*$/, '');   // на случай чужого суффикса
+    if (bare === 'aikeysapi' || bare === 'ak' || bare === 'rumeng') return 1050000;
+    if (typeof CC_MODEL_PREFIX === 'object' && Object.prototype.hasOwnProperty.call(CC_MODEL_PREFIX, bare.toLowerCase())) return 1050000;
     const n = modelWindows()[bare];
     return Number.isFinite(n) && n > 0 ? n : null;
 }
@@ -467,19 +535,25 @@ function writeSettings(obj) {
     // Чокпоинт суффикса: сюда сходятся ВСЕ записи settings.json (см. tools/check-1m.js —
     // он валит сборку, если кто-то опять пишет файл напрямую). ANTHROPIC_MODEL правим
     // тоже: cun/conduit пишут его рядом с top-level model, расхождение = 200k.
-    if (typeof obj.model === 'string') obj.model = normalizeCcModel(obj.model);
+    //
+    // 🎯 Активный шлюз читаем ДО applyFrontdoor() (он ниже): исключение AIKeysAPI —
+    // «1m всем, кроме него» — обязано работать и когда модель записывается голым именем
+    // (`gpt-5.6-terra`), а такое бывает как раз в момент активации шлюза. Плюс запасной
+    // путь: base ещё не переведён на front-door, зато сам settings знает бэкенд.
+    const gwNow = activeGatewayFor(obj) || backendFromSettingsObj(obj) || null;
+    if (typeof obj.model === 'string') obj.model = normalizeCcModel(obj.model, gwNow);
     // Пустая/снесённая модель — тоже даунгрейд до 200k, лечим тут же (см. resolveCcModel).
     if (typeof obj.model !== 'string' || !obj.model.trim()) {
-        const fb = normalizeCcModel(resolveCcModel(obj));
+        const fb = normalizeCcModel(resolveCcModel(obj), gwNow);
         if (fb) obj.model = fb; else delete obj.model;
     }
     if (obj.env && typeof obj.env.ANTHROPIC_MODEL === 'string') {
-        obj.env.ANTHROPIC_MODEL = normalizeCcModel(obj.env.ANTHROPIC_MODEL);
+        obj.env.ANTHROPIC_MODEL = normalizeCcModel(obj.env.ANTHROPIC_MODEL, gwNow);
     }
     // Окно для незнакомых CC моделей — сюда же, чтобы не расползлось по хендлерам.
     // Ключ обязательно СНИМАЕМ, когда модель антропиковская: залипшие 1050000 на
     // claude-opus-5 (реально 1M) — это переполнение контекста на апстриме.
-    const ctxTokens = ccContextTokensFor(obj.model);
+    const ctxTokens = ccContextTokensFor(obj.model, gwNow);
     if (ctxTokens) {
         obj.env = obj.env || {};
         obj.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(ctxTokens);
@@ -621,16 +695,33 @@ const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
     sk: 'seekai', ts: 'truesota', kk: 'kktoken', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
+    rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
 };
 
-// Одна запись реестра из пары «имя → base_url». Для локального апстрима ключ и карта
-// тиров не нужны — их ставит keepalive. Для удалённого нужен файл ключа, и если его
-// на диске нет, запись НЕ создаём: угадывать имя ключа = 503 на первом же запросе.
+// Одна запись реестра из пары «имя → base_url». Для удалённого нужен файл ключа, и если
+// его на диске нет, запись НЕ создаём: угадывать имя ключа = 503 на первом же запросе.
+//
+// 🪤 Поле `modelmap` нужно ОБОИМ путям, и локальному тоже (исправлено 12.09).
+// До этого локальные отдавали `modelmap: null` с обоснованием «их ставит keepalive».
+// Для запроса БЕЗ префикса это верно — там карту и правда применяет keepalive. Но у
+// префиксного пути свой файл (`<prefix>-routes-modelmap.json`), и имя ему front-door
+// выводит ЗАМЕНОЙ суффикса в `state.modelmap`:
+//
+//     modelmap: null  →  routesMapFor() возвращает null  →  `default` не найден  →  400
+//
+// Ровно это и ломало `/model agentrouter`: в `ar-routes-modelmap.json` на диске
+// `default` лежит, вкладка «Маршруты» его показывает (она читает файл напрямую), а
+// префиксный путь отвечал «не задан» — расходились два источника, не значения.
+// Ключ локальному по-прежнему не нужен: его ставит keepalive, и `!state.local` в
+// front-door гасит инжект. Шлюзы без префикса (omniroute, custom, notion) остаются
+// с null — у них и routes-карты нет.
 function registrySeedEntry(name, base, label) {
     if (!base) return null;
-    if (isLocalBase(base)) return { upstream: base, keyFile: null, modelmap: null, label, source: 'backends' };
     const p = CC_MODEL_PREFIX[name] || null;
+    if (isLocalBase(base)) {
+        return { upstream: base, keyFile: null, modelmap: p ? `${p}-modelmap.json` : null, label, source: 'backends' };
+    }
     const kf = p ? `${p}-active-key.txt` : null;
     if (!kf || !fs.existsSync(path.join(os.homedir(), '.claude', kf))) return null;
     return { upstream: base, keyFile: kf, modelmap: `${p}-modelmap.json`, label, source: 'backends' };
@@ -654,11 +745,38 @@ function writeBackendsRegistry(extra) {
             if (e) doc.providers[name] = e; else delete doc.providers[name];
         }
         if (extra && extra.backend && extra.upstream) {
+            // 🪤 Активация НЕ смеет обеднять seed-запись (исправлено 13.09).
+            //
+            // Было: `doc.providers[extra.backend] = {…}` — присваивание ЦЕЛИКОМ, поверх
+            // корректной записи из цикла выше. У локального шлюза `frontdoorStateFrom()`
+            // выводит `modelmap` из имени key-файла (:816), а key-файла у локальных нет
+            // по устройству (ключ ставит keepalive) → в реестр уезжал `modelmap: null`.
+            // Дальше `routesMapFor()` (frontdoor-proxy.js:365) возвращал null, `default`
+            // не находился, и `/model <шлюз>` отвечал 400 «модель по умолчанию не задана»
+            // — при том, что `<prefix>-routes-modelmap.json` на диске лежал и вкладка
+            // «Маршруты» его показывала (она читает файл напрямую).
+            //
+            // Ловушка была в том, что портился ТОЛЬКО активный шлюз: `extra` — это
+            // «только что активированный». Фикс 12.09 закрыл `registrySeedEntry()`, а эту
+            // ветку — нет, поэтому баг вернулся при следующей же активации agentrouter
+            // (лог front-door: 22 успешных `agentrouter → claude-opus-5`, затем
+            // перезапись реестра в 00:29:15 и 400 в 00:29:22).
+            //
+            // Лечим слиянием, а не вторым источником истины: имя карты по-прежнему выводит
+            // ОДНА таблица `CC_MODEL_PREFIX` — та же, что в `registrySeedEntry()`. Поля
+            // `extra` побеждают только там, где реально что-то знают (непустые), поэтому
+            // remote-шлюзы с ключом продолжают работать как раньше.
+            const p = CC_MODEL_PREFIX[extra.backend] || null;
+            const prev = doc.providers[extra.backend] || {};
             doc.providers[extra.backend] = {
                 upstream: extra.upstream,
-                keyFile: extra.keyFile || null,
-                modelmap: extra.modelmap || null,
-                label: extra.backend,
+                keyFile: extra.keyFile || prev.keyFile || null,
+                // Порядок важен: что знает активация → что было в seed → вывод из префикса.
+                modelmap: extra.modelmap || prev.modelmap || (p ? `${p}-modelmap.json` : null),
+                // Человеческую подпись не затираем служебным именем: её показывает вкладка
+                // «Маршруты» (`v.label || name`), и до этой правки там висело `agentrouter`
+                // вместо `AgentRouter (opus-5 1M)`.
+                label: prev.label || extra.backend,
                 source: 'learned',
             };
         }
@@ -754,6 +872,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 const ROUTE_EP = {
     agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
+    rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
 };
 
@@ -1367,6 +1486,7 @@ const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT |
 const keepaliveAp = makeKeepaliveHandlers(Number(process.env.AP_KEEPALIVE_PORT || 20163));
 const keepaliveHn = makeKeepaliveHandlers(Number(process.env.HN_KEEPALIVE_PORT || 20162));
 const keepaliveAk = makeKeepaliveHandlers(Number(process.env.AK_KEEPALIVE_PORT || 20165));
+const keepaliveRm = makeKeepaliveHandlers(Number(process.env.RM_KEEPALIVE_PORT || 20166));
 
 
 // ---- /__switch/api/whoami --------------------------------------------------
@@ -4328,6 +4448,7 @@ async function handleHealth(res) {
         // С автоподъёмом цена выросла: шлюзы встают сами, «осиротел» подталкивал их убить.
         { name: 'Keepalive AIPM',     port: AP_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive AIKeysAPI', port: AK_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive rumeng',   port: RM_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -7859,6 +7980,10 @@ function makeNoKeyStub() {
 const AR_SESSIONS_FILE = path.join(__dirname, 'agentrouter-sessions.json');
 const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
 const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
+// Кеш последней ручной проверки квоты Opus. Рядом с активным ключом, а не в state/:
+// файл читает и статуслайн, и любое окно дашборда — один источник правды на машину.
+// Живёт до следующего налива партии (03/11/19 МСК), инвалидация в lib/ar-quota-probe.
+const AR_QUOTA_STATE_FILE = path.join(os.homedir(), '.claude', 'ar-quota-state.json');
 const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
 const AR_BASE_URL = 'https://agentrouter.org';
 // Баланс ключа берётся точно из /api/user/self (см. newapiBalance). Константы ниже —
@@ -8126,6 +8251,10 @@ const NEWAPI_PROFILE_DIRS = {
     'api.hcnsec.cn':   path.join(__dirname, '..', 'hcnsec', 'profiles'),
     // AIKeysAPI uses classic cookie sessions and stable acct_<id> profiles.
     'www.aikeysapi.com': path.join(__dirname, '..', 'aikeysapi', 'profiles'),
+    // rumeng (如梦AI): панель и шлюз на одном `api.rumeng-ai.com`. Профиль нужен не ради
+    // куки — её у sub2api нет вовсе, — а ради localStorage: вход держится на JWT
+    // (`auth_token`/`refresh_token`), и снять его можно только подняв этот же профиль.
+    'api.rumeng-ai.com': path.join(__dirname, '..', 'rumeng', 'profiles'),
 };
 
 function newapiLib() {
@@ -8262,7 +8391,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, apLkPids, hnLkPids, akLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -11239,7 +11368,31 @@ async function handleArQuotaCheck(req, res) {
         probe.end(payload);
     });
     logLine(`agentrouter quota-check claude-opus-5 -> ${result.state}`);
-    return jsonRes(res, 200, { ...result, model: AR_QUOTA_BODY.model, checkedAt: new Date().toISOString() });
+    // Кешируем только доказанное состояние квоты: `error` — факт про сеть в тот
+    // момент, а не про квоту, и завтра он бессмыслен. Ошибка записи некритична:
+    // проверка уже состоялась, кеш — удобство, а не результат.
+    const cached = buildArQuotaCache(result, key, Date.now());
+    if (cached) {
+        try {
+            fs.mkdirSync(path.dirname(AR_QUOTA_STATE_FILE), { recursive: true });
+            fs.writeFileSync(AR_QUOTA_STATE_FILE, JSON.stringify(cached, null, 2) + '\n');
+        } catch (e) { logLine(`agentrouter quota-check cache write failed: ${e.message}`); }
+    }
+    return jsonRes(res, 200, { ...result, ...(cached || {}), model: AR_QUOTA_BODY.model,
+                               checkedAt: (cached && cached.checkedAt) || new Date().toISOString() });
+}
+
+// GET /__switch/api/ar/quota-state → последняя проверка, если она ещё относится к
+// текущей партии. Устаревшую отдаём как `state: null`, а не молча свежей: иначе
+// после налива дашборд красил бы часы вчерашним «квота закончилась».
+function handleArQuotaState(req, res) {
+    let entry = null;
+    try { entry = JSON.parse(fs.readFileSync(AR_QUOTA_STATE_FILE, 'utf8')); } catch {}
+    let keyTail = '';
+    try { keyTail = arQuotaKeyTail(fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim()); } catch {}
+    const fresh = isArQuotaCacheFresh(entry, Date.now(), keyTail);
+    return jsonRes(res, 200, fresh ? { ...entry, stale: false }
+                                   : { state: null, stale: true, keyTail });
 }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
@@ -11850,6 +12003,9 @@ function arPidAlive(pid) {
 // везде поллится, поэтому просто держим состояние в памяти процесса, как arLkPids.
 const AR_AUTO_CHECKIN = new Map(); // label → { id, name, state, message, checkedIn, balance, checkinAt, checkinFrom, startedAt, finishedAt }
 const AR_AUTO_CHECKIN_TTL_MS = 10 * 60 * 1000;
+const AR_RATE_RETRY_MAX = 3;
+const AR_RATE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
+const AR_RATE_RETRY_TIMERS = new Map(); // label → timeout
 // Что означает код возврата agentrouter/open-session.js (см. его заголовок).
 const AR_AUTO_CHECKIN_FAIL = {
     2: 'вход не подтвердился за 90 с — бонус не забран, попробуй ещё раз или добери кнопкой 🎁',
@@ -11920,6 +12076,26 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
             st.state = 'error';
             st.message = (auto ? AR_AUTO_CHECKIN_FAIL[code] : AR_CHECKIN_FAIL_MANUAL[code])
                 || AR_AUTO_CHECKIN_FAIL[code] || `скрипт завершился с кодом ${code}`;
+            st.failureKind = code === 6 ? 'rate_limit' : 'checkin';
+            if (code === 6 && auto && (st.retryCount || 0) < AR_RATE_RETRY_MAX) {
+                st.retryCount = (st.retryCount || 0) + 1;
+                st.retryAt = Date.now() + AR_RATE_RETRY_COOLDOWN_MS;
+                st.message += ` — повтор ${st.retryCount}/${AR_RATE_RETRY_MAX} после кулдауна`;
+                const retryAt = st.retryAt;
+                clearTimeout(AR_RATE_RETRY_TIMERS.get(label));
+                const timer = setTimeout(() => {
+                    AR_RATE_RETRY_TIMERS.delete(label);
+                    const current = AR_AUTO_CHECKIN.get(label);
+                    if (!current || current.state !== 'error' || current.retryAt !== retryAt) return;
+                    const job = { id, label, dispName: current.name || label, mode: 'autocheckin', wantCheckin: true, wantAuto: true };
+                    if (arQueueSpot(label) || arPidAlive(arLkPids.get(label))) return;
+                    current.state = 'queued'; current.message = 'рейт-лимит прошёл — повтор в очереди'; current.retryAt = null;
+                    AR_AUTO_CHECKIN.set(label, current);
+                    AR_CHECKIN_QUEUE.push(job); arCheckinPump();
+                }, AR_RATE_RETRY_COOLDOWN_MS);
+                if (timer.unref) timer.unref();
+                AR_RATE_RETRY_TIMERS.set(label, timer);
+            }
             // Коды 3 и 5 — про GitHub-сессию. Называем аккаунт: плашка в таблице говорит
             // о состоянии постоянно, а тост должен назвать виновника в момент отказа.
             const who = (code === 3 || code === 5) ? arGhNameFor(id) : null;
@@ -11959,6 +12135,9 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
         }
         st.state = 'done';
         st.checkedIn = checkedIn;
+        delete st.failureKind;
+        delete st.retryAt;
+        delete st.retryCount;
         st.balance = bal && typeof bal.balance === 'number' ? bal.balance : null;
         st.balanceFrom = null;
         const after = arLoad().find(s => s.id === id) || {};
@@ -12065,7 +12244,7 @@ function arCheckinPump() {
         const job = AR_CHECKIN_QUEUE.splice(at, 1)[0];
         logLine(`agentrouter чек-ин: беру из очереди ${job.dispName}`
             + ` (полоса ${arLaneOf(job)}, осталось ${AR_CHECKIN_QUEUE.length})`);
-        try { arSpawnSession(job).catch(e => arSpawnFailed(job, e)); } catch (e) {
+        try { arSpawnSession(job); } catch (e) {
             arSpawnFailed(job, e);
         }
     }
@@ -12241,9 +12420,8 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
     const kind = wantAuto ? 'auto' : wantCheckin ? 'manual' : 'plain';
 
     const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
-    // Чек-ину stdout нужен не только для логов: в последней строке приезжает маркер
-    // AUTOCHECKIN_RESULT — слово шлюза про суточный бонус и СНИМОК точного баланса,
-    // снятый в самом браузере. Ловим его в ОБОИХ режимах чек-ина.
+    // Чек-ину stdout нужен только для слова шлюза о суточном бонусе. Баланс браузер
+    // не вычисляет: после закрытия parent запускает обычный cookie/raw-auth чек.
     let outTail = '';
     proc.stdout.on('data', d => {
         const s = String(d);
@@ -12257,8 +12435,7 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
         arRunKind.delete(label);
         logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
         if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
-        // Обычный визит в ЛК (🌐): замок с куки снят, точный баланс стал читаемым.
-        // Checkin modes have their own forced post-browser cookie/raw-auth check.
+        // Ordinary browser visits also refresh the balance after the profile is released.
         else newapiRecheckAfterLk('ar', id);
         // Прогресс пачки и её предохранитель — СИНХРОННО и до насоса. arAutoCheckinFinish
         // асинхронна (ждёт флаша кук), и полагаться на неё было нельзя: насос успел бы
@@ -12444,15 +12621,7 @@ async function handleArSessionOpen(req, res) {
                 return jsonRes(res, 200, { ok: true, label, queued: true, position: pos, etaSec, mode: runMode });
             }
             newapiLkVisited(label);
-            const proc = await arSpawnSession(job);
-            // Прокси непригоден → окно не поднималось, состояние уже записано с кодом 7.
-            if (!proc) {
-                const st = AR_AUTO_CHECKIN.get(label);
-                return jsonRes(res, 200, {
-                    ok: false, label, mode: runMode,
-                    error: (st && st.message) || 'прокси аккаунта непригоден — напрямую не пошли',
-                });
-            }
+            const proc = arSpawnSession(job);
             logLine(`agentrouter session/open: ${dispName} label=${label} mode=${runMode} (pid ${proc.pid})`);
             return jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode: runMode });
         }
@@ -12465,12 +12634,7 @@ async function handleArSessionOpen(req, res) {
         newapiSyncProfile('agentrouter.org', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс/пополнение.
         const mode = isRealKey(target.api_key) ? 'console' : 'register';
-        const proc = await arSpawnSession({ id, label, dispName, mode, wantCheckin: false, wantAuto: false });
-        // Обычный визит 🌐 тоже не идёт мимо прокси: пул включён и адрес непригоден —
-        // честный отказ вместо окна, открытого с домашнего IP под живой сессией.
-        if (!proc) {
-            return jsonRes(res, 502, { error: 'прокси аккаунта непригоден — окно не открыто, напрямую не пошли' });
-        }
+        const proc = arSpawnSession({ id, label, dispName, mode, wantCheckin: false, wantAuto: false });
         const failed = await sessionOpenEarlyFailure(proc);
         if (failed) {
             arLkPids.delete(label);
@@ -15938,9 +16102,16 @@ async function akBalance(target, opts = {}) {
             if (me) {
                 const quota = Number(me.quota || 0) / 500000;
                 const spent = Number(me.used_quota || 0) / 500000;
+                // 🪤 `status: 'live'` обязателен. `newapiApplyBalance` открывает блок
+                // записи цифр условием `bal.status === 'live'` — без него баланс
+                // считался, штамп времени ставился, а сами цифры молча отбрасывались,
+                // и таблица показывала «—» при живом ключе и живой куке. Поймано 12.09:
+                // `balanceCheckedAt` свежий, а `balance`/`balanceSource` в записи нет.
                 return {
-                    ok: true, source: 'self', balance: quota, spent,
-                    granted: quota + spent, userId: Number(me.id || t.newApiUserId),
+                    ok: true, status: 'live', source: 'self',
+                    balance: quota, spent, granted: quota + spent,
+                    balanceSource: 'self',
+                    userId: Number(me.id || t.newApiUserId),
                     username: me.username || t.name || null,
                 };
             }
@@ -15987,9 +16158,11 @@ const akAutoreg = {
     count: 0,
     stdout: [],
     stderr: [],
+    stage: null,
     result: null,
     exitCode: null,
     signal: null,
+    useProxy: true,
 };
 
 function akAutoregPublic() {
@@ -15998,8 +16171,10 @@ function akAutoregPublic() {
         pid: akAutoreg.pid,
         startedAt: akAutoreg.startedAt,
         count: akAutoreg.count,
+        useProxy: akAutoreg.useProxy,
         stdout: akAutoreg.stdout.slice(-40),
         stderr: akAutoreg.stderr.slice(-20),
+        stage: akAutoreg.stage,
         result: akAutoreg.result,
         exitCode: akAutoreg.exitCode,
         signal: akAutoreg.signal,
@@ -16016,7 +16191,14 @@ async function handleAkAutoregStart(req, res) {
         const script = path.join(__dirname, '..', 'aikeysapi', 'auto-add.js');
         if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'aikeysapi/auto-add.js не найден' });
 
-        const proc = spawn(process.execPath, [script, String(count)], {
+        // Пул прокси — переключатель, а не приговор. Когда в пуле пусто или все адреса
+        // мертвы, авторег обязан уметь пройти с домашнего IP по явному выбору владельца;
+        // раньше это было только флагом CLI, и вкладка такой возможности не давала.
+        const useProxy = body.useProxy !== false;
+        const args = [script, String(count)];
+        if (!useProxy) args.push('--no-proxy');
+
+        const proc = spawn(process.execPath, args, {
             cwd: path.join(__dirname, '..'),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -16024,15 +16206,36 @@ async function handleAkAutoregStart(req, res) {
         });
         Object.assign(akAutoreg, {
             proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(), count,
-            stdout: [], stderr: [], result: null, exitCode: null, signal: null,
+            useProxy, stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
         });
         const pushLines = (which, chunk) => {
             for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
-                akAutoreg[which].push(line);
-                if (akAutoreg[which].length > 100) akAutoreg[which].shift();
+                // 🪤 Этап берём ТОЛЬКО из машиночитаемого маркера. Человекочитаемые строки
+                // («✓ код …», «✓ зарегистрирован») меняются при любой правке формулировки,
+                // и регулярка по ним однажды молча покажет не тот шаг — индикатор,
+                // который врёт, хуже отсутствующего.
+                //
+                // В буфер лога маркер НЕ кладём: он служебный, и в панели владельца от него
+                // только шум — там человек читает обычные строки прогона.
+                if (line.startsWith('AK_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('AK_STAGE '.length));
+                        if (s && typeof s.stage === 'string') {
+                            akAutoreg.stage = { ...s, at: new Date().toISOString() };
+                        }
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                // 🪤 `AK_AUTOADD_RESULT` — тоже протокол, а не строка для чтения: итог
+                // уезжает отдельным полем и рисуется как «готово 1, в пул 1, ошибок 0».
+                // В панели он выглядел сырым JSON-ом на весь экран — владелец показал его
+                // как «вот ещё такая тема». Разбираем и НЕ показываем.
                 if (line.startsWith('AK_AUTOADD_RESULT ')) {
                     try { akAutoreg.result = JSON.parse(line.slice('AK_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
                 }
+                akAutoreg[which].push(line);
+                if (akAutoreg[which].length > 100) akAutoreg[which].shift();
             }
         };
         proc.stdout.on('data', d => pushLines('stdout', d));
@@ -16044,9 +16247,12 @@ async function handleAkAutoregStart(req, res) {
             akAutoreg.exitCode = code;
             akAutoreg.signal = signal || null;
             akAutoreg.proc = null;
+            akRefillStop('прогон завершён');   // фон живёт ровно столько, сколько прогон
             logLine(`aikeysapi autoreg exited: count=${count} code=${code} signal=${signal || '-'}`);
         });
         logLine(`aikeysapi autoreg launched: count=${count} pid=${proc.pid}`);
+        // Докорм только когда прокси реально используются: с --no-proxy прокси не нужны.
+        if (useProxy) akRefillStart();
         jsonRes(res, 200, { ok: true, ...akAutoregPublic() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -16070,6 +16276,394 @@ async function handleAkAutoregStop(_req, res) {
         logLine(`aikeysapi autoreg stop requested: pid=${proc.pid}`);
         return jsonRes(res, 200, { ok: true, stopped: true, ...akAutoregPublic() });
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// Публичные прокси из открытых списков живут минуты, поэтому список для авторега
+// пересобирается ПЕРЕД прогоном. Ходим в CLI валидатора (`find_for_host`) — он умеет
+// скрап источников, отсев нетуннелирующих и проверку реального HTTPS до панели,
+// и останавливается, как только набрано нужное число.
+//
+// 🪤 Результат кладём в ОТДЕЛЬНЫЙ файл (`live-for-host.txt`) и переключаем на него
+// `proxy-pool.json`. Писать в `stable.txt` нельзя: это вывод трёхпроходной проверки,
+// и затирать его коротким списком значит терять результат долгого прогона.
+const AK_LIVE_PROXY_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.txt');
+// Валидатор пишет сюда, а не в рабочий файл: список пула ДОЛИВАЕТСЯ, а не заменяется.
+const AK_PROXY_TMP_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.new.txt');
+const AK_PROXY_CAP = 60;          // предел файла пула: свежие впереди, хвост отрезается
+const AK_VALIDATOR_DIR = path.join(__dirname, '..', 'tools', 'proxy-validator');
+
+// ─────────────────── долив списка прокси вместо замены ───────────────────
+//
+// 🔴 Заменять файл нельзя. Привязка прокси к аккаунту липкая, и `forAccount()` на
+// исчезнувший из пула адрес отвечает `needsReassign` — «другой подставлять не буду».
+// Перезапись списка осиротила бы привязки ВСЕХ уже начатых аккаунтов разом.
+//
+// 🪤 Но и просто склеивать нельзя. Публичные прокси мрут минутами; за прогон в 25 минут
+// файл распух бы до сотен заведомо мёртвых строк, `leastLoaded` выбирал бы из них, и новые
+// аккаунты садились бы на трупы. Поэтому свежие идут ПЕРВЫМИ, а список обрезается: хвост —
+// это то, что проверено давно, и оно уходит первым.
+function akReadProxyLines(file) {
+    try {
+        return fs.readFileSync(file, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    } catch { return []; }
+}
+
+function akMergeProxyLines(fresh, old, cap = AK_PROXY_CAP) {
+    const seen = new Set();
+    const out = [];
+    for (const line of [...fresh, ...old]) {
+        if (seen.has(line)) continue;
+        seen.add(line);
+        out.push(line);
+        if (out.length >= cap) break;
+    }
+    return out;
+}
+
+// Stop не должен выбрасывать уже проверенные адреса. Валидатор пишет итоговый файл
+// только при нормальном завершении, поэтому при ручном Stop сохраняем найденный префикс
+// отдельной атомарной записью и доливаем его в живой пул.
+function akCommitPartialProxyLines(lines, liveFile) {
+    const fresh = (lines || []).map(String).map(s => s.trim()).filter(Boolean);
+    if (!fresh.length) return 0;
+    const merged = akMergeProxyLines(fresh, akReadProxyLines(liveFile));
+    const tmp = `${liveFile}.partial-${process.pid}.tmp`;
+    fs.writeFileSync(tmp, merged.join('\n') + '\n', 'utf8');
+    fs.renameSync(tmp, liveFile);
+    return fresh.length;
+}
+
+function handleAkProxyPoolLines(req, res) {
+    try {
+        const lines = akReadProxyLines(AK_LIVE_PROXY_FILE);
+        jsonRes(res, 200, { ok: true, count: lines.length, lines });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function proxyPoolLib() {
+    try { return require('./lib/proxy-pool'); }
+    catch (e) { logLine(`proxy-pool недоступен: ${e.message}`); return null; }
+}
+
+// GET /__switch/api/ak/proxy-pool — сколько адресов пул реально отдаст автореге.
+//
+// 🪤 Считаем `count` из `describe()`, а НЕ строки файла: пул отбрасывает неразбираемые
+// строки в `bad`, и «в файле 41» при девяти рабочих — это цифра, которая обманывает
+// ровно в тот момент, когда на неё смотрят перед прогоном.
+//
+// 🪤 Число живёт минуты. Публичные прокси мрут на ходу (замер 12.09: из трёх найденных
+// в 10:29 один мёртв к 10:45), поэтому ответ несёт `readAt` и честно означает «столько
+// было при последнем чтении файла», а не «столько есть сейчас».
+function handleAkProxyPool(_req, res) {
+    const lib = proxyPoolLib();
+    if (!lib) return jsonRes(res, 503, { error: 'proxy-pool недоступен' });
+    try {
+        const d = lib.describe();
+        // Список адресов — чтобы «сколько» можно было проверить глазами, а не верить
+        // цифре. `describe()` их не отдаёт (там только count и конфиг), поэтому берём
+        // у самого пула. Секретов тут нет: это публичные прокси из открытого файла.
+        const list = lib.pool().proxies.map(p => p.id);
+        jsonRes(res, 200, {
+            ok: true,
+            enabled: !!d.enabled,
+            enabledForHost: lib.enabledForHost('www.aikeysapi.com'),
+            count: d.count,
+            bad: d.bad,
+            proxies: list,
+            source: d.source,
+            scheme: d.scheme,
+            hosts: d.hosts,
+            assigned: d.assigned,
+            orphans: d.orphans,
+            fileError: d.fileError || null,
+            readAt: new Date().toISOString(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+
+// Состояние поиска прокси. Поиск идёт минуты, поэтому он НЕ держит HTTP-ответ: запуск
+// возвращает управление сразу, а прогресс фронт забирает опросом. Иначе кнопка «ищу…»
+// висела бы всё время поиска без единой цифры — и прервать его было бы нечем.
+const akFindProxy = {
+    proc: null, running: false, want: 0,
+    found: [], phase: '', checked: 0, total: 0,
+    startedAt: null, stopRequested: false,
+    result: null, error: null, exitCode: null,
+    mode: null,        // 'manual' (кнопка) | 'refill' (фон под прогоном)
+    log: [],           // строки валидатора как есть — владелец просил видеть лог поиска
+};
+
+function akFindProxyPublic() {
+    return {
+        running: akFindProxy.running,
+        want: akFindProxy.want,
+        found: akFindProxy.found.slice(-60),
+        foundCount: akFindProxy.found.length,
+        phase: akFindProxy.phase,
+        checked: akFindProxy.checked,
+        total: akFindProxy.total,
+        startedAt: akFindProxy.startedAt,
+        stopRequested: akFindProxy.stopRequested,
+        result: akFindProxy.result,
+        error: akFindProxy.error,
+        exitCode: akFindProxy.exitCode,
+        mode: akFindProxy.mode,
+        log: akFindProxy.log.slice(-80),
+    };
+}
+
+// Разбор строк валидатора. Формат задан в `find_for_host.py`:
+//   ✓ socks5://host:port  312 мс  (3/20)      — найден живой
+//   … проверено 120/45000, живых 3            — прогресс
+//   собрано кандидатов: N · похожи на прокси (порт): M
+// Фазы человекочитаемые, но их немного и они стабильны; цифры берём ТОЛЬКО из скобок и
+// после «проверено», чтобы не подставлять в счётчик что попало.
+function akFindProxyLine(line) {
+    const s = String(line || '').trim();
+    if (!s) return;
+    // Сырую строку кладём в лог ДО разбора: владелец просил видеть, что делает поиск,
+    // а не только итоговые цифры. Разбор ниже только уточняет состояние.
+    akFindProxy.log.push(s);
+    if (akFindProxy.log.length > 400) akFindProxy.log.shift();
+    let m = s.match(/^✓\s+(\S+)\s+\d+\s*мс\s+\((\d+)\/(\d+)\)/);
+    if (m) {
+        akFindProxy.found.push(m[1]);
+        akFindProxy.checked = Number(m[2]);
+        akFindProxy.total = Number(m[3]);
+        akFindProxy.phase = `найдено ${m[2]} из ${m[3]}`;
+        return;
+    }
+    m = s.match(/^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/);
+    if (m) {
+        akFindProxy.checked = Number(m[1]);
+        akFindProxy.total = Number(m[2]);
+        akFindProxy.phase = `проверено ${m[1]} из ${m[2]}`;
+        return;
+    }
+    if (/^скраплю источники/.test(s)) { akFindProxy.phase = 'скраплю источники'; return; }
+    if (/^собрано кандидатов:/.test(s)) { akFindProxy.phase = s; return; }
+    if (/^похожи на прокси/.test(s)) { akFindProxy.phase = s; return; }
+    if (/^набрал /.test(s)) { akFindProxy.phase = s; return; }
+}
+
+// POST /__switch/api/ak/autoreg/find-proxy — запустить поиск. Отвечает сразу.
+// Запуск поиска. Вынесен из HTTP-обработчика, потому что его зовут ДВОЕ: кнопка на вкладке
+// ('manual') и фоновый докорм под прогоном ('refill').
+function akFindProxyLaunch({ want, mode = 'manual', host = 'www.aikeysapi.com' }) {
+    if (akFindProxy.running) return { ok: false, error: 'поиск прокси уже идёт' };
+    const w = Math.max(1, Math.min(30, parseInt(want, 10) || 3));
+    const py = process.env.PYTHON || 'python';
+
+    const proc = spawn(py, [
+        '-u',   // без буферизации: иначе строки прогресса доедут одним куском в конце
+        '-m', 'proxy_scraper.find_for_host',
+        '--host', host, '--want', String(w), '--json',
+        '--out', AK_PROXY_TMP_FILE,
+    ], {
+        cwd: AK_VALIDATOR_DIR, windowsHide: true,
+        // Консоль Windows по умолчанию cp1252: русская строка в логе валидатора
+        // роняла прогон UnicodeEncodeError ещё до первой проверки.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    Object.assign(akFindProxy, {
+        proc, running: true, want: w, found: [], phase: 'запуск',
+        checked: 0, total: 0, startedAt: new Date().toISOString(),
+        stopRequested: false, result: null, error: null, exitCode: null,
+        mode, log: [],
+    });
+
+    const t0 = Date.now();
+    let tail = '';
+    let jsonLine = null;      // итог валидатора: последняя строка, начинающаяся с `{`
+    const feed = (chunk) => {
+        const text = tail + String(chunk);
+        const lines = text.split(/\r?\n/);
+        tail = lines.pop();              // последняя может быть неполной
+        for (const l of lines) {
+            const s = l.trim();
+            if (s.startsWith('{')) { jsonLine = s; continue; }
+            akFindProxyLine(l);
+        }
+    };
+    proc.stdout.on('data', feed);
+    proc.stderr.on('data', feed);
+
+    proc.on('error', e => { akFindProxy.error = e.message; });
+    proc.on('exit', (code) => {
+        akFindProxy.running = false;
+        akFindProxy.proc = null;
+        akFindProxy.exitCode = code;
+        if (akFindProxy.stopRequested) {
+            // Обрыв: файл пула валидатор пишет в самом конце, поэтому текущий пул и
+            // конфиг остаются нетронутыми. Ничего не переключаем и не разбираем.
+            akFindProxy.phase = `остановлено вручную (найдено ${akFindProxy.found.length})`;
+            try {
+                const committed = akCommitPartialProxyLines(akFindProxy.found, AK_LIVE_PROXY_FILE);
+                akFindProxy.log.push(`частичный долив после Stop: ${committed} найдено, пул сохранён`);
+                logLine(`aikeysapi find-proxy: после Stop сохранено ${committed} найденных прокси`);
+            } catch (e) { logLine(`aikeysapi find-proxy: частичный долив не удался — ${e.message}`); }
+            logLine(`aikeysapi find-proxy: остановлен вручную, найдено ${akFindProxy.found.length}`);
+            return;
+        }
+        let parsed = null;
+        try { parsed = jsonLine ? JSON.parse(jsonLine) : null; } catch { /* не наш JSON */ }
+        if (parsed && parsed.ok) {
+            // Долив: свежие впереди, старые следом, хвост обрезан. Замена здесь
+            // сломала бы привязки уже начатых аккаунтов (см. akMergeProxyLines).
+            let merged = null;
+            try {
+                const fresh = akReadProxyLines(AK_PROXY_TMP_FILE);
+                const old = akReadProxyLines(AK_LIVE_PROXY_FILE);
+                merged = akMergeProxyLines(fresh, old);
+                fs.writeFileSync(AK_LIVE_PROXY_FILE, merged.join('\n') + '\n', 'utf8');
+                akFindProxy.log.push(`долив: свежих ${fresh.length}, в файле стало ${merged.length}`);
+            } catch (e) {
+                akFindProxy.error = `список найден, но в пул не записан: ${e.message}`;
+                logLine(`aikeysapi find-proxy: ${akFindProxy.error}`);
+            }
+            let switched = false;
+            try { switched = akFindProxySwitchPool(host); }
+            catch (e) { logLine(`aikeysapi find-proxy: конфиг пула не переключён — ${e.message}`); }
+            akFindProxy.result = {
+                host, want: w, mode, found: parsed.proxies || [], foundCount: parsed.found || 0,
+                out: parsed.out, switched, ms: Date.now() - t0,
+                poolSize: merged ? merged.length : null,
+            };
+            akFindProxy.phase = `готово: ${parsed.found || 0} живых`;
+            logLine(`aikeysapi find-proxy[${mode}]: найдено ${parsed.found}/${w} за ${Math.round((Date.now() - t0) / 1000)}с, в пуле ${merged ? merged.length : '—'}, конфиг ${switched ? 'переключён' : 'не тронут'}`);
+        } else {
+            akFindProxy.error = parsed ? (parsed.error || 'поиск не удался') : 'валидатор не отдал результат';
+            akFindProxy.phase = 'ошибка';
+            logLine(`aikeysapi find-proxy: ${akFindProxy.error}`);
+        }
+    });
+
+    logLine(`aikeysapi find-proxy[${mode}]: запущен поиск ${w} живых прокси (pid ${proc.pid})`);
+    return { ok: true, pid: proc.pid };
+}
+
+async function handleAkFindProxyStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const r = akFindProxyLaunch({
+            want: body.want,
+            mode: body.refill ? 'refill' : 'manual',
+        });
+        if (!r.ok) return jsonRes(res, 409, { error: r.error, ...akFindProxyPublic() });
+        jsonRes(res, 200, { ok: true, started: true, ...akFindProxyPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ak/autoreg/find-proxy — прогресс поиска (фронт опрашивает).
+function handleAkFindProxyStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...akFindProxyPublic() });
+}
+
+// POST /__switch/api/ak/autoreg/find-proxy/stop — прервать поиск.
+//
+// 🪤 Файл пула пишет САМ валидатор в самом конце, поэтому обрыв не портит текущий пул:
+// старый `live-for-host.txt` и конфиг остаются как были. Конфиг переключается только по
+// успешному JSON-итогу — см. handleAkFindProxyResult.
+function handleAkFindProxyStop(_req, res) {
+    const p = akFindProxy.proc;
+    if (!akFindProxy.running || !p) return jsonRes(res, 200, { ok: true, stopped: false, ...akFindProxyPublic() });
+    akFindProxy.stopRequested = true;
+    try {
+        if (process.platform === 'win32') {
+            // Только execFileAsync: сырой execFile в модуле не объявлен, и его ReferenceError
+            // молча съедался этим catch — ручка докладывала stopped: true, не убив процесс.
+            // Без await: ответ не ждёт taskkill, уход процесса ловит proc.on('exit').
+            execFileAsync('taskkill.exe', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true })
+                .catch((e) => logLine(`aikeysapi find-proxy: taskkill не убил pid ${p.pid}: ${e.message}`));
+        } else {
+            p.kill('SIGTERM');
+        }
+    } catch (e) { logLine(`aikeysapi find-proxy: остановка не удалась (pid ${p.pid}): ${e.message}`); }
+    logLine(`aikeysapi find-proxy: запрошена остановка (pid ${p.pid})`);
+    jsonRes(res, 200, { ok: true, stopped: true, ...akFindProxyPublic() });
+}
+
+// ─────────────────── фоновый докорм пула под длинный прогон ───────────────────
+//
+// Прогон 50 аккаунтов — это ~25 минут (один аккаунт ≈ 30 с), а публичные прокси живут
+// минуты. Пул, набранный один раз ПЕРЕД прогоном, к середине пустеет, и дальше аккаунты
+// падают с «живых прокси в пуле не осталось». Фон доливает список на ходу.
+//
+// 🎯 Запас 10 — решение владельца 12.09: держим впереди очереди десять живых, чтобы прогон
+// не вставал на каждой второй регистрации. По его же решению авторега при пустом пуле
+// ЖДЁТ прокси, а не пропускает аккаунт (см. acquireProxyFor в auto-add.js).
+//
+// 🪤 Пул перечитывает файл по штампу mtime, поэтому свежие адреса видны сразу и рестарт для
+// докорма не нужен — в этом вся суть.
+const AK_REFILL_RESERVE = 10;
+const AK_REFILL_TICK_MS = 45_000;
+
+const akRefill = { timer: null, reason: null, runs: 0, live: null };
+
+function akRefillStop(why) {
+    if (akRefill.timer) clearInterval(akRefill.timer);
+    akRefill.timer = null;
+    if (why) { akRefill.reason = why; logLine(`aikeysapi refill: остановлен (${why})`); }
+}
+
+function akRefillTick() {
+    if (!akAutoreg.running) { akRefillStop('прогон завершён'); return; }
+    if (akFindProxy.running) { akRefill.reason = 'поиск уже идёт'; return; }
+    const lib = proxyPoolLib();
+    let live = 0;
+    try { live = lib ? lib.describe().count : 0; } catch { live = 0; }
+    akRefill.live = live;
+
+    // Сколько аккаунтов ещё пойдёт: текущий (i, счёт с единицы) и все после него.
+    const total = Number(akAutoreg.count || 0);
+    const done = Number((akAutoreg.stage && akAutoreg.stage.i) || 0);
+    const remaining = Math.max(1, total - Math.max(0, done - 1));
+    const need = remaining + AK_REFILL_RESERVE;
+
+    if (live >= need) { akRefill.reason = `запас есть: живых ${live}, нужно ${need}`; return; }
+
+    const want = Math.max(3, Math.min(30, need - live));
+    akRefill.runs++;
+    akRefill.reason = `доливаю ${want}: живых ${live}, нужно ${need}`;
+    logLine(`aikeysapi refill: ${akRefill.reason}`);
+    const r = akFindProxyLaunch({ want, mode: 'refill' });
+    if (!r.ok) akRefill.reason = `запуск не удался: ${r.error}`;
+}
+
+function akRefillStart() {
+    if (akRefill.timer) return;
+    akRefill.runs = 0;
+    logLine(`aikeysapi refill: включён (запас ${AK_REFILL_RESERVE})`);
+    akRefillTick();
+    akRefill.timer = setInterval(akRefillTick, AK_REFILL_TICK_MS);
+}
+
+function akRefillPublic() {
+    return {
+        active: !!akRefill.timer,
+        reserve: AK_REFILL_RESERVE,
+        reason: akRefill.reason,
+        runs: akRefill.runs,
+        live: akRefill.live,
+    };
+}
+
+// GET /__switch/api/ak/refill — состояние фонового докорма (для UI).
+function handleAkRefillState(_req, res) {
+    jsonRes(res, 200, { ok: true, ...akRefillPublic() });
+}
+
+// Пул должен читать именно свежий файл. Правку конфига делаем только если пул уже включён
+// на этом хосте: иначе мы бы включили проксирование молча.
+function akFindProxySwitchPool(host) {
+    const cfgFile = path.join(__dirname, 'proxy-pool.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    if (!(cfg.enabled && Array.isArray(cfg.hosts) && cfg.hosts.includes(host))) return false;
+    cfg.file = AK_LIVE_PROXY_FILE;
+    cfg.scheme = null;   // схема уже в каждой строке
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    return true;
 }
 
 async function handleAkPing(req, res) {
@@ -16284,6 +16878,1264 @@ async function handleAkModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
         const mm = writeTierMap(AK_MODELMAP_FILE, { opus: body.opus, sonnet: body.sonnet, haiku: body.haiku }, null);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ───── rumeng (如梦AI) — account manager + HTTP autoreg ────────────────────
+//
+// Структурная копия вкладки AIKeysAPI: тот же пул, тот же авторег, тот же поиск прокси
+// и фоновый долив. Расхождения ровно там, где расходятся платформы, и каждое ниже
+// помечено 🪤 — «почини как у ak» в этих трёх местах не сработает.
+//
+// 🔴 rumeng — это **sub2api**, тот же движок, что у TrueSOTA, а НЕ New API.
+// Разведка в вике («собственный SPA, не New API») верна лишь наполовину: SPA и правда
+// свой, но сервер — открытый sub2api (github.com/Wei-Shaw/sub2api). Замеры 2026-09-13:
+//   • `GET /api/v1/settings/public` → `{"code":0,…,"site_name":"如梦AI"}` — конверт
+//     sub2api `{code,message,data}`, где `code: 0` = успех;
+//   • `GET /v1/models` без ключа → `401 {"code":"API_KEY_REQUIRED","message":"API key is
+//     required in Authorization header (Bearer scheme), x-api-key header, or
+//     x-goog-api-key header"}` — текст БАЙТ В БАЙТ как у true-sota.com;
+//   • `POST /api/v1/auth/refresh {}` → `400 Key: 'RefreshTokenRequest.RefreshToken'` —
+//     имя Go-структуры sub2api;
+//   • в бандле SPA: `sub2api_locale`, ручки `/subscriptions/summary`, `/groups/available`.
+// ⇒ образец для баланса — `routing/lib/truesota-account.js`, а не New-API-путь `akBalance`.
+//
+// 🪤 БАЗ ДВЕ, и промах между ними — тихая ошибка, а не крик.
+//   • шлюз LLM   — `https://api.rumeng-ai.com/v1`      (`/v1/models` → 401 с ключом-требованием)
+//   • кабинет    — `https://api.rumeng-ai.com/api/v1`  (`/api/v1/settings/public` → 200)
+// `GET /api/v1/models` отвечает «404 page not found». Если бы RM_BASE_URL указывал на
+// `/api/v1`, как читается бриф «база /api/v1, не /api», то `rmProbe` ловил бы 404 →
+// `unknown` на КАЖДОМ ключе: вкладка показывала бы живые ключи серыми, и искать причину
+// пришлось бы в куках, а не в одной букве пути. Поэтому констант две.
+const RM_SESSIONS_FILE = path.join(__dirname, 'rumeng-sessions.json');
+const RM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'rumeng-active-key.txt');
+const RM_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'rumeng-active-model.txt');
+const RM_HOST = 'api.rumeng-ai.com';
+const RM_BASE_URL = `https://${RM_HOST}/v1`;          // шлюз: /v1/models, /v1/messages
+const RM_PANEL_API = `https://${RM_HOST}/api/v1`;     // кабинет: /auth/*, /keys, /subscriptions/*
+const RM_UPSTREAM = `https://${RM_HOST}`;
+const RM_KEEPALIVE_PORT = Number(process.env.RM_KEEPALIVE_PORT || 20166);
+const RM_KEEPALIVE_URL = `http://localhost:${RM_KEEPALIVE_PORT}`;
+const RM_MODELMAP_FILE = path.join(__dirname, 'rumeng-modelmap.json');
+const RM_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+const RM_CC_HEADERS = HN_CC_HEADERS;
+const RM_PANEL_TIMEOUT_MS = 15000;
+
+// 🪤 Ключи sub2api не обязаны начинаться с `sk-`, поэтому общий isRealKey() отверг бы их
+// и аккаунт навсегда остался бы `no_key`. Проверка — по форме заглушки makeNoKeyStub(),
+// как у ak.
+function rmIsRealKey(k) {
+    const s = String(k || '').trim();
+    return s.length >= 20 && !/^no-key-/.test(s);
+}
+
+function rmSave(arr) {
+    fs.writeFileSync(RM_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+}
+function rmLoad() {
+    try {
+        const raw = fs.readFileSync(RM_SESSIONS_FILE, 'utf8');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                s.id = `rm_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) rmSave(arr);
+        return arr;
+    } catch { return []; }
+}
+function rmReadActiveKey() {
+    try { return fs.readFileSync(RM_ACTIVE_KEY_FILE, 'utf8').trim() || null; } catch { return null; }
+}
+function rmReadActiveModel() {
+    try { return fs.readFileSync(RM_ACTIVE_MODEL_FILE, 'utf8').trim() || null; } catch { return null; }
+}
+function rmReadModelMap() {
+    try {
+        const raw = fs.readFileSync(RM_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+// 🪤 Из записи вычищаются и JWT-поля: у sub2api вход держится на `accessToken` /
+// `refreshToken` в localStorage, и это такой же секрет, как пароль. У ak в этом месте
+// снималась `sessionCookie`; отдать наружу токен вместо куки — та же утечка другим словом.
+function rmSafe(s) {
+    const { password, accessToken, refreshToken, sessionCookie, mailSid, userAgent, ...safe } = s || {};
+    return {
+        ...safe,
+        hasPassword: !!String(password || ''),
+        hasSession: !!String(accessToken || '') || !!String(refreshToken || '') || !!safe.profile,
+    };
+}
+async function rmKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(RM_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env, PORT: String(RM_KEEPALIVE_PORT), UPSTREAM: RM_UPSTREAM,
+                KEY_FILE: RM_ACTIVE_KEY_FILE, MODELMAP_FILE: RM_MODELMAP_FILE,
+                ...(process.env.RM_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.RM_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive rumeng', RM_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`rumeng keepalive proxy spawn: :${RM_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) { return { ok: false, error: e.message }; }
+}
+// Живость ключа — САМИМ ключом по шлюзовой базе, без токена кабинета. Единственная
+// проверка, не зависящая ни от профиля, ни от JWT: истёкший токен панели не должен
+// выглядеть как сдохший ключ и вышибать живые ключи из ротации.
+// 🪤 `x-api-key` шлём вместе с Bearer: sub2api принимает обе схемы, и на части сборок
+// отвечает только на вторую (так же сделано в truesota-account.js § keyAlive).
+async function rmProbe(apiKey) {
+    if (!rmIsRealKey(apiKey)) return 'no_key';
+    try {
+        const r = await fetch(`${RM_BASE_URL}/models`, {
+            headers: { ...RM_CC_HEADERS, 'x-api-key': apiKey, Authorization: `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        return r.status === 200 ? 'live' : (r.status === 401 || r.status === 403) ? 'dead' : 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// ───── кабинет rumeng: конверт sub2api и JWT вместо куки ─────
+//
+// 🪤 Ответы завёрнуты в `{code, message, data}`, причём на успехе `code` — ЧИСЛО 0, а на
+// ошибке СТРОКА (`UNAUTHORIZED`, `API_KEY_REQUIRED`). Тип поля меняется, поэтому сверка
+// только через `Number(...) === 0`: `code === 0` на строке не сработает и наоборот.
+//
+// 🔴 UA ОБЯЗАН быть тем же, которым аккаунт зарегистрирован. В JWT кабинета лежит claim
+// `bnd` — отпечаток клиента, и панель сверяет его на КАЖДОМ запросе. Замер на живой
+// записи пула 13.09, `GET /api/v1/auth/me` с одним и тем же токеном:
+//     UA аккаунта (Chrome/151…)     → 200 code=0
+//     без UA                        → 401 SESSION_BINDING_MISMATCH
+//     claude-cli/2.1.158 (наш CC)   → 401 SESSION_BINDING_MISMATCH
+// Поэтому здесь НЕ RM_CC_HEADERS, в отличие от `akBalance` и всех New-API-соседей: с
+// ними каждая ручка кабинета отвечала бы 401, баланс навсегда остался бы пустым, а
+// причина читалась бы как «токен истёк» — и лечили бы её перевыпуском токена, который
+// не помогает. Заголовки шлюза (`rmProbe`, `handleRmModels`) остаются CC-шными: там
+// авторизация по api_key, привязки нет (тот же замер: `/v1/models` с claude-cli → 200).
+const RM_PANEL_UA_FALLBACK = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
+
+function rmPanelHeaders(userAgent) {
+    return {
+        'User-Agent': String(userAgent || RM_PANEL_UA_FALLBACK),
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Origin': RM_UPSTREAM,
+        'Referer': `${RM_UPSTREAM}/`,
+    };
+}
+
+async function rmPanelApi(pathname, { token = null, method = 'GET', body = null, userAgent = null } = {}) {
+    const headers = rmPanelHeaders(userAgent);
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (body) headers['Content-Type'] = 'application/json';
+    let res;
+    try {
+        res = await fetch(`${RM_PANEL_API}${pathname}`, {
+            method, headers,
+            body: body ? JSON.stringify(body) : undefined,
+            signal: AbortSignal.timeout(RM_PANEL_TIMEOUT_MS),
+        });
+    } catch (e) { return { status: 0, ok: false, data: null, error: e.message }; }
+    let json = null;
+    try { json = await res.json(); } catch {}
+    const env = json && typeof json === 'object' ? json : null;
+    const ok = res.status === 200 && env && Number(env.code) === 0;
+    // Отдельная, понятная причина вместо сырого кода панели: «токен не подходит этому
+    // клиенту» и «токен истёк» лечатся по-разному, и путать их дорого.
+    const bindMismatch = !ok && env && String(env.code) === 'SESSION_BINDING_MISMATCH';
+    return {
+        status: res.status,
+        ok,
+        data: env ? env.data : null,
+        bindMismatch: !!bindMismatch,
+        // 🔴 Ключ в текст ошибки НЕ подставляем — ни здесь, ни у вызывающих. Известная
+        // дыра 404-обработчика под /__switch/api/ печатала URL с api_key в теле ответа;
+        // здесь причина берётся только из message панели.
+        error: ok ? null : (bindMismatch
+            ? 'токен привязан к другому клиенту (UA аккаунта не совпал)'
+            : ((env && env.message) || `HTTP ${res.status}`)),
+    };
+}
+
+// Продление JWT. У sub2api срок жизни access-токена короткий, а refresh живёт долго —
+// без продления баланс отваливался бы через сутки после автореги.
+// 🪤 UA прокидываем и сюда: привязка сверяется и на продлении.
+async function rmRefreshTokens(refresh, userAgent) {
+    if (!refresh) return { ok: false, error: 'нет refresh-токена' };
+    const r = await rmPanelApi('/auth/refresh', { method: 'POST', body: { refresh_token: refresh }, userAgent });
+    if (!r.ok) return { ok: false, error: `refresh: ${r.error}` };
+    const d = r.data || {};
+    if (!d.access_token) return { ok: false, error: 'refresh без access_token' };
+    return {
+        ok: true,
+        access: d.access_token,
+        refresh: d.refresh_token || refresh,
+        expiresAt: Date.now() + (Number(d.expires_in) || 3600) * 1000,
+    };
+}
+
+// 🔴 Вход паролем — НЕ запасной путь «на всякий случай», а основной способ починки
+// протухшей сессии на этой панели. `refresh_token` здесь ОДНОРАЗОВЫЙ: выданный при
+// регистрации к моменту первого 401 уже потрачен перехватчиком SPA, и `/auth/refresh`
+// вторым вызовом отвечает отказом. То есть «продли по refresh», как у соседних вкладок,
+// тут чинит ровно ноль случаев из ста — аккаунт выглядел бы умершим на следующие сутки
+// после автореги, хотя пароль лежит в той же записи пула.
+async function rmLoginWithPassword(email, password, userAgent) {
+    if (!email || !password) return { ok: false, error: 'нет пароля для входа' };
+    const r = await rmPanelApi('/auth/login', { method: 'POST', body: { email, password }, userAgent });
+    if (!r.ok) return { ok: false, error: `вход: ${r.error}` };
+    const d = r.data || {};
+    if (!d.access_token) return { ok: false, error: 'вход без access_token' };
+    return {
+        ok: true,
+        access: d.access_token,
+        refresh: d.refresh_token || null,
+        expiresAt: Date.now() + (Number(d.expires_in) || 3600) * 1000,
+    };
+}
+
+// ───── снимок сессии → токены кабинета ─────
+//
+// 🔴 Имя ключа в localStorage — **`auth_token`**, НЕ `access_token`. По проводу ручка
+// `/auth/login` и `/auth/register` отдают поле `access_token`, но SPA кладёт его значение
+// под именем `auth_token` (замер живого бандла `assets/index-BY5fm1HP.js`:
+// `setItem("auth_token"` ×2, `getItem("auth_token")` ×4). Ключа `access_token` в
+// localStorage нет вообще. Всего ключей четыре: `auth_token`, `refresh_token`,
+// `token_expires_at`, `auth_user`. Читать снимок по имени поля из HTTP-ответа — значит
+// не найти токен никогда и показать «токена кабинета нет» на исправном аккаунте.
+// В HTTP-заголовок значение по-прежнему уезжает как `Authorization: Bearer <значение>`.
+//
+// Формат снимка — общий с `rumeng/refresh-sessions.js` (storageState Playwright);
+// второй реализации формата здесь заводить нельзя.
+const RM_TOKEN_KEY = 'auth_token';
+const RM_REFRESH_KEY = 'refresh_token';
+const RM_EXPIRES_KEY = 'token_expires_at';
+
+function rmSnapshotFile(recordId) {
+    return path.join(__dirname, '..', 'rumeng', 'sessions', `acct_${recordId}.json`);
+}
+
+// Токены из снимка кнопки 🌐. Нужны, когда в записи пула их нет: авторег пишет снимок, а
+// вкладку могли добавить руками или импортом.
+function rmTokensFromSnapshot(recordId) {
+    try {
+        const j = JSON.parse(fs.readFileSync(rmSnapshotFile(recordId), 'utf8'));
+        const out = {};
+        for (const o of j.origins || []) {
+            for (const e of o.localStorage || []) {
+                if (e.name === RM_TOKEN_KEY && e.value) out.access = String(e.value);
+                else if (e.name === RM_REFRESH_KEY && e.value) out.refresh = String(e.value);
+                else if (e.name === RM_EXPIRES_KEY && e.value) out.expiresAt = Number(e.value) || 0;
+            }
+        }
+        return out.access || out.refresh ? out : null;
+    } catch { return null; }
+}
+
+// 🔴 Живость токена проверяется ТОЛЬКО запросом. Правило «токен в снимке есть → залогинен»
+// врёт: с мёртвым токеном кабинет держится ~16 секунд, потом отдаёт 401 и уводит на логин.
+// Поэтому «есть строка» и «пускает» — разные факты, и второй стоит одного запроса.
+async function rmTokenAlive(token, userAgent) {
+    if (!token) return { ok: false, error: 'токена нет' };
+    const r = await rmPanelApi('/auth/me', { token, userAgent });
+    if (r.ok) return { ok: true, user: r.data };
+    return { ok: false, error: r.status === 401 && !r.bindMismatch ? 'токен кабинета отвергнут (401)' : r.error };
+}
+
+// Живой токен кабинета для записи пула. Порядок: непротухший сохранённый → токены из
+// снимка 🌐 → продление по refresh → «токена нет» с причиной. Продлённую пару СРАЗУ пишем
+// в запись: иначе каждый чек баланса дёргал бы /auth/refresh заново.
+//
+// 🪤 Записываем через `save(load())`, а не в переданный объект: между чтением и записью
+// пул мог быть перезаписан авторегом, и правка по ссылке потерялась бы молча.
+// Срок жизни access-токена в записи пула. 🪤 Форм ДВЕ, и это не небрежность, а стык двух
+// писателей: продление здесь кладёт готовый штамп `tokenExpiresAt` (мс эпохи), а авторег
+// пишет то, что отдала панель, — `tokenExpiresIn` (секунды) плюс `tokenIssuedAt` (ISO).
+// Проверено на живом пуле: обе записи, созданные авторегом 13.09, несут ВТОРУЮ форму.
+// Читая только `tokenExpiresAt`, мы считали бы свежий суточный токен протухшим и гоняли
+// `/auth/refresh` на каждый чек баланса — лишний запрос к панели на ровном месте.
+function rmTokenExpiresAt(rec) {
+    const direct = Number(rec && rec.tokenExpiresAt) || 0;
+    if (direct > 0) return direct;
+    const ttl = Number(rec && rec.tokenExpiresIn) || 0;
+    const issued = rec && rec.tokenIssuedAt ? Date.parse(rec.tokenIssuedAt) : NaN;
+    if (ttl > 0 && isFinite(issued)) return issued + ttl * 1000;
+    return 0;
+}
+
+const RM_TOKEN_SKEW_MS = 60_000;   // считаем протухшим за минуту до срока
+async function rmTokenFor(target, { force = false } = {}) {
+    const rec = target || {};
+    // Токенов в записи нет — подбираем из снимка кнопки 🌐, прежде чем сдаваться.
+    if (!rec.accessToken && !rec.refreshToken && rec.id) {
+        const snap = rmTokensFromSnapshot(rec.id);
+        if (snap) {
+            if (snap.access) rec.accessToken = snap.access;
+            if (snap.refresh) rec.refreshToken = snap.refresh;
+            if (snap.expiresAt) rec.tokenExpiresAt = snap.expiresAt;
+        }
+    }
+    const exp = rmTokenExpiresAt(rec);
+    // 🔴 UA записи — часть пропуска, а не косметика: панель сверяет его с claim `bnd` в
+    // токене. Аккаунт, добавленный руками без `userAgent`, уедет на запасной Chrome-UA:
+    // он подойдёт, только если тем же UA аккаунт и регистрировали.
+    const ua = rec.userAgent || null;
+    if (!force && rec.accessToken && exp > Date.now() + RM_TOKEN_SKEW_MS) {
+        // 🪤 Срок из снимка — обещание, а не факт: аккаунт мог быть разлогинен на сервере
+        // (`/auth/revoke-all-sessions`), и тогда непротухший по часам токен всё равно
+        // отвергается. Одна проверка `/auth/me` дешевле, чем «баланс молча пустой».
+        const alive = await rmTokenAlive(rec.accessToken, ua);
+        if (alive.ok) return { ok: true, token: rec.accessToken, userAgent: ua };
+        if (!rec.refreshToken) return { ok: false, error: alive.error };
+        // Токен мёртв, но refresh есть — падаем в продление ниже.
+    }
+    if (!rec.refreshToken) {
+        // Refresh нет, но пароль есть — этого достаточно: вход по паролю выдаёт свежую
+        // пару целиком. Ветка нужна для записей, добавленных руками и через импорт: у них
+        // токенов не бывает вовсе, и без неё вкладка вечно писала бы «токена кабинета нет».
+        const relogin = await rmLoginWithPassword(rec.email, rec.password, ua);
+        if (relogin.ok) {
+            rec.accessToken = relogin.access;
+            if (relogin.refresh) rec.refreshToken = relogin.refresh;
+            rec.tokenExpiresAt = relogin.expiresAt;
+            try {
+                const sessions = rmLoad();
+                const live = sessions.find(s => s.id === rec.id);
+                if (live) {
+                    live.accessToken = relogin.access;
+                    if (relogin.refresh) live.refreshToken = relogin.refresh;
+                    live.tokenExpiresAt = relogin.expiresAt;
+                    delete live.tokenExpiresIn;
+                    delete live.tokenIssuedAt;
+                    rmSave(sessions);
+                }
+            } catch (e) { logLine(`rumeng вход: пара получена, но в пул не записана — ${e.message}`); }
+            logLine(`rumeng: сессия ${rec.email || rec.id} получена входом по паролю (refresh-токена не было)`);
+            return { ok: true, token: relogin.access, userAgent: ua, refreshed: true };
+        }
+        return { ok: false, error: rec.accessToken ? `токен кабинета истёк; ${relogin.error}` : `токена кабинета нет; ${relogin.error}` };
+    }
+    let r = await rmRefreshTokens(rec.refreshToken, ua);
+    // 🔴 Отказ продления — ожидаемый ход событий, а не авария: `refresh_token` одноразовый
+    // и к первому 401 обычно уже потрачен перехватчиком SPA. Чиним входом по паролю,
+    // который лежит в той же записи. Без этой ветки каждый аккаунт «умирал» через сутки
+    // после автореги и требовал ручного захода в ЛК.
+    if (!r.ok) {
+        const relogin = await rmLoginWithPassword(rec.email, rec.password, ua);
+        if (!relogin.ok) return { ok: false, error: `${r.error}; ${relogin.error}` };
+        logLine(`rumeng: сессия ${rec.email || rec.id} восстановлена входом по паролю (refresh отвергнут)`);
+        r = relogin;
+    }
+    rec.accessToken = r.access;
+    if (r.refresh) rec.refreshToken = r.refresh;
+    rec.tokenExpiresAt = r.expiresAt;
+    try {
+        const sessions = rmLoad();
+        const live = sessions.find(s => s.id === rec.id);
+        if (live) {
+            live.accessToken = r.access;
+            if (r.refresh) live.refreshToken = r.refresh;
+            live.tokenExpiresAt = r.expiresAt;
+            // 🪤 Снимаем форму автореги, иначе `rmTokenExpiresAt` увидит СТАРЫЙ
+            // `tokenIssuedAt` раньше нового штампа и снова сочтёт токен протухшим —
+            // вход по паролю повторялся бы на каждый чек баланса.
+            delete live.tokenExpiresIn;
+            delete live.tokenIssuedAt;
+            rmSave(sessions);
+        }
+    } catch (e) { logLine(`rumeng refresh: пара продлена, но в пул не записана — ${e.message}`); }
+    return { ok: true, token: r.access, userAgent: ua, refreshed: true };
+}
+
+async function rmListKeys(token, userAgent) {
+    const r = await rmPanelApi('/keys', { token, userAgent });
+    if (!r.ok) return { ok: false, error: r.error, keys: [] };
+    const d = r.data || {};
+    const items = Array.isArray(d) ? d : (d.items || d.records || d.keys || []);
+    return { ok: true, keys: items };
+}
+
+async function rmSubscriptionSummary(token, userAgent) {
+    const r = await rmPanelApi('/subscriptions/summary', { token, userAgent });
+    if (!r.ok) return { ok: false, error: r.error };
+    const d = r.data || {};
+    return {
+        ok: true,
+        activeCount: Number(d.active_count) || 0,
+        totalUsedUsd: Number(d.total_used_usd) || 0,
+        subscriptions: Array.isArray(d.subscriptions) ? d.subscriptions : [],
+    };
+}
+
+// Кошелёк пользователя. 🔴 Именно он, а не подписка, держит деньги на ЭТОЙ панели —
+// см. комментарий к `rmBalance`. Поля из `/auth/me`: `balance` (доступно),
+// `frozen_balance` (удержано под текущие запросы), `total_recharged` (всего заведено).
+async function rmWallet(token, userAgent) {
+    const r = await rmPanelApi('/auth/me', { token, userAgent });
+    if (!r.ok) return { ok: false, error: r.error };
+    const d = r.data || {};
+    if (d.balance == null) return { ok: false, error: 'в профиле нет поля balance' };
+    return {
+        ok: true,
+        balance: Number(d.balance) || 0,
+        frozen: Number(d.frozen_balance) || 0,
+        recharged: Number(d.total_recharged) || 0,
+        userId: Number(d.id) || null,
+        username: d.username || d.email || null,
+    };
+}
+
+// Самое узкое окно подписки. Лимит 0 у sub2api = «без ограничения», поэтому нули в
+// расчёт не идут: иначе аккаунт без дневного лимита показывал бы остаток $0 и его
+// вышибло бы из ротации.
+function rmTightestWindow(sub) {
+    const windows = [
+        { window: '5h', limit: sub.rate_limit_5h, used: sub.usage_5h },
+        { window: 'сутки', limit: sub.daily_limit_usd, used: sub.daily_used_usd },
+        { window: 'неделя', limit: sub.weekly_limit_usd, used: sub.weekly_used_usd },
+        { window: 'месяц', limit: sub.monthly_limit_usd, used: sub.monthly_used_usd },
+    ];
+    let best = null;
+    for (const w of windows) {
+        const limit = Number(w.limit) || 0;
+        if (limit <= 0) continue;
+        const used = Number(w.used) || 0;
+        const left = round2(limit - used);
+        if (!best || left < best.balance) best = { window: w.window, limit: round2(limit), used: round2(used), balance: left };
+    }
+    return best;
+}
+
+// 🔴 ЗДЕСЬ КОПИЯ 1:1 ЛОМАЕТСЯ — и это первое из трёх мест, названных в брифе.
+//
+// `akBalance` тянет цифру КУКОЙ New API: `/api/user/self` с заголовками `Cookie` +
+// `New-Api-User`, кванты `quota/500000`, а при промахе — `newapiBalance` с угадыванием
+// гранта. У rumeng нет ни того, ни другого: авторизация — JWT в `Authorization: Bearer`,
+// кошелька нет вовсе, а деньги живут подписками с окнами 5h/сутки/неделя/месяц.
+// Скопированный дословно `akBalance` дал бы 404 на `/api/user/self` и «прикидку» из
+// делённого на 500000 нуля — то есть уверенную неправду в таблице.
+//
+// Поэтому цифра берётся так же, как у TrueSOTA (тот же движок), приоритет источников:
+//   1. КЛЮЧ (`/keys`, quota/quota_used) — если у самого ключа задан лимит, он и есть
+//      потолок: подписка может разрешать больше, чем ключ;
+//   2. ПОДПИСКА (`/subscriptions/summary`) — самое узкое окно с ненулевым лимитом;
+//   3. только живость — когда токена кабинета нет. Цифру НЕ выдумываем: `balance: null`,
+//      причина уезжает в `quotaError` и видна в UI. «Угадать грант», как у New-API, тут
+//      нечем — прикидка от расхода врала бы в обе стороны.
+// Форма возврата совпадает с newapiBalance, поэтому общий newapiApplyBalance подходит.
+async function rmBalance(target, opts = {}) {
+    const rec = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = rec.api_key;
+    if (!rmIsRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+
+    const status = await rmProbe(apiKey);
+    if (status !== 'live') return { status, error: status === 'dead' ? 'ключ отвергнут шлюзом' : 'шлюз не ответил' };
+
+    const t = await rmTokenFor(rec, { force: !!opts.force });
+    if (!t.ok) {
+        return { status: 'live', balance: null, spent: null, balanceSource: 'probe', quotaError: t.error };
+    }
+
+    // 🪤 Панель отдаёт ключ в списке ЗАМАСКИРОВАННЫМ, поэтому сопоставляем по хвосту, а
+    // не сравнением строк целиком — иначе «своего» ключа в списке не найдётся никогда.
+    const tail = String(apiKey).slice(-6);
+    const keys = await rmListKeys(t.token, t.userAgent);
+    const mine = (keys.keys || []).find(k => String(k.key || '').slice(-6) === tail);
+    if (mine && Number(mine.quota) > 0) {
+        const used = Number(mine.quota_used) || 0;
+        return {
+            status: 'live',
+            balance: round2(Number(mine.quota) - used),
+            spent: round2(used),
+            granted: round2(Number(mine.quota)),
+            balanceSource: 'key',
+            keyId: mine.id,
+            keyName: mine.name,
+            window: 'ключ',
+        };
+    }
+
+    const sum = await rmSubscriptionSummary(t.token, t.userAgent);
+    let best = null;
+    if (sum.ok) {
+        for (const sub of sum.subscriptions) {
+            if (sub.status && String(sub.status).toLowerCase() !== 'active') continue;
+            const w = rmTightestWindow(sub);
+            if (w && (!best || w.balance < best.balance)) best = { ...w, groupName: sub.group_name || null, expiresAt: sub.expires_at || null };
+        }
+    }
+    if (best) {
+        return {
+            status: 'live',
+            balance: best.balance,
+            spent: round2(best.used),
+            granted: best.limit,
+            balanceSource: 'subscription',
+            window: best.window,
+            groupName: best.groupName,
+            accessUntil: best.expiresAt || undefined,
+        };
+    }
+
+    // 🔴 КОШЕЛЁК — основной источник цифры на ЭТОЙ панели, и ради него ветка стоит
+    // последней, а не отсутствует. Замер 13.09 на трёх живых аккаунтах:
+    //     /subscriptions/summary → {"active_count":0,"total_used_usd":0,"subscriptions":[]}
+    //     /keys                  → quota: 0, quota_used: 0   (0 у sub2api = «без лимита»)
+    //     /auth/me               → balance: 1, frozen_balance: 0, total_recharged: 0
+    // То есть у TrueSOTA тот же движок продаёт ПОДПИСКИ, а здесь — предоплаченный
+    // кошелёк: грант за регистрацию $1 лежит именно в нём. Скопированный дословно путь
+    // TrueSOTA отдал бы `balance: null` и «нет подписки» на полностью исправном аккаунте,
+    // то есть вкладка показывала бы «$—» всем и всегда.
+    const wallet = await rmWallet(t.token, t.userAgent);
+    if (wallet.ok) {
+        // `spent` честно берём из расхода ключа: кошелёк знает остаток, но не историю.
+        // `granted` = остаток + расход, как у соседей, чтобы детект «налили денег»
+        // (newapiApplyBalance § grantedSelf) работал тем же способом.
+        const used = mine ? round2(Number(mine.quota_used) || 0) : round2(sum.ok ? sum.totalUsedUsd : 0);
+        return {
+            status: 'live',
+            balance: round2(wallet.balance),
+            spent: used,
+            granted: round2(wallet.balance + used),
+            balanceSource: 'self',
+            window: 'кошелёк',
+            newApiUserId: wallet.userId || undefined,
+            newApiUsername: wallet.username || undefined,
+            // Удержанное под текущие запросы показываем отдельно: без него «остаток $1»
+            // при замороженных $0.20 выглядел бы расхождением с кабинетом.
+            frozen: wallet.frozen || undefined,
+        };
+    }
+
+    // Ни ключевой квоты, ни подписки, ни кошелька — цифру НЕ выдумываем.
+    return {
+        status: 'live',
+        balance: null,
+        spent: mine ? round2(Number(mine.quota_used) || 0) : null,
+        balanceSource: 'probe',
+        quotaError: `кошелёк: ${wallet.error}${sum.ok ? '' : ` · подписки: ${sum.error}`}`,
+    };
+}
+
+// 🪤 `newapiApplyBalance` подходит (ему нужна только форма ответа), но причина отсутствия
+// цифры и окно расчёта обязаны доехать в UI отдельно: без них «$—» выглядит поломкой
+// вкладки, хотя это «у аккаунта нет лимита» или «токен кабинета истёк».
+function rmApplyBalance(target, bal) {
+    const out = newapiApplyBalance(target, bal, { provider: 'rumeng' });
+    if (bal && bal.quotaError) target.quotaError = bal.quotaError; else if (target) delete target.quotaError;
+    if (bal && bal.window) target.quotaWindow = bal.window; else if (target) delete target.quotaWindow;
+    if (bal && bal.groupName) target.groupName = bal.groupName;
+    return out;
+}
+
+async function handleRmSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const sessions = rmLoad();
+        if (params.get('probe') === '1') {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await rmProbe(s.api_key); }));
+            }
+            rmSave(sessions);
+        }
+        if (params.get('balance') === '1') {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => rmApplyBalance(s, await rmBalance(s))));
+            }
+            rmSave(sessions);
+        }
+        jsonRes(res, 200, { sessions: sessions.map(rmSafe), activeModel: rmReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+const rmAutoreg = {
+    proc: null,
+    pid: null,
+    running: false,
+    startedAt: null,
+    count: 0,
+    stdout: [],
+    stderr: [],
+    stage: null,
+    result: null,
+    exitCode: null,
+    signal: null,
+    useProxy: true,
+};
+
+function rmAutoregPublic() {
+    return {
+        running: rmAutoreg.running,
+        pid: rmAutoreg.pid,
+        startedAt: rmAutoreg.startedAt,
+        count: rmAutoreg.count,
+        useProxy: rmAutoreg.useProxy,
+        stdout: rmAutoreg.stdout.slice(-40),
+        stderr: rmAutoreg.stderr.slice(-20),
+        stage: rmAutoreg.stage,
+        result: rmAutoreg.result,
+        exitCode: rmAutoreg.exitCode,
+        signal: rmAutoreg.signal,
+    };
+}
+
+async function handleRmAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        if (rmAutoreg.running && rmAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторег rumeng уже идёт', ...rmAutoregPublic() });
+        }
+        const script = path.join(__dirname, '..', 'rumeng', 'auto-add.js');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'rumeng/auto-add.js не найден' });
+
+        // Пул прокси — переключатель, а не приговор: при пустом или мёртвом пуле владелец
+        // вправе пройти с домашнего IP явным выбором.
+        const useProxy = body.useProxy !== false;
+        const args = [script, String(count)];
+        if (!useProxy) args.push('--no-proxy');
+
+        const proc = spawn(process.execPath, args, {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: process.env,
+        });
+        Object.assign(rmAutoreg, {
+            proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(), count,
+            useProxy, stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
+        });
+        const pushLines = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                // 🪤 Этап берём ТОЛЬКО из машиночитаемого маркера. Человекочитаемые строки
+                // («✓ код …», «✓ зарегистрирован») меняются при любой правке формулировки,
+                // и регулярка по ним однажды молча покажет не тот шаг — индикатор,
+                // который врёт, хуже отсутствующего.
+                //
+                // В буфер лога маркер НЕ кладём: он служебный, и в панели владельца от него
+                // только шум — там человек читает обычные строки прогона.
+                if (line.startsWith('RM_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('RM_STAGE '.length));
+                        if (s && typeof s.stage === 'string') {
+                            rmAutoreg.stage = { ...s, at: new Date().toISOString() };
+                        }
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                // 🪤 `RM_AUTOADD_RESULT` — тоже протокол, а не строка для чтения: итог
+                // уезжает отдельным полем и рисуется как «готово 1, в пул 1, ошибок 0».
+                // Оставленный в буфере, он выглядел бы сырым JSON-ом на весь экран.
+                if (line.startsWith('RM_AUTOADD_RESULT ')) {
+                    try { rmAutoreg.result = JSON.parse(line.slice('RM_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
+                }
+                rmAutoreg[which].push(line);
+                if (rmAutoreg[which].length > 100) rmAutoreg[which].shift();
+            }
+        };
+        proc.stdout.on('data', d => pushLines('stdout', d));
+        proc.stderr.on('data', d => pushLines('stderr', d));
+        proc.on('error', e => { rmAutoreg.stderr.push(e.message); });
+        proc.on('exit', (code, signal) => {
+            rmAutoreg.running = false;
+            rmAutoreg.pid = null;
+            rmAutoreg.exitCode = code;
+            rmAutoreg.signal = signal || null;
+            rmAutoreg.proc = null;
+            rmRefillStop('прогон завершён');   // фон живёт ровно столько, сколько прогон
+            logLine(`rumeng autoreg exited: count=${count} code=${code} signal=${signal || '-'}`);
+        });
+        logLine(`rumeng autoreg launched: count=${count} pid=${proc.pid}`);
+        // Докорм только когда прокси реально используются: с --no-proxy прокси не нужны.
+        if (useProxy) rmRefillStart();
+        jsonRes(res, 200, { ok: true, ...rmAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleRmAutoregStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...rmAutoregPublic() });
+}
+
+async function handleRmAutoregStop(_req, res) {
+    const proc = rmAutoreg.proc;
+    if (!rmAutoreg.running || !proc) return jsonRes(res, 200, { ok: true, stopped: false, ...rmAutoregPublic() });
+    try {
+        // Windows: убиваем всё дерево. Без /T дочерний помощник (браузер, почтовый мост)
+        // пережил бы «остановку», о которой UI уже отчитался.
+        if (process.platform === 'win32') {
+            await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }).catch(() => {});
+        } else {
+            try { proc.kill('SIGTERM'); } catch {}
+        }
+        rmAutoreg.signal = 'STOP';
+        logLine(`rumeng autoreg stop requested: pid=${proc.pid}`);
+        return jsonRes(res, 200, { ok: true, stopped: true, ...rmAutoregPublic() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// Публичные прокси живут минуты, поэтому список пересобирается ПЕРЕД прогоном через CLI
+// валидатора (`find_for_host`) — он умеет скрап, отсев нетуннелирующих и проверку живого
+// HTTPS до панели, и останавливается, как только набрано нужное.
+//
+// 🪤 Файлы пула — ОБЩИЕ с вкладкой ak: один валидатор, один `live-for-host.txt`, один
+// `proxy-pool.json`. Заводить второй пул под rumeng нельзя — два писателя в один конфиг
+// пула затирали бы находки друг друга, а хост в конфиге всё равно один на переключение.
+const RM_LIVE_PROXY_FILE = AK_LIVE_PROXY_FILE;
+const RM_PROXY_TMP_FILE = AK_PROXY_TMP_FILE;
+const RM_PROXY_CAP = AK_PROXY_CAP;
+const RM_VALIDATOR_DIR = AK_VALIDATOR_DIR;
+
+// 🪤 Слияние, а не замена: привязка прокси к аккаунту липкая, и `forAccount()` на
+// исчезнувший адрес отвечает `needsReassign`. Перезапись осиротила бы привязки ВСЕХ уже
+// начатых аккаунтов. Но и просто склеивать нельзя — свежие идут первыми, хвост режется.
+function rmReadProxyLines(file) { return akReadProxyLines(file); }
+function rmMergeProxyLines(fresh, old, cap = RM_PROXY_CAP) { return akMergeProxyLines(fresh, old, cap); }
+
+function handleRmProxyPoolLines(req, res) {
+    try {
+        const lines = rmReadProxyLines(RM_LIVE_PROXY_FILE);
+        jsonRes(res, 200, { ok: true, count: lines.length, lines });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// 🪤 `count` берём из `describe()`, а НЕ из числа строк файла: пул отбрасывает
+// неразбираемые строки в `bad`, и «в файле 41» при девяти рабочих обманывает ровно в тот
+// момент, когда на цифру смотрят перед прогоном. `readAt` честно означает «столько было
+// при последнем чтении файла», а не «столько есть сейчас».
+function handleRmProxyPool(_req, res) {
+    const lib = proxyPoolLib();
+    if (!lib) return jsonRes(res, 503, { error: 'proxy-pool недоступен' });
+    try {
+        const d = lib.describe();
+        const list = lib.pool().proxies.map(p => p.id);
+        jsonRes(res, 200, {
+            ok: true,
+            enabled: !!d.enabled,
+            enabledForHost: lib.enabledForHost(RM_HOST),
+            count: d.count,
+            bad: d.bad,
+            proxies: list,
+            source: d.source,
+            scheme: d.scheme,
+            hosts: d.hosts,
+            assigned: d.assigned,
+            orphans: d.orphans,
+            fileError: d.fileError || null,
+            readAt: new Date().toISOString(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Состояние поиска прокси. Поиск идёт минуты и НЕ держит HTTP-ответ: запуск возвращает
+// управление сразу, прогресс фронт забирает опросом, прервать можно отдельной ручкой.
+const rmFindProxy = {
+    proc: null, running: false, want: 0,
+    found: [], phase: '', checked: 0, total: 0,
+    startedAt: null, stopRequested: false,
+    result: null, error: null, exitCode: null,
+    mode: null,        // 'manual' (кнопка) | 'refill' (фон под прогоном)
+    log: [],           // строки валидатора как есть — владелец просил видеть лог поиска
+};
+
+function rmFindProxyPublic() {
+    return {
+        running: rmFindProxy.running,
+        want: rmFindProxy.want,
+        found: rmFindProxy.found.slice(-60),
+        foundCount: rmFindProxy.found.length,
+        phase: rmFindProxy.phase,
+        checked: rmFindProxy.checked,
+        total: rmFindProxy.total,
+        startedAt: rmFindProxy.startedAt,
+        stopRequested: rmFindProxy.stopRequested,
+        result: rmFindProxy.result,
+        error: rmFindProxy.error,
+        exitCode: rmFindProxy.exitCode,
+        mode: rmFindProxy.mode,
+        log: rmFindProxy.log.slice(-80),
+    };
+}
+
+// Разбор строк валидатора (формат задан в `find_for_host.py`). Сырую строку кладём в лог
+// ДО разбора: владелец просил видеть, что делает поиск, а не только итоговые цифры.
+function rmFindProxyLine(line) {
+    const s = String(line || '').trim();
+    if (!s) return;
+    rmFindProxy.log.push(s);
+    if (rmFindProxy.log.length > 400) rmFindProxy.log.shift();
+    let m = s.match(/^✓\s+(\S+)\s+\d+\s*мс\s+\((\d+)\/(\d+)\)/);
+    if (m) {
+        rmFindProxy.found.push(m[1]);
+        rmFindProxy.checked = Number(m[2]);
+        rmFindProxy.total = Number(m[3]);
+        rmFindProxy.phase = `найдено ${m[2]} из ${m[3]}`;
+        return;
+    }
+    m = s.match(/^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/);
+    if (m) {
+        rmFindProxy.checked = Number(m[1]);
+        rmFindProxy.total = Number(m[2]);
+        rmFindProxy.phase = `проверено ${m[1]} из ${m[2]}`;
+        return;
+    }
+    if (/^скраплю источники/.test(s)) { rmFindProxy.phase = 'скраплю источники'; return; }
+    if (/^собрано кандидатов:/.test(s)) { rmFindProxy.phase = s; return; }
+    if (/^похожи на прокси/.test(s)) { rmFindProxy.phase = s; return; }
+    if (/^набрал /.test(s)) { rmFindProxy.phase = s; return; }
+}
+
+// Запуск поиска вынесен из HTTP-обработчика: его зовут ДВОЕ — кнопка вкладки ('manual')
+// и фоновый докорм под прогоном ('refill').
+function rmFindProxyLaunch({ want, mode = 'manual', host = RM_HOST }) {
+    if (rmFindProxy.running) return { ok: false, error: 'поиск прокси уже идёт' };
+    const w = Math.max(1, Math.min(30, parseInt(want, 10) || 3));
+    const py = process.env.PYTHON || 'python';
+
+    const proc = spawn(py, [
+        '-u',   // без буферизации: иначе строки прогресса доедут одним куском в конце
+        '-m', 'proxy_scraper.find_for_host',
+        '--host', host, '--want', String(w), '--json',
+        '--out', RM_PROXY_TMP_FILE,
+    ], {
+        cwd: RM_VALIDATOR_DIR, windowsHide: true,
+        // Консоль Windows по умолчанию cp1252: русская строка в логе валидатора роняла
+        // прогон UnicodeEncodeError ещё до первой проверки.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    Object.assign(rmFindProxy, {
+        proc, running: true, want: w, found: [], phase: 'запуск',
+        checked: 0, total: 0, startedAt: new Date().toISOString(),
+        stopRequested: false, result: null, error: null, exitCode: null,
+        mode, log: [],
+    });
+
+    const t0 = Date.now();
+    let tail = '';
+    let jsonLine = null;      // итог валидатора: последняя строка, начинающаяся с `{`
+    const feed = (chunk) => {
+        const text = tail + String(chunk);
+        const lines = text.split(/\r?\n/);
+        tail = lines.pop();              // последняя может быть неполной
+        for (const l of lines) {
+            const s = l.trim();
+            if (s.startsWith('{')) { jsonLine = s; continue; }
+            rmFindProxyLine(l);
+        }
+    };
+    proc.stdout.on('data', feed);
+    proc.stderr.on('data', feed);
+
+    proc.on('error', e => { rmFindProxy.error = e.message; });
+    proc.on('exit', (code) => {
+        rmFindProxy.running = false;
+        rmFindProxy.proc = null;
+        rmFindProxy.exitCode = code;
+        if (rmFindProxy.stopRequested) {
+            // Обрыв: файл пула валидатор пишет в самом конце, поэтому текущий пул и
+            // конфиг остаются нетронутыми. Ничего не переключаем и не разбираем.
+            rmFindProxy.phase = `остановлено вручную (найдено ${rmFindProxy.found.length})`;
+            try {
+                const committed = akCommitPartialProxyLines(rmFindProxy.found, RM_LIVE_PROXY_FILE);
+                rmFindProxy.log.push(`частичный долив после Stop: ${committed} найдено, пул сохранён`);
+                logLine(`rumeng find-proxy: после Stop сохранено ${committed} найденных прокси`);
+            } catch (e) { logLine(`rumeng find-proxy: частичный долив не удался — ${e.message}`); }
+            logLine(`rumeng find-proxy: остановлен вручную, найдено ${rmFindProxy.found.length}`);
+            return;
+        }
+        let parsed = null;
+        try { parsed = jsonLine ? JSON.parse(jsonLine) : null; } catch { /* не наш JSON */ }
+        if (parsed && parsed.ok) {
+            let merged = null;
+            try {
+                const fresh = rmReadProxyLines(RM_PROXY_TMP_FILE);
+                const old = rmReadProxyLines(RM_LIVE_PROXY_FILE);
+                merged = rmMergeProxyLines(fresh, old);
+                fs.writeFileSync(RM_LIVE_PROXY_FILE, merged.join('\n') + '\n', 'utf8');
+                rmFindProxy.log.push(`долив: свежих ${fresh.length}, в файле стало ${merged.length}`);
+            } catch (e) {
+                rmFindProxy.error = `список найден, но в пул не записан: ${e.message}`;
+                logLine(`rumeng find-proxy: ${rmFindProxy.error}`);
+            }
+            let switched = false;
+            try { switched = rmFindProxySwitchPool(host); }
+            catch (e) { logLine(`rumeng find-proxy: конфиг пула не переключён — ${e.message}`); }
+            rmFindProxy.result = {
+                host, want: w, mode, found: parsed.proxies || [], foundCount: parsed.found || 0,
+                out: parsed.out, switched, ms: Date.now() - t0,
+                poolSize: merged ? merged.length : null,
+            };
+            rmFindProxy.phase = `готово: ${parsed.found || 0} живых`;
+            logLine(`rumeng find-proxy[${mode}]: найдено ${parsed.found}/${w} за ${Math.round((Date.now() - t0) / 1000)}с, в пуле ${merged ? merged.length : '—'}, конфиг ${switched ? 'переключён' : 'не тронут'}`);
+        } else {
+            rmFindProxy.error = parsed ? (parsed.error || 'поиск не удался') : 'валидатор не отдал результат';
+            rmFindProxy.phase = 'ошибка';
+            logLine(`rumeng find-proxy: ${rmFindProxy.error}`);
+        }
+    });
+
+    logLine(`rumeng find-proxy[${mode}]: запущен поиск ${w} живых прокси (pid ${proc.pid})`);
+    return { ok: true, pid: proc.pid };
+}
+
+async function handleRmFindProxyStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const r = rmFindProxyLaunch({
+            want: body.want,
+            mode: body.refill ? 'refill' : 'manual',
+        });
+        if (!r.ok) return jsonRes(res, 409, { error: r.error, ...rmFindProxyPublic() });
+        jsonRes(res, 200, { ok: true, started: true, ...rmFindProxyPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/rm/autoreg/find-proxy — прогресс поиска (фронт опрашивает).
+function handleRmFindProxyStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...rmFindProxyPublic() });
+}
+
+// POST /__switch/api/rm/autoreg/find-proxy/stop — прервать поиск.
+//
+// 🪤 Файл пула пишет САМ валидатор в самом конце, поэтому обрыв не портит текущий пул:
+// старый `live-for-host.txt` и конфиг остаются как были.
+function handleRmFindProxyStop(_req, res) {
+    const p = rmFindProxy.proc;
+    if (!rmFindProxy.running || !p) return jsonRes(res, 200, { ok: true, stopped: false, ...rmFindProxyPublic() });
+    rmFindProxy.stopRequested = true;
+    try {
+        if (process.platform === 'win32') {
+            // Только execFileAsync: сырой execFile в модуле не объявлен, и его ReferenceError
+            // молча съедался этим catch — ручка докладывала stopped: true, не убив процесс.
+            // Без await: ответ не ждёт taskkill, уход процесса ловит proc.on('exit').
+            execFileAsync('taskkill.exe', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true })
+                .catch((e) => logLine(`rumeng find-proxy: taskkill не убил pid ${p.pid}: ${e.message}`));
+        } else {
+            p.kill('SIGTERM');
+        }
+    } catch (e) { logLine(`rumeng find-proxy: остановка не удалась (pid ${p.pid}): ${e.message}`); }
+    logLine(`rumeng find-proxy: запрошена остановка (pid ${p.pid})`);
+    jsonRes(res, 200, { ok: true, stopped: true, ...rmFindProxyPublic() });
+}
+
+// ─────────────────── фоновый докорм пула под длинный прогон ───────────────────
+//
+// Прогон 50 аккаунтов — это десятки минут, а публичные прокси живут минуты. Пул, набранный
+// один раз ПЕРЕД прогоном, к середине пустеет, и дальше аккаунты падают с «живых прокси не
+// осталось». Фон доливает список на ходу.
+//
+// 🎯 Запас 10 — решение владельца 12.09 для ak, повторено здесь: держим впереди очереди
+// десять живых, чтобы прогон не вставал на каждой второй регистрации.
+//
+// 🪤 Пул перечитывает файл по mtime, поэтому свежие адреса видны сразу и рестарт для
+// докорма не нужен (проверено на живой системе: 20 → 22 прокси без перезапуска).
+const RM_REFILL_RESERVE = 10;
+const RM_REFILL_TICK_MS = 45_000;
+
+const rmRefill = { timer: null, reason: null, runs: 0, live: null };
+
+function rmRefillStop(why) {
+    if (rmRefill.timer) clearInterval(rmRefill.timer);
+    rmRefill.timer = null;
+    if (why) { rmRefill.reason = why; logLine(`rumeng refill: остановлен (${why})`); }
+}
+
+function rmRefillTick() {
+    if (!rmAutoreg.running) { rmRefillStop('прогон завершён'); return; }
+    // 🪤 Проверяем ОБА поиска: пул и валидатор общие с ak, и два прогона разом дрались бы
+    // за один временный файл — второй затёр бы находки первого.
+    if (rmFindProxy.running || akFindProxy.running) { rmRefill.reason = 'поиск уже идёт'; return; }
+    const lib = proxyPoolLib();
+    let live = 0;
+    try { live = lib ? lib.describe().count : 0; } catch { live = 0; }
+    rmRefill.live = live;
+
+    // Сколько аккаунтов ещё пойдёт: текущий (i, счёт с единицы) и все после него.
+    const total = Number(rmAutoreg.count || 0);
+    const done = Number((rmAutoreg.stage && rmAutoreg.stage.i) || 0);
+    const remaining = Math.max(1, total - Math.max(0, done - 1));
+    const need = remaining + RM_REFILL_RESERVE;
+
+    if (live >= need) { rmRefill.reason = `запас есть: живых ${live}, нужно ${need}`; return; }
+
+    const want = Math.max(3, Math.min(30, need - live));
+    rmRefill.runs++;
+    rmRefill.reason = `доливаю ${want}: живых ${live}, нужно ${need}`;
+    logLine(`rumeng refill: ${rmRefill.reason}`);
+    const r = rmFindProxyLaunch({ want, mode: 'refill' });
+    if (!r.ok) rmRefill.reason = `запуск не удался: ${r.error}`;
+}
+
+function rmRefillStart() {
+    if (rmRefill.timer) return;
+    rmRefill.runs = 0;
+    logLine(`rumeng refill: включён (запас ${RM_REFILL_RESERVE})`);
+    rmRefillTick();
+    rmRefill.timer = setInterval(rmRefillTick, RM_REFILL_TICK_MS);
+}
+
+function rmRefillPublic() {
+    return {
+        active: !!rmRefill.timer,
+        reserve: RM_REFILL_RESERVE,
+        reason: rmRefill.reason,
+        runs: rmRefill.runs,
+        live: rmRefill.live,
+    };
+}
+
+// GET /__switch/api/rm/refill — состояние фонового докорма (для UI).
+function handleRmRefillState(_req, res) {
+    jsonRes(res, 200, { ok: true, ...rmRefillPublic() });
+}
+
+// Пул должен читать именно свежий файл. Конфиг правим ТОЛЬКО если пул уже включён на этом
+// хосте: иначе мы бы включили проксирование молча.
+function rmFindProxySwitchPool(host) {
+    const cfgFile = path.join(__dirname, 'proxy-pool.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    if (!(cfg.enabled && Array.isArray(cfg.hosts) && cfg.hosts.includes(host))) return false;
+    cfg.file = RM_LIVE_PROXY_FILE;
+    cfg.scheme = null;   // схема уже в каждой строке
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    return true;
+}
+
+async function handleRmPing(req, res) {
+    try {
+        const api_key = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await rmProbe(api_key);
+        const sessions = rmLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; rmSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = rmLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await rmBalance(target || { api_key }, { force });
+            if (target) { rmApplyBalance(target, bal); rmSave(sessions); }
+            return bal;
+        };
+        if (q.searchParams.get('nudge') === '1') {
+            return jsonRes(res, 200, { ok: true, queued: nudgeBalanceOnce('rm:' + api_key, recalc) });
+        }
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+function handleRmSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'rumeng', load: rmLoad, save: rmSave, balanceFn: rmBalance, applyFn: rmApplyBalance });
+}
+const rmLkPids = new Map();
+function rmPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+async function handleRmSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const target = rmLoad().find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+        const prevPid = rmLkPids.get(label);
+        if (rmPidAlive(prevPid)) return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        // 🪤 `newapiSyncProfile` здесь НЕ зовём, в отличие от ak. Он перекладывает КУКИ из
+        // newapi-jar в профиль Chromium, а у sub2api куки нет вовсе: вход держится на JWT в
+        // localStorage. Вызов был бы бессмысленной работой с пустым результатом и создавал
+        // бы ложное впечатление, что сессия перенесена.
+        const proc = spawn(process.execPath, [path.join(__dirname, '..', 'rumeng', 'open-session.js'), label, 'console'], {
+            detached: true, stdio: 'pipe', env: {
+                ...process.env, RM_LK_EMAIL: String(target.email || ''), RM_LK_PASS: String(target.password || ''),
+            },
+        });
+        proc.stdout.on('data', d => logLine(`rumeng session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`rumeng session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`rumeng session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            rmLkPids.delete(label);
+            logLine(`rumeng session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            newapiRecheckAfterLk('rm', id);
+        });
+        proc.unref();
+        rmLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) { rmLkPids.delete(label); return jsonRes(res, 502, { error: failed }); }
+        newapiLkVisited(label);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode: 'console' });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+function rmB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function rmB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+async function handleRmShare(req, res) {
+    try {
+        const id = String((await readJsonBody(req)).id || '').trim();
+        const target = rmLoad().find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+        if (rmPidAlive(rmLkPids.get(label))) return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его и попробуй ещё раз.' });
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'rumeng', 'sessions', label + '.json'), 'utf8')); } catch {}
+        const payload = { v: 1, provider: 'rumeng', email: target.email || '', name: target.name || '', api_key: target.api_key || '', meta: sharePickMeta(target), session };
+        const share = rmB64UrlEncode(JSON.stringify(payload));
+        jsonRes(res, 200, { ok: true, share, hasSession: !!((session.cookies || []).length || (session.origins || []).length) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmImport(req, res) {
+    try {
+        const share = String((await readJsonBody(req)).share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(rmB64UrlDecode(share)); } catch { return jsonRes(res, 400, { error: 'неверный share-код' }); }
+        if (payload.provider !== 'rumeng' || payload.v !== 1) return jsonRes(res, 400, { error: 'не rumeng-аккаунт' });
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const sessions = rmLoad();
+        if (sessions.some(s => s.api_key === key || String(s.email || '').toLowerCase() === mail.toLowerCase())) return jsonRes(res, 409, { error: 'аккаунт уже есть' });
+        const id = `rm_${Date.now()}_${sessions.length}`;
+        const rec = shareApplyMeta({ id, email: mail, name: String(payload.name || '').trim() || mail.split('@')[0], api_key: key, active: false, status: 'unknown', created: new Date().toISOString(), importedAt: new Date().toISOString() }, payload.meta);
+        sessions.push(rec); rmSave(sessions);
+        const session = payload.session && typeof payload.session === 'object' ? payload.session : { cookies: [], origins: [] };
+        const dir = path.join(__dirname, '..', 'rumeng', 'sessions');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'acct_' + id + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        jsonRes(res, 200, { ok: true, id, email: mail, hasSession: !!((session.cookies || []).length || (session.origins || []).length) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mail = String(body.email || '').trim();
+        const password = String(body.password || '');
+        const key = String(body.api_key || '').trim() || makeNoKeyStub();
+        if (!mail || !password) return jsonRes(res, 400, { error: 'email и password обязательны' });
+        const sessions = rmLoad();
+        if (sessions.some(s => String(s.email || '').toLowerCase() === mail.toLowerCase())) return jsonRes(res, 409, { error: 'такой email уже есть' });
+        if (rmIsRealKey(key) && sessions.some(s => s.api_key === key)) return jsonRes(res, 409, { error: 'такой ключ уже есть' });
+        const id = `rm_${Date.now()}_${sessions.length}`;
+        sessions.push({ id, email: mail, name: String(body.name || '').trim() || mail.split('@')[0], password, api_key: key, active: false, status: rmIsRealKey(key) ? 'unknown' : 'no_key', created: new Date().toISOString() });
+        rmSave(sessions);
+        logLine(`rumeng manual add: ${mail} (${rmIsRealKey(key) ? '***' + key.slice(-6) : 'без ключа'})`);
+        jsonRes(res, 200, { ok: true, id, noKey: !rmIsRealKey(key) });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req); const id = String(body.id || '').trim(); const key = String(body.api_key || '').trim();
+        if (!id || !rmIsRealKey(key)) return jsonRes(res, 400, { error: 'id и настоящий api_key обязательны' });
+        const sessions = rmLoad(); const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.id !== id && s.api_key === key)) return jsonRes(res, 409, { error: 'ключ уже занят' });
+        target.api_key = key; target.status = 'unknown';
+        if (target.active) fs.writeFileSync(RM_ACTIVE_KEY_FILE, key, 'utf8');
+        rmSave(sessions); jsonRes(res, 200, { ok: true, email: target.email, wasActive: !!target.active });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmRename(req, res) {
+    try {
+        const body = await readJsonBody(req); const id = String(body.id || '').trim();
+        const sessions = rmLoad(); const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined) { const n = String(body.name || '').trim(); if (!n) return jsonRes(res, 400, { error: 'name пуст' }); target.name = n; }
+        if (body.email !== undefined) { const e = String(body.email || '').trim(); if (!e) return jsonRes(res, 400, { error: 'email пуст' }); target.email = e; }
+        rmSave(sessions); jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmDelete(req, res) {
+    try {
+        const id = String((await readJsonBody(req)).id || '').trim(); const sessions = rmLoad();
+        const target = sessions.find(s => s.id === id); rmSave(sessions.filter(s => s.id !== id));
+        if (target && target.api_key === rmReadActiveKey()) {
+            try { fs.rmSync(RM_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(RM_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmActivate(req, res) {
+    try {
+        const key = String((await readJsonBody(req)).api_key || '').trim();
+        if (!rmIsRealKey(key)) return jsonRes(res, 400, { error: 'настоящий api_key обязателен' });
+        const sessions = rmLoad(); const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+        fs.writeFileSync(RM_ACTIVE_KEY_FILE, key, 'utf8'); sessions.forEach(s => { s.active = s.api_key === key; }); rmSave(sessions);
+        let settingsOk = false;
+        try {
+            const settings = readSettings(); makeSettingsBackup('settings-rm'); settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = RM_KEEPALIVE_URL; settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            delete settings.env.ANTHROPIC_API_KEY; delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS; delete settings.apiKeyHelper; clearOtEnv(settings);
+            const model = rmReadActiveModel(); if (model) settings.model = model; else delete settings.model;
+            writeSettings(settings); settingsOk = true;
+        } catch (e) { logLine(`rumeng activate settings: ${e.message}`); }
+        const ka = await keepaliveBring(RM_KEEPALIVE_PORT, { waitMs: 8000 });
+        jsonRes(res, 200, { ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true, keepalive: { up: ka.ok, port: RM_KEEPALIVE_PORT, error: ka.ok ? null : ka.error } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`); const api_key = url.searchParams.get('api_key'); const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        if (RM_MODELS_CACHE.data && Date.now() - RM_MODELS_CACHE.ts < RM_MODELS_CACHE.TTL && !force) return jsonRes(res, 200, { ok: true, models: RM_MODELS_CACHE.data, cached: true });
+        const resp = await fetch(`${RM_BASE_URL}/models`, { headers: { ...RM_CC_HEADERS, 'x-api-key': api_key, Authorization: `Bearer ${api_key}` }, signal: AbortSignal.timeout(10000) });
+        if (!resp.ok) return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        const data = await resp.json(); const models = (data.data || []).map(m => ({ id: m.id, owned_by: m.owned_by, supported_endpoint_types: m.supported_endpoint_types || [] }));
+        RM_MODELS_CACHE.data = models; RM_MODELS_CACHE.ts = Date.now(); jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) { jsonRes(res, 200, { ok: true, models: RM_MODELS_CACHE.data || [], cached: !!RM_MODELS_CACHE.data, note: e.message }); }
+}
+async function handleRmSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req); const model = String(body.model || '').trim();
+        if (!model) return jsonRes(res, 400, { error: 'model обязателен' });
+        fs.writeFileSync(RM_ACTIVE_MODEL_FILE, model + '\n', 'utf8'); let settingsOk = false;
+        try {
+            const settings = readSettings(); makeSettingsBackup('settings-rm-model'); settings.env = settings.env || {};
+            settings.model = (body.modelMap || {})[model] || normalizeCcModel(model);
+            settings.env.ANTHROPIC_BASE_URL = RM_KEEPALIVE_URL; settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            delete settings.env.ANTHROPIC_API_KEY; delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS; delete settings.apiKeyHelper; clearOtEnv(settings);
+            writeSettings(settings); settingsOk = true;
+        } catch (e) { logLine(`rumeng set-model settings: ${e.message}`); }
+        const ka = await keepaliveBring(RM_KEEPALIVE_PORT, { waitMs: 8000 });
+        jsonRes(res, 200, { ok: true, model, settingsUpdated: settingsOk, base: RM_KEEPALIVE_URL, needRestart: true, keepalive: { up: ka.ok, port: RM_KEEPALIVE_PORT, error: ka.ok ? null : ka.error } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleRmModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const mm = writeTierMap(RM_MODELMAP_FILE, { opus: body.opus, sonnet: body.sonnet, haiku: body.haiku }, null);
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -16509,15 +18361,8 @@ function handleJwSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'justwoker', load: jwLoad, save: jwSave, balanceFn: jwBalance, applyFn: jwApplyBalance });
 }
 
-// Окно ЛК закрылось → Chromium снял замок с БД куки и дописал в неё свежую сессию.
-// Ровно в этот момент точный баланс становится читаемым, поэтому пересчитываем сами,
-// один раз и с `force`. Без этого владелец попадал в петлю: жмёт 💰, пока окно открыто,
-// получает «в профиле нет куки», по совету открывает ЛК ещё раз — и держит замок дальше
-// (разбор 24.08 на `WA justwoker`: в кабинете $604.38, в дашборде вписанные $0.26).
-//
-// Пауза: запись SQLite на закрытии асинхронна — тот же приём, что в arAutoCheckinFinish.
-// `force` обязателен: визит в ЛК уже снял годность сохранённой цифры, а без force
-// расчёт вернул бы её же (или анкер), не спросив шлюз.
+// Проверка обычного браузерного визита после закрытия профиля остаётся отдельной веткой;
+// чек-ин завершает arAutoCheckinFinish и там принудительно вызывает arBalanceOnce.
 const LK_RECHECK_DELAY_MS = 2500;
 function newapiRecheckAfterLk(gwKey, id) {
     const gw = MONEY_GW[gwKey];
@@ -18808,6 +20653,7 @@ function keepaliveInstances() {
         [AP_KEEPALIVE_PORT]: { name: 'AIPM', spawn: apKeepaliveSpawn },
         [HN_KEEPALIVE_PORT]: { name: 'HCNsec', spawn: hnKeepaliveSpawn },
         [AK_KEEPALIVE_PORT]: { name: 'AIKeysAPI', spawn: akKeepaliveSpawn },
+        [RM_KEEPALIVE_PORT]: { name: 'rumeng', spawn: rmKeepaliveSpawn },
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
@@ -20215,6 +22061,12 @@ const MONEY_GW = {
     // Эту же строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима — байт в байт.
     hn: { tag: 'hcnsec',      label: 'HCNsec',      host: 'api.hcnsec.cn', keyFile: HN_ACTIVE_KEY_FILE, load: hnLoad, save: hnSave, balanceFn: hnBalance, applyFn: hnApplyBalance },
     ak: { tag: 'aikeysapi',   label: 'AIKeysAPI',   host: 'www.aikeysapi.com', keyFile: AK_ACTIVE_KEY_FILE, load: akLoad, save: akSave, balanceFn: akBalance, applyFn: akApplyBalance },
+    // 🪤 rumeng — второй в реестре НЕ New-API (первый TrueSOTA): движок sub2api, баланс
+    // считает rmBalance по подпискам и квоте ключа, а не newapiBalance. Реестру это
+    // безразлично (нужна лишь одинаковая форма load/save/balanceFn/applyFn), но «почини
+    // как у остальных» тут не сработает. host — ХОСТ ПАНЕЛИ целиком, и той же строкой
+    // keepalive-proxy ищет префикс в GW_BY_HOST по Host апстрима: байт в байт.
+    rm: { tag: 'rumeng',      label: 'rumeng',      host: 'api.rumeng-ai.com', keyFile: RM_ACTIVE_KEY_FILE, load: rmLoad, save: rmSave, balanceFn: rmBalance, applyFn: rmApplyBalance },
 };
 
 const MONEY_AUTO_FILE = path.join(__dirname, '..', 'logs', '.money_autorotate.json');
@@ -20252,7 +22104,7 @@ const moneyAuto = {};   // p → { rotating (Promise|null), lastAt, lastKey, rec
 const moneyAutoShared = { enabled: false };
 function moneyState(p) {
     if (!moneyAuto[p]) {
-        const st = { rotating: null, lastAt: 0, lastKey: null, recent: [] };
+        const st = { rotating: null, lastAt: 0, lastKey: null, recent: [], switches: 0 };
         // `enabled` — не поле, а окно в общий тумблер: все места читают и пишут его как
         // раньше (`moneyState(p).enabled`), но хранится он в одном месте. Иначе пришлось
         // бы держать два источника правды и следить, чтобы они не разъехались.
@@ -20288,8 +22140,12 @@ function moneyLoadPersist() {
 
 // Деньги на мёртвом/безключевом аккаунте — не деньги: забрать нельзя (тот же
 // предикат, что balanceUsable во фронте). Кандидат обязан иметь настоящий ключ.
-function moneyUsable(s) {
-    return !!s && isRealKey(s.api_key) && typeof s.balance === 'number'
+function moneyKeyUsable(p, key) {
+    const validator = p === 'ak' ? akIsRealKey : p === 'rm' ? rmIsRealKey : isRealKey;
+    return validator(key);
+}
+function moneyUsable(s, p) {
+    return !!s && moneyKeyUsable(p, s.api_key) && typeof s.balance === 'number'
         && s.status !== 'dead' && s.status !== 'no_key' && !s.banned;
 }
 // Порядок кандидатов: «самый маленький, которому хватает» (доедаем огрызки, жирные
@@ -20353,7 +22209,7 @@ async function moneyRotate(p, opts = {}) {
             else if (opts.reason === 'out-of-balance' && typeof from.balance === 'number' && from.balance > 0) from.balance = 0;
         }
         const need = Number(opts.needUsd) || 0;
-        const queue = moneyRank(sessions.filter(s => moneyUsable(s) && s.api_key !== cur && s.api_key !== opts.fromKey), need, p);
+        const queue = moneyRank(sessions.filter(s => moneyUsable(s, p) && s.api_key !== cur && s.api_key !== opts.fromKey), need, p);
         if (!queue.length) {
             gw.save(sessions);
             logLine(`money auto ${p}: замены нет — в пуле ни одного живого аккаунта с балансом`);
@@ -20369,12 +22225,13 @@ async function moneyRotate(p, opts = {}) {
                     const bal = await gw.balanceFn(cand, { force: true });
                     gw.applyFn(cand, bal);
                 } catch (e) { logLine(`money auto ${p}: чек ${cand.email || cand.name} не прошёл (${e.message}) — беру по кешу`); }
-                if (!moneyUsable(cand) || cand.balance < Math.max(moneyMinBal(p), need)) {
+                if (!moneyUsable(cand, p) || cand.balance < Math.max(moneyMinBal(p), need)) {
                     logLine(`money auto ${p}: ${cand.email || cand.name} на самом деле $${typeof cand.balance === 'number' ? cand.balance.toFixed(2) : '—'}${need ? ` (нужно $${need.toFixed(2)})` : ''} — следующий`);
                     continue;
                 }
             }
             moneySwitchKey(p, sessions, cand.api_key);
+            st.switches++;
             st.lastAt = Date.now();
             st.lastKey = cand.api_key;
             st.recent.unshift({
@@ -20405,7 +22262,7 @@ function moneyKickOnZero(providerTag, target) {
         const p = Object.keys(MONEY_GW).find(k => MONEY_GW[k].tag === providerTag);
         if (!p || !target || !target.active || !moneyState(p).enabled) return;
         if (!(typeof target.balance === 'number') || target.balance > 0) return;
-        if (!isRealKey(target.api_key)) return;
+        if (!moneyKeyUsable(p, target.api_key)) return;
         logLine(`money auto ${p}: у активного ${target.email || target.name} $${target.balance.toFixed(2)} по свежему чеку — подменяю не дожидаясь отказа`);
         moneyRotate(p, { reason: 'zero-cache', fromKey: target.api_key })
             .catch(e => logLine(`money auto ${p} kick: ${e.message}`));
@@ -20421,7 +22278,7 @@ function moneyAutoStatus(p) {
         const rec = key ? gw.load().find(s => s.api_key === key) : null;
         if (rec) active = { email: rec.email || rec.name || '', balance: typeof rec.balance === 'number' ? rec.balance : null };
     } catch {}
-    const pool = gw.load().filter(moneyUsable);
+    const pool = gw.load().filter(s => moneyUsable(s, p));
     return {
         provider: p, label: gw.label, enabled: st.enabled,
         // Признак «тумблер общий на все шлюзы». Нужен фронту, чтобы отличить этот
@@ -20430,7 +22287,7 @@ function moneyAutoStatus(p) {
         // Без признака новый фронт в паре со старым бэкендом показывал бы «включено»
         // на шлюзе, где включено не было.
         shared: true,
-        lastSwitch: st.lastAt, rotating: !!st.rotating,
+        lastSwitch: st.lastAt, switches: st.switches, rotating: !!st.rotating,
         active, minBal: moneyMinBal(p),
         poolReady: pool.filter(s => s.balance >= moneyMinBal(p)).length,
         poolBalance: round2(pool.reduce((a, s) => a + Math.max(0, s.balance), 0)),
@@ -21703,6 +23560,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/ping'))     return handleArPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/balance'))  return handleArBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/quota-check') return handleArQuotaCheck(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ar/quota-state') return handleArQuotaState(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);
@@ -21778,6 +23636,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/hn/keepalive/config') return keepaliveHn.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/keepalive/state')  return keepaliveAk.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ak/keepalive/config') return keepaliveAk.config(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/keepalive/state')  return keepaliveRm.state(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/keepalive/config') return keepaliveRm.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xp/keepalive/state')  return keepaliveXp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xp/keepalive/config') return keepaliveXp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/jw/keepalive/state')  return keepaliveJw.state(req, res);
@@ -21794,6 +23654,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/keepalive/latency')) return keepaliveAp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/keepalive/latency')) return keepaliveHn.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/keepalive/latency')) return keepaliveAk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/rm/keepalive/latency')) return keepaliveRm.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xp/keepalive/latency')) return keepaliveXp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/jw/keepalive/latency')) return keepaliveJw.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/sk/keepalive/latency')) return keepaliveSk.latency(req, res);
@@ -21908,6 +23769,12 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/autoreg/status') return handleAkAutoregStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ak/autoreg/start') return handleAkAutoregStart(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ak/autoreg/stop') return handleAkAutoregStop(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ak/autoreg/find-proxy') return handleAkFindProxyStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ak/autoreg/find-proxy') return handleAkFindProxyStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ak/autoreg/find-proxy/stop') return handleAkFindProxyStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ak/refill') return handleAkRefillState(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-lines') return handleAkProxyPoolLines(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-pool') return handleAkProxyPool(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/ping'))     return handleAkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/balance'))  return handleAkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/models'))   return handleAkModels(req, res);
@@ -21924,6 +23791,35 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ak/session/open') return handleAkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ak/share')     return handleAkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ak/import')    return handleAkImport(req, res);
+
+    // ── rumeng (rm) — зеркало ak один в один. Расхождения не в маршрутах, а под ними:
+    // движок sub2api, JWT вместо куки, две базы (`/v1` шлюз, `/api/v1` кабинет).
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/rm/sessions')) return handleRmSessions(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/autoreg/status') return handleRmAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/start') return handleRmAutoregStart(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/stop') return handleRmAutoregStop(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/find-proxy') return handleRmFindProxyStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/autoreg/find-proxy') return handleRmFindProxyStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/find-proxy/stop') return handleRmFindProxyStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/refill') return handleRmRefillState(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/proxy-lines') return handleRmProxyPoolLines(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/proxy-pool') return handleRmProxyPool(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/rm/ping'))     return handleRmPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/rm/balance'))  return handleRmBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/rm/models'))   return handleRmModels(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/active-model') return jsonRes(res, 200, { model: rmReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/rm/modelmap') return jsonRes(res, 200, { ok: true, modelMap: rmReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/add')       return handleRmAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/key')       return handleRmSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/rename')    return handleRmRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/delete')    return handleRmDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/activate')  return handleRmActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/set-model') return handleRmSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/set-balance') return handleRmSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/modelmap')  return handleRmModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/session/open') return handleRmSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/share')     return handleRmShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/rm/import')    return handleRmImport(req, res);
 
     // ---- Tabi (tb) — автономная вкладка, keepalive :20155 → tabitoken.com ----
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/sessions')) return handleTbSessions(req, res);
@@ -22161,7 +24057,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn|ak|rm)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

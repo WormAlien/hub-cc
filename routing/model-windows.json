@@ -4,6 +4,8 @@
   "_updated": "2026-09-04",
   "windows": {
     "glm-5.3": 1050000,
+    "deepseek-v4-flash": 1050000,
+    "deepseek-v4-pro": 1050000,
     "gpt-3.5-turbo": 16385,
     "gpt-3.5-turbo-0613": 4095,
     "gpt-3.5-turbo-16k": 16385,

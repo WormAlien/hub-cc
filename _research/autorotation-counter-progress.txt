@@ -1,0 +1,10 @@
+Autorotation counter implementation checkpoint
+
+1. Inspected code.
+- Backend: routing/transparent-proxy.js, moneyAuto state at ~22088 and moneyAutoStatus at ~22262.
+- Successful money rotation is recorded in moneyRotate() by unshifting st.recent at ~22227.
+- Frontend: routing/proxy-dashboard.html, side-auto row at ~567 and paintSideAuto() at ~24389.
+- Existing checks: tools/check-autorotate.js and tools/check-rotate-history.js.
+- No live service or rotation will be restarted or invoked.
+
+Next: add in-memory successful rotation count, expose as rotations/switchCount in status, render visible count in side-auto label/title, and extend static checks.

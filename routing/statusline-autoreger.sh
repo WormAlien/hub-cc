@@ -146,11 +146,19 @@ case "$base_url" in
         fi
         ;;
 esac
-# ---- Префикс провайдера в имени модели: `aipm/claude-opus-4-6[1m]` ----------
+# ---- Шлюз назван в имени модели: `aipm/claude-opus-4-6[1m]` и `agentrouter[1m]` ---
 # Такой запрос уехал НЕ к активному бэкенду, а к названному шлюзу (routeByModel в
 # frontdoor-proxy.js). Бар обязан показать фактический маршрут — иначе получится
 # двойной провайдер `agentrouter/aipm/claude-opus-4-6`, а стрелка маппинга ниже
 # возьмёт тир-карту глобального бэкенда для трафика, ушедшего совсем в другое место.
+#
+# Форм ДВЕ, и различать их обязательно (заявка владельца 12.09):
+#   `aipm/claude-opus-4-6[1m]` — шлюз назван И модель названа;
+#   `agentrouter[1m]`          — назван ТОЛЬКО шлюз, модель выбирает routes-карта.
+# 🪤 Вторая форма до 13.09 здесь не распознавалась (`case */*)` требовал слэш), и бар
+# врал сразу трижды: провайдер брался от АКТИВНОГО бэкенда, поэтому имя шлюза уезжало
+# во вторую половину строки и печаталось дважды (`agentrouter/agentrouter[1m]`), баланс
+# считался для чужого шлюза, а стрелки развёртки не было вовсе.
 #
 # Реестр читаем целиком в память, как settings.json выше: 0 форков, 0 сети. Блокирующий
 # `curl :8200` отсюда убран намеренно (см. коммент на :119) — возвращать его нельзя.
@@ -162,23 +170,81 @@ esac
 # (`"aipm": {`), regex на строку не сматчится и останется само имя; у алиаса значение —
 # строка (`"ar": "agentrouter"`), и мы берём её. Это важно: подписи и `map_prefix` ниже
 # знают только полные имена, короткий `ar` провалился бы в catch-all без тир-карты.
+route_prefixed=0   # 1 = шлюз назван в имени модели (любой из двух форм) → routes-карта
+route_bare=0       # 1 = модель НЕ названа → тир `default`, печатать второе слово нечем
+win_suffix=""      # `[1m]` источника; на цель переносится как в upstreamModelFor()
+case "$model_id" in *'[1m]') win_suffix="[1m]" ;; esac
 case "$model_id" in
-    */*)
-        mp_head="${model_id%%/*}"
-        if [[ "$mp_head" =~ ^[A-Za-z0-9_.-]+$ ]]; then
-            mp_reg=""
-            [ -f "$PROF/.claude/backends.json" ] && mp_reg="$(<"$PROF/.claude/backends.json")"
-            if [ -n "$mp_reg" ] && [[ "$mp_reg" == *"\"$mp_head\":"* ]]; then
-                if [[ "$mp_reg" =~ \"$mp_head\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
-                    raw_target="${BASH_REMATCH[1]}"     # алиас → полное имя
-                else
-                    raw_target="$mp_head"               # сам провайдер
-                fi
-                model_id="${model_id#*/}"
-            fi
-        fi
-        ;;
+    */*) mp_head="${model_id%%/*}"; mp_bare=0 ;;
+    # 🪤 Голое имя: суффикс окна снимаем ПЕРЕД поиском в реестре — ровно как
+    # routeByModel (frontdoor-proxy.js:386). `normalizeCcModel` вешает `[1m]` на всё
+    # похожее на 1M-модель, поэтому `agentrouter[1m]` возникает сам собой, и без среза
+    # имя в реестре не нашлось бы. `%%\[*` вместо regex: bash 3.2 без `${x//}`-магии.
+    *)   mp_head="${model_id%%\[*}"; mp_bare=1 ;;
 esac
+# Обычное имя модели (`claude-opus-5`) сюда тоже заходит и обязано ничего не менять:
+# ключа с таким именем в реестре нет, ветка молчит. Так же устроен и front-door — он
+# ищет в реестре КАЖДОЕ имя без слэша (`reg.get(bare)`), а промах считает штатным.
+#
+# 🪤 Регистр имени не важен: front-door кладёт ключи реестра в нижнем регистре и ищет
+# `reg.get(bare.toLowerCase())` (frontdoor-proxy.js:230/401/434), поэтому `/model AIPM/…`
+# у него уезжает на aipm, а бар без `nocasematch` показывал бы такой запрос как обычную
+# модель на активном шлюзе — то есть врал бы про маршрут. `${x,,}` для этого нельзя:
+# bash 4+, а скрипт держит 3.2 (macOS). `shopt nocasematch` есть и в 3.2.
+# Включаем ТОЛЬКО на этот блок: ниже по файлу есть `case` с регистро-зависимыми
+# шаблонами (`Custom*`, `*[Oo]pus*`), и глобальный nocasematch их поведение изменил бы.
+shopt -s nocasematch
+mp_hit=""      # имя шлюза, найденное в реестре; пусто = имя не наше
+if [[ "$mp_head" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    mp_reg=""
+    [ -f "$PROF/.claude/backends.json" ] && mp_reg="$(<"$PROF/.claude/backends.json")"
+    if [ -n "$mp_reg" ] && [[ "$mp_reg" == *"\"$mp_head\":"* ]]; then
+        # Имя берём КАНОНИЧНЫМ написанием ИЗ ФАЙЛА (первая группа), а не как его набрал
+        # человек: подписи ниже (`case "$raw_target"`) и `map_prefix` сравнивают точные
+        # строки, и `AIPM` провалился бы в catch-all без тир-карты и без баланса.
+        if [[ "$mp_reg" =~ \"($mp_head)\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]]; then
+            mp_hit="${BASH_REMATCH[2]}"         # алиас → полное имя (значение ключа)
+        elif [[ "$mp_reg" =~ \"($mp_head)\"[[:space:]]*: ]]; then
+            mp_hit="${BASH_REMATCH[1]}"         # сам провайдер
+        fi
+    fi
+    # 🪤 Проверять `[ -n "$raw_target" ]` здесь НЕЛЬЗЯ: блок front-door выше уже заполнил
+    # его активным бэкендом из `active-backend.json`, поэтому такое условие было бы верным
+    # для ЛЮБОГО имени модели — и обычный `claude-opus-5` объявился бы шлюзом. Признак
+    # попадания только один: имя нашлось в реестре (`mp_hit`).
+    if [ -n "$mp_hit" ]; then
+        raw_target="$mp_hit"
+        route_prefixed=1
+        if [ "$mp_bare" = "1" ]; then
+            route_bare=1
+            model_id=""                         # модель не названа — печатать нечего
+            # 🪤 Путь routes-карты берём ИЗ ЗАПИСИ РЕЕСТРА, а не из своей таблицы
+            # префиксов: front-door выводит его ровно так — `routesMapFor()`
+            # (frontdoor-proxy.js:376) делает `state.modelmap.replace(/-modelmap\.json$/,
+            # '-routes-modelmap.json')`, а при `modelmap: null` возвращает null и отвечает
+            # 400 «default не задан». Замер 13.09: в живом реестре у agentrouter лежит
+            # именно `null` (реестр писал старый `transparent-proxy.js`, до рестарта
+            # :8200), и по своей таблице бар нарисовал бы развёртку на запросе, который
+            # фактически вернёт 400. Пустой `mp_map` ниже = «карты нет» — так и покажем.
+            #
+            # Ищем поле внутри блока СВОЕГО провайдера: `raw_target` уже полное имя, а
+            # значение алиаса — строка, поэтому от хвоста после `"agentrouter":` до первой
+            # `}`. Без этого сузить нельзя — `"modelmap"` есть у каждого провайдера.
+            mp_map=""
+            mp_tail="${mp_reg#*\"$raw_target\":}"
+            mp_blk="${mp_tail%%\}*}"
+            if [[ "$mp_blk" =~ \"modelmap\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+                mp_map="${BASH_REMATCH[1]}"
+            fi
+        else
+            model_id="${model_id#*/}"
+        fi
+    fi
+fi
+# Обратно СРАЗУ: ниже `case "$raw_target"`, `Custom*` и `*[Oo]pus*` — регистро-зависимые,
+# и при включённом nocasematch провайдер `custom` совпал бы с шаблоном `Custom*`, получив
+# подпись `Custom🧪` вместо своей.
+shopt -u nocasematch
 if [ -z "$raw_target" ]; then
 case "$helper" in
     *fm-active-key.txt*|*freemodel*) raw_target="apihelper" ;;
@@ -198,6 +264,8 @@ case "$helper" in
     *kktoken-active-key.txt*)        raw_target="kktoken" ;;
     *hcnsec-active-key.txt*)         raw_target="hcnsec" ;;
     *aipm-active-key.txt*)           raw_target="aipm" ;;
+    *aikeysapi-active-key.txt*)      raw_target="aikeysapi" ;;
+    *rumeng-active-key.txt*)         raw_target="rumeng" ;;
     *wisdomsatan-active-key.txt*)    raw_target="wisdomsatan" ;;
     *custom-active-key.txt*)         raw_target="custom" ;;
 esac
@@ -236,6 +304,10 @@ if [ -z "$raw_target" ]; then
         # как `Custom🧪`.
         *localhost:20164*)        raw_target="wisdomsatan" ;;
         *127.0.0.1:20164*)        raw_target="wisdomsatan" ;;
+        *localhost:20165*)        raw_target="aikeysapi" ;;
+        *127.0.0.1:20165*)        raw_target="aikeysapi" ;;
+        *localhost:20166*)        raw_target="rumeng" ;;
+        *127.0.0.1:20166*)        raw_target="rumeng" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
@@ -272,6 +344,8 @@ case "$raw_target" in
     justwoker)                   provider="justwoker" ;;
     seekai)                      provider="seekai" ;;
     truesota)                    provider="truesota" ;;
+    aikeysapi)                  provider="aikeysapi" ;;
+    rumeng)                      provider="rumeng" ;;
     kktoken)                     provider="kktoken" ;;
     hcnsec)                      provider="hcnsec" ;;
     aipm)                        provider="aipm" ;;
@@ -282,11 +356,19 @@ case "$raw_target" in
 esac
 
 # ---- modelmap: показать фактическую модель, если тир-карта переписывает ----
-# Читаем <prefix>-modelmap.json (тот же файл, что keepalive-proxy), матчим тир
-# модели из payload, и если карта подменяет имя — дописываем →target в рендер.
+# Читаем тир-карту (тот же файл, что keepalive-proxy), матчим тир модели из payload,
+# и если карта подменяет имя — дописываем →target в рендер.
 # БЕЗ форков: jq/python не зовём, разбираем JSON двумя regex.
+#
+# 🪤 Карт ДВЕ, и путь определяет, какую брать (инвариант 12.09, вика «Маршруты — своя
+# тир-карта и имя без модели»): `<prefix>-modelmap.json` обслуживает запрос БЕЗ имени
+# шлюза (окно сидит на активном бэкенде), `<prefix>-routes-modelmap.json` — запрос, где
+# шлюз назван. Это ровно `readModelMap(routes)` из keepalive-proxy.js:127, куда флаг
+# приезжает заголовком `x-route-prefixed` от front-door. Прочитать не ту карту — значит
+# показать модель, которой в этом запросе нет.
 map_target=""
-if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; then
+if [ -n "$provider" ] && [ "$model_id" != "unknown" ] \
+   && { [ -n "$model_id" ] || [ "$route_bare" = "1" ]; }; then
     # CC_MODEL_PREFIX из transparent-proxy.js (урезанная копия — только провайдеры
     # с keepalive, у которых маппинг работает).
     map_prefix=""
@@ -298,15 +380,31 @@ if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; the
         justwoker)   map_prefix="justwoker" ;;
         seekai)      map_prefix="seekai" ;;
         truesota)    map_prefix="truesota" ;;
+        aikeysapi)  map_prefix="aikeysapi" ;;
+        rumeng)      map_prefix="rumeng" ;;
         kktoken)     map_prefix="kktoken" ;;
         hcnsec)      map_prefix="hcnsec" ;;
         aipm)        map_prefix="aipm" ;;
         wisdomsatan) map_prefix="wisdomsatan" ;;
         Custom*)     map_prefix="custom" ;;
     esac
-    if [ -n "$map_prefix" ]; then
-        mmf="$ROUTING/${map_prefix}-modelmap.json"
-        if [ -f "$mmf" ]; then
+    if [ -n "$map_prefix" ] || [ "$route_bare" = "1" ]; then
+        if [ "$route_bare" = "1" ]; then
+            # Голое имя обслуживает front-door, и карту он берёт из поля реестра (см.
+            # 🪤 выше). Относительный путь резолвится от `routing/` — как `path.join(
+            # __dirname, file)` в readModelMap (frontdoor-proxy.js:265).
+            mmf=""
+            case "$mp_map" in
+                "")            mmf="" ;;                       # modelmap: null → 400
+                /*|[A-Za-z]:*) mmf="${mp_map%-modelmap.json}-routes-modelmap.json" ;;
+                *)             mmf="$ROUTING/${mp_map%-modelmap.json}-routes-modelmap.json" ;;
+            esac
+        elif [ "$route_prefixed" = "1" ]; then
+            mmf="$ROUTING/${map_prefix}-routes-modelmap.json"
+        else
+            mmf="$ROUTING/${map_prefix}-modelmap.json"
+        fi
+        if [ -n "$mmf" ] && [ -f "$mmf" ]; then
             mm_raw="$(<"$mmf")"
             # определяем тир модели (зеркало TIER_RE + isGptLike из keepalive-proxy.js)
             #
@@ -322,8 +420,16 @@ if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; the
             # bash 4+, а на macOS bash 3.2, и весь скрипт намеренно держится 3.2 (см.
             # комментарии про BSD выше). `chatgpt` отдельной альтернативы не требует —
             # он содержит `gpt` и покрыт первым классом.
+            #
+            # 🪤 Голое имя шлюза (`/model agentrouter`) — тир `default`, а НЕ тир по
+            # имени: имени модели в запросе нет вовсе. Без этой ветки `mm_tier` оставался
+            # пустым и стрелка не рисовалась совсем (баг до 13.09). `default` — отдельный
+            # ключ карты, а не переиспользованный `opus`: «CC попросил opus» и «модель не
+            # названа» — разные события, их склейка и была причиной разбора 12.09.
             mm_tier=""
-            if [[ "$model_id" =~ [Gg][Pp][Tt]|[Oo][0-9]|[Dd][Aa][Vv][Ii][Nn][Cc][Ii] ]]; then
+            if [ "$route_bare" = "1" ]; then
+                mm_tier="default"
+            elif [[ "$model_id" =~ [Gg][Pp][Tt]|[Oo][0-9]|[Dd][Aa][Vv][Ii][Nn][Cc][Ii] ]]; then
                 mm_tier="gpt"
             else
                 case "$model_id" in
@@ -338,30 +444,41 @@ if [ -n "$provider" ] && [ -n "$model_id" ] && [ "$model_id" != "unknown" ]; the
                 if [[ "$mm_raw" =~ \"$mm_tier\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then
                     mm_val="${BASH_REMATCH[1]}"
                 fi
-                # показываем стрелку только если карта подменяет модель (без учёта [1m])
+                # показываем стрелку только если карта подменяет модель (без учёта [1m]).
+                # У голого имени сравнивать не с чем — модель не названа, поэтому цель
+                # карты и есть вся информация о том, что уедет наверх.
                 mm_bare="${model_id%\[1m\]}"
-                if [ -n "$mm_val" ] && [ "$mm_val" != "$mm_bare" ]; then
+                if [ -n "$mm_val" ] && { [ "$route_bare" = "1" ] || [ "$mm_val" != "$mm_bare" ]; }; then
                     # сокращаем: claude-opus-5 → opus-5, gpt-5.6-sol → gpt-5.6-sol
                     mm_short="$mm_val"
                     mm_short="${mm_short#claude-}"
                     # дописываем [1m] если исходная модель пришла с ним И цель — claude
-                    case "$model_id" in
-                        *'[1m]')
-                            case "$mm_val" in
-                                claude-*|*opus*|*sonnet*|*haiku*|*fable*) mm_short="${mm_short}[1m]" ;;
-                            esac
-                            ;;
-                    esac
+                    # (зеркало upstreamModelFor + echoModelFor: клиенту окно возвращают,
+                    # шлюзу суффикс не показывают). `win_suffix` снят с ИСХОДНОГО имени
+                    # до среза префикса — у голого `agentrouter[1m]` другого источника нет.
+                    if [ -n "$win_suffix" ]; then
+                        case "$mm_val" in
+                            claude-*|*opus*|*sonnet*|*haiku*|*fable*) mm_short="${mm_short}${win_suffix}" ;;
+                        esac
+                    fi
                     map_target="$mm_short"
                 fi
             fi
         fi
     fi
 fi
+# 🪤 Голое имя без цели в карте — это не «нечего показать», а гарантированный отказ:
+# front-door отдаёт 400 «`default` в Маршрутах не задан» (frontdoor-proxy.js:397,
+# noTarget). Молча напечатать одно имя шлюза значило бы показать нормально выглядящий
+# бар на запросе, который наверх не уйдёт вообще.
+route_nomap=0
+[ "$route_bare" = "1" ] && [ -z "$map_target" ] && route_nomap=1
 
 # ---- balance/quota gauge (mirrors dashboard) -------------------------------
 pct=0
 avail_sum=0
+pool_balance_total=""
+active_account_label=""
 have_gauge=0
 cool_str=""     # непустая = аккаунт на перезарядке, тут остаток времени
 
@@ -384,8 +501,10 @@ active_name=""
 # рефреш через GET /__switch/api/<endpoint_path>?api_key=… если кеш протух (> <stale_s>).
 gauge_from_balance_cache() {
     local sessions_file="$1" active_key_file="$2" endpoint_path="$3" stale_threshold="$4"
-    local key raw after before head_obj tail_obj block bal granted anchor grant bonus referral chk bal_i grant_i chk_ts now_s
+    local key raw after before head_obj tail_obj block bal granted anchor grant bonus referral chk bal_i grant_i chk_ts now_s name email id
     have_gauge=0
+    pool_balance_total=""
+    active_account_label=""
 
     key=""; read -r key < "$active_key_file" 2>/dev/null || true
     key="${key//[$' \t\r\n']/}"
@@ -400,6 +519,11 @@ gauge_from_balance_cache() {
     tail_obj="${after%%\}*}"      # до первой } после ключа
     block="{$head_obj$key$tail_obj}"
     [ -n "$block" ] || return 0
+
+    name=""; [[ "$block" =~ \"name\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && name="${BASH_REMATCH[1]}"
+    email=""; [[ "$block" =~ \"email\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && email="${BASH_REMATCH[1]}"
+    id=""; [[ "$block" =~ \"id\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && id="${BASH_REMATCH[1]}"
+    active_account_label="${name:-${email:-${id}}}"
 
     have_gauge=1
     bal=0;   [[ "$block" =~ \"balance\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] && bal="${BASH_REMATCH[1]}"
@@ -419,6 +543,11 @@ gauge_from_balance_cache() {
     referral=0; [[ "$block" =~ \"referral\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && referral="${BASH_REMATCH[1]}"
     [[ "$bal" == -* ]] && bal=0
     avail_sum="$bal"
+    if [ "$provider" = "aikeysapi" ]; then
+        pool_balance_total="$(grep -oE '"balance"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' "$sessions_file" 2>/dev/null \
+            | grep -oE '[0-9]+(\.[0-9]+)?' \
+            | awk '{ s += $1 } END { if (NR > 0) printf "%d", s }')"
+    fi
     bal_i="${bal%.*}"
     if [ "${granted%.*}" -gt 0 ] 2>/dev/null; then
         grant_i="${granted%.*}"
@@ -543,6 +672,10 @@ elif [ "$provider" = "ourtoken" ] && [ -f "$ROUTING/ourtoken-sessions.json" ]; t
     live="$(grep -c '"status"[[:space:]]*:[[:space:]]*"live"' "$ROUTING/ourtoken-sessions.json" 2>/dev/null | head -n1 | tr -cd 0-9)"
     [ -z "$total" ] && total=0
     [ -z "$live" ] && live=0
+elif [ "$provider" = "rumeng" ] && [ -f "$ROUTING/rumeng-sessions.json" ]; then
+    # rumeng/sub2api: balance — wallet field from /auth/me, cached by dashboard.
+    # There is no subscription grant; dashboard's balance is the authoritative value.
+    gauge_from_balance_cache "$ROUTING/rumeng-sessions.json" "$PROF/.claude/rumeng-active-key.txt" "rm/balance" 90
 elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/agentrouter-sessions.json" "$PROF/.claude/ar-active-key.txt" "ar/balance" 90
 elif [ "$provider" = "tabi" ] && [ -f "$ROUTING/tabi-sessions.json" ]; then
@@ -562,10 +695,10 @@ elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
 elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
-elif [ "$provider" = "hcnsec" ] && [ -f "$ROUTING/hcnsec-sessions.json" ]; then
-    gauge_from_balance_cache "$ROUTING/hcnsec-sessions.json" "$PROF/.claude/hcnsec-active-key.txt" "hn/balance" 90
 elif [ "$provider" = "aipm" ] && [ -f "$ROUTING/aipm-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/aipm-sessions.json" "$PROF/.claude/aipm-active-key.txt" "ap/balance" 90
+elif [ "$provider" = "aikeysapi" ] && [ -f "$ROUTING/aikeysapi-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/aikeysapi-sessions.json" "$PROF/.claude/aikeysapi-active-key.txt" "ak/balance" 90
 elif [ "$provider" = "wisdomsatan" ] && [ -f "$ROUTING/wisdomsatan-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/wisdomsatan-sessions.json" "$PROF/.claude/wisdomsatan-active-key.txt" "ws/balance" 90
 fi
@@ -580,7 +713,19 @@ MONEY=$'\033[38;5;42m'
 if [ -n "$map_target" ]; then
     MAP_ARROW=$'\033[38;5;243m'
     MAP_VAL=$'\033[38;5;114m'
-    printf '%s%s/%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+    # 🪤 У голого имени шлюза второго слова НЕТ — модель не названа, и печатать вместо
+    # неё имя шлюза второй раз (`agentrouter/agentrouter[1m]`) значит показать выбор,
+    # которого владелец не делал. Поэтому здесь `agentrouter→opus-5[1m]`: слева шлюз,
+    # справа во что развернётся, ровно один раз каждое.
+    if [ "$route_bare" = "1" ]; then
+        printf '%s%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+    else
+        printf '%s%s/%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+    fi
+elif [ "$route_nomap" = "1" ]; then
+    # Цель не задана → front-door ответит 400, запрос наверх не уйдёт. Красным, а не
+    # тускло: это отказ, а не «просто нет стрелки».
+    printf '%s%s%s→%s%s?%s' "$MODEL_COL" "$provider" $'\033[38;5;243m' "$RESET" $'\033[1;38;2;255;107;128m' "$RESET"
 else
     printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
 fi
@@ -655,9 +800,14 @@ if [ "$have_gauge" = "1" ]; then
         money_col="$MONEY"
     fi
 
+    if [ "$provider" = "aikeysapi" ] && [ -n "$pool_balance_total" ]; then
+        avail_display="$(awk -v v="$avail_sum" 'BEGIN { printf "%.2f", v }')/\$$pool_balance_total"
+    else
+        avail_display="$avail_sum"
+    fi
     printf ' %s│%s %s$%s%s%s' \
         "$SEP" "$RESET" \
-        "$money_col" "$avail_sum" "$age_mark" "$RESET"
+        "$money_col" "$avail_display" "$age_mark" "$RESET"
 
     # ⏳ перезарядка: окно выжрано, аккаунт живой и ждёт налива
     if [ -n "$cool_str" ]; then
@@ -792,7 +942,7 @@ fi
 # ложной тревогой. Это отличает блок от 🎁, который считается всегда намеренно
 # (бонус лежит на пуле и важен, даже когда сидишь на другом провайдере).
 case "$provider" in
-    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|kktoken|hcnsec|aipm)
+    agentrouter|tabi|gorouter|xpeach|justwoker|seekai|truesota|rumeng|kktoken|hcnsec|aipm)
         rot_raw=""
         [ -f "$LOGS/.money_autorotate.json" ] && rot_raw="$(<"$LOGS/.money_autorotate.json")"
         if [[ "$rot_raw" =~ \"enabled\"[[:space:]]*:[[:space:]]*true ]]; then

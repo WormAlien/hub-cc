@@ -118,6 +118,39 @@ async function reportRender(page) {
     : '⚠️  белый экран: SPA не поднялась — жми F5, в DevTools ищи 404 на /static/js/*.js');
 }
 
+// Панель — SPA, и «я вошёл» она держит в localStorage, а не в адресе страницы: на
+// `/console` без входа отдаётся форма логина по ТОМУ ЖЕ URL. Поэтому судить по `page.url()`
+// нельзя — смотрим на саму форму.
+async function isLoginPage(page) {
+  try {
+    return await page.evaluate(() => {
+      const p = document.querySelector('input[type="password"]');
+      if (!p) return false;
+      const r = p.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+  } catch { return false; }
+}
+
+// Само-лечение для 🌐: оказались на форме входа, а снимок есть — применяем его НА МЕСТЕ
+// и перезагружаем.
+//
+// Зачем, если снимок уже применён выше: куки в профиль пишет ещё и
+// `newapiSyncProfile()` (из общего jar), и он это делает БЕЗ состояния SPA. Порядок
+// «кука уже лежала в профиле → снимок не применяли» оставлял владельца на форме входа
+// при живом снимке рядом. Здесь это лечится без разбора причин: раз мы на логине, терять
+// нечего — перезапись куки ничего не ломает.
+//
+// `addInitScript` срабатывает на СЛЕДУЮЩЕЙ навигации, поэтому перезагрузка обязательна,
+// а не косметика.
+async function trySnapshotRecovery(page, context, shared) {
+  if (!shared) return false;
+  await applyImportedSession(context, shared);
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+  await page.waitForTimeout(4000);
+  return !(await isLoginPage(page));
+}
+
 async function preflight() {
   try {
     const r = await fetch(STATUS_URL, {
@@ -258,7 +291,16 @@ async function main() {
   raiseBrowserWindow();
   await disableHttpCache(context, page);
 
-  const appliedSession = (fresh && shared) ? await applyImportedSession(context, shared) : false;
+  // Снимок применяем, когда в САМОМ ПРОФИЛЕ нет живой сессии, — а не только когда профиль
+  // чистый.
+  //
+  // 🪤 Раньше здесь стояло `fresh && shared`. На любом уже существующем профиле снимок
+  // молча игнорировался, открывалась консоль, и скрипт печатал «уже залогинен» — ничего не
+  // проверив. Владелец видел форму входа при живом снимке рядом. Каталог профиля создаётся
+  // первым же открытием окна, так что «не чистый» — это обычный случай, а не редкий.
+  const existingCookies = await context.cookies().catch(() => []);
+  const needSnapshot = !!shared && (fresh || !hasSessionCookie(existingCookies));
+  const appliedSession = needSnapshot ? await applyImportedSession(context, shared) : false;
   const wantRegister = appliedSession ? false
     : mode === 'register' ? true
     : mode === 'console' ? false
@@ -269,7 +311,20 @@ async function main() {
     if (appliedSession) {
       await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
       await reportRender(page);
-      console.log('✅ Импортированная сессия применена (AIKeysAPI уже залогинен).');
+      if (await isLoginPage(page)) {
+        // Честно: снимок применился, но входа в нём не хватило. Молчать здесь нельзя —
+        // именно молчание и превращало это в «кнопка 🌐 открывает логин».
+        if (await trySnapshotRecovery(page, context, shared)) {
+          console.log('✅ Снимок применён со второй попытки — AIKeysAPI уже залогинен.');
+        } else {
+          console.log('⚠️  Снимок применён, но панель показывает ФОРМУ ВХОДА.');
+          console.log('   Причина, как правило, одна: снимок без состояния входа SPA (localStorage.user).');
+          console.log('   Кука при этом живая — API отвечает 200, а SPA про вход не знает.');
+          console.log('   Пересобери снимок: node aikeysapi/refresh-sessions.js');
+        }
+      } else {
+        console.log('✅ Снимок применён — AIKeysAPI уже залогинен.');
+      }
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await holdOpen(context);
       return;
@@ -301,7 +356,20 @@ async function main() {
     await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
     if (!fresh) {
       await reportRender(page);
-      console.log('✅ Профиль восстановлен (AIKeysAPI уже залогинен, если заходил раньше).');
+      // 🪤 Здесь стояло безусловное «уже залогинен, если заходил раньше» — утверждение,
+      // которое никто не проверял. Профиль на диске сам по себе не значит вход: сессия
+      // могла истечь, а снимок — не примениться.
+      if (await isLoginPage(page)) {
+        if (await trySnapshotRecovery(page, context, shared)) {
+          console.log('✅ Снимок из пула применён — AIKeysAPI уже залогинен.');
+        } else {
+          console.log('⚠️  Профиль на диске есть, но вход НЕ выполнен — открыта форма входа.');
+          console.log('   Войди паролем вручную (он есть в записи аккаунта на вкладке) либо');
+          console.log('   пересобери снимок: node aikeysapi/refresh-sessions.js');
+        }
+      } else {
+        console.log('✅ Профиль восстановлен — AIKeysAPI уже залогинен.');
+      }
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await holdOpen(context);
       return;

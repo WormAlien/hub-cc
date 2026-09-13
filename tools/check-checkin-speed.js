@@ -19,7 +19,8 @@
 //   · watchOauthState     — попап открывается только после годного /api/oauth/state,
 //                           отказ на нём = приговор, ждать попап дальше бессмысленно;
 //   · Promise.any на кнопках — два кандидата ждутся разом, а не по 10 с подряд;
-//   · readBaselineSelf    — зовётся только при живой сессии и с поводком на свой fetch.
+//   · браузер после перелогина не ждёт и не снимает баланс: точная проверка идёт после
+//     закрытия окна обычным cookie/raw-auth путём.
 // Плюс честный отказ: пустое тело от ПУБЛИЧНОЙ /api/status — это рейт-лимит/WAF по IP
 // (код 6), а не «шлюз переделал страницу входа» (код 4).
 //
@@ -71,11 +72,11 @@ async function main() {
     const GATE = num('CONSOLE_GATE_MS');
     const POPUP = num('GH_POPUP_WAIT_MS');
     const BTN = num('GH_BTN_WAIT_MS');
-    const BASE = num('BASELINE_SELF_MS');
     check(Number.isFinite(GATE) && GATE <= 10000, `CONSOLE_GATE_MS = ${GATE} мс (было 15000 на аватар)`);
     check(Number.isFinite(POPUP) && POPUP <= 8000, `GH_POPUP_WAIT_MS = ${POPUP} мс (было 15000)`);
     check(Number.isFinite(BTN) && BTN <= 10000, `GH_BTN_WAIT_MS = ${BTN} мс на ОБА кандидата (было 10000 на каждого)`);
-    check(Number.isFinite(BASE) && BASE > 0 && BASE <= 5000, `BASELINE_SELF_MS = ${BASE} мс — поводок на свой fetch эталона`);
+    check(!/BASELINE_SELF_MS|readBaselineSelf\(/.test(SESS),
+        'браузерный baseline/self-fetch полностью убран из speed-critical пути');
     const click = cutFn(SESS, 'async function clickGithubLogin(');
     check(!/timeout: 15000/.test(click) && !/timeout: 10000/.test(click),
         'в clickGithubLogin не осталось зашитых 10/15 с');
@@ -84,24 +85,24 @@ async function main() {
     check(!/timeout: 15000/.test(uiLogout), 'ожидание аватара с потолком 15 с из uiLogout убрано');
     // Арифметика худшего случая — ради неё всё и делалось.
     const oldWorst = 15000 /* аватар */ + 4700 /* эталон */ + 10000 * 2 /* два кандидата */ + 15000 /* попап */;
-    const newWorst = GATE + BASE + BTN + POPUP;
+    const newWorst = GATE + BTN + POPUP;
     check(newWorst < oldWorst / 2,
         `худший случай фиксированных ожиданий: было ~${(oldWorst / 1000).toFixed(1)} с → стало ${(newWorst / 1000).toFixed(1)} с`);
 
     // ── 2. разлогин: выходить не из чего — не выходим ──
     console.log('\n2. ранний выход из разлогина (сессия мертва на сервере)');
     check(/consoleGate\(/.test(uiLogout), 'uiLogout спрашивает consoleGate, а не ждёт аватар вслепую');
-    check(uiLogout.indexOf('consoleGate(') < uiLogout.indexOf('readBaselineSelf('),
-        'эталон снимается ПОСЛЕ вердикта — на мёртвой сессии до него дело не доходит');
+    check(!/readBaselineSelf\(|BASELINE_SELF_MS/.test(uiLogout),
+        'uiLogout не запускает браузерный baseline/self-fetch');
     check(/gate === 'login'[\s\S]*?return true/.test(uiLogout),
         'вердикт «уже на странице входа» = выход прошёл, фолбэк с удалением кук не зовётся');
     check(/purgeSiteCookies\(context, page\)[\s\S]*?уже мертва/.test(uiLogout)
         || /уже мертва[\s\S]{0,400}?return true/.test(uiLogout),
         'мёртвая кука с диска убирается — иначе точный баланс примет её за живую сессию');
-    check(/BASELINE_SELF_MS/.test(cutFn(SESS, 'async function readBaselineSelf(')),
-        'свой fetch эталона ограничен по времени (заглушка WAF не ответит никогда)');
-    check(/signal: ac \? ac\.signal : undefined/.test(cutFn(SESS, 'async function siteSelfOk(')),
-        'поводок сделан AbortController внутри страницы, а не гонкой снаружи');
+    check(!/BASELINE_SELF_MS|readBaselineSelf\(/.test(SESS),
+        'browser baseline/self-fetch is absent from the implementation');
+    check(!/watchSelfResponses\(|reloadForFreshSelf\(|captureSelfSnapshot\(|waitBalanceRendered\(|GIFT_RELOAD_ATTEMPTS|GIFT_TOTAL_BUDGET_MS/.test(SESS),
+        'browser balance-wait machinery and snapshot capture are absent');
 
     {
         const block = cutRange(SESS, 'const AUTH_PAGE_RE =', '// Выход через меню профиля');
@@ -264,12 +265,26 @@ async function main() {
     // ── 6. запреты владельца не нарушены ──
     console.log('\n6. чего трогать было нельзя');
     check(/headless: false/.test(SESS), 'headless: false на месте — решения по нему не принято');
-    check(!/userAgent:/.test(SESS) && !/setExtraHTTPHeaders/.test(SESS),
-        'подменённого UA не появилось: сырые запросы на github.com уже стоили трёх сессий');
+    check(/accountUserAgent\(/.test(SESS) && /userAgent:\s*ua/.test(SESS),
+        'липкий UA аккаунта передаётся в запуск Chromium');
+    check(/Network\.setUserAgentOverride/.test(SESS) && /userAgentMetadata:\s*uaMetadata\(ua\)/.test(SESS),
+        'client hints синхронизированы с липким UA');
     check(!/fetch\(['"`]https:\/\/github\.com/.test(SESS),
         'к github.com ходим только навигацией настоящего браузера');
-    check(/const expectGrowth = !!\(auto && baseline && !gatewaySaysNo\)/.test(SESS),
-        'checked_in по-прежнему не служит основанием ждать/не ждать рост — он врёт');
+    const sessionWait = cutFn(SESS, 'async function waitForSiteSession(');
+    check(!/hasSessionCookie\(cookies\)\) return \{ ok: true \}/.test(sessionWait),
+        'session-cookie from /api/oauth/state cannot finish login before OAuth callback');
+    check(/oauth\.seen && oauth\.success === true/.test(sessionWait),
+        'both manual and auto modes wait for successful gateway OAuth callback');
+    check(/watchOauthResult\(context\)/.test(SESS)
+        && !/auto \? watchOauthResult\(context\) : null/.test(SESS),
+        'manual check-in observes OAuth callback too, not only autocheckin');
+    check(/context\.on\('page',[\s\S]{0,250}applyUserAgentOverride/.test(SESS),
+        'every popup gets matching sticky-UA client hints');
+    check(/async function applyUserAgentOverride/.test(SESS),
+        'UA/CDP override is a shared helper for initial page and popups');
+    check(/oauth\.success/.test(sessionWait) && !/checkedIn/.test(sessionWait),
+        'браузер ждёт только успешный колбэк входа, а не ошибочный checked_in или рост баланса');
     check(/loadSharedGhSnapshot/.test(SESS) && (SESS.match(/seedFromSharedSnapshot\(/g) || []).length >= 4,
         'подъём сессии из общего снимка не задет');
     check(!/\r/.test(fs.readFileSync(SRC, 'utf8')) && fs.readFileSync(SRC).slice(0, 3).toString('hex') !== 'efbbbf',

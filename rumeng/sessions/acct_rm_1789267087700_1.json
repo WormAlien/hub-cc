@@ -1,0 +1,30 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "https://api.rumeng-ai.com",
+      "localStorage": [
+        {
+          "name": "auth_token",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxOTQsImVtYWlsIjoiaGUuc2h1bC5hbGFAZ21haWwuY29tIiwicm9sZSI6InVzZXIiLCJ0b2tlbl92ZXJzaW9uIjo2MjIxMTAyNDM2MDM0Nzg5Nzk2LCJzaWQiOiI5YmMyNmNmYmFmZTU5MzFlODE0MTVkZjc3NTlkYWI4NiIsImJuZCI6Ijg4ZTgyMzFkYTgzNGVkZDkyMDRhMDJhMDA3NjM3N2U1IiwiZXhwIjoxNzg5MzUzNDg2LCJuYmYiOjE3ODkyNjcwODYsImlhdCI6MTc4OTI2NzA4Nn0.482zDof0OUw6KSgYMp03ZInEP0HBtbV_cz1hU04RSAY"
+        },
+        {
+          "name": "refresh_token",
+          "value": "rt_790461a2fec92cc1a5cee9564c47d0b4b7535f97e93d6a7c2cd3db6656fb1e75"
+        },
+        {
+          "name": "token_expires_at",
+          "value": "1789353487708"
+        },
+        {
+          "name": "auth_user",
+          "value": "{\"id\":194,\"email\":\"he.shul.ala@gmail.com\",\"username\":\"\",\"role\":\"user\",\"balance\":1,\"frozen_balance\":0,\"concurrency\":15,\"status\":\"active\",\"allowed_groups\":null,\"created_at\":\"2026-09-13T10:38:06.32659823+08:00\",\"updated_at\":\"2026-09-13T10:38:06.326598427+08:00\",\"balance_notify_enabled\":false,\"balance_notify_threshold_type\":\"\",\"balance_notify_threshold\":null,\"balance_notify_extra_emails\":null,\"total_recharged\":0,\"rpm_limit\":0}"
+        },
+        {
+          "name": "sub2api_login_agreement_consent",
+          "value": "{\"revision\":\"515ed00e0aa9f5e6\",\"accepted_at\":\"2026-09-13T02:38:07.708Z\"}"
+        }
+      ]
+    }
+  ]
+}

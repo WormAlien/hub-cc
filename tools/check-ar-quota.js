@@ -9,7 +9,9 @@ const DASH = path.join(__dirname, '..', 'routing', 'transparent-proxy.js');
 const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const src = fs.readFileSync(DASH, 'utf8');
 const html = fs.readFileSync(HTML, 'utf8');
-const { classifyArQuotaProbe, AR_QUOTA_BODY } = require('../routing/lib/ar-quota-probe');
+const { classifyArQuotaProbe, AR_QUOTA_BODY, AR_QUOTA_CYCLE_MS, AR_QUOTA_ANCHOR_MS,
+        arQuotaDropAt, arQuotaKeyTail, buildArQuotaCache, isArQuotaCacheFresh,
+        pickFresherArQuota } = require('../routing/lib/ar-quota-probe');
 
 const fails = [];
 const ok = [];
@@ -53,6 +55,56 @@ check(html.includes("ar-quota-dial2"), 'dial choice key bumped to gen2 — day d
 check(html.includes('localStorage.removeItem(KEY_OLD)'), 'old dial choice key is cleaned up');
 check(html.includes('тремя партиями'), 'mini tooltip says three batches');
 check(html.includes('Три партии в сутки'), 'big caption says three batches');
+
+// ── Кеш результата проверки (2026-09-12) ──────────────────────────────────
+// Инвалидация по ПАРТИИ, а не по TTL. Точки взяты в UTC, чтобы регресс не зависел
+// от таймзоны машины: 08:00 UTC = дневная партия 11:00 МСК.
+const DROP = Date.UTC(2026, 8, 12, 8, 0, 0);          // партия 11:00 МСК
+const NEXT_DROP = DROP + AR_QUOTA_CYCLE_MS;           // партия 19:00 МСК
+check(AR_QUOTA_CYCLE_MS === 8 * 3600 * 1000, 'cache grid cycle is 8 hours');
+check(AR_QUOTA_ANCHOR_MS === Date.UTC(1970, 0, 1, 16, 0, 0), 'cache grid anchor is 16:00 UTC');
+// Обе копии сетки обязаны совпадать: у циферблата своя в HTML (самодостаточный IIFE).
+check(html.includes('const dropAt = t => t - (((t - ANCHOR) % CYCLE + CYCLE) % CYCLE)'),
+      'browser cache reuses the dial CYCLE/ANCHOR instead of duplicating numbers');
+check(arQuotaDropAt(DROP + 3600_000) === DROP, 'dropAt snaps to the batch that already happened');
+check(arQuotaDropAt(DROP - 1) === DROP - AR_QUOTA_CYCLE_MS, 'dropAt before a batch points at the previous one');
+check(arQuotaDropAt('nope') === null, 'dropAt rejects garbage');
+
+const AVAIL = buildArQuotaCache({ state: 'available' }, 'sk-abcdef1234', DROP + 60_000);
+check(AVAIL.state === 'available' && AVAIL.keyTail === '1234', 'cache entry keeps state and key tail');
+check(!JSON.stringify(AVAIL).includes('sk-abcdef'), 'cache never stores the full key');
+check(Date.parse(AVAIL.dropAt) === DROP, 'cache entry records its batch');
+check(buildArQuotaCache({ state: 'error', error: 'boom' }, 'sk-1', DROP) === null, 'errors are not cached');
+check(buildArQuotaCache({ state: 'exhausted' }, 'sk-1', DROP).state === 'exhausted', 'exhausted is cached');
+check(arQuotaKeyTail('sk-xyz9876') === '9876' && arQuotaKeyTail('ab') === 'ab', 'key tail is last four chars');
+
+check(isArQuotaCacheFresh(AVAIL, DROP + 3600_000, '1234'), 'entry stays fresh inside the same batch');
+check(isArQuotaCacheFresh(AVAIL, NEXT_DROP - 1000, '1234'), 'entry survives until the very next drop');
+check(!isArQuotaCacheFresh(AVAIL, NEXT_DROP, '1234'), 'entry dies exactly at the next drop');
+check(!isArQuotaCacheFresh(AVAIL, DROP + 60_000, '9999'), 'entry dies when the active key changed');
+check(isArQuotaCacheFresh(AVAIL, DROP + 60_000, ''), 'unknown active key does not invalidate the entry');
+check(!isArQuotaCacheFresh({ ...AVAIL, checkedAt: 'x' }, DROP + 60_000, '1234'), 'unparseable checkedAt is not fresh');
+check(!isArQuotaCacheFresh({ ...AVAIL, state: 'error' }, DROP + 60_000, '1234'), 'error state is never fresh');
+check(!isArQuotaCacheFresh(null, DROP, '1234'), 'missing entry is not fresh');
+
+const OLDER = { ...AVAIL, checkedAt: new Date(DROP + 10_000).toISOString() };
+const NEWER = { ...AVAIL, state: 'exhausted', checkedAt: new Date(DROP + 90_000).toISOString() };
+check(pickFresherArQuota(OLDER, NEWER) === NEWER, 'fresher checkedAt wins regardless of layer');
+check(pickFresherArQuota(NEWER, OLDER) === NEWER, 'layer order does not decide the winner');
+check(pickFresherArQuota(null, OLDER) === OLDER, 'missing local falls back to remote');
+check(pickFresherArQuota(OLDER, null) === OLDER, 'missing remote keeps local');
+check(pickFresherArQuota(null, null) === null, 'nothing cached stays nothing');
+
+check(src.includes("'/__switch/api/ar/quota-state'"), 'GET quota-state route exists');
+check(src.includes('AR_QUOTA_STATE_FILE'), 'server caches the probe result to disk');
+check(src.includes('buildArQuotaCache'), 'server builds the cache entry from the probe');
+check(src.includes('isArQuotaCacheFresh'), 'server validates freshness before serving cache');
+check(html.includes("const KEY_ST = 'ar-quota-state'"), 'browser cache has its own storage key');
+check(html.includes("fetch('/__switch/api/ar/quota-state')"), 'browser reads the shared cache');
+check(html.includes('stExpire(c.t)'), 'dial tick expires the cache when a batch lands');
+check(html.includes('проверено в'), 'restored result says it is a past check');
+const stHandler = html.slice(html.indexOf('function stApply'), html.indexOf('window.arqCheckQuota'));
+check(!/api_key|x-api-key|sk-/i.test(stHandler), 'browser cache never touches keys');
 
 for (const msg of ok) console.log('OK  ' + msg);
 for (const msg of fails) console.error('FAIL ' + msg);

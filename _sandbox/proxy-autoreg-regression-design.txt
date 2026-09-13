@@ -1,0 +1,47 @@
+Proxy validator + autoreg regression-test design
+
+Point 1: Existing harness conventions
+- tools/proxy-validator/tests/test_agentrouter_validation.py is stdlib unittest, imported as a package from tools/proxy-validator, run with `python -m unittest discover -s tests -t .`.
+- It uses tempfile.TemporaryDirectory for output isolation, hand-built ProxyRecord fixtures, injected callbacks, fake sockets, and assertions against stable.txt/report.json.
+- tools/check-aikeysapi-safe.js and tools/check-rumeng-safe.js are standalone Node CommonJS scripts with only fs/path. They read repository files, use numbered `check()`/`has()` assertions, print TAP-like `ok N - ...` / `not ok N - ...`, and set process.exitCode/exit(1).
+- JS safe checks are static/offline; they do not import transparent-proxy.js because it starts the live server. Existing dynamic JS checks use fs.mkdtempSync(os.tmpdir()), assert/check helpers, child_process only when a subprocess is needed, and cleanup on exit.
+- package.json has no general test command for these checks; they are invoked directly with `node tools/check-*.js`. The Python validator suite is the only established unit-test runner for proxy_scraper internals.
+
+Point 2: Host overwrite regression
+Target: `tools/proxy-validator/proxy_scraper/find_for_host.py::find`.
+- Build a temporary source/config and monkeypatch `ProxyScraper`, `DomainProxyChecker`, and `write_pool` or call `find` with fakes; no sockets/network.
+- Fake scraper returns six ProxyRecord values, fake checker returns successful results in batches. Assert `find(host="target.example", want=2, ...)` calls the checker with a DomainTarget whose host is target.example and path is `/api/status` by default, and returns exactly two records.
+- Verify a success does not replace the caller's existing pool: create old pool lines, invoke the integration boundary that merges fresh with old (or directly test extracted `akMergeProxyLines`/`rmMergeProxyLines` logic in a static safe check), then assert old assigned proxy remains and fresh lines precede it, duplicates collapse, and cap is enforced. This specifically catches a `writeFileSync(fresh)` overwrite.
+- For both AK and RM, the safe-check script should statically assert the live-file write is fed by `merge(fresh, old)`, not the validator temp file directly; a dynamic test should use a temp old file containing `old-assigned` plus fresh output and assert both survive.
+
+Point 3: Concurrent merge regression
+Target: `routing/transparent-proxy.js` merge/write path and `aikeysapi/auto-add.js` + `rumeng/auto-add.js` `poolAppend`.
+- Use two independent Node child processes, each pointed at a temp pool file through an environment override or extracted helper. Start them simultaneously behind a barrier; each reads a common seed and appends a distinct record.
+- Assert final JSON contains seed + both records, has no duplicate API keys, and parses fully. Repeat several rounds to make the race reproducible.
+- If helpers cannot be parameterized, make the test a source-level safe check plus an isolated extracted-function test. The current `poolAppend` hardcodes module constants, so an ideal small refactor would inject the pool path; absent that, load each source in a VM/extractor with a temporary `POOL_FILE` binding.
+- For validator merge, call the extracted `akMergeProxyLines` concurrently against independent old snapshots and assert the writer needs a serialized/atomic read-merge-write primitive; current direct `read old → write merged` is vulnerable to lost updates between AK and RM searches. The regression should fail if both writers can overwrite each other's fresh line.
+
+Point 4: Early-stop regression
+Target: `find_for_host.find` and both `akFindProxyLaunch`/`rmFindProxyLaunch`.
+- For `find`, fake checker returns a batch containing more successes than needed. Assert checker is called only through the batch containing `want`, return length equals want (or at least no later batches), and no additional candidate checks occur.
+- For launchers, use a fake child process/EventEmitter injected at the spawn boundary. Feed stdout/stderr progress lines, set stopRequested, emit exit, and assert partial found lines are committed through `akCommitPartialProxyLines` for both providers; assert existing live pool lines remain and fresh found lines are added.
+- Assert a second launch while `running` returns `{ok:false}` and does not spawn another child. Stop when already idle returns `stopped:false`; stop while running marks stopRequested and kills the process tree (Windows taskkill arguments `/PID`, pid, `/T`, `/F`; POSIX SIGTERM).
+
+Point 5: Timeout propagation regression
+Targets: `find_for_host.find(... workers, timeout)` → `DomainProxyChecker`, and `panel()` in both autoregs.
+- Python: monkeypatch the checker constructor and capture `workers`/`timeout`; fake `check_many` returns failures. Assert the values passed to `find` are forwarded unchanged, rather than the current hardcoded scraper timeout or a default checker timeout. Also assert each DomainProxyChecker sees the target host/path and the requested timeout.
+- Python: use a fake checker whose check blocks/raises `socket.timeout`; assert `find` completes with no result and does not convert a timeout into a success.
+- Node: static checks should require `https.request({... timeout: REQ_TIMEOUT_MS })` and a timeout listener that destroys the request, for both auto-add files. Dynamic test should replace `https.request` with a fake request, capture options.timeout, emit `timeout`, then `error`; assert the returned result has `status: 0` and the timeout error text. This catches passing timeout only to a higher-level caller while the socket request remains unbounded.
+- Do not sleep real retry intervals: inject/fake `sleep` or test the non-429 path. If testing `AbortSignal.timeout` balance calls, mock fetch and assert the signal timeout is 30000 ms.
+
+Point 6: More than three dead candidates
+Targets: `find_for_host.find` and autoreg proxy acquisition loops.
+- Python: supply at least six candidates, fake checker marks first five dead and sixth live, with `want=1`; assert all six are attempted and one live record is returned. This guards accidental `[:3]`, one-batch-only, or “three failures means stop” logic. Also test all six dead: returns empty and writes no false success.
+- Node: stub proxy-pool methods so `forAccount` fails for the first four assigned IDs and succeeds on the fifth. Assert `acquireProxyFor` reaches the fifth candidate, records each tried proxy, and returns its agent/label; assert the hard attempt ceiling is intentional and documented (currently `attempt < 3`, so this test exposes that it cannot satisfy “>3 dead candidates” and should drive changing the loop to iterate until candidates are exhausted/deadline).
+- For both AK and RM, run the same fixture against their extracted `acquireProxyFor` and compare behavior. A failure after exactly three dead candidates is the expected red test until implementation is adjusted.
+
+Point 7: Concrete placement and execution
+- Extend `tools/proxy-validator/tests/test_agentrouter_validation.py` for Python `find` behavior, preserving unittest and temporary-dir conventions. Add a separate `tools/proxy-validator/tests/test_find_for_host.py` only if keeping the existing file focused is preferable; do not add pytest or third-party fixtures.
+- Add a focused standalone `tools/check-autoreg-regressions.js` for both Node autoreg modules. Keep it offline: fs/path/os/assert/events/vm/child_process only; use source extraction or VM injection, never require the live proxy server or contact panel/email services.
+- Keep `check-aikeysapi-safe.js` and `check-rumeng-safe.js` as static integration guards; add assertions there only for wiring contracts (merge source, timeout listener, loop bound), not timing-sensitive behavior.
+- Run Python with `cd tools/proxy-validator && python -m unittest discover -s tests -t .`; run Node with `node tools/check-aikeysapi-safe.js`, `node tools/check-rumeng-safe.js`, and the new focused check. Report failures by numbered assertion and provider.

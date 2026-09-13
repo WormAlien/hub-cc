@@ -1,0 +1,37 @@
+[03:12:53] КЛИК   #accept-cookies-usage  <button>  «Got it»   @ /
+[03:12:54] URL    about:blank  →  about:srcdoc
+[03:12:54] КЛИК   div.mf-ticket:nth-of-type(2) > div.mf-ticket-body:nth-of-type(2) > div.mf-toggles:nth-of-type(5) > button.mf-chip:nth-of-type(1)  <button>  «Domain»   @ /
+[03:12:55] КЛИК   div.mf-ticket:nth-of-type(2) > div.mf-ticket-body:nth-of-type(2) > div.mf-toggles:nth-of-type(5) > button.mf-chip:nth-of-type(2)  <button>  «+Gmail»   @ /
+[03:12:55] КЛИК   div.mf-ticket:nth-of-type(2) > div.mf-ticket-body:nth-of-type(2) > div.mf-toggles:nth-of-type(5) > button.mf-chip:nth-of-type(4)  <button>  «GoogleMail»   @ /
+[03:12:56] КЛИК   div.mf-ticket:nth-of-type(2) > div.mf-ticket-body:nth-of-type(2) > div.mf-ticket-actions:nth-of-type(6) > button.mf-btn-ghost  <button>  «Generate New»   @ /
+[03:13:00] КЛИК   div.mf-ticket:nth-of-type(2) > div.mf-ticket-body:nth-of-type(2) > div.mf-go-row:nth-of-type(4) > button.mf-btn-go  <button>  «GO !»   @ /
+[03:13:00] URL    /  →  /inbox#ez.ra.meur.a@gmail.com
+[03:13:28] КЛИК   div.w-full > div.border-t:nth-of-type(3) > div.grid > button.rounded-xl:nth-of-type(2)  <button>  «同意并继续»   @ /register
+[03:13:40] КЛИК   div.mf-panel > div.mf-panel-head:nth-of-type(1) > div.mf-panel-actions:nth-of-type(2) > button.mf-panel-icon-btn:nth-of-type(1)  <button>  «Copy»   @ /inbox
+[03:13:45] КЛИК   #email  <input>  «请输入邮箱»   @ /register
+[03:13:47] ВВОД   #email  <input>  «ez.ra.meur.a@gmail.com»   ← "ez.ra.meur.a@gmail.com"
+[03:13:47] КЛИК   #password  <input>  «创建一个安全的密码»   @ /register
+[03:13:48] ВВОД   #password  <input>  «ez.ra.meur.a@gmail.com»   ← "ez.ra.meur.a@gmail.com"
+[03:13:48] КЛИК   div.card-glass:nth-of-type(2) > div.space-y-6 > form.space-y-5 > button.btn  <button>  «继续»   @ /register
+[03:13:49] URL    /register  →  /email-verify
+[03:13:53] КЛИК   div.mf-panel > div.mf-panel-body:nth-of-type(2) > div.mf-panel-toolbar:nth-of-type(1) > button.mf-panel-btn  <button>  «Reload»   @ /inbox
+[03:13:58] КЛИК   div.mf-panel > div.mf-panel-body:nth-of-type(2) > div.mf-panel-toolbar:nth-of-type(1) > button.mf-panel-btn  <button>  «Reload»   @ /inbox
+[03:14:01] КЛИК   div.relative:nth-of-type(2) > div.mf-msg-list > div.mf-msg-row:nth-of-type(2) > a.mf-msg-link  <a>  «"如梦AI" <2624952982@qq.com> [如梦AI] 邮箱验证码 »   @ /inbox
+[03:14:01] URL    /inbox#ez.ra.meur.a@gmail.com  →  /inbox/ez.ra.meur.a%40gmail.com/gp1.t4HZCsCroq2SuI3VDaEUHQBclULOWjvT0rUeWONqzRlR
+[03:14:06] КЛИК   #code  <input>  «000000»   @ /email-verify
+[03:14:07] ВВОД   #code  <input>  «491558»   ← "491558"
+[03:14:07] КЛИК   div.card-glass:nth-of-type(2) > div.space-y-6 > form.space-y-5 > button.btn  <button>  «验证并创建账户»   @ /email-verify
+[03:14:09] URL    /email-verify  →  /dashboard
+[03:14:10] КЛИК   div.w-full > div.border-t:nth-of-type(3) > div.flex > button.rounded-xl  <button>  «标记已读»   @ /dashboard
+[03:14:12] КЛИК   aside.sidebar > nav.sidebar-nav > div.sidebar-section > a.sidebar-link:nth-of-type(2)  <a>  «API 密钥»   @ /dashboard
+[03:14:12] URL    /dashboard  →  /keys
+[03:14:14] КЛИК   td.py-12 > div.empty-state > div.mt-6:nth-of-type(2) > button.btn  <button>  «创建密钥»   @ /keys
+[03:14:15] КЛИК   form.space-y-5 > div:nth-of-type(1) > input.input  <input>  «我的 API 密钥»   @ /keys
+[03:14:17] ВВОД   form.space-y-5 > div:nth-of-type(1) > input.input  <input>  «1»   ← "1"
+[03:14:17] КЛИК   div.modal-content > div.modal-footer:nth-of-type(3) > div.flex > button.btn:nth-of-type(2)  <button>  «创建»   @ /keys
+[03:14:21] КЛИК   form.space-y-5 > div:nth-of-type(1) > input.input  <input>  «1»   @ /keys
+[03:14:22] КЛИК   #key-form  <form>  «名称 分组 选择分组 自定义密钥 IP 限制 额度限制 $ 设置此密钥可消费的最»   @ /keys
+[03:14:22] КЛИК   form.space-y-5 > div:nth-of-type(2) > div.relative > button.select-trigger  <button>  «选择分组»   @ /keys
+[03:14:24] КЛИК   div.select-option:nth-of-type(4) > div.flex > div.flex:nth-of-type(1) > span.inline-flex  <span>  «kiro自建»   @ /keys
+[03:14:25] КЛИК   div.modal-content > div.modal-footer:nth-of-type(3) > div.flex > button.btn:nth-of-type(2)  <button>  «创建»   @ /keys
+[03:14:28] КЛИК   tr.hover:bg-gray-50 > td.whitespace-nowrap:nth-of-type(2) > div.flex > button.rounded-lg  <button>  «»   @ /keys

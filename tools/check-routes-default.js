@@ -203,6 +203,145 @@ const check = (name, fn) => {
     });
     check('подделанный клиентом x-route-prefixed снят', () => assert.strictEqual(seen[0] && seen[0].prefixed, null, JSON.stringify(seen[0])));
 
+    // 8. Корень бага 12.09: реестр обязан давать карту и ЛОКАЛЬНЫМ шлюзам.
+    //
+    // Почему отдельная проверка, а не «тест и так это ловит». Все прогоны выше дают
+    // фикстуру с готовым `modelmap` (gwMap), то есть проверяют ветку front-door. Прод
+    // же получал `modelmap: null` — и баг жил в ГЕНЕРАЦИИ реестра, которую эти прогоны
+    // не трогали вовсе. Отсюда симптом владельца: вкладка «Маршруты» показывает
+    // `default`, а `/model agentrouter` отвечает «не задана».
+    //
+    // Проверяем двумя разными способами, потому что они ловят разное:
+    //  а) исходник — регресс кода (локальная ветка обязана брать префикс из таблицы);
+    //  б) живой реестр — фактическое состояние машины.
+    const tpSrc = fs.readFileSync(path.join(__dirname, '..', 'routing', 'transparent-proxy.js'), 'utf8');
+    const seed = tpSrc.match(/function registrySeedEntry[\s\S]*?\n\}/);
+    check('registrySeedEntry найден', () => assert.ok(seed, 'функции нет — тест устарел'));
+    check('локальная ветка берёт карту из CC_MODEL_PREFIX, а не хардкодит null',
+        () => assert.ok(/if \(isLocalBase\(base\)\) \{[\s\S]*?modelmap:\s*p\s*\?/.test(seed[0]),
+            'локальный шлюз снова отдаёт modelmap: null → /model <шлюз> вернёт 400'));
+
+    const regFile = path.join(os.homedir(), '.claude', 'backends.json');
+    if (fs.existsSync(regFile)) {
+        const reg = JSON.parse(fs.readFileSync(regFile, 'utf8').replace(/^﻿/, ''));
+        const pre = {};
+        const tbl = tpSrc.match(/const CC_MODEL_PREFIX = \{([\s\S]*?)\};/);
+        if (tbl) for (const m of tbl[1].matchAll(/(\w+):\s*'([^']+)'/g)) pre[m[1]] = m[2];
+        const broken = Object.entries(reg.providers || {})
+            .filter(([name, e]) => /^https?:\/\/(127\.|localhost|\[::1\])/i.test(String(e.upstream || ''))
+                && pre[name] && !e.modelmap)
+            .map(([name]) => name);
+        check('в живом реестре у локальных шлюзов с префиксом карта проставлена',
+            () => assert.deepStrictEqual(broken, [], `без карты: ${broken.join(', ')}`));
+    }
+
+    // 9. Диагноз отказа обязан называть СЛОМАННОЕ, а не первое похожее (13.09).
+    //
+    // Корень 13.09 был в реестре (`modelmap: null` от ветки `extra` писателя), но текст
+    // 400 отправлял владельца на вкладку «Маршруты» выбирать `default` — который он там
+    // уже выбрал. Отсюда его «я уже выбрал, а она непонятно куда пошла»: подсказка вела
+    // чинить исправное. Две поломки — два разных текста, и это проверяемо.
+    const noMapReg = path.join(TMP, 'backends-nomap.json');
+    const nmGw = path.join(TMP, 'nm-modelmap.json');
+    const nmRt = path.join(TMP, 'nm-routes-modelmap.json');
+    fs.writeFileSync(nmGw, JSON.stringify({ opus: 'x' }), 'utf8');
+    fs.writeFileSync(nmRt, JSON.stringify({ default: '', opus: 'y' }), 'utf8');  // карта есть, тир пуст
+    fs.writeFileSync(noMapReg, JSON.stringify({
+        version: 1,
+        providers: {
+            // Ровно состояние прода до фикса: запись есть, карты не указано.
+            nomap: { upstream: `http://127.0.0.1:${UP_PORT}`, keyFile: null, modelmap: null },
+            hasmap: { upstream: `http://127.0.0.1:${UP_PORT}`, keyFile: null, modelmap: nmGw },
+        },
+    }), 'utf8');
+    const FD2 = FD_PORT + 2;
+    const child2 = spawn(process.execPath, [path.join(__dirname, '..', 'routing', 'frontdoor-proxy.js')], {
+        env: {
+            ...process.env,
+            PORT: String(FD2),
+            BACKENDS_FILE: noMapReg, ACTIVE_BACKEND_FILE: active,
+            LOG_FILE: path.join(TMP, 'fd-nomap.log'),
+        },
+        stdio: 'ignore',
+    });
+    const killChild2 = () => { try { process.kill(child2.pid); } catch { } };
+    process.on('exit', killChild2);
+    for (let i = 0; i < 60; i++) {
+        try { await post(FD2, '/__ping', {}, 1000); break; } catch { await nap(100); }
+    }
+
+    seen.length = 0;
+    r = await post(FD2, '/v1/messages', { model: 'nomap', max_tokens: 1 });
+    check('modelmap: null → 400', () => assert.strictEqual(r.status, 400, `status ${r.status}: ${r.body}`));
+    check('при modelmap: null текст винит РЕЕСТР, а не вкладку',
+        // 🪤 Не грепать `backends.json`: сообщение печатает путь РЕЕСТРА, а под тестом это
+        // фикстура `backends-nomap.json` во временной папке. Признак — `modelmap: null`
+        // (имя поля реестра) плюс явное снятие вины с вкладки.
+        () => assert.ok(/modelmap: null/.test(r.body) && /НЕ виновата/.test(r.body), r.body));
+    check('при modelmap: null наверх не ушло ничего', () => assert.strictEqual(seen.length, 0, JSON.stringify(seen)));
+
+    seen.length = 0;
+    r = await post(FD2, '/v1/messages', { model: 'hasmap', max_tokens: 1 });
+    check('карта есть, default пуст → 400', () => assert.strictEqual(r.status, 400, `status ${r.status}: ${r.body}`));
+    check('пустой тир ведёт на вкладку «Маршруты» и НЕ винит реестр',
+        () => assert.ok(/Маршруты/.test(r.body) && !/modelmap: null/.test(r.body), r.body));
+
+    // Контроль к тому же состоянию: `modelmap: null` ломает ТОЛЬКО голое имя. Явное имя
+    // routes-карту не читает вовсе (`routesMapFor` в той ветке не вызывается), поэтому
+    // обязано доезжать. Без этой проверки фикс мог бы «вылечить» голое имя, попутно
+    // сломав явное, и тест бы этого не увидел.
+    seen.length = 0;
+    r = await post(FD2, '/v1/messages', { model: 'nomap/glm-5.3', max_tokens: 1 });
+    check('явное имя при modelmap: null доезжает (200)', () => assert.strictEqual(r.status, 200, `status ${r.status}: ${r.body}`));
+    check('явное имя при modelmap: null не подменено', () => assert.strictEqual(seen[0] && seen[0].model, 'glm-5.3', JSON.stringify(seen[0])));
+    killChild2();
+
+    // 10. Корень 13.09 — в ПИСАТЕЛЕ реестра, и он проверяется исполнением, а не грепом.
+    //
+    // Проверка №8 выше грепает `registrySeedEntry` — она и была зелёной, пока баг жил во
+    // ВТОРОЙ ветке (`extra`, «только что активированный бэкенд»). Греп её не покрывал,
+    // поэтому 12.09 фикс сочли полным, а 13.09 первая же активация agentrouter снова
+    // положила `/model agentrouter` в 400. Значит нужен прогон самой функции.
+    //
+    // `transparent-proxy.js` целиком не поднять (23,5 тыс. строк, поднимет серверы), поэтому
+    // вырезаем блок писателя и исполняем его в песочнице с поддельными зависимостями —
+    // тем же приёмом, что check-1m.js (см. там же 🪤 про внешние константы).
+    check('ветка extra не обедняет запись: modelmap выводится из CC_MODEL_PREFIX', () => {
+        const tblSrc = tpSrc.match(/const CC_MODEL_PREFIX = \{[\s\S]*?\n\};/);
+        const fnSrc = tpSrc.match(/function writeBackendsRegistry\(extra\) \{[\s\S]*?\n\}\n/);
+        assert.ok(tblSrc && fnSrc, 'блок writeBackendsRegistry/CC_MODEL_PREFIX не найден — тест устарел');
+
+        const regOut = path.join(TMP, 'writer-out.json');
+        const sandbox = `
+            ${tblSrc[0]}
+            const fs = require('fs');
+            const BACKENDS_REGISTRY_FILE = ${JSON.stringify(regOut)};
+            // Локальный шлюз с префиксом — ровно случай agentrouter.
+            const BACKENDS = { agentrouter: { base_url: 'http://localhost:20133', label: 'AgentRouter (opus-5 1M)' } };
+            const BACKEND_ALIASES = { ar: 'agentrouter' };
+            const isLocalBase = (u) => /^https?:\\/\\/(127\\.|localhost|\\[::1\\])/i.test(String(u || ''));
+            const logLine = () => {};
+            function registrySeedEntry(name, base, label) {
+                if (!base) return null;
+                const p = CC_MODEL_PREFIX[name] || null;
+                if (isLocalBase(base)) return { upstream: base, keyFile: null, modelmap: p ? p + '-modelmap.json' : null, label, source: 'backends' };
+                return null;
+            }
+            ${fnSrc[0]}
+            // Активация локального шлюза: ключа и карты она не знает — как в проде.
+            writeBackendsRegistry({ backend: 'agentrouter', upstream: 'http://localhost:20133', keyFile: null, modelmap: null });
+        `;
+        require('child_process').execFileSync(process.execPath, ['-e', sandbox], { stdio: 'pipe' });
+        const out = JSON.parse(fs.readFileSync(regOut, 'utf8'));
+        const e = out.providers.agentrouter;
+        assert.ok(e, 'запись agentrouter не создана');
+        assert.strictEqual(e.modelmap, 'ar-modelmap.json',
+            `активация снова обеднила карту (modelmap=${JSON.stringify(e.modelmap)}) → /model agentrouter вернёт 400`);
+        assert.strictEqual(e.label, 'AgentRouter (opus-5 1M)',
+            `активация затёрла человеческий label: ${JSON.stringify(e.label)}`);
+        assert.strictEqual(out.aliases.ar, 'agentrouter', 'алиас ar потерян');
+    });
+
     // ── Итог ─────────────────────────────────────────────────────────────────
     for (const n of ok) console.log(`  ok   ${n}`);
     for (const f of fails) console.log(`  FAIL ${f}`);

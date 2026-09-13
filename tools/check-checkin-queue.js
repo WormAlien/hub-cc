@@ -54,7 +54,21 @@ const pump = cutFn(PROXY, 'function arCheckinPump(');
 check(/AR_CHECKIN_QUEUE\.splice\(at, 1\)/.test(pump) && /findIndex/.test(pump),
     'насос берёт первое задание, чья полоса свободна (а не слепой shift по общей очереди)');
 check(/setTimeout\(arCheckinPump/.test(pump), 'если ждать — насос сам просыпается');
+check(!/arSpawnSession\(job\)\.catch/.test(pump),
+    'синхронный arSpawnSession не вызывается как Promise — иначе каждый старт падает с .catch is not a function');
 check(/unref/.test(pump), 'таймер не держит процесс');
+check(/AR_RATE_RETRY_MAX/.test(PROXY) && /failureKind = code === 6 \? 'rate_limit'/.test(PROXY),
+    'код 6 сохраняется как rate-limit и имеет ограниченный retry');
+check(/AR_RATE_RETRY_COOLDOWN_MS/.test(PROXY) && /AR_RATE_RETRY_TIMERS/.test(PROXY),
+    'рейт-лимит планирует ограниченный повтор после cooldown');
+check(/current\.state = 'queued'/.test(PROXY) && /wantAuto: true/.test(PROXY),
+    'автоматический повтор возвращается в auto-очередь, а не спавнит обходной процесс');
+check(/AR_RATE_RETRY_MAX/.test(PROXY) && /failureKind = code === 6 \? 'rate_limit'/.test(PROXY),
+    'код 6 сохраняется как rate-limit и имеет ограниченный retry');
+check(/AR_RATE_RETRY_COOLDOWN_MS/.test(PROXY) && /AR_RATE_RETRY_TIMERS/.test(PROXY),
+    'рейт-лимит планирует ограниченный повтор после cooldown');
+check(/current\.state = 'queued'/.test(PROXY) && /wantAuto: true/.test(PROXY),
+    'автоматический повтор возвращается в auto-очередь, а не спавнит обходной процесс');
 check(/st\.state !== 'queued'\) return/.test(pump) && /st\.position = i \+ 1/.test(pump),
     'пока стоим в очереди, статус обновляет позицию и время до старта');
 // Обработка провалившегося запуска переехала из насоса в arSpawnFailed 11.09: спавн стал

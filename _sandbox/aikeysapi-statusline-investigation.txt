@@ -1,0 +1,10 @@
+Investigation checkpoint 1
+- statusline-autoreger.sh defines generic balance parser at lines 490-559.
+- Dispatch includes agentrouter through wisdomsatan at lines 651-675, but no provider=aikeysapi branch.
+- transparent-proxy.js defines AIKeysAPI backend/keepalive and balance route infrastructure; exact handler lines pending.
+- routing/aikeysapi-sessions.json is outside the investigation cwd and must be read from C:\\Users\\WormAlien\\Desktop\\Autoreger_Clean.
+
+Investigation checkpoint 2
+- Detection sources: helper fallback at statusline lines 248-268, direct base_url port mapping at 270-319, front-door active-backend value at 137-146.
+- Existing AIKeysAPI conventions: canonical provider `aikeysapi`, alias `ak`, keepalive port `20165`, endpoint `ak/balance`.
+- Regression test will exercise helper fallback plus a staged sessions file and active key, without touching live sessions or starting processes.

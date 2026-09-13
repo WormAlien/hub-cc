@@ -487,6 +487,9 @@ aikeysapi/sessions/
 routing/aikeysapi-sessions.json
 # Инбокс регистрации: email + пароль созданного аккаунта. Репозиторий публичный.
 aikeysapi/.signup-inbox.json
+# Заготовки с ЖИВОЙ cookie-сессией панели (создаются при ручных проверках баланса).
+aikeysapi/.probe-cookie.sh
+aikeysapi/.probe-cookie.*
 
 # MEDIA (vkladka generacii) - vsyo nizhe generiruetsya i v publichnyy repo ne edet.
 # Video i webp obshchih pravil ne imeyut: *.png i *.jpg est, *.mp4/*.webm/*.gif/*.webp - net.
@@ -494,3 +497,8 @@ routing/media-out/
 routing/media-history.jsonl
 routing/media-models-cache.json
 routing/media-profiles.json
+
+# экранные артефакты разведки: в репо им не место (решение владельца 13.09).
+# Скрипты пишут их в системный temp; правило — страховка на случай промаха.
+rumeng-video/
+rumeng-shots/

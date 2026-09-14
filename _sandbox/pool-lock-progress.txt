@@ -1,0 +1,60 @@
+POOL WRITE LOCK — прогресс (агент, 2026-09-13)
+==============================================
+
+ЗАДАЧА 1 — что сейчас (прочитано в коде, не по слухам)
+------------------------------------------------------
+
+Файлы пула:
+  aikeysapi/auto-add.js:81   POOL_FILE = <repo>/routing/aikeysapi-sessions.json
+  rumeng/auto-add.js:105     POOL_FILE = <repo>/routing/rumeng-sessions.json
+
+poolLoad() (ak:263-269, rm:355-361) — одинаковы байт в байт по смыслу:
+  readFileSync utf8 → срез BOM (charCodeAt(0)===0xFEFF) → JSON.parse →
+  Array.isArray ? arr : [] ; любая ошибка → [] (пустой пул, не throw).
+
+poolAppend(records) (ak:275-286, rm:366-377):
+  1. disk = poolLoad()
+  2. haveKeys = Set(disk.map(s=>s.api_key).filter(Boolean))
+  3. fresh = records.filter(r => !haveKeys.has(r.api_key))     ← ДЕДУП ПО api_key
+  4. if (!fresh.length) return 0
+  5. mkdirSync(dir,{recursive:true})
+  6. tmp = dir/.<name>-sessions.<pid>.tmp
+  7. writeFileSync(tmp, JSON.stringify(disk.concat(fresh), null, 2) + '\n', 'utf8')
+  8. renameSync(tmp, POOL_FILE)
+  9. return fresh.length        ← 0 означает «дубль», это печатает лог
+
+poolPatch(apiKey, patch) (ak:288-296, rm:379-387):
+  1. disk = poolLoad()
+  2. i = disk.findIndex(s => s.api_key === apiKey)
+  3. i < 0 → throw new Error('сохранённый аккаунт не найден')
+  4. disk[i] = { ...disk[i], ...patch }        ← shallow merge
+  5. tmp = dir/.<name>-sessions.<pid>.tmp ; writeFileSync ; renameSync
+  (возврата нет, undefined)
+
+Механизм = read-modify-write + temp-файл + rename. Атомарность ЕСТЬ у самой
+подмены файла (rename), межпроцессной ВЗАИМОИСКЛЮЧАЮЩЕЙ СЕКЦИИ НЕТ.
+Имя tmp содержит только pid — два процесса не столкнутся на tmp, но и не узнают
+друг о друге.
+
+Дыра (lost update): A читает пул (N записей) → B читает тот же пул (N) →
+A rename (N+1, свой аккаунт) → B rename (N+1, свой аккаунт, БЕЗ аккаунта A).
+Аккаунт A исчез с диска, при этом poolAppend вернул A единицу и лог сказал
+«✓ записан в пул». Rename атомарен, но атомарность подмены не защищает от того,
+что снимок в памяти B устарел ещё до записи.
+
+Порядок персистенции, который надо сохранить (ak:817-851, rm:1051-1082):
+  createOne → writeProfileSession (снимок ЛК) → delete rec.spaUser →
+  poolAppend([rec]) (+= written, лог «записан»/«дубль») →
+  checkSavedBalance → при ошибке баланса poolPatch(balanceError, balanceCheckedAt)
+  и запись в failed[]. Аккаунт при ошибке баланса НЕ удаляется.
+
+Экспорт: ak module.exports содержит poolLoad, poolAppend (poolPatch НЕ экспортирован);
+rm — то же самое. Значит менять сигнатуры нельзя, но добавлять можно.
+
+Пункт 4 (только зафиксировать, не менять):
+  ak:742   for (let attempt = 0; attempt < 3 && !r.ok; attempt++)   acquireProxyFor
+  rm:527   for (let attempt = 0; attempt < 3 && !r.ok; attempt++)   acquireProxyFor
+  (в обоих файлах есть ещё циклы `attempt < 3` в поиске токена/ключа — их не трогаем,
+   ak:623 findMine, rm:913 findKeyByName.)
+
+СТАТУС: пункт 1 закрыт.

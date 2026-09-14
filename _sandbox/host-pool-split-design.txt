@@ -1,0 +1,154 @@
+HOST-SPECIFIC PROXY POOL: SPLIT vs ANNOTATE — decision document
+Author: investigation agent (read-only; no files in this tree were edited)
+Date: 2026-09-13
+
+===============================================================================
+TASK 1. HOW A HOST SELECTS ITS SOURCE TODAY, AND WHERE A PER-HOST SOURCE HOOKS IN
+===============================================================================
+
+1.1 Config shape (routing/proxy-pool.json, 11 lines)
+  enabled: true
+  file:    <abs>\tools\proxy-validator\export\live-for-host.txt   (single scalar)
+  scheme:  null                (scheme lives per-line, e.g. socks5://…)
+  hosts:   ["www.aikeysapi.com", "agentrouter.org", "api.rumeng-ai.com"]
+  preflightTtlMs: 600000
+
+  There is exactly ONE `file` key. Nothing in the config is keyed by host.
+
+1.2 config()  (proxy-pool.js:188-230)
+  - Memoized 5 s, keyed on the env fingerprint (envKey()) only — NOT on host.
+  - Source precedence: env PROXY_POOL / PROXY_POOL_FILE overrides file+list
+    WHOLESALE (deliberate: a regression run must not blend the owner's live list).
+  - `hosts` is only a whitelist of host names; it never maps host -> file.
+  - `enabled` derives from "has a source at all". No source => pool silently off
+    (that is the "not configured behaves exactly as before" invariant).
+  - preflightTtlMs: single global number, floor 0, default PREFLIGHT_TTL_MS 10 min.
+    ⇒ TTL is ALREADY not per-host at the config level.
+
+1.3 pool()  (proxy-pool.js:255-283)
+  - Memo key = [cfg.file, fileStamp(cfg.file)=mtimeMs:size, cfg.list joined,
+    cfg.scheme]. Again NO host component.
+  - Reads cfg.file, parses lines, dedups by `id` = "scheme://host:port"
+    (content-addressed on purpose: the scraper reorders lines, an index-based id
+    would break every binding).
+  - Returns { proxies, byId, bad, scheme, fileError, source }.
+
+1.4 enabledForHost(host)  (235-240)
+  - cfg.enabled && (hosts empty || hosts.includes(host)). Boolean only; it does
+    not and cannot select a source.
+
+1.5 forAccount(key, {host, force, usePreflight, preflightPath})  (601-661)
+  Order of operations, and this is where the host does/doesn't matter:
+   a) !cfg.enabled            -> {ok:true, proxy:null, direct:true}
+   b) host not in cfg.hosts   -> {ok:true, proxy:null, direct:true}
+   c) pool() empty            -> {ok:false, error:…}  (NEVER falls back to direct)
+   d) empty sticky key        -> {ok:false}
+   e) existing assignment:    proxy = p.byId.get(cur.proxy)
+        missing  -> {ok:false, needsReassign:true, assigned:cur.proxy}
+      no assignment: proxy = leastLoaded(p.proxies, doc.assign); writeAssign(...)
+   f) usePreflight && host    -> health(proxy, host, {force, path: preflightPath})
+        not ok -> {ok:false, dead:true, proxy, …}
+  ⇒ The ONLY host-aware steps are (b) the whitelist and (f) the preflight. Proxy
+    *selection* (steps c/e) is completely host-blind, which is exactly the bug:
+    an aikeysapi-validated line can be handed to a rumeng account by leastLoaded.
+
+1.6 Preflight / health TTL logic  (469-535)
+  - preflightVerdict(status,text): 200 alone is NOT a pass — empty body, HTML
+    (WAF), non-JSON, success:false all fail. This is the 10.09 incident.
+  - DEFAULT_PREFLIGHT_PATH = '/api/status' (a New API convention). rumeng
+    (sub2api) has no such route: 404 for every proxy. rumeng/auto-add.js therefore
+    passes preflightPath = '/api/v1/settings/public'.
+  - HEALTH is an in-process Map keyed `${proxyId}|${host}|${path}` — already
+    host- AND path-scoped, in memory only, deliberately not persisted.
+  - health() TTL: config().preflightTtlMs unless caller passes ttlMs; ttl===0
+    means "skip the check and report ok:true, skipped:true".
+  ⇒ Per-host verification state ALREADY EXISTS in memory. What does not exist is
+    (i) persistence across processes and (ii) any host-awareness in selection.
+
+1.7 assignmentFor / reassign / leastLoaded
+  - assignFile default routing/proxy-assign.json, overridable by
+    PROXY_POOL_ASSIGN (regression isolation) or doc.assignFile.
+  - writeAssign(key,value) MERGES one key: loadAssign() then rewrite whole doc.
+    Non-atomic (plain writeFileSync, no tmp+rename, no lock) and read-modify-write
+    — a real race with 3 parallel balance checks, mitigated only by being
+    per-key merge rather than snapshot replace.
+  - assignmentFor(key) -> {proxy,at,why} | null.
+  - leastLoaded(proxies, assign): counts assignments per pool id, ties broken by
+    pool order (deterministic). It counts ALL assignments regardless of host, so
+    aikeysapi load skews rumeng's choice and vice versa.
+  - reassign(key, proxyId?) : explicit owner action; drops own load, picks
+    leastLoaded, forgetHealth(proxy.id).
+
+1.8 Live state (counts only, no credentials printed)
+  - routing/proxy-assign.json: version 1, updatedAt 2026-09-13T08:35Z,
+    49 assignments, uniform value shape {at, proxy, why};
+    why: 41 "первичное назначение", 8 "назначено вручную";
+    proxy schemes among assignments: socks5 33, http 11, socks4 5;
+    35 distinct proxies referenced; `at` range 2026-09-12 .. 2026-09-13.
+  - Sticky-key namespaces present:
+      ar_*                       26   (agentrouter accountId)
+      aikeysapi:<email>          20
+      ak_*                        1
+      rumeng:<email>              1
+      probe:*                     1
+    ⇒ Keys are already host-namespaced BY CONVENTION for ak/rumeng (prefix), and
+      by accountId shape for agentrouter. That is load-bearing for the migration.
+  - live-for-host.txt: 20 lines. 35 distinct proxies are referenced by
+    assignments ⇒ AT LEAST 15 assignments are ALREADY orphaned right now
+    (describe().orphans would report them). needsReassign is therefore not a
+    hypothetical risk introduced by the split; it is the current steady state.
+  - Other export artifacts that already exist: export/agentrouter/{stable.txt,
+    report.json}, export/aklive/{stable.txt,pool-ready.txt,report.json},
+    export/live-for-host.new.txt (the validator tmp), export/protocols/,
+    export/_probe_pool.txt. Per-host directories are thus already an established
+    convention in the validator's output layout.
+
+1.9 Writers of the shared file (routing/transparent-proxy.js)
+  - AK_LIVE_PROXY_FILE = export/live-for-host.txt  (16289)
+  - AK_PROXY_TMP_FILE  = export/live-for-host.new.txt (16291)
+  - AK_PROXY_CAP = 60 (16292); akMergeProxyLines(fresh, old, cap) fresh-first,
+    dedup, truncate at cap (16311-16321).
+  - akCommitPartialProxyLines: tmp + renameSync => atomic-ish on the JS side.
+  - Success path (16514-16519): reads tmp, reads live, merges, writeFileSync to
+    the LIVE file directly — NOT atomic (no rename). Same for rm (17774).
+  - akFindProxySwitchPool(host) / rmFindProxySwitchPool(host) (16659, 17914):
+    read proxy-pool.json, bail unless enabled && hosts.includes(host), then set
+    cfg.file = <the shared live file>, cfg.scheme = null, write config back.
+    ⇒ BOTH tabs rewrite the SAME config key. This is the second half of the bug:
+      not only is the list shared, the config-rewrite path is shared too.
+  - rumeng explicitly aliases everything to ak's constants (17604-17607) with a
+    comment claiming a second pool is impossible ("two writers into one pool
+    config would clobber each other"). Any split must retire that comment
+    honestly, because the real reason it was written is the single `file` key.
+  - Refill: AK/RM_REFILL_RESERVE 10, tick 45 s. rmRefillTick checks BOTH
+    rmFindProxy.running and akFindProxy.running (17867) because the tmp file is
+    shared. akRefillTick checks only akFindProxy.running (16612) — asymmetric,
+    so an ak refill can start while an rm search is running and both write
+    live-for-host.new.txt. That is a live bug independent of this design.
+
+1.10 WHERE A PER-HOST SOURCE WOULD HAVE TO HOOK IN (exhaustive)
+  A. config(): resolve a per-host source. Because config() is memoized without a
+     host and is called by enabled()/pool()/health()/forAccount()/describe(),
+     either config() gains a host parameter (touching every caller) or a new
+     `sourceForHost(host)` layer is added and pool() takes a host.
+  B. pool(): memo key must include the host-resolved file, i.e. POOL_MEMO becomes
+     a Map keyed by host (today a single slot — a per-host pool with one slot
+     would thrash the memo on every alternating call and re-read the file each
+     time).
+  C. forAccount(): pass host down to pool(host); leastLoaded must be fed the
+     host's proxies AND ideally a host-filtered view of assignments.
+  D. describe(): today host-blind; the dashboard calls it once and pairs it with
+     enabledForHost(<literal host>) at 16369 and 17635. It would report the wrong
+     count for one of the two tabs the moment sources diverge.
+  E. akFindProxySwitchPool / rmFindProxySwitchPool: must write a per-host key
+     instead of cfg.file, or stop rewriting config at all.
+  F. Both /__switch/api/{ak,rm}/proxy-pool handlers and both proxy-pool-lines
+     handlers read the shared constant; they'd need host-scoped paths.
+  G. tools/check-aikeysapi-safe.js:205,330 and tools/check-rumeng-safe.js:249-250
+     assert the CURRENT shape by regex (e.g. /enabledForHost:\s*lib\.enabledForHost\('www\.aikeysapi\.com'\)/
+     and /function akMergeProxyLines\(fresh, old, cap = AK_PROXY_CAP\)/). Any
+     rename breaks these guards; they must be updated in the same commit.
+  H. tools/check-proxy-pool.js (~15 forAccount assertions) is the regression
+     harness that must be extended, not replaced.
+
+(sections 2-6 follow)

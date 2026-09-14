@@ -1,0 +1,36 @@
+{
+  "_readme": [
+    "Конфиги шлюзов для tools/add-gateway.js. Заполняется по §0 инструкции ADDING-A-GATEWAY.md.",
+    "flags: github (есть GitHub-вход и пул) · ref (есть реф-код) · flatRate (плоский тариф за запрос,",
+    "нужен FLAT_RATE_HOSTS и maxHedges:0) · anthropic (работает /v1/messages — конвертер не нужен).",
+    "Эталон для сверки — kktoken. Он обязан давать ПОЛНО, иначе спека или чекер врут."
+  ],
+
+  "kktoken": {
+    "p": "kk", "P": "KK", "full": "kktoken", "NAME": "KKtoken",
+    "HOST": "kktoken.cc", "PORT": 20161, "FOLDER": "kktoken",
+    "ICON": "🪙", "COLOR": "emerald", "REF": "Sog2",
+    "github": true, "ref": true, "flatRate": false, "anthropic": false
+  },
+
+  "hcnsec": {
+    "p": "hn", "P": "HN", "full": "hcnsec", "NAME": "HCNsec",
+    "HOST": "api.hcnsec.cn", "PORT": 20162, "FOLDER": "hcnsec",
+    "ICON": "🛡️", "COLOR": "emerald", "REF": "u4eN",
+    "github": false, "ref": true, "flatRate": false, "anthropic": true
+  },
+
+  "aipm": {
+    "p": "ap", "P": "AP", "full": "aipm", "NAME": "AIPM",
+    "HOST": "emtf.aipm9527.online", "PORT": 20163, "FOLDER": "aipm",
+    "ICON": "🔷", "COLOR": "indigo", "REF": "NS3L",
+    "github": true, "ref": true, "flatRate": true, "anthropic": false
+  },
+
+  "fluxnat": {
+    "p": "fn", "P": "FN", "full": "fluxnat", "NAME": "FluxRouter",
+    "HOST": "llm.fluxnat.dev", "PORT": 20167, "FOLDER": "fluxnat",
+    "ICON": "🌀", "COLOR": "fuchsia", "REF": "",
+    "github": true, "ref": false, "flatRate": false, "anthropic": true
+  }
+}

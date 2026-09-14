@@ -1,0 +1,11 @@
+# proxy-validator find_for_host: progress
+## TASK 0 — baseline read (done)
+- Baseline suite: 26 tests, OK (python -m unittest discover -s tests -t .)
+- domain_checker.py check_many: committed, has progress_cb + stop_after + rolling window. Confirmed.
+- find_for_host.py: MODIFIED (uncommitted). find() forwards workers/timeout to ProxyScraper;
+  uses check_many(progress_cb=collect, stop_after=want); write_pool atomic via NamedTemporaryFile
+  + flush + fsync + os.replace, sorted dedupe set-comprehension.
+- REGRESSION CONFIRMED: old chunked loop emitted "  … проверено X/Y, живых N" after each batch;
+  new callback emits only "✓ ..." lines. Dashboard regex at routing/transparent-proxy.js:16437
+  (akFindProxyLine) and :17695 (rmFindProxyLine): /^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/
+  — never matches now => checked/total/phase frozen.

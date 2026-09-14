@@ -1,7 +1,7 @@
 {
-  "default": "claude-opus-5",
+  "default": "deepseek-v4-flash",
   "opus": "claude-opus-5",
   "sonnet": "claude-opus-5",
-  "haiku": "claude-opus-4-8",
+  "haiku": "glm-5.3",
   "gpt": ""
 }

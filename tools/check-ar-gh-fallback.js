@@ -62,7 +62,11 @@ check(/seedFromSharedSnapshot\(/.test(restore),
     const auto = SESS.slice(SESS.indexOf('      if (auto) {'), SESS.indexOf('🔄 GitHub-часть'));
     check(/seedFromSharedSnapshot\([\s\S]*?process\.exit\(3\)/.test(auto),
         'перед выходом с кодом 3 (нет user_session) снимок пробуется');
-    check((auto.match(/seedFromSharedSnapshot\(/g) || []).length === 2,
+    check(/seedFromSharedSnapshot\(/.test(cutFn(SESS, 'async function ensureGithubSession(')),
+        'дверь «нет user_session» пробует общий снимок — вынесена в общий хелпер обеих проверок');
+    check((auto.match(/seedFromSharedSnapshot\(/g) || []).length === 1
+        && /ensureGithubSession\(/.test(auto)
+        && /GitHub попросил пароль\/2FA/.test(auto),
         'и на «нет user_session», и на «GitHub попросил пароль/2FA» — обе двери');
     check(/повторяю вход после подъёма сессии/.test(auto),
         'после подъёма сессии вход повторяется, а не просто логируется');
@@ -119,8 +123,8 @@ const nameFor = cutFn(PROXY, 'function arGhNameFor(');
 check(/ghLoad\(\)/.test(nameFor) && /nickname/.test(nameFor), 'ник берётся из менеджера GitHub');
 check(/personal/.test(nameFor), 'личный GitHub владельца назван словами, а не ghId');
 const finish = cutFn(PROXY, 'async function arAutoCheckinFinish(');
-check(/code === 3 \|\| code === 5/.test(finish) && /arGhNameFor\(id\)/.test(finish),
-    'коды 3 и 5 (это всегда про сессию) получают имя аккаунта в сообщение');
+check(/code === 3 \|\| code === 5 \|\| code === 9/.test(finish) && /arGhNameFor\(id\)/.test(finish),
+    'коды 3, 5 и 9 (это всегда про сессию) получают имя аккаунта в сообщение');
 // Ищем в самой таблице сообщений, а не по всему файлу: старая формулировка законно
 // цитируется в комментариях «как было» — на них проверка срабатывать не должна.
 {

@@ -1146,6 +1146,61 @@ async function applyUserAgentOverride(context, page, ua) {
   }
 }
 
+// ───── Предпроверка входа: обе причины, которые видно ДО гашения сессии ──
+//
+// Подарок = разлогин + вход. Гашение сессии идёт первым, а «смогу ли войти обратно»
+// выясняется уже после него — и тогда любой отказ (мёртвая GitHub-сессия, молчащий
+// край, пропавшая кнопка, отказ OAuth) оставляет аккаунт РАЗЛОГИНЕННЫМ. Цена провала —
+// доступ к остатку (до $175 на аккаунте) и выпадение из пула до следующего удачного
+// прогона, то есть до того самого механизма, который его и снёс.
+//
+// Две причины из четырёх стоят ноль и проверяются заранее:
+//   • `user_session` GitHub лежит в профиле локально — сеть не нужна;
+//   • `/api/status` — ПУБЛИЧНАЯ ручка, отвечает и без сессии.
+//
+// 🪤 Только `/api/status`. Через `/api/oauth/state` предпроверку вести нельзя: этот
+// роут сам ставит куку `session` (в ней сервер держит state OAuth) и до разлогина
+// подменил бы живую сессию аккаунта заглушкой — та же ловушка, что описана у
+// waitForSiteSession. Гасить сессию своим же пробником было бы худшим видом отказа.
+async function preflightEdge(page) {
+  try {
+    const r = await page.evaluate(async () => {
+      const resp = await fetch('/api/status', { credentials: 'include' });
+      const body = await resp.text();
+      let json = null;
+      try { json = JSON.parse(body); } catch { /* пусто или HTML-челлендж WAF */ }
+      return {
+        status: resp.status,
+        len: body.length,
+        clientId: !!(json && json.data && json.data.github_client_id),
+      };
+    });
+    if (r && r.clientId) return { ok: true };
+    return {
+      ok: false,
+      detail: r
+        ? `/api/status → HTTP ${r.status}, тело ${r.len} Б, github_client_id нет`
+        : 'страница не вернула ответ',
+    };
+  } catch (e) {
+    // Обрыв запроса из страницы — тоже отказ края: до вёрстки дело не дошло.
+    return { ok: false, detail: e.message };
+  }
+}
+
+// Живость GitHub-сессии профиля. Ничего не гасит и ходит на github.com только за
+// куками, без сырых запросов (фейковый UA GitHub считает угоном — так уже потеряли три
+// сессии). Своей копии нет — пробуем общий снимок: та же цепочка, что и после
+// разлогина, просто раньше и до того, как аккаунт что-то потерял.
+async function ensureGithubSession(context, why) {
+  const alive = async () => (await context.cookies('https://github.com').catch(() => []))
+    .some(c => c.name === 'user_session' && c.value);
+  if (await alive()) return { ok: true, seeded: null };
+  const seeded = await seedFromSharedSnapshot(context, why);
+  if (await alive()) return { ok: true, seeded };
+  return { ok: false, seeded };
+}
+
 async function main() {
   if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const fresh = isFreshProfile();
@@ -1198,25 +1253,42 @@ async function main() {
         ? '⚡ Автоподарок: гашу сессию и вхожу через GitHub сам.'
         : '🎁 Чек-ин +$25: гашу сессию и открываю вход.');
       if (RUN_LOG) console.log(`📝 полный след прогона: ${RUN_LOG}`);
+
+      // 🔴 Предпроверка ДО выхода. Отказ здесь стоит один прогон; отказ ПОСЛЕ — сессию
+      // аккаунта, а вернуть её может только такой же прогон (петля). Навигация нужна,
+      // чтобы относительный fetch в пробе шёл с нашего origin: вкладка после старта
+      // контекста может стоять на about:blank, и проба ответила бы «край молчит» ложно.
+      await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
+      const edge = await preflightEdge(page);
+      if (!edge.ok) {
+        console.error(`🛑 Прогон НЕ начат, сессия аккаунта цела: край не отвечает (${edge.detail}).`);
+        console.error('   Это рейт-лимит или WAF по IP, а не сломанная вёрстка. Гасить сессию');
+        console.error('   вслепую нельзя: не сумев войти, аккаунт остался бы разлогиненным.');
+        await context.close().catch(() => {});
+        process.exit(8);
+      }
+      if (auto) {
+        const ghPre = await ensureGithubSession(context, 'предпроверка входа');
+        if (!ghPre.ok) {
+          console.error(`🛑 Прогон НЕ начат, сессия аккаунта цела: GitHub-сессия ${ghNameForError(ghPre.seeded)} мертва.`);
+          console.error('   Пароль и 2FA автоматика не вводит — возьми 🐙 «готовый GitHub» заново.');
+          await context.close().catch(() => {});
+          process.exit(9);
+        }
+      }
+
       await doCheckinLogout(context, page);
 
       if (auto) {
-        // Живость GitHub-сессии смотрим ПО КУКАМ ПРОФИЛЯ. Сырой пробник на github.com
-        // запрещён: фейковый UA GitHub считает угоном и гасит сессию (три штуки уже
-        // так потеряли, см. routing/lib/github-session.js).
-        let gh = await context.cookies('https://github.com').catch(() => []);
-        if (!gh.some(c => c.name === 'user_session' && c.value)) {
-          // Прежде чем сдаться — общий снимок. Сюда попадали аккаунты, у которых живая
-          // сессия ЛЕЖАЛА НА ДИСКЕ в github/sessions/<ghId>.json, но читать её было
-          // некому: скрипт знал только свою локальную копию.
-          const seeded = await seedFromSharedSnapshot(context, 'в профиле нет user_session');
-          if (seeded) gh = await context.cookies('https://github.com').catch(() => []);
-          if (!gh.some(c => c.name === 'user_session' && c.value)) {
-            console.error(`❌ GitHub-сессия ${ghNameForError(seeded)} мертва (нет user_session).`);
-            console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
-            await context.close().catch(() => {});
-            process.exit(3);
-          }
+        // Страховка на случай, если сессия отвалилась ПОСЛЕ выхода (GitHub умеет гасить
+        // её сам, если тем же аккаунтом вошли в другом месте). Основная проверка уже
+        // прошла до разлогина — сюда попадаем только с тем, что изменилось по дороге.
+        const gh = await ensureGithubSession(context, 'в профиле нет user_session');
+        if (!gh.ok) {
+          console.error(`❌ GitHub-сессия ${ghNameForError(gh.seeded)} мертва (нет user_session).`);
+          console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+          await context.close().catch(() => {});
+          process.exit(3);
         }
 
         const target = await clickGithubLogin(context, page);

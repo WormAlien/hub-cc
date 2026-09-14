@@ -524,3 +524,16 @@ routing/fluxnat-sessions.json
 # Бэкапы перед правками движка: гигантские копии transparent-proxy.js рядом с ним.
 routing/transparent-proxy.js.bak-*
 routing/proxy-dashboard.html.bak-*
+
+# ── Мусор и личные данные: репо ПУБЛИЧНЫЙ ────────────────────────────────────
+# 14.09.2026 в отслеживаемых файлах нашлись живые секреты: routing/rumeng-sessions.json
+# (email, пароли, api_key, токены десяти аккаунтов) и rumeng/sessions/acct_rm_*.json
+# с куками. GitHub индексирует мгновенно — правило ставят ДО, а не после.
+# Проверка на пути пуша: .githooks/pre-push → tools/check-no-secrets.js.
+.tmp-*
+.tmp/
+.tmp-stand/
+*.orig
+*.rej
+*~
+*.bak-*

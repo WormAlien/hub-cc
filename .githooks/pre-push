@@ -1,11 +1,18 @@
 #!/bin/sh
-# pre-push: refuse to push code that requires files missing from the repo.
+# pre-push: в репозиторий не уезжает то, чего в нём быть не должно.
 #
-# Backstory (2026-08-21): transparent-proxy.js and keepalive-proxy.js went to master
-# with require('./latency-store.js') while that module was still untracked. Locally
-# everything worked; for the second user UPDATE.bat + restart meant MODULE_NOT_FOUND
-# on dashboard boot. `git status` does not flag this - an untracked dependency looks
-# exactly like personal scratch.
+# 1) Зависимости: файл требует модуль, которого нет в репо.
+#    Backstory (2026-08-21): transparent-proxy.js and keepalive-proxy.js went to master
+#    with require('./latency-store.js') while that module was still untracked. Locally
+#    everything worked; for the second user UPDATE.bat + restart meant MODULE_NOT_FOUND
+#    on dashboard boot. `git status` does not flag this - an untracked dependency looks
+#    exactly like personal scratch.
+#
+# 2) Секреты и мусор. Репозиторий ПУБЛИЧНЫЙ, а 14.09.2026 в нём обнаружились
+#    routing/rumeng-sessions.json (email, пароли, api_key, токены десяти аккаунтов) и
+#    rumeng/sessions/acct_rm_*.json с живыми куками. GitHub индексирует мгновенно,
+#    удаление постфактум не помогает — поэтому проверка стоит на пути пуша.
+#    Разбор правил и что делать с находкой — в шапке tools/check-no-secrets.js.
 #
 # Enable (per clone, hooks are not cloned by git):
 #   git config core.hooksPath .githooks
@@ -13,14 +20,24 @@
 # Skip once, if you really must:  git push --no-verify
 
 if ! command -v node >/dev/null 2>&1; then
-    echo "pre-push: node not found, dependency check skipped" >&2
+    echo "pre-push: node not found, checks skipped" >&2
     exit 0
 fi
 
-node "$(git rev-parse --show-toplevel)/tools/check-deps-tracked.js" || {
+root="$(git rev-parse --show-toplevel)"
+
+# Ссылки из stdin читаем ОДИН раз и раздаём чекерам: stdin у хука один на всех.
+refs="$(cat)"
+
+printf '%s' "$refs" | node "$root/tools/check-deps-tracked.js" || {
     echo "" >&2
     echo "pre-push: push aborted. Fix the paths above, or bypass with --no-verify." >&2
     exit 1
 }
 
-exit 0
+printf '%s' "$refs" | node "$root/tools/check-no-secrets.js" || {
+    echo "" >&2
+    echo "pre-push: push aborted — секреты и мусор в публичный репо не уезжают." >&2
+    echo "           Обойти на один раз (осознанно): git push --no-verify" >&2
+    exit 1
+}

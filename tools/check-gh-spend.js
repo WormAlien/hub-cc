@@ -53,8 +53,13 @@ if (src) {
         const file = path.join(dir, 'github-spend.json');
         let api;
         try {
-            api = new Function('fs', 'GH_SPEND_FILE',
-                `${load[0]}\n${save[0]}\nreturn { ghSpendLoad, ghSpendSave };`)(fs, file);
+            // Функции вырезаются из файла и исполняются в изоляции, поэтому их внешние
+            // зависимости надо передать явно. `durableWriteJson` — именно такая: запись
+            // идёт через общий durable-хелпер (tmp + fsync + rename), см.
+            // routing/lib/durable-write.js. Без него вырезка падает ReferenceError.
+            const { writeJsonSync } = require(path.join(ROOT, 'routing/lib/durable-write.js'));
+            api = new Function('fs', 'GH_SPEND_FILE', 'durableWriteJson',
+                `${load[0]}\n${save[0]}\nreturn { ghSpendLoad, ghSpendSave };`)(fs, file, writeJsonSync);
         } catch (e) {
             fails.push(`хранилище не исполняется: ${e.message}`);
         }

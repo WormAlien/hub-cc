@@ -96,6 +96,8 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
+// Durable-запись пула: temp + fsync + rename.
+const { writeJsonSync: durableWriteJson } = require('../routing/lib/durable-write');
 
 const HOST = 'api.rumeng-ai.com';
 const BASE = '/api/v1';
@@ -362,17 +364,15 @@ function poolLoad() {
 
 // Мерж-ДОПИСЫВАНИЕ, а не запись целиком: этот же файл пишет дашборд после сетевых сканов,
 // и целая запись снесла бы аккаунт, заведённый в это окно (гонка, поймана в AIPM).
-// Запись атомарная — temp + rename: падение процесса посреди writeFileSync обнуляло пул.
+// Запись через общий durable-хелпер: temp + fsync + rename. Прежняя версия делала
+// temp+rename без fsync — при BSOD данные оставались в page cache и файл оказывался
+// нулями при живом inode (инцидент 13.09, дважды за день).
 function poolAppend(records) {
     const disk = poolLoad();
     const haveKeys = new Set(disk.map(s => s.api_key).filter(Boolean));
     const fresh = records.filter(r => !haveKeys.has(r.api_key));
     if (!fresh.length) return 0;
-    const dir = path.dirname(POOL_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    const tmp = path.join(dir, `.rumeng-sessions.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(disk.concat(fresh), null, 2) + '\n', 'utf8');
-    fs.renameSync(tmp, POOL_FILE);
+    durableWriteJson(POOL_FILE, disk.concat(fresh));
     return fresh.length;
 }
 
@@ -381,9 +381,7 @@ function poolPatch(apiKey, patch) {
     const i = disk.findIndex(s => s.api_key === apiKey);
     if (i < 0) throw new Error('сохранённый аккаунт не найден');
     disk[i] = { ...disk[i], ...patch };
-    const tmp = path.join(path.dirname(POOL_FILE), `.rumeng-sessions.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(disk, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmp, POOL_FILE);
+    durableWriteJson(POOL_FILE, disk);
 }
 
 async function checkSavedBalance(rec) {

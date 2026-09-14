@@ -70,6 +70,36 @@ const label = (labelArg || `session_${Date.now()}`).replace(/[^\w-]/g, '_');
 const mode = String(process.argv[3] || 'auto'); // register | console | auto
 const profileDir = path.join(PROFILES_DIR, label);
 
+// ─────────────────── User-Agent: часть учётных данных, а не украшение ───────────────────
+//
+// 🔴 Панель держит сессию за заголовком `User-Agent` — вплоть до версии браузера.
+// Замер 13.09 на живом аккаунте `userId=204`, ОДИН И ТОТ ЖЕ `auth_token`, менялся только UA:
+//
+//     200  UA из поля `userAgent` записи пула
+//     401  тот же UA, но версия 139 → 140           SESSION_BINDING_MISMATCH
+//     401  дефолтный UA Chromium / без заголовка
+//     200  UA записи + `Accept-Language` / `sec-ch-ua`   ← не влияют вовсе
+//
+// 🪤 Симптом обманчив, и владелец описал его дословно: «крутится туда-сюда и не заходит
+// в аккаунт». Токен в localStorage на месте, кабинет РИСУЕТСЯ и держится ~16 секунд —
+// а потом перехватчик ловит 401 на `/auth/me` и уводит на `/login`. Снаружи это «панель
+// не пускает», хотя токен живой и панель его принимает: просто не от ЭТОГО окна.
+//
+// Запись ищем по метке профиля: `routing/transparent-proxy.js` спавнит нас как
+// `acct_<id записи>` (`handleRmSessionOpen`), то есть id — это метка без префикса.
+// Механизм ровно тот же, что `recordUA` в `refresh-sessions.js`: второй не заводим.
+function resolvePoolRecord() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(POOL_FILE, 'utf8'));
+    const id = label.replace(/^acct_/, '');
+    return Array.isArray(arr) ? (arr.find(r => r && r.id === id) || null) : null;
+  } catch { return null; }
+}
+const poolRecord = resolvePoolRecord();
+const recordUA = (poolRecord && typeof poolRecord.userAgent === 'string' && poolRecord.userAgent.trim())
+  ? poolRecord.userAgent.trim()
+  : null;
+
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Ключ согласия с условиями и ключи входа — ровно те имена, что пишет сам сайт.
@@ -222,11 +252,22 @@ async function readToken(page) {
 // напечатал бы «✅ уже залогинен», а владелец через несколько секунд увидел бы логин —
 // ровно та ложь, на которую он ругался. Спрашиваем саму панель: `/auth/me` отвечает
 // мгновенно и однозначно.
+// 🔴 `User-Agent` здесь ОБЯЗАТЕЛЕН, ровно как в окне.
+//
+// Этот запрос идёт из Node, а не из браузера, и своего UA не имеет вовсе — панель видит
+// «чужой отпечаток» и отвечает `401 SESSION_BINDING_MISMATCH` на ПОЛНОСТЬЮ ЖИВОМ токене.
+// Замер 13.09: `…/auth/me` с родным UA → 200, без заголовка UA → 401.
+//
+// 🪤 Чем это было опасно: самопроверка объявляла живую сессию мёртвой (`why: 'dead_token'`),
+// скрипт печатал «токен ПРОТУХ» и уводил владельца входить заново — при том, что вход
+// был исправен. Отдельная копия той же грабли, что и в окне, но с другой стороны.
 async function tokenAlive(token) {
   if (!token) return false;
   try {
+    const headers = { Accept: 'application/json', Authorization: `Bearer ${token}` };
+    if (recordUA) headers['User-Agent'] = recordUA;
     const r = await fetch(`${ORIGIN}/api/v1/auth/me`, {
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+      headers,
       signal: AbortSignal.timeout(15000),
     });
     return r.status === 200;
@@ -461,6 +502,15 @@ async function main() {
   console.log('🚀 Запускаю Chromium (видимый режим)…');
   console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен вход почтой)' : 'уже есть (сохранённый)'}`);
   console.log(`🗂️  пул сессий: ${POOL_FILE}`);
+  // Говорим вслух, а не ломаем вход молча. Именно молчание превращало это в загадку:
+  // окно открывается, токен на месте, а владелец видит форму входа и не понимает, почему.
+  if (recordUA) {
+    console.log(`🧬 UA аккаунта: ${recordUA}`);
+  } else {
+    console.log(`⚠️  В пуле нет записи «${label.replace(/^acct_/, '')}» или в ней нет поля userAgent.`);
+    console.log('   🪤 Панель держит сессию за UA: без родного отпечатка вход, скорее всего,');
+    console.log('      отвалится с SESSION_BINDING_MISMATCH — кабинет отрисуется и выкинет на /login.');
+  }
   if (shared && !sessionHasJwt(shared)) {
     console.log(`⚠️  Снимок рядом есть, но в нём НЕТ ${TOKEN_KEY} — он не откроет ЛК.`);
     console.log('   Пересобери: node rumeng/refresh-sessions.js');
@@ -482,6 +532,9 @@ async function main() {
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: null,
+    // 🔴 Без этого окно идёт дефолтным UA Chromium, а панель держит сессию за UA —
+    // вход отваливается на первом же `/auth/me`. Разбор и замер — у `resolvePoolRecord()`.
+    ...(recordUA ? { userAgent: recordUA } : {}),
     // 🪤 Локаль явная. Без неё сайт отдаёт английские кнопки, и любой селектор по
     // китайскому тексту ломается МОЛЧА — проверено в пробе 13.09.
     locale: 'zh-CN',

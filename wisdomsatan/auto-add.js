@@ -75,6 +75,8 @@ const http = require('http');
 const https = require('https');
 const tls = require('tls');
 const crypto = require('crypto');
+// Durable-запись пула: temp + fsync + rename.
+const { writeJsonSync: durableWriteJson } = require('../routing/lib/durable-write');
 
 const HOST = 'api.wisdomsatan.club';
 const POOL_FILE = path.join(__dirname, '..', 'routing', 'wisdomsatan-sessions.json');
@@ -350,13 +352,15 @@ function poolLoad() {
 // же файл после сетевых сканов, и целая запись сносит аккаунт, заведённый в это окно —
 // ровно та гонка, которую в AIPM уже ловили (см. apSaveMerge в transparent-proxy.js).
 // Дедуп по api_key: повторный прогон не должен плодить дубли.
+// Запись через общий durable-хелпер: temp + fsync + rename. Здесь была САМАЯ опасная
+// форма — прямая запись в целевой файл без временного: BSOD посреди неё оставлял пул
+// нулями при живом inode, что и случилось с AR/JW 13.09.
 function poolAppend(records) {
     const disk = poolLoad();
     const haveKeys = new Set(disk.map(s => s.api_key).filter(Boolean));
     const fresh = records.filter(r => !haveKeys.has(r.api_key));
     if (!fresh.length) return 0;
-    fs.mkdirSync(path.dirname(POOL_FILE), { recursive: true });
-    fs.writeFileSync(POOL_FILE, JSON.stringify(disk.concat(fresh), null, 2) + '\n', 'utf8');
+    durableWriteJson(POOL_FILE, disk.concat(fresh));
     return fresh.length;
 }
 

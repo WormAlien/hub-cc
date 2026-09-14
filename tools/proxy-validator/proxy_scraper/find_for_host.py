@@ -27,13 +27,14 @@ Usage
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
+import os
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from .domain_checker import DomainProxyChecker
 from .models import DomainTarget, ProxyRecord
@@ -56,6 +57,42 @@ PROXY_PORTS = {
     10007, 10080, 10800, 10801, 10809, 10811, 10997, 11108, 11209, 12648,
     12677, 14222, 20800,
 }
+
+# 🔴 Формат строки прогресса — контракт с дашбордом, а не украшение лога.
+# `routing/transparent-proxy.js` (akFindProxyLine / rmFindProxyLine) читает stderr
+# валидатора регуляркой /^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/ и только из неё
+# берёт счётчики `checked` / `total` и текст фазы. В скобках строки `✓` стоит
+# найдено/нужно, а не проверено/всего, поэтому честные счётчики приходят ТОЛЬКО отсюда.
+# Пока проверка шла чанками, строка печаталась после каждого чанка; окно проверок теперь
+# скользящее, границ батча нет — расписание ниже её и заменяет. Любая правка слов, «/»
+# или «, живых » оставит панель с надписью «ищу…» и нулями на всё время прогона
+# (ровно баг 13.09: минуты без единой цифры).
+PROGRESS_EVERY = 25          # каждые N завершённых проверок
+PROGRESS_SECONDS = 1.5       # и не реже, чем раз в столько секунд — период опроса вкладки
+
+
+def _pool_protocol(record: ProxyRecord) -> str:
+    """Protocol as the pool must read it.
+
+    HTTP-family collapses to ``http``: the strict checker labels a CONNECT-capable
+    proxy ``HTTPS`` ("can tunnel TLS"), while the pool reads ``https://`` as "speak
+    TLS to the proxy itself", which public proxies do not do.
+    """
+    protocol = (record.protocol or "").strip().lower()
+    return "http" if protocol in {"http", "https"} else protocol
+
+
+def _safe_uri(record: ProxyRecord) -> str:
+    """URI for log lines. Never raises: a log line must not abort a run.
+
+    ``format_proxy_uri`` rejects non-tunnelable protocols on purpose, but it is
+    called here from inside the progress callback, and an exception there would
+    propagate out of ``check_many`` and lose every proxy already found.
+    """
+    try:
+        return format_proxy_uri(record)
+    except ValueError:
+        return f"{(record.protocol or '?').strip().lower()}://{record.address}"
 
 
 def _target_for(host: str, path: str) -> DomainTarget:
@@ -99,7 +136,7 @@ def find(
 ) -> List[ProxyRecord]:
     scraper = ProxyScraper(
         [s for s in load_services(str(sources_file)) if s.enabled],
-        threads=120, timeout=8, retries=0,
+        threads=workers, timeout=timeout, retries=0,
     )
     log(f"скраплю источники → {host}")
     records = scraper.run()
@@ -117,28 +154,46 @@ def find(
 
     found: List[ProxyRecord] = []
     started = time.perf_counter()
-    batch = max(workers, 40)
+    # Состояние строк прогресса. Раньше их печатал внешний цикл по батчам: батч
+    # закончился — вывели «проверено X/Y». Окно проверок теперь скользящее, границ
+    # батча нет, поэтому счётчик ведём здесь и печатаем по своему расписанию.
+    progress_state = {"last_done": 0, "last_at": time.monotonic()}
 
-    for offset in range(0, len(ordered), batch):
-        chunk = ordered[offset:offset + batch]
-        results = checker.check_many(list(chunk), [target])
-        for res in results:
-            if res.passed_targets:
-                rec = res.proxy
-                rec.working = True
-                rec.latency_ms = res.latency_ms
-                found.append(rec)
-                log(f"  ✓ {format_proxy_uri(rec)}  {res.latency_ms:.0f} мс  ({len(found)}/{want})")
-                if len(found) >= want:
-                    log(f"набрал {len(found)} за {time.perf_counter() - started:.0f} с — останавливаюсь")
-                    return found
-        log(f"  … проверено {min(offset + batch, len(ordered))}/{len(ordered)}, живых {len(found)}")
+    def emit_progress(done: int, total: int) -> None:
+        progress_state["last_done"] = done
+        progress_state["last_at"] = time.monotonic()
+        # Формат дословный, его читает дашборд. См. PROGRESS_EVERY выше.
+        log(f"  … проверено {done}/{total}, живых {len(found)}")
+
+    def collect(done: int, total: int, res) -> None:
+        if res.passed_targets:
+            rec = res.proxy
+            rec.working = True
+            rec.latency_ms = res.latency_ms
+            found.append(rec)
+            log(f"  ✓ {_safe_uri(rec)}  {res.latency_ms:.0f} мс  ({len(found)}/{want})")
+        due = (
+            done - progress_state["last_done"] >= PROGRESS_EVERY
+            or time.monotonic() - progress_state["last_at"] >= PROGRESS_SECONDS
+            or done >= total
+        )
+        if due:
+            emit_progress(done, total)
+
+    checked = checker.check_many(list(ordered), [target], progress_cb=collect, stop_after=want)
+    # Досылаем итоговую строку, если последняя проверка попала между расписаниями:
+    # панель иначе замрёт на промежуточной цифре до конца прогона.
+    if len(checked) != progress_state["last_done"]:
+        emit_progress(len(checked), len(ordered))
+    if len(found) >= want:
+        log(f"набрал {len(found)} за {time.perf_counter() - started:.0f} с — останавливаюсь")
+        return found[:want]
 
     log(f"живых найдено {len(found)} из {len(ordered)} за {time.perf_counter() - started:.0f} с")
     return found
 
 
-def write_pool(records: Sequence[ProxyRecord], out_file: Path) -> Path:
+def write_pool(records: Sequence[ProxyRecord], out_file: Path, *, log=print) -> Path:
     """Write pool-ready lines, translating the checker's protocol semantics.
 
     The strict checker labels a CONNECT-capable HTTP-family proxy as ``HTTPS``,
@@ -147,15 +202,48 @@ def write_pool(records: Sequence[ProxyRecord], out_file: Path) -> Path:
     Writing the checker's label straight through made every one of 41 freshly
     verified proxies fail in the pool (measured 12.09), so the translation
     happens here, at the boundary, instead of changing either side's meaning.
+
+    A record whose protocol is not tunnelable (``AUTO`` from a bare ``ip:port``
+    line) is skipped with a warning rather than aborting the write: the
+    ``ValueError`` from ``format_proxy_uri`` used to escape this function and
+    take every verified proxy of the run down with it. The gate stays — such a
+    line is junk for ``routing/lib/proxy-pool.js`` — but it now costs one entry,
+    not the whole file.
+
+    The write is atomic: contents land in a sibling temp file that is flushed and
+    fsynced, then ``os.replace``d over the target. A crash mid-write therefore
+    leaves the previous pool file intact instead of a truncated one, and readers
+    never see a half-written list.
     """
     out_file.parent.mkdir(parents=True, exist_ok=True)
-    lines = []
-    for r in records:
-        proto = (r.protocol or "").strip().lower()
-        if proto in {"https", "http"}:
-            proto = "http"          # HTTP-family: CONNECT tunnel, no TLS to proxy
-        lines.append(format_proxy_uri(replace(r, protocol=proto)))
-    out_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8", newline="\n")
+    # Canonicalize before writing so retries/source overlap cannot produce
+    # duplicate lines, while format_proxy_uri remains the safety gate.
+    seen: set[str] = set()
+    for record in records:
+        try:
+            seen.add(format_proxy_uri(replace(record, protocol=_pool_protocol(record))))
+        except ValueError as exc:
+            log(f"  ! пропускаю запись: {exc}")
+    lines = sorted(seen)
+    temp_name: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="\n", dir=out_file.parent,
+            prefix=f".{out_file.name}.", suffix=".tmp", delete=False,
+        ) as temp:
+            temp_name = temp.name
+            if lines:
+                temp.write("\n".join(lines) + "\n")
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_name, out_file)
+    except BaseException:
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+        raise
     return out_file
 
 
@@ -201,7 +289,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"ОШИБКА: {exc}", file=sys.stderr)
         return 1
 
-    out = write_pool(found, Path(args.out))
+    # log=progress: под --json предупреждения о пропущенных записях обязаны уйти в
+    # stderr, иначе они встанут в stdout рядом с единственной машинной строкой.
+    out = write_pool(found, Path(args.out), log=progress)
     if args.json:
         print(json.dumps({
             "ok": True,
@@ -209,7 +299,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "found": len(found),
             "want": args.want,
             "out": str(out),
-            "proxies": [format_proxy_uri(r) for r in found],
+            "proxies": [_safe_uri(r) for r in found],
             "latency_ms": [round(r.latency_ms or 0) for r in found],
         }, ensure_ascii=False))
     else:

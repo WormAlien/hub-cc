@@ -23,6 +23,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// Durable-запись: менеджер GitHub-аккаунтов — реестр, по которому берут сессии.
+const { writeJsonSync: durableWriteJson } = require('./durable-write');
 
 const POLL_MS = 5 * 1000;
 
@@ -145,7 +147,7 @@ function makeCapture({ label, moduleDir, poolFile }) {
             const old = rec.status;
             rec.status = 'live';
             rec.revivedAt = new Date().toISOString();
-            fs.writeFileSync(accountsFile, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+            durableWriteJson(accountsFile, arr);
             console.log(`🟢 GitHub-менеджер: ${ghId} (${rec.nickname || rec.login || '?'}) был ${old} — оживлён по свежей сессии`);
         } catch (e) {
             console.log(`⚠️  не удалось оживить ${ghId} в менеджере: ${e.message}`);

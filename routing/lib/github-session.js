@@ -21,6 +21,8 @@
 
 const fs = require('fs');
 const path = require('path');
+// Durable-запись: индекс и снимки сессий — это то, без чего автореги не могут войти.
+const { writeJsonSync: durableWriteJson } = require('./durable-write');
 
 const nac = require('./newapi-account.js');
 
@@ -105,7 +107,9 @@ function loadIndex() {
 function saveIndex(entries) {
     try {
         fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-        fs.writeFileSync(INDEX_FILE, JSON.stringify({ version: INDEX_VERSION, entries }, null, 1) + '\n', 'utf8');
+        // durable: BSOD оставлял индекс нулями (13.09), а без него автореги вслепую
+        // перебирают профили и жгут попытки GitHub.
+        durableWriteJson(INDEX_FILE, { version: INDEX_VERSION, entries });
     } catch { /* индекс — ускоритель, без него всё работает, просто медленнее */ }
 }
 
@@ -388,7 +392,9 @@ function cacheStale(snap) {
 
 function writeCache(ghId, snap) {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(cachePath(ghId), JSON.stringify(snap, null, 2) + '\n', 'utf8');
+    // durable: снимок GitHub-сессии — то, чем авторег входит. Нулёвка после BSOD
+    // выглядела бы как «сессия мертва» и уводила бы на полный релогин.
+    durableWriteJson(cachePath(ghId), snap);
     return cachePath(ghId);
 }
 

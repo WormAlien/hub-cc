@@ -76,6 +76,9 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const crypto = require('crypto');
+// Durable-запись пула: temp + fsync + rename. Авторег заводит аккаунты, ради которых
+// пул и существует, — потерять их при BSOD нельзя.
+const { writeJsonSync: durableWriteJson } = require('../routing/lib/durable-write');
 
 const HOST = 'www.aikeysapi.com';
 const POOL_FILE = path.join(__dirname, '..', 'routing', 'aikeysapi-sessions.json');
@@ -270,18 +273,15 @@ function poolLoad() {
 
 // Мерж-ДОПИСЫВАНИЕ, а не запись целиком: дашборд пишет этот же файл после сетевых сканов,
 // и целая запись снесла бы аккаунт, заведённый в это окно (гонка, поймана в AIPM).
-// Запись атомарная — temp + rename: падение процесса посреди writeFileSync обнуляло пул
-// (доработка №2 из разбора WisdomSatan).
+// Запись через общий durable-хелпер: temp + fsync + rename. Прежняя версия делала
+// temp+rename без fsync — при BSOD данные оставались в page cache и файл оказывался
+// нулями при живом inode (инцидент 13.09, дважды за день).
 function poolAppend(records) {
     const disk = poolLoad();
     const haveKeys = new Set(disk.map(s => s.api_key).filter(Boolean));
     const fresh = records.filter(r => !haveKeys.has(r.api_key));
     if (!fresh.length) return 0;
-    const dir = path.dirname(POOL_FILE);
-    fs.mkdirSync(dir, { recursive: true });
-    const tmp = path.join(dir, `.aikeysapi-sessions.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(disk.concat(fresh), null, 2) + '\n', 'utf8');
-    fs.renameSync(tmp, POOL_FILE);
+    durableWriteJson(POOL_FILE, disk.concat(fresh));
     return fresh.length;
 }
 
@@ -290,9 +290,7 @@ function poolPatch(apiKey, patch) {
     const i = disk.findIndex(s => s.api_key === apiKey);
     if (i < 0) throw new Error('сохранённый аккаунт не найден');
     disk[i] = { ...disk[i], ...patch };
-    const tmp = path.join(path.dirname(POOL_FILE), `.aikeysapi-sessions.${process.pid}.tmp`);
-    fs.writeFileSync(tmp, JSON.stringify(disk, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmp, POOL_FILE);
+    durableWriteJson(POOL_FILE, disk);
 }
 
 async function checkSavedBalance(rec) {
@@ -942,7 +940,9 @@ function writeProfileSession(recordId, cookieHeaderStr, user) {
     const dir = path.join(__dirname, 'sessions');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `acct_${recordId}.json`);
-    fs.writeFileSync(file, JSON.stringify(state, null, 2), 'utf8');
+    // durable: снимок сессии — то, чем потом ходят за балансом. Нулёвка после BSOD
+    // выглядела бы как «кука пропала» и увела бы на полный релогин.
+    durableWriteJson(file, state);
     return file;
 }
 

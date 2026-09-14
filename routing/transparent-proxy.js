@@ -29,6 +29,10 @@ const execFileAsync = require('util').promisify(require('child_process').execFil
 // историю С ДИСКА, когда прокси провайдера не запущен — иначе график был бы только у
 // активного бэкенда, а у остальных «не отвечает» при готовых данных в файле рядом.
 const latencyStore = require('./latency-store.js');
+// Durable-запись пулов: tmp + fsync + rename. Без неё BSOD оставляет файл нулями
+// (инцидент 13.09, дважды за день). Обязана грузиться В ШАПКЕ: `*Save` живут выше
+// блока с outlook-pool, и `const` в TDZ уронил бы первую же запись.
+const { writeJsonSync: durableWriteJson, assertNotZeroed } = require('./lib/durable-write');
 const { AR_QUOTA_BODY, classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
         arQuotaKeyTail } = require('./lib/ar-quota-probe');
 
@@ -3586,12 +3590,13 @@ const AL_BASE_URL = 'https://capi.aerolink.lat';
 function alLoad() {
     try {
         const raw = fs.readFileSync(AL_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Al');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function alSave(arr) {
-    fs.writeFileSync(AL_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(AL_SESSIONS_FILE, arr);
 }
 
 // Пинг ключа: GET /v1/me → 401 = DEAD, иначе LIVE.
@@ -3690,12 +3695,13 @@ const EV_BASE_URL = 'https://api.evomap.ai/v1';
 function evLoad() {
     try {
         const raw = fs.readFileSync(EV_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Evomap');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function evSave(arr) {
-    fs.writeFileSync(EV_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(EV_SESSIONS_FILE, arr);
 }
 
 // Пинг ключа: GET /v1/models → 401 = DEAD, 200 = LIVE. /models публично доступен
@@ -3814,12 +3820,13 @@ const OT_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 function otLoad() {
     try {
         const raw = fs.readFileSync(OT_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Ourtoken');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function otSave(arr) {
-    fs.writeFileSync(OT_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(OT_SESSIONS_FILE, arr);
 }
 
 async function otProbe(apiKey) {
@@ -4079,9 +4086,10 @@ function customModelsCacheSave() {
     try {
         const obj = {};
         for (const [k, v] of CUSTOM_MODELS_CACHE) obj[k] = { data: v.data, ts: v.ts };
-        const tmp = CUSTOM_MODELS_CACHE_FILE + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', 'utf8');
-        fs.renameSync(tmp, CUSTOM_MODELS_CACHE_FILE);
+        // Через durable-хелпер, а не своей парой tmp+rename: у прежней версии не было
+        // fsync, и после BSOD файл оставался нулями при живом inode — тот же класс,
+        // что съел пулы 13.09.
+        durableWriteJson(CUSTOM_MODELS_CACHE_FILE, obj);
     } catch {}
 }
 customModelsCacheLoad();
@@ -4103,7 +4111,7 @@ function customLoad() {
     } catch { return { providers: [] }; }
 }
 function customSave(data) {
-    fs.writeFileSync(CUSTOM_FILE, JSON.stringify(data, null, 2) + '\n', 'utf8');
+    durableWriteJson(CUSTOM_FILE, data);
 }
 function customFind(id) {
     const data = customLoad();
@@ -5211,12 +5219,13 @@ const CUN_TIER_PREFS = {
 function cunLoad() {
     try {
         const raw = fs.readFileSync(CUN_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Conduit');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function cunSave(arr) {
-    fs.writeFileSync(CUN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(CUN_SESSIONS_FILE, arr);
 }
 function cunReadActiveModel() {
     try { return normalizeCcModel(fs.readFileSync(CUN_ACTIVE_MODEL_FILE, 'utf8').trim()) || null; }
@@ -5564,12 +5573,13 @@ const OM_BASE_URL = 'http://localhost:20128/v1';
 function omLoad() {
     try {
         const raw = fs.readFileSync(OM_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'OmniRoute');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function omSave(arr) {
-    fs.writeFileSync(OM_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(OM_SESSIONS_FILE, arr);
 }
 
 async function omProbe(apiKey) {
@@ -5668,7 +5678,7 @@ function vidLoad() {
     } catch { return []; }
 }
 function vidSave(arr) {
-    fs.writeFileSync(VIDEO_KEYS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(VIDEO_KEYS_FILE, arr);
 }
 function vidToday() {
     return new Date().toISOString().slice(0, 10);
@@ -5735,7 +5745,7 @@ const VIDEO_TRIALS_SEED = [
     { id: 'leonardo',    name: 'Leonardo.ai',   url: 'https://leonardo.ai',               kind: 'daily free',    note: 'дневные токены, motion' },
 ];
 function trialsLoad() { try { const raw = fs.readFileSync(VIDEO_TRIALS_FILE,'utf8'); const o = JSON.parse(raw.charCodeAt(0)===0xFEFF?raw.slice(1):raw); return (o && typeof o==='object') ? o : {}; } catch { return {}; } }
-function trialsSave(o) { fs.writeFileSync(VIDEO_TRIALS_FILE, JSON.stringify(o,null,2)+'\n','utf8'); }
+function trialsSave(o) { durableWriteJson(VIDEO_TRIALS_FILE, o); }
 
 async function handleVideoTrials(req, res) {
     try {
@@ -5769,7 +5779,7 @@ function imgLoad() {
     } catch { return []; }
 }
 function imgSave(arr) {
-    fs.writeFileSync(IMAGE_KEYS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(IMAGE_KEYS_FILE, arr);
 }
 
 async function handleImageKeys(req, res) {
@@ -5827,7 +5837,7 @@ const IMAGE_TRIALS_SEED = [
     { id: 'recraft',     name: 'Recraft',        url: 'https://recraft.ai',                kind: 'free credits',  note: 'вектор/растр, бренд-дизайн' },
 ];
 function imgTrialsLoad() { try { const raw = fs.readFileSync(IMAGE_TRIALS_FILE,'utf8'); const o = JSON.parse(raw.charCodeAt(0)===0xFEFF?raw.slice(1):raw); return (o && typeof o==='object') ? o : {}; } catch { return {}; } }
-function imgTrialsSave(o) { fs.writeFileSync(IMAGE_TRIALS_FILE, JSON.stringify(o,null,2)+'\n','utf8'); }
+function imgTrialsSave(o) { durableWriteJson(IMAGE_TRIALS_FILE, o); }
 
 async function handleImageTrials(req, res) {
     try {
@@ -5872,20 +5882,20 @@ function ghSpendLoad() {
 function ghSpendSave(rub) {
     // Запись через временный файл: оборванный на половине JSON читался бы как 0, то есть
     // молча терял бы сумму — ровно тот дефект, который эта ручка и закрывает.
-    const tmp = GH_SPEND_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify({ rub, updatedAt: new Date().toISOString() }, null, 2) + '\n', 'utf8');
-    fs.renameSync(tmp, GH_SPEND_FILE);
+    // Через durable-хелпер: своей паре tmp+rename не хватало fsync.
+    durableWriteJson(GH_SPEND_FILE, { rub, updatedAt: new Date().toISOString() });
 }
 
 function ghLoad() {
     try {
         const raw = fs.readFileSync(GH_ACCOUNTS_FILE, 'utf8');
+        assertNotZeroed(raw, 'GitHub-менеджер');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 function ghSave(arr) {
-    fs.writeFileSync(GH_ACCOUNTS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(GH_ACCOUNTS_FILE, arr);
 }
 // Оживить запись менеджера GitHub если она не live. Вызывается из handleXxxActivate
 // когда аккаунт провайдера привязан к ghId — раз ключ работает, значит GitHub жив.
@@ -6878,7 +6888,24 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         // Запись пула. email = ник GitHub осознанно: резервная ветка сопоставления
         // профилей (newapiMapProfiles) сверяет `s.email || s.name` с githubLogin(cookies),
         // то есть с кукой dotcom_user — а это и есть ник. Связка заработает сама.
-        const sessions = load();
+        // 🔴 Пул битый (нулёвка после BSOD) — заводить аккаунт НЕЛЬЗЯ: `push` в пустой
+        // массив дал бы пул из одной записи, то есть затёр бы остатки, а имена/ключи
+        // прежних аккаунтов пришлось бы восстанавливать по снимкам заново. Ровно это
+        // и случилось 13.09: пул стал огрызком `ar_1789304590154_0` с именем `123`.
+        let sessions;
+        try {
+            sessions = load();
+        } catch (e) {
+            if (e && e.poolCorrupt) {
+                return jsonRes(res, 409, {
+                    error: `${tag}: пул не читается — файл обнулён жёстким крахом (BSOD), `
+                        + 'а не пуст. Заводить аккаунт поверх нельзя, иначе остатки затрутся. '
+                        + 'Сначала восстанови пул из снимка, потом повтори.',
+                    poolCorrupt: true,
+                });
+            }
+            throw e;
+        }
         const dup = sessions.find(s => String(s.email || '').toLowerCase() === nick.toLowerCase());
         if (dup) return jsonRes(res, 409, { error: `запись с email ${nick} уже есть в пуле` });
 
@@ -6898,8 +6925,9 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         save(sessions);
 
         fs.mkdirSync(sessionsDir, { recursive: true });
-        fs.writeFileSync(path.join(sessionsDir, label + '.json'),
-            JSON.stringify(gsl.seedPayload(snap, nick), null, 2) + '\n', 'utf8');
+        // durable: снимок сессии — то, чем потом входят. Нулёвка после BSOD дала бы
+        // «сессия мертва» и увела бы на полный релогин с паролем и 2FA.
+        durableWriteJson(path.join(sessionsDir, label + '.json'), gsl.seedPayload(snap, nick));
 
         logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
         jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length, forced: force });
@@ -8138,15 +8166,25 @@ const AR_CC_HEADERS = {
 function arLoad() {
     try {
         const raw = fs.readFileSync(AR_SESSIONS_FILE, 'utf8');
+        // 🔴 Нулёвка — это НЕ пустой пул, а битый файл после жёсткого краха (BSOD
+        // 13.09 обнулил оба пула дважды за день). Раньше `JSON.parse` падал, функция
+        // возвращала `[]`, и обработчик писал поверх ОГРЫЗОК из одной записи — после
+        // чего восстановление из снимка требовало уже разбираться, что потеряно.
+        // Теперь битый файл бросает, а не притворяется пустым: `arSaveMerge` обязан
+        // отказаться писать, а не затирать остатки.
+        assertNotZeroed(raw, 'AgentRouter');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
         if (newapiMigrateAnchors(arr)) { try { arSave(arr); } catch {} }
         return arr;
-    } catch { return []; }
+    } catch (e) {
+        if (e && e.poolCorrupt) throw e;   // битый файл — не «пусто», наверх
+        return [];
+    }
 }
 function arSave(arr) {
-    fs.writeFileSync(AR_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(AR_SESSIONS_FILE, arr);
 }
 
 // Мерж-запись для обновлений баланса/статуса. Раньше каждый хендлер делал
@@ -8173,7 +8211,17 @@ const BALANCE_CLEARABLE = ['balanceError', 'selfError', 'granted'];
 // у него, у go/tb/xp по одному активному.
 function arSaveMerge(changed) {
     const list = Array.isArray(changed) ? changed : [changed];
-    const disk = arLoad();
+    let disk;
+    try {
+        disk = arLoad();
+    } catch (e) {
+        // Пул битый (нулёвка после BSOD). Писать поверх нельзя: запись «что успели
+        // прочитать» — это и есть механизм, которым битый файл превращался в огрызок
+        // с одной записью. Оставляем файл как есть, чтобы его можно было восстановить
+        // из снимка, и говорим вслух.
+        logLine(`🔴 arSaveMerge: пул не прочитан (${e.message}) — запись отменена, файл сохранён для восстановления`);
+        return false;
+    }
     const byKey = new Map(disk.map(s => [s.api_key, s]));
     for (const upd of list) {
         if (!upd || !upd.api_key) continue;
@@ -13311,6 +13359,7 @@ const GO_CC_HEADERS = {
 function goLoad() {
     try {
         const raw = fs.readFileSync(GO_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'GoRouter');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -13334,7 +13383,7 @@ function goLoad() {
     } catch { return []; }
 }
 function goSave(arr) {
-    fs.writeFileSync(GO_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(GO_SESSIONS_FILE, arr);
 }
 function goReadActiveModel() {
     try { return fs.readFileSync(GO_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -14000,6 +14049,7 @@ const AP_CC_HEADERS = {
 function kkLoad() {
     try {
         const raw = fs.readFileSync(KK_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'KKtoken');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -14023,7 +14073,7 @@ function kkLoad() {
     } catch { return []; }
 }
 function kkSave(arr) {
-    fs.writeFileSync(KK_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(KK_SESSIONS_FILE, arr);
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -14107,6 +14157,7 @@ function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { 
 function apLoad() {
     try {
         const raw = fs.readFileSync(AP_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'AIPM');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -14130,7 +14181,7 @@ function apLoad() {
     } catch { return []; }
 }
 function apSave(arr) {
-    fs.writeFileSync(AP_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(AP_SESSIONS_FILE, arr);
 }
 
 // Мерж-запись для ДОЛГИХ операций: пинг статусов, батч балансов, фоновый пересчёт
@@ -15145,7 +15196,7 @@ async function handleApActivate(req, res) {
         try {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
-            makeSettingsBackup('settings-kk');
+            makeSettingsBackup('settings-ap');
             settings.env = settings.env || {};
             settings.env.ANTHROPIC_BASE_URL = AP_KEEPALIVE_URL;   // keepalive :20163 → emtf.aipm9527.online напрямую
             delete settings.apiKeyHelper;
@@ -15230,7 +15281,7 @@ async function handleApSetModel(req, res) {
         try {
             const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
-            makeSettingsBackup('settings-kk-model');
+            makeSettingsBackup('settings-ap-model');
             const mm = (body.modelMap || {});
             settings.model = mm[m] || settingsModel;
             settings.env = settings.env || {};
@@ -15336,6 +15387,7 @@ const HN_CC_HEADERS = {
 function hnLoad() {
     try {
         const raw = fs.readFileSync(HN_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'HCNsec');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -15359,7 +15411,7 @@ function hnLoad() {
     } catch { return []; }
 }
 function hnSave(arr) {
-    fs.writeFileSync(HN_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(HN_SESSIONS_FILE, arr);
 }
 function hnReadActiveModel() {
     try { return fs.readFileSync(HN_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -16004,11 +16056,12 @@ function akIsRealKey(k) {
 }
 
 function akSave(arr) {
-    fs.writeFileSync(AK_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(AK_SESSIONS_FILE, arr);
 }
 function akLoad() {
     try {
         const raw = fs.readFileSync(AK_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'AIKeysAPI');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         let changed = false;
@@ -16931,11 +16984,12 @@ function rmIsRealKey(k) {
 }
 
 function rmSave(arr) {
-    fs.writeFileSync(RM_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(RM_SESSIONS_FILE, arr);
 }
 function rmLoad() {
     try {
         const raw = fs.readFileSync(RM_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Rumeng');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         let changed = false;
@@ -18198,6 +18252,7 @@ const JW_CC_HEADERS = {
 function jwLoad() {
     try {
         const raw = fs.readFileSync(JW_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'JustWoker');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -18221,7 +18276,7 @@ function jwLoad() {
     } catch { return []; }
 }
 function jwSave(arr) {
-    fs.writeFileSync(JW_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(JW_SESSIONS_FILE, arr);
 }
 function jwReadActiveModel() {
     try { return fs.readFileSync(JW_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -19088,6 +19143,7 @@ const SK_CC_HEADERS = {
 function skLoad() {
     try {
         const raw = fs.readFileSync(SK_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'SeekAi');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
@@ -19111,7 +19167,7 @@ function skLoad() {
     } catch { return []; }
 }
 function skSave(arr) {
-    fs.writeFileSync(SK_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(SK_SESSIONS_FILE, arr);
 }
 function skReadActiveModel() {
     try { return fs.readFileSync(SK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -19741,6 +19797,7 @@ function tsLib() {
 function tsLoad() {
     try {
         const raw = fs.readFileSync(TS_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'TrueSOTA');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         let changed = false;
@@ -19758,7 +19815,7 @@ function tsLoad() {
     } catch { return []; }
 }
 function tsSave(arr) {
-    fs.writeFileSync(TS_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(TS_SESSIONS_FILE, arr);
 }
 function tsReadActiveModel() {
     try { return fs.readFileSync(TS_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -20459,6 +20516,7 @@ const TB_CC_HEADERS = {
 function tbLoad() {
     try {
         const raw = fs.readFileSync(TB_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'TabiToken');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция (как gorouter): стабильный id нужен для share/import/rename/setKey.
@@ -20481,7 +20539,7 @@ function tbLoad() {
     } catch { return []; }
 }
 function tbSave(arr) {
-    fs.writeFileSync(TB_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(TB_SESSIONS_FILE, arr);
 }
 function tbReadActiveModel() {
     try { return fs.readFileSync(TB_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
@@ -21427,6 +21485,7 @@ const XP_CC_HEADERS = {
 function xpLoad() {
     try {
         const raw = fs.readFileSync(XP_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'XPeach');
         const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
         if (!Array.isArray(arr)) return [];
         // id-миграция (как tabi/gorouter): стабильный id нужен для share/import/rename/setKey.
@@ -21448,7 +21507,7 @@ function xpLoad() {
     } catch { return []; }
 }
 function xpSave(arr) {
-    fs.writeFileSync(XP_SESSIONS_FILE, JSON.stringify(arr, null, 2) + '\n', 'utf8');
+    durableWriteJson(XP_SESSIONS_FILE, arr);
 }
 function xpReadActiveModel() {
     try { return fs.readFileSync(XP_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }

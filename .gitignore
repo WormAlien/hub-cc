@@ -502,3 +502,25 @@ routing/media-profiles.json
 # Скрипты пишут их в системный temp; правило — страховка на случай промаха.
 rumeng-video/
 rumeng-shots/
+# ── rumeng (如梦AI), nova, fluxnat: приватные данные вкладок ──────────────────
+# Тот же канон, что у tabi/gorouter/aikeysapi выше: профили браузера и живые
+# сессии НЕ коммитим, modelmap и routes-modelmap — безопасный конфиг, коммитим.
+# 🔴 routing/rumeng-sessions.json попал в публичный репо 13.09 с email, паролями,
+# api_key и токенами 10 аккаунтов. Снят из индекса 14.09; лежащее в истории этим
+# не отзывается — ключи и пароли считать скомпрометированными.
+rumeng/profiles/
+rumeng/sessions/
+rumeng/gh-sessions/
+routing/rumeng-sessions.json
+nova/profiles/
+nova/sessions/
+nova/gh-sessions/
+routing/nova-sessions.json
+fluxnat/profiles/
+fluxnat/sessions/
+fluxnat/gh-sessions/
+routing/fluxnat-sessions.json
+
+# Бэкапы перед правками движка: гигантские копии transparent-proxy.js рядом с ним.
+routing/transparent-proxy.js.bak-*
+routing/proxy-dashboard.html.bak-*

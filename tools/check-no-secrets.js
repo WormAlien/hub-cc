@@ -7,12 +7,17 @@
 // с живыми куками. Ни то, ни другое не выглядело ошибкой: файлы рабочие, репо локально
 // приватный по ощущению. GitHub индексирует мгновенно — удаление постфактум не помогает.
 //
-// Вызывается из `.githooks/pre-push` (см. его шапку про `core.hooksPath`).
-// Обойти на один раз: `git push --no-verify`.
-// Проверить вручную: `node tools/check-no-secrets.js --range=<base>..<head>`
+// Зовётся из ДВУХ крючков (устройство и включение — в шапке `.githooks/pre-commit`):
+//   `.githooks/pre-commit` → `--staged` — что вот-вот станет коммитом (индекс);
+//   `.githooks/pre-push`               — что уезжает этим пушем (диапазон base..head).
+// Второй нужен отдельно: коммит с секретом остаётся в локальной истории навсегда, но
+// уехать наружу он может и позже, другим пушем — например, после снятия секрета из файла.
+// Обойти на один раз: `git commit --no-verify` или `git push --no-verify`.
+// Проверить вручную: `node tools/check-no-secrets.js --staged`
+//                     `node tools/check-no-secrets.js --range=<base>..<head>`
 //
-// Что проверяется — только то, что уезжает ЭТИМ пушем (диапазон base..head), а не вся
-// история: иначе страж блокировал бы любой пуш вечно из-за того, что уже лежит в прошлом.
+// Проверяется ровно то, что добавляется этим коммитом (пушем), а не вся история: иначе
+// страж блокировал бы всё вечно из-за того, что уже лежит в прошлом.
 //
 //   1. ПУТИ — личные данные и мусор. Блокируем по имени независимо от содержимого:
 //      профили браузеров, пулы сессий, ключи, `.tmp-*`, бэкапы движка.
@@ -128,9 +133,7 @@ function refsFromStdin() {
 }
 const ZERO = /^0+$/;
 
-function scanRange(base, head) {
-    const diff = gitSafe(['diff', '-U0', '--no-color', '--no-prefix', '--diff-filter=ACMR', base, head]);
-    if (diff === null) return { paths: [], findings: [], err: 'не удалось прочитать диапазон ' + base + '..' + head };
+function scanDiffText(diff) {
     const paths = [], findings = [];
     let cur = '';
     for (const line of diff.split('\n')) {
@@ -141,14 +144,32 @@ function scanRange(base, head) {
         if (PATH_OK.some(re => re.test(cur))) continue;
         for (const hit of scanContent(cur, body)) findings.push({ path: cur, what: hit });
     }
-    return { paths, findings, err: null };
+    return { paths, findings };
+}
+
+function scanRange(base, head) {
+    const diff = gitSafe(['diff', '-U0', '--no-color', '--no-prefix', '--diff-filter=ACMR', base, head]);
+    if (diff === null) return { paths: [], findings: [], err: 'не удалось прочитать диапазон ' + base + '..' + head };
+    return Object.assign(scanDiffText(diff), { err: null });
+}
+
+// То же самое, но про ИНДЕКС: то, что вот-вот станет коммитом. Зовётся из pre-commit,
+// чтобы секрет не попадал даже в локальную историю — на пуше ловить уже поздно,
+// коммит с секретом останется в репозитории навсегда.
+function scanStaged() {
+    const diff = gitSafe(['diff', '--cached', '-U0', '--no-color', '--no-prefix', '--diff-filter=ACMR']);
+    if (diff === null) return { paths: [], findings: [], err: 'не удалось прочитать индекс' };
+    return Object.assign(scanDiffText(diff), { err: null });
 }
 
 function main() {
     const argv = process.argv.slice(2);
     const rangeArg = argv.find(a => a.startsWith('--range='));
     let ranges = [];
-    if (rangeArg) {
+    if (argv.includes('--staged')) {
+        // Режим pre-commit: смотрим индекс, а не историю — что вот-вот станет коммитом.
+        ranges.push({ staged: true, label: 'индекс (что уходит в коммит)' });
+    } else if (rangeArg) {
         const [b, h] = rangeArg.slice('--range='.length).split('..');
         ranges.push({ base: b, head: h, label: b + '..' + h });
     } else {
@@ -167,7 +188,7 @@ function main() {
     const problems = [];
     const seen = new Set();
     for (const r of ranges) {
-        const { paths, findings, err } = scanRange(r.base, r.head);
+        const { paths, findings, err } = r.staged ? scanStaged() : scanRange(r.base, r.head);
         if (err) { console.log('check-no-secrets: ' + err + ' — пропускаю'); continue; }
         for (const p of paths) {
             if (PATH_OK.some(re => re.test(p))) continue;
@@ -188,16 +209,17 @@ function main() {
         return 0;
     }
     console.error('');
-    console.error('check-no-secrets: СТОП. В этот пуш попадёт то, чего в репозитории быть не должно:');
+    console.error('check-no-secrets: СТОП. В этот коммит (пуш) попадёт то, чего в репозитории быть не должно:');
     for (const p of problems) {
         console.error('  [' + (p.kind === 'путь' ? 'мусор/личные данные' : 'СЕКРЕТ') + '] ' + p.path
             + ' — ' + p.what + '  (' + p.range + ')');
     }
     console.error('');
     console.error('  Что делать: убрать файл из индекса, оставив на диске —');
-    console.error('      git rm --cached <файл>');
+    console.error('      git restore --staged <файл>   (файл ещё не в истории)');
+    console.error('      git rm --cached <файл>        (файл уже отслеживается)');
     console.error('    и дописать правило в .gitignore, чтобы не вернулся.');
-    console.error('  Если это ложное срабатывание — обойти на один раз: git push --no-verify');
+    console.error('  Если это ложное срабатывание — обойти на один раз: --no-verify');
     console.error('');
     return 1;
 }

@@ -1,0 +1,26 @@
+#!/bin/sh
+# pre-commit: секрет не должен попасть даже в КОММИТ.
+#
+# Зачем отдельно от pre-push: коммит с секретом остаётся в локальной истории навсегда,
+# а уехать наружу может и позже — другим пушем, например после того, как секрет вычистили
+# из файла руками. На пуше ловить поздно: файл уже в репозитории.
+#
+# Проверка та же, что на пуше (`tools/check-no-secrets.js`), только смотрит она индекс —
+# то, что вот-вот станет коммитом.
+#
+# Включение (хуки не клонируются): git config core.hooksPath .githooks
+# Обойти на один раз: git commit --no-verify
+
+root="$(git rev-parse --show-toplevel)"
+
+if ! command -v node >/dev/null 2>&1; then
+    echo "pre-commit: node not found, check skipped" >&2
+    exit 0
+fi
+
+node "$root/tools/check-no-secrets.js" --staged || {
+    echo "" >&2
+    echo "pre-commit: коммит не создан — в публичный репо не уезжают секреты и мусор." >&2
+    echo "            Обойти на один раз (осознанно): git commit --no-verify" >&2
+    exit 1
+}

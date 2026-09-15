@@ -124,6 +124,38 @@ const CC_FALLBACK_HEADERS = {
 // на каждый запрос. Та же правка, что во front-door (`mapCache`, frontdoor-proxy.js:261).
 const modelMapCache = new Map();          // путь → { data, mtime }
 const EMPTY_TIERS = { default: '', opus: '', sonnet: '', haiku: '', gpt: '' };
+// ── Память о мёртвой ПУЛОВОЙ модели (2026-09-15) ─────────────────────────────
+// Пул наливки agentrouter кончается посреди дня, и каждая попытка сходить в пуловую
+// модель стоит 0.4-1с на 402. Помним модель → время, и последующие запросы идут мимо
+// неё сразу (см. poolFallbackFor и его вызов из tierTargetFor).
+// 🪤 Почему именно ПАМЯТЬ, а не «один раз реактивно отреагировали»: тир-карту на диске
+// переписывает дашборд, а он может быть и не поднят. Память — страховка на этот случай.
+// 🔁 И почему память СБРАСЫВАЕТСЯ сменой mtime карты (см. readModelMap): как только
+// владелец переключил карту руками или дашборд вернул её из бэкапа после наливки, память
+// не должна спорить с тем, что лежит на диске. TTL cfg.poolDeadMs — вторая страховка,
+// на случай, когда ни карту записать, ни сбросить память было некому.
+const poolDead = new Map();               // модель → ts последнего 402 по ней
+// 🪤 Ключ памяти НОРМАЛИЗУЕМ, снимая клиентский суффикс окна (`[1m]`/`[200k]`).
+// Без этого память не срабатывала бы на самом частом пути: в тир-карте лежит голое
+// `claude-opus-5`, а на провод уходит `claude-opus-5[1m]` (upstreamModelFor переносит
+// суффикс на claude-цель, а CC его присылает). Помечали бы `…[1m]`, а `tierTargetFor`
+// спрашивал бы про голое имя — промах, и следующий запрос снова шёл бы в сухой пул.
+// Модель-то одна: `[1m]` — вариант окна той же модели, а не другой пул.
+function poolDeadKey(id) {
+  return String(id || '').replace(/\s*\[[^\]]*\]\s*$/, '');
+}
+function markPoolDead(id) {
+  const key = poolDeadKey(id);
+  if (key) poolDead.set(key, Date.now());
+}
+function poolDeadActive(id) {
+  if (!(cfg.poolDeadMs > 0)) return false;   // 0 = не помнить вовсе
+  const key = poolDeadKey(id);
+  const ts = poolDead.get(key);
+  if (!ts) return false;
+  if (Date.now() - ts > cfg.poolDeadMs) { poolDead.delete(key); return false; }
+  return true;
+}
 function readModelMap(routes) {
     const file = routes ? AR_ROUTES_MODELMAP_FILE : AR_MODELMAP_FILE;
     try {
@@ -134,6 +166,10 @@ function readModelMap(routes) {
         const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
         const data = { ...EMPTY_TIERS, ...doc };
         modelMapCache.set(file, { data, mtime: st.mtimeMs });
+        // Карта изменилась на диске — значит её правил человек или восстановил дашборд.
+        // Наша память о мёртвой модели в этот момент устарела: снимаем её целиком, чтобы
+        // она не спорила с картой и не подменяла цель, которую владелец только что вернул.
+        poolDead.clear();
         return data;
     } catch { return { ...EMPTY_TIERS }; }
 }
@@ -145,6 +181,14 @@ function tierTargetFor(model, routes) {
     for (const { tier, re } of TIER_RE) {
         if (mm[tier] && re.test(String(model || ''))) {
             const target = mm[tier];
+            // ── Пул наливки пуст: уходим в беспуловую модель ДО всего остального ──
+            // Проверка стоит первой намеренно. Если модель уже помечена мёртвой
+            // (402 «пул исчерпан»), то availableTarget искал бы замену внутри того же
+            // пулового семейства — то есть вёл бы в другой пул, который сух ровно так же.
+            // Здесь же мы уходим из пула целиком, и последующие запросы в мёртвую модель
+            // не ходят вовсе: не жгут 0.4-1с на 402 и не дёргают дашборд повторно.
+            const pf = poolFallbackFor(target);
+            if (pf) return { tier, target: pf, from: target, substituted: true };
             // Карта — пожелание, каталог шлюза — факт. Если цели у шлюза нет, берём
             // живую замену: иначе запрос гарантированно умрёт на 503 model_not_found
             // (03.09: justwoker убрал claude-opus-4-8, и 255 запросов сабагентов легли).
@@ -528,6 +572,23 @@ const DEFAULT_CFG = {
   // 180с — тот же запас, что у пустого потока: живой thinking такие паузы не делает.
   // 0 = выключить.
   stallMs: 180000,
+  // ── Фолбэк при исчерпании ПУЛА наливки (2026-09-15) ─────────────────────────
+  // Куда уходить, когда шлюз отвечает `402 Budget pool quota has been exhausted`.
+  // Владелец выбрал `deepseek-v4-flash` — это БЕСПУЛОВАЯ модель (см. POOL_MODEL_RE),
+  // поэтому она работает, когда пул сух, и её же он поставил руками в 04:53.
+  // 🪤 **Пустая строка выключает фичу ЦЕЛИКОМ** — и это осознанная ручка отката, а не
+  // «пустое значение по недосмотру»: если шлюз начнёт отдавать 402 на что-то другое,
+  // лечение надо снять одним движением, без рестарта процесса и без правки кода.
+  // Поэтому здесь НЕ пустая строка, а рабочее значение, а выключение — явное.
+  poolFallbackModel: 'deepseek-v4-flash',
+  // Сколько помнить, что модель пула мертва. Память процесса (`poolDead`) сбрасывается
+  // сменой mtime тир-карты: ручной свич владельца или возврат карты из бэкапа гасят её
+  // сразу, и она не спорит с тем, что лежит на диске. Этот TTL — страховка ровно на
+  // случай, когда дашборд лежал и записать карту не удалось: тогда через 15 минут
+  // запросы снова пойдут в пуловую модель, и если пул уже налили — попадут в цель.
+  // Меньше 15 минут брать нельзя: проба пула ходит по кнопке, и слишком короткая память
+  // вернула бы нас в тот же 402 на следующем же запросе. `0` = не помнить вовсе.
+  poolDeadMs: 900000,
 };
 // Шлюзы с ПЛОСКИМ тарифом за запрос — там мульти-запрос выключен из коробки.
 // Замер 21.08: tabitoken списывает 50¢, gorouter 20¢ — одинаково за полный ответ на
@@ -577,6 +638,14 @@ const cfg = {
   catalogTtlMs: Number(process.env.CATALOG_TTL_MS || DEFAULT_CFG.catalogTtlMs),
   jsonHoldMs: Number(process.env.JSON_HOLD_MS || DEFAULT_CFG.jsonHoldMs),
   stallMs: Number(process.env.STALL_MS || DEFAULT_CFG.stallMs),
+  // Строковая ручка — не по образцу соседей: `Number(... || DEFAULT)` для неё
+  // бессмыслен, а `|| DEFAULT` не дал бы ВЫКЛЮЧИТЬ фичу пустой строкой (она бы
+  // подменилась дефолтом). Поэтому env уважаем любой, включая пустой, а дефолт берём
+  // только когда переменной нет вовсе.
+  poolFallbackModel: process.env.POOL_FALLBACK_MODEL === undefined
+    ? DEFAULT_CFG.poolFallbackModel
+    : String(process.env.POOL_FALLBACK_MODEL),
+  poolDeadMs: Number(process.env.POOL_DEAD_MS || DEFAULT_CFG.poolDeadMs),
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -601,7 +670,12 @@ function patchNum(v, min, max, allowZero) {
 // путь до шлюза. Правило то же: без поднятия версии у тех, кто однажды нажал «Применить»,
 // в json нет нового поля, удержание осталось бы на дефолте кода, а старые цифры доехали
 // бы из файла — полусостояние, в котором непонятно, что именно работает.
-const CFG_VERSION = 6;
+// v7 (2026-09-15): добавлены poolFallbackModel и poolDeadMs — фолбэк на беспуловую
+// модель, когда пул наливки agentrouter пуст (`402 Budget pool quota has been exhausted`).
+// Правило то же. 🪤 Поднятие версии АРХИВИРУЕТ keepalive-config-<порт>.json в
+// `.v6.bak` и переписывает его дефолтами: ручные preCommitMs/holdMs, выставленные на
+// живом инстансе, при первом же изменении настроек слетят к поставочным.
+const CFG_VERSION = 7;
 // Платный мульти-запрос: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
 // его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
 // ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
@@ -656,6 +730,12 @@ function loadConfig() {
   if (jh !== null) cfg.jsonHoldMs = jh;
   const sm = patchNum(c.stallMs, 30000, 900000, true);
   if (sm !== null) cfg.stallMs = sm;
+  // Строковая ручка: не число, поэтому без patchNum. Берём только строку, обрезаем —
+  // лишний пробел в id модели превратил бы фолбэк в «модели не существует».
+  // Пустая строка уважается: это и есть выключатель фичи.
+  if (typeof c.poolFallbackModel === 'string') cfg.poolFallbackModel = c.poolFallbackModel.trim();
+  const pd = patchNum(c.poolDeadMs, 60000, 86400000, true);
+  if (pd !== null) cfg.poolDeadMs = pd;
 }
 function saveConfig() {
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
@@ -705,9 +785,17 @@ function applyPatch(p) {
     const sm = patchNum(p.stallMs, 30000, 900000, true);
     if (sm !== null) cfg.stallMs = sm;
   }
+  if ('poolFallbackModel' in p) {
+    // Пустая строка — легальное значение (выключить фичу), поэтому `if (v)` тут нельзя.
+    if (typeof p.poolFallbackModel === 'string') cfg.poolFallbackModel = p.poolFallbackModel.trim();
+  }
+  if ('poolDeadMs' in p) {
+    const pd = patchNum(p.poolDeadMs, 60000, 86400000, true);
+    if (pd !== null) cfg.poolDeadMs = pd;
+  }
   const clamped = clampPaidHedge('патч конфига');
   saveConfig();
-  log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? `${cfg.holdMs}ms` : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? `${cfg.emptyStreamMs}ms` : 'выкл'}, каталог ${cfg.catalogTtlMs ? `${cfg.catalogTtlMs}ms` : 'выкл'}, JSON-удержание ${cfg.jsonHoldMs ? `${cfg.jsonHoldMs}ms` : 'выкл'}, вставший поток ${cfg.stallMs ? `${cfg.stallMs}ms` : 'выкл'}`);
+  log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? `${cfg.holdMs}ms` : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? `${cfg.emptyStreamMs}ms` : 'выкл'}, каталог ${cfg.catalogTtlMs ? `${cfg.catalogTtlMs}ms` : 'выкл'}, JSON-удержание ${cfg.jsonHoldMs ? `${cfg.jsonHoldMs}ms` : 'выкл'}, вставший поток ${cfg.stallMs ? `${cfg.stallMs}ms` : 'выкл'}, фолбэк пула ${cfg.poolFallbackModel ? `${cfg.poolFallbackModel} (память ${cfg.poolDeadMs ? `${cfg.poolDeadMs}ms` : 'выкл'})` : 'выкл'}`);
   return clamped;
 }
 function publicState() {
@@ -1016,6 +1104,60 @@ const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|in
 // открытого потока — начатый поток Claude Code повторить не может и убивает подагента.
 const ROUTE_MISS_RE = /model_not_found|no available channel|no channel available|无可用渠道|渠道不存在/i;
 
+// ── ПУЛ НАЛИВКИ кончился (2026-09-15) ────────────────────────────────────────
+// 15.09 в 04:52 МСК живая сессия встала на `402 Budget pool quota has been exhausted.
+// Please ask an administrator to increase the limit or select another budget pool.`
+// Шлюз agentrouter выдаёт claude- и gpt-модели ТОЛЬКО во время наливки (пул «用完即止»):
+// ночная партия 03:00 МСК налилась, в 03:08 проба дала `available`, в 04:52 пул уже пуст.
+// Лечение владелец нашёл руками — переписал `ar-modelmap.json` на `deepseek-v4-flash`
+// (беспуловая модель) и продолжил работу. Здесь — автоматика того же хода.
+// 🪤 Формулировку НЕ выдумывать и китайские варианты не досочинять: канонический текст
+// ровно один (выше). Любой 402 всё равно логируется телом ЦЕЛИКОМ, поэтому новая
+// формулировка будет видна в логе сразу, и её допишут по факту, а не по догадке.
+const POOL_QUOTA_RE = /budget pool quota has been exhausted/i;
+// «Модель из пула наливки». Владелец 15.09: Claude и GPT agentrouter выдаёт только во
+// время наливки, `deepseek-*` и `glm-*` пулу не подчинены вовсе. То есть переключаем
+// ровно те тиры, что смотрят в пуловое семейство, а беспуловые цели не трогаем.
+const POOL_MODEL_RE = /^(claude|gpt)[-_]/i;
+// 🪤 Почему решение о «доступности» НЕЛЬЗЯ вешать на каталог `/v1/models`: он ВРЁТ при
+// пустом пуле. Замер 15.09 01:50 UTC — шлюз отдал все 6 моделей (`claude-opus-4-8`,
+// `claude-opus-5`, `deepseek-v4-flash`, `glm-5.3`, `gpt-5.6-sol`, `gpt-6-astra`), при
+// этом `claude-opus-5` тут же отвечал 402. Каталог годится только как ОТРИЦАТЕЛЬНЫЙ
+// фильтр («модели, которой у шлюза точно нет, не подставляем») — см. poolFallbackFor.
+
+// ── Единая точка решения: подставлять ли фолбэк вместо этой цели ─────────────
+// Возвращает модель-фолбэк или null («подставлять нечего, работаем как раньше»).
+// Все четыре условия обязательны, и каждое закрывает свой способ ошибиться:
+//   1. фолбэк задан — пустая строка выключает фичу целиком (ручка отката);
+//   2. цель ПУЛОВАЯ — беспуловые `glm-*`/`deepseek-*` пулу не подчинены, их не трогаем
+//      (владелец 15.09: именно поэтому `haiku` → `glm-5.3` в правке не участвует);
+//   3. цель помечена мёртвой в памяти — без этого мы бы подменяли ЖИВУЮ модель;
+//   4. каталог НЕ утверждает, что фолбэка у шлюза нет. `null` от catalogHas
+//      (каталог выключен, пуст или устарел) подстановку НЕ запрещает — иначе фича
+//      молча не работала бы у всех, кто отключил каталог ручкой catalogTtlMs=0.
+// 🪤 Каталог здесь именно ОТРИЦАТЕЛЬНЫЙ фильтр и никогда положительный: при пустом
+// пуле `/v1/models` отдаёт и `claude-opus-5`, который тут же отвечает 402 (замер
+// 15.09 01:50 UTC). Положиться на «модель есть в каталоге» = не заметить пустой пул.
+// Второй аргумент — «это РЕАКТИВНЫЙ вызов», из ветки живого 402: мёртвость модели там
+// ДОКАЗАНА ответом шлюза, а не памятью.
+// 🪤 Спрашивать память в реактивном пути нельзя, и это не придирка: ветка 402 ставит
+// `markPoolDead` НИЖЕ своего же гейта, поэтому на первом 402 памяти ещё нет, решение
+// выходило `null`, и клиент получал сырой 402 — ровно та смерть сессии, ради которой
+// фича и делалась. Фича при этом выглядела живой: `selftest` ставит память руками и
+// потому был зелёным. Поймано только прогоном боевого файла (`tools/check-pool-fallback.js`).
+// Для упреждающего пути (`tierTargetFor`) память обязательна — там доказательства нет.
+function poolFallbackFor(target, reactive) {
+  const fb = String(cfg.poolFallbackModel || '');
+  if (!fb) return null;
+  if (!POOL_MODEL_RE.test(String(target || ''))) return null;
+  // «Фолбэк» в ту же самую модель фолбэком не является: повтор ушёл бы в тот же пул
+  // и получил бы второй 402, только уже без права на ответ клиенту.
+  if (poolDeadKey(fb) === poolDeadKey(target)) return null;
+  if (!reactive && !poolDeadActive(target)) return null;
+  if (catalogHas(fb) === false) return null;
+  return fb;
+}
+
 // ── Структурный ответ вместо угадывания по прозе ──────────────────────────────
 // Cloudflare и часть шлюзов СООБЩАЮТ класс ошибки полями, а не текстом:
 //   {"retryable": true, "retry_after": 120, "error_category": "origin", …}
@@ -1141,6 +1283,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'www.getunikey.ai': 'uk',
   'emtf.aipm9527.online': 'ap',
   'www.aikeysapi.com': 'ak',
   // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
@@ -1195,6 +1338,58 @@ function askRotate(payload) {
   });
 }
 
+// Просьба к дашборду переписать тир-карту на беспуловый фолбэк: пул наливки кончился,
+// и следующий запрос должен уехать уже по новому маппингу — в том числе после рестарта
+// процесса, когда память о мёртвой модели обнулится.
+// 🎯 Best-effort по образцу askRotate: дашборд не ответил — строка в лог, и фича
+// ПРОДОЛЖАЕТ работать в памяти процесса. Молча ничего не делаем только в одном случае —
+// когда провайдера не знаем вовсе: тогда и ручки такой у дашборда нет.
+// 🪤 Гейтить по ROTATE_ON здесь НЕЛЬЗЯ: это флаг АВТОротации аккаунта, а не фолбэка.
+// С AUTOROTATE=0 подстановка обязана работать ровно так же — иначе фича, которая держит
+// сессию живой, отключалась бы тумблером, который про другое.
+function askPoolDrop(deadModel, fallback) {
+  return new Promise((resolve) => {
+    // Провайдера берём так же, как askRotate: ROTATE_PROVIDER (env-перебивка + вывод из
+    // хоста апстрима), а если он пуст — смотрим таблицу хостов напрямую. Для
+    // agentrouter.org это `ar`.
+    const provider = ROTATE_PROVIDER || GW_BY_HOST[upstream.hostname] || '';
+    if (!provider) {
+      log(`${deadModel}: пул пуст, но провайдер не опознан (${upstream.hostname}) — карту на диске не прошу`);
+      return resolve({ ok: false, error: 'провайдер не опознан' });
+    }
+    let body;
+    try { body = Buffer.from(JSON.stringify({ provider, model: deadModel, fallback })); }
+    catch (e) { return resolve({ ok: false, error: e.message }); }
+    const u = new URL(`${DASH_URL}/__switch/api/routes/pool-drop`);
+    const requester = u.protocol === 'https:' ? https.request : http.request;
+    const r = requester({
+      hostname: u.hostname, port: u.port, method: 'POST', path: u.pathname,
+      headers: { 'content-type': 'application/json', 'content-length': body.length },
+      timeout: 20000,
+    }, (resp) => {
+      const chunks = [];
+      resp.on('data', (c) => chunks.push(c));
+      resp.on('end', () => {
+        let doc = {};
+        try { doc = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
+        catch (e) { doc = { ok: false, error: 'дашборд ответил не JSON' }; }
+        if (doc && doc.ok) {
+          log(`тир-карта ${provider} переключена на ${fallback} (дашборд${doc.already ? ': уже была' : ''})`);
+        } else {
+          log(`дашборд не переписал карту ${provider}: ${(doc && doc.error) || `HTTP ${resp.statusCode}`} — фича работает в памяти`);
+        }
+        resolve(doc);
+      });
+      resp.on('error', (e) => resolve({ ok: false, error: e.message }));
+    });
+    r.on('timeout', () => { r.destroy(new Error('pool-drop timeout')); });
+    r.on('error', (e) => resolve({ ok: false, error: e.message }));
+    r.end(body);
+  }).catch((e) => {
+    log(`просьба о pool-drop упала: ${e.message} — фича работает в памяти`);
+    return { ok: false, error: e.message };
+  });
+}
 
 const COUNT_TOKENS_PATH = '/v1/messages/count_tokens';
 
@@ -1257,7 +1452,9 @@ function wantsStream(method, reqPath, headers, body) {
 // на OpenAI-эндпоинте, и «выключенный ремап» означал бы gpt голым в /v1/messages —
 // т.е. ровно ту поломку, ради которой конвертер и написан.
 // Возвращает { body, requester, hostname, port, base, host } или null.
-function remapHaiku(method, reqPath, body, routes) {
+// Пятый аргумент `overrideModel` необязателен и нужен ровно одному вызывающему —
+// ветке 402 «пул исчерпан» в makeUpstream.
+function remapHaiku(method, reqPath, body, routes, overrideModel) {
   if (method !== 'POST') return null;
   const p = reqPath.replace(/\?.*$/, '');
   if (p !== '/v1/messages') return null;
@@ -1269,6 +1466,24 @@ function remapHaiku(method, reqPath, body, routes) {
   }
   if (typeof j.model !== 'string') return null;
   const model = j.model;
+  // ── Принудительная цель: пул наливки пуст, уходим на беспуловую модель ───────
+  // 🪤 Карта тиров здесь НЕ спрашивается ВООБЩЕ, и это не оптимизация, а защита от
+  // цикла: фолбэк вида `claude-*` прошёл бы через tierTargetFor и замапился бы обратно
+  // в ту самую мёртвую модель, из которой мы уходим (а если её уже помечали мёртвой —
+  // то и в неё же по памяти, и так по кругу).
+  // Дальше — ровно как для обычной цели: `upstreamModelFor` (снимает чужой суффикс окна
+  // и переносит `[1m]` только на claude-цель) и выбор апстрима по типу цели.
+  if (overrideModel) {
+    const finalTarget = upstreamModelFor(overrideModel, model);
+    const newBody = Buffer.from(JSON.stringify(Object.assign({}, j, { model: finalTarget })), 'utf8');
+    log(`${method} ${reqPath} ⛔ пул пуст: ${finalTarget} вместо ${model}`);
+    if (isGptLike(finalTarget) && GPT_PROXY_ENABLED) {
+      return { body: newBody, requester: gptRequester, hostname: gptProxy.hostname, port: gptProxy.port || 80, base: gptBase, host: gptProxy.host };
+    }
+    // В том числе gpt-цель на ЧУЖОМ шлюзе (конвертер :20132 агентроутеровский): уводить
+    // туда запрос инстанса tabi/gorouter нельзя — чужой ключ и чужой content-filter.
+    return { body: newBody, requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+  }
   // gpt-модели уходят на конвертер всегда — до и независимо от маппинга тиров.
   // Но только если конвертер наш (см. GPT_PROXY_ENABLED): на tabi/gorouter gpt остаётся
   // на своём шлюзе, иначе запрос уходит чужим ключом на agentrouter.
@@ -1464,6 +1679,9 @@ const server = http.createServer((req, res) => {
   let reqBody = Buffer.alloc(0);  // тело запроса (после ремапа)
   let rawBody = Buffer.alloc(0);  // тело КАК ПРИШЛО: нужно, чтобы переиграть ремап на другую модель
   let routeFixTried = false;      // подмену модели по ответу «нет такой модели» пробуем один раз
+  // Пул наливки кончился — уходим на беспуловый фолбэк. РОВНО ОДИН раз на запрос:
+  // если фолбэк сам отдаст 402, клиент получит честную ошибку, а не цикл.
+  let poolDropTried = false;
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
@@ -2291,6 +2509,79 @@ const server = http.createServer((req, res) => {
         return;
       }
 
+      // ── Пул наливки пуст: 402 «Budget pool quota has been exhausted» (2026-09-15) ──
+      // Стоим ЗДЕСЬ, а не в shouldRetryStatus: 402 туда не входит и входить не должен —
+      // это не транзиентная ошибка, повтор той же моделью ничего не лечит. Без этой
+      // ветки запрос уходил в settle()+forward() за 0.4-1с, и сессия Claude Code
+      // умирала на `API Error: 402` (живой случай 15.09 04:52 МСК).
+      // Тело читаем ЦЕЛИКОМ на каждом 402 — иначе китайская формулировка того же смысла
+      // опять была бы невидимой: тела постоянных ошибок сейчас не логируются вовсе.
+      if (status === 402) {
+        drain(() => {
+          if (finished || aborted) return;
+          const buf = Buffer.concat(chunks, size);
+          const text = buf.toString('utf8');
+          log(`${req.method} ${reqPath} 402 (тело целиком): ${text.slice(0, 4000)}`);
+          // Пока пул пуст, каждый 402 из карты идёт в ошибку клиенту. Тело читается
+          // глазами и по факту дописывается в POOL_QUOTA_RE, а не угадывается заранее.
+          const wasModel = modelInBody(body);
+          // Другая попытка (мульти-дубль) уже уводит запрос на фолбэк — эта просто
+          // уходит, как ветка `rotating` при ротации аккаунта: запрос доведёт та.
+          // Сюда попадаем двумя разными путями, и путать их нельзя.
+          //   (а) параллельный мульти-дубль, пока другой повтор уже уводит запрос на
+          //       фолбэк: эта попытка просто уходит, как ветка `rotating` при ротации —
+          //       запрос доведёт та, что уже переиграна;
+          //   (б) САМ повтор на фолбэке получил свой 402 (сух и он). В полёте больше
+          //       никого нет, и молчаливый `return` означал бы, что клиенту не ответил
+          //       никто: он видит обрыв сокета (`read ECONNRESET`) вместо честного кода
+          //       ошибки. Условие `!holdProbing` — то же, по которому решает `giveUp`:
+          //       во время удержания попытка ещё переиграется, отвечать рано.
+          if (poolDropTried) {
+            activeSet.delete(upReq);
+            if (activeSet.size === 0 && !holdProbing && !finished && !aborted) {
+              log(`${req.method} ${reqPath} 402 и на фолбэке «${cfg.poolFallbackModel}» — отдаю ошибку клиенту`);
+              forwardBuffered(buf, headers);
+            }
+            return;
+          }
+          const fb = cfg.poolFallbackModel ? poolFallbackFor(wasModel, true) : null;
+          const isQuota = POOL_QUOTA_RE.test(text);
+          // Не пуловой отказ (нет баланса на аккаунте), фича выключена пустой строкой,
+          // цель беспуловая или фолбэк не подставляется — поведение ровно прежнее.
+          if (!fb || !isQuota) {
+            if (isQuota && cfg.poolFallbackModel) {
+              log(`${req.method} ${reqPath} пул пуст по ${wasModel}, но фолбэк не применим`
+                + ` (${POOL_MODEL_RE.test(String(wasModel)) ? `«${cfg.poolFallbackModel}» не подставляется` : 'цель не из пула'}) — отдаю ошибку клиенту`);
+            }
+            forwardBuffered(buf, headers);
+            return;
+          }
+          poolDropTried = true;
+          activeSet.delete(upReq);
+          markPoolDead(wasModel);        // память процесса: следующие запросы идут мимо
+          askPoolDrop(wasModel, fb);     // дашборд: карта на диске + бэкап, best-effort
+          const again = remapHaiku(req.method, reqPath, rawBody,
+            String(req.headers['x-route-prefixed'] || '') === '1', fb);
+          if (!again) {
+            // Тело не переиграть (не-JSON) — отдаём как есть, но память о мёртвой
+            // модели уже стоит, и следующий запрос уедет по карте тиров.
+            log(`${req.method} ${reqPath} фолбэк ${fb} не удалось подставить — отдаю 402 клиенту`);
+            forwardBuffered(buf, headers);
+            return;
+          }
+          reqBody = again.body;
+          tgt = again;
+          // Повтор не должен съедать бюджет попыток — он не ретрай, а уход из пула.
+          bonusAttempts += 1;
+          ev.note('pooldrop');
+          // Громкая строка с ОБЕИМИ моделями: по ней владелец видит переключение в логе,
+          // даже если дашборд лежал и карта на диске осталась прежней.
+          log(`${req.method} ${reqPath} ⛔ пул ${upstream.host} пуст по ${wasModel}: тир → ${modelInBody(again.body)}, повторяю`);
+          makeUpstream('квота пула');
+        });
+        return;
+      }
+
       settle(upReq);
       forward(status, headers, upRes);
     });
@@ -2798,6 +3089,187 @@ if (process.argv[2] === 'selftest') {
   assert.ok(/if \(catalogStale\(\)\) refreshCatalog\(false\)/.test(routeSrc),
     'в обычном пути каталог освежается в фоне и запрос не блокирует');
 
+  // ── Пул наливки кончился: 402 → беспуловая модель (2026-09-15) ───────────────
+  // Живой случай: 15.09 04:52 МСК сессия Claude Code встала на `402 Budget pool quota
+  // has been exhausted`. Шлюз agentrouter выдаёт claude- и gpt-модели только во время
+  // наливки; владелец руками переписал карту на `deepseek-v4-flash` — здесь та же
+  // логика автоматикой. Сцену с живым шлюзом гоняет tools/check-pool-fallback.js.
+  const QUOTA_BODY = '{"error":{"type":"bad_response_status_code","message":"Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool. (request id: 2026)"}}';
+  assert.strictEqual(POOL_QUOTA_RE.test(QUOTA_BODY), true, 'каноническая формулировка пустого пула ловится');
+  assert.strictEqual(POOL_QUOTA_RE.test(EN_OOB), false,
+    'чужой 402 (нет баланса на аккаунте) пуловым фолбэком НЕ считается — это работа ротации');
+  assert.strictEqual(POOL_QUOTA_RE.test(''), false, 'пустое тело — не «пул пуст»');
+  // Пуловые модели — `claude-*` и `gpt-*`; `deepseek-*` и `glm-*` пулу не подчинены
+  // вовсе. Отсюда же следует, что haiku→glm-5.3 (см. выше) в правке не участвует.
+  assert.strictEqual(POOL_MODEL_RE.test('claude-opus-5'), true, 'claude-opus-5 — модель пула наливки');
+  assert.strictEqual(POOL_MODEL_RE.test('gpt-5.6-sol'), true, 'gpt-5.6-sol — модель пула наливки');
+  assert.strictEqual(POOL_MODEL_RE.test('claude-opus-5[1m]'), true, 'суффикс окна не мешает классификации');
+  assert.strictEqual(POOL_MODEL_RE.test('deepseek-v4-flash'), false, 'deepseek-* пулу не подчинён');
+  assert.strictEqual(POOL_MODEL_RE.test('glm-5.3'), false, 'glm-5.3 пулу не подчинён');
+  assert.strictEqual(DEFAULT_CFG.poolFallbackModel, 'deepseek-v4-flash',
+    'поставочный фолбэк — беспуловая модель, которой пул не управляет');
+  assert.strictEqual(DEFAULT_CFG.poolDeadMs, 900000, 'поставочная память о мёртвой модели — 15 минут');
+
+  const cfgFbSaved = cfg.poolFallbackModel;
+  const cfgDeadSaved = cfg.poolDeadMs;
+  const catIdsSaved = catalog.ids;
+  cfg.poolFallbackModel = 'deepseek-v4-flash';
+  cfg.poolDeadMs = 900000;
+  catalog.ids = new Set(['claude-opus-5', 'deepseek-v4-flash', 'glm-5.3']);
+  catalog.at = Date.now();
+  poolDead.clear();
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), null, 'живая цель фолбэка не получает');
+  markPoolDead('claude-opus-5');
+  assert.strictEqual(poolDeadActive('claude-opus-5'), true, 'мёртвая модель помнится в процессе');
+  assert.strictEqual(poolDeadActive('claude-sonnet-5'), false, 'чужая модель не считается мёртвой');
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), 'deepseek-v4-flash',
+    'помеченная мёртвой пуловая цель уходит на фолбэк');
+  // 🪤 Память ключуется БЕЗ суффикса окна: карта тиров хранит голое `claude-opus-5`,
+  // а на провод уходит `claude-opus-5[1m]` — с разными ключами `tierTargetFor` промахнулся
+  // бы, и следующий запрос снова пошёл бы в сухой пул.
+  assert.strictEqual(poolFallbackFor('claude-opus-5[1m]'), 'deepseek-v4-flash',
+    'вариант окна той же модели — тот же ключ памяти, фолбэк тоже достаётся');
+  assert.strictEqual(poolDeadActive('claude-opus-5[200k]'), true, 'любой суффикс окна нормализуется');
+  markPoolDead('glm-5.3');
+  assert.strictEqual(poolFallbackFor('glm-5.3'), null,
+    'беспуловая цель не трогается, даже помеченная мёртвой: пул ею не управляет');
+  // 🪤 Каталог шлюза ВРЁТ при пустом пуле: 15.09 01:50 UTC `/v1/models` отдал все шесть
+  // моделей, включая `claude-opus-5`, который тут же отвечал 402. Поэтому каталог
+  // работает ТОЛЬКО отрицательным фильтром — «мёртвая» цель в нём подстановку не отменяет.
+  assert.strictEqual(catalogHas('claude-opus-5'), true, 'каталог подтверждает мёртвую модель — так и врёт');
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), 'deepseek-v4-flash',
+    'каталог врёт → подстановка идёт всё равно (каталог не положительный фильтр)');
+  // А фолбэк, которого у шлюза ТОЧНО нет, не подставляем: это гарантированная 503.
+  cfg.poolFallbackModel = 'нет-такой-модели';
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), null, 'фолбэка нет в каталоге — не подставляем');
+  // `null` от catalogHas (каталог выключен или пуст) подстановку НЕ запрещает: иначе
+  // фича молча не работала бы у всех, кто снял каталог ручкой catalogTtlMs=0.
+  cfg.poolFallbackModel = 'deepseek-v4-flash';
+  catalog.ids = null; catalog.at = 0;
+  assert.strictEqual(catalogHas('deepseek-v4-flash'), null, 'без каталога о моделях не судим');
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), 'deepseek-v4-flash',
+    'null от каталога подстановку не запрещает');
+  catalog.ids = new Set(['claude-opus-5', 'deepseek-v4-flash', 'glm-5.3']);
+  catalog.at = Date.now();
+  // Выключенная фича: пустая строка не подставляет НИЧЕГО, даже мёртвую пуловую цель.
+  cfg.poolFallbackModel = '';
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), null, 'пустой poolFallbackModel выключает фичу целиком');
+  cfg.poolFallbackModel = 'deepseek-v4-flash';
+  // `poolDeadMs: 0` — «не помнить вовсе»: откат памяти без рестарта процесса.
+  cfg.poolDeadMs = 0;
+  assert.strictEqual(poolDeadActive('claude-opus-5'), false, 'poolDeadMs 0 = мёртвых моделей не помним');
+  assert.strictEqual(poolFallbackFor('claude-opus-5'), null, 'и фолбэка соответственно нет');
+  cfg.poolDeadMs = 900000;
+  // TTL памяти: отметка старше poolDeadMs перестаёт действовать, и просроченная запись
+  // вычищается — иначе за долгую жизнь процесса карта мёртвых моделей росла бы молча.
+  poolDead.clear();
+  poolDead.set('claude-opus-5', Date.now() - 1000000);
+  assert.strictEqual(poolDeadActive('claude-opus-5'), false, 'отметка старше poolDeadMs не действует');
+  assert.strictEqual(poolDead.size, 0, 'просроченная отметка вычищается, а не копится');
+
+  // ── tierTargetFor: фолбэк стоит ПЕРВОЙ строкой внутри найденного тира ────────
+  // До availableTarget намеренно: подстановка внутри пулового семейства увели бы нас
+  // в другой пул, который сух ровно так же. А главное — последующие запросы вообще не
+  // ходят в мёртвую модель, то есть не жгут 0.4-1с на 402.
+  // Карту подкладываем в КЕШ модуля, а НЕ на диск: `ar-modelmap.json` — боевое
+  // состояние владельца, его трогать нельзя. mtime берём живой, иначе readModelMap
+  // сочтёт кеш промахом, перечитает файл и сбросит память о мёртвых моделях.
+  const mmFileForTest = AR_MODELMAP_FILE;
+  const mmCacheSaved = modelMapCache.get(mmFileForTest);
+  try {
+    const mmSt = fs.statSync(mmFileForTest);
+    modelMapCache.set(mmFileForTest, {
+      data: { ...EMPTY_TIERS, opus: 'claude-opus-5', sonnet: 'claude-opus-5', haiku: 'glm-5.3' },
+      mtime: mmSt.mtimeMs,
+    });
+    catalog.ids = new Set(['claude-opus-5', 'glm-5.3', 'deepseek-v4-flash']);
+    catalog.at = Date.now();
+    poolDead.clear();
+    markPoolDead('claude-opus-5');
+    markPoolDead('glm-5.3');
+    const ttPool = tierTargetFor('claude-opus-5[1m]', false);
+    assert.strictEqual(ttPool && ttPool.target, 'deepseek-v4-flash',
+      'мёртвая пуловая цель тира уходит на фолбэк');
+    assert.strictEqual(ttPool && ttPool.tier, 'opus', 'тир назван верно');
+    assert.strictEqual(ttPool && ttPool.substituted, true, 'подстановка помечена — видна в логе ремапа');
+    assert.strictEqual(ttPool && ttPool.from, 'claude-opus-5', 'видно, из какой модели ушли');
+    // Беспуловая цель карты не трогается — даже помеченная мёртвой.
+    const ttGlm = tierTargetFor('claude-haiku-4-5', false);
+    assert.strictEqual(ttGlm && ttGlm.target, 'glm-5.3', 'беспуловая цель тира остаётся как у владельца');
+    assert.strictEqual(ttGlm && ttGlm.substituted, undefined, 'и подстановки по пулу там нет');
+    // Выключенная фича — карта работает ровно как до 15.09.
+    cfg.poolFallbackModel = '';
+    const ttOff = tierTargetFor('claude-opus-5[1m]', false);
+    assert.strictEqual(ttOff && ttOff.target, 'claude-opus-5', 'пустой фолбэк = прежнее поведение');
+    assert.strictEqual(ttOff && ttOff.substituted, undefined, 'и никакой подстановки');
+    cfg.poolFallbackModel = 'deepseek-v4-flash';
+    // ── override в remapHaiku: карта тиров не спрашивается ВООБЩЕ ──────────────
+    // 🪤 Иначе фолбэк, начинающийся с `claude`, замапился бы обратно в мёртвую модель:
+    // в подложенной карте haiku смотрит в glm-5.3, и без override именно туда бы и ушли.
+    const ovFb = remapHaiku('POST', '/v1/messages',
+      Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })), false, 'deepseek-v4-flash');
+    assert.ok(ovFb, 'override собирает тело');
+    assert.strictEqual(parse(ovFb.body).model, 'deepseek-v4-flash', 'override переписывает модель');
+    assert.strictEqual(ovFb.host, upstream.host, 'беспуловая цель идёт на свой шлюз, а не на конвертер :20132');
+    const ovClaude = remapHaiku('POST', '/v1/messages',
+      Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })), false, 'claude-opus-5');
+    assert.strictEqual(parse(ovClaude.body).model, 'claude-opus-5',
+      'claude-фолбэк НЕ замапился обратно по карте (там haiku → glm-5.3) — цикла нет');
+    // Существующие вызовы без override работают как раньше: haiku по карте уходит в glm-5.3.
+    const ovNone = remapHaiku('POST', '/v1/messages',
+      Buffer.from(JSON.stringify({ model: 'claude-haiku-4-5', messages: [] })), false);
+    assert.strictEqual(parse(ovNone.body).model, 'glm-5.3', 'без override карта тиров работает как раньше');
+  } finally {
+    if (mmCacheSaved) modelMapCache.set(mmFileForTest, mmCacheSaved);
+    else modelMapCache.delete(mmFileForTest);
+  }
+
+  // Ручки фичи — из панели и из env, как у соседей.
+  applyPatch({ poolFallbackModel: 'glm-5.3' });
+  assert.strictEqual(cfg.poolFallbackModel, 'glm-5.3', 'poolFallbackModel применяется на лету');
+  applyPatch({ poolFallbackModel: '  deepseek-v4-flash  ' });
+  assert.strictEqual(cfg.poolFallbackModel, 'deepseek-v4-flash', 'пробелы в id модели срезаются');
+  applyPatch({ poolFallbackModel: '' });
+  assert.strictEqual(cfg.poolFallbackModel, '',
+    'пустая строка — легальное значение (выключатель), а не «оставить как было»');
+  applyPatch({ poolFallbackModel: 42 });
+  assert.strictEqual(cfg.poolFallbackModel, '', 'не-строка в фолбэке игнорируется');
+  applyPatch({ poolFallbackModel: 'deepseek-v4-flash' });
+  applyPatch({ poolDeadMs: 3600000 });
+  assert.strictEqual(cfg.poolDeadMs, 3600000, 'poolDeadMs применяется');
+  applyPatch({ poolDeadMs: 1 });
+  assert.strictEqual(cfg.poolDeadMs, 60000, 'poolDeadMs зажат по нижней границе');
+  applyPatch({ poolDeadMs: 0 });
+  assert.strictEqual(cfg.poolDeadMs, 0, '0 = не помнить мёртвых моделей вовсе');
+  applyPatch({ poolDeadMs: DEFAULT_CFG.poolDeadMs });
+  assert.strictEqual(cfg.poolDeadMs, 900000, 'поставочная память вернулась');
+
+  // Инварианты ветки 402 — по исходнику: сцену с живым шлюзом гоняет
+  // tools/check-pool-fallback.js, а здесь фиксируем то, что нельзя нарушить правкой.
+  assert.ok(evStore.EVENTS.includes('pooldrop'),
+    'событие зарегистрировано в закрытом списке event-store — иначе ev.note молча ничего не пишет');
+  assert.ok(/if \(status === 402\) \{/.test(holdSrc),
+    '402 перехватывается отдельной веткой (в shouldRetryStatus его нет и быть не должно)');
+  assert.ok(/let poolDropTried = false;/.test(holdSrc),
+    'уход из пула — ровно один раз за запрос: фолбэк, сам давший 402, отдаёт честную ошибку');
+  assert.ok(/if \(poolDropTried\) \{[\s\S]{0,700}?forwardBuffered\(buf, headers\);[\s\S]{0,120}?return;/.test(holdSrc),
+    '402 и на самом фолбэке — клиенту уходит честная ошибка, а не молчаливый обрыв сокета');
+  assert.ok(/const fb = cfg\.poolFallbackModel \? poolFallbackFor\(wasModel, true\) : null;/.test(holdSrc),
+    'решение о подстановке — через единую точку poolFallbackFor, реактивно (память ставит эта же ветка)');
+  assert.ok(/markPoolDead\(wasModel\)/.test(holdSrc) && /askPoolDrop\(wasModel, fb\)/.test(holdSrc),
+    'оба пути ухода из пула: память процесса и карта на диске');
+  assert.ok(/bonusAttempts \+= 1;[\s\S]{0,500}?makeUpstream\('квота пула'\)/.test(holdSrc),
+    'повтор после ухода из пула не съедает бюджет попыток — это не ретрай, а смена модели');
+  assert.ok(/ev\.note\('pooldrop'\);/.test(holdSrc), 'событие уходит в историю — видно на шкале /__state');
+  assert.ok(/402 \(тело целиком\)/.test(holdSrc),
+    'тело 402 логируется целиком: иначе китайская формулировка опять была бы невидимой');
+  // Возвращаем всё, что трогали руками: дальше по прогону эти состояния ещё нужны.
+  cfg.poolFallbackModel = cfgFbSaved;
+  cfg.poolDeadMs = cfgDeadSaved;
+  catalog.ids = catIdsSaved;
+  catalog.at = 0;
+  poolDead.clear();
+
   // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
   // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
   // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
@@ -2827,7 +3299,7 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(DEFAULT_CFG.jsonHoldMs, 15000,
     'поставочные 15с — по замеру 137 не-стримовых ответов: быстрее 15с только 24 из них, '
     + 'а путь giveUp успевает отдать честный 529 до коммита');
-  assert.strictEqual(CFG_VERSION, 6, 'версия конфига поднята под retryBudgetMs (05.09)');
+  assert.strictEqual(CFG_VERSION, 7, 'версия конфига поднята под фолбэк пустого пула (15.09)');
   // Бюджет времени на повторы: дешёвый отказ ретраим, дорогой отдаём клиенту.
   assert.strictEqual(DEFAULT_CFG.retryBudgetMs, 90000,
     '90с — под потолок Cloudflare: первый 524 приходит позже, значит повтора не будет, '
@@ -2911,7 +3383,7 @@ server.on('clientError', (err, socket) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? cfg.holdMs + 'ms (≤' + HOLD_MAX_LAUNCHES + ' повторов)' : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? cfg.emptyStreamMs + 'ms (≤' + EMPTY_MAX_RETRIES + ')' : 'выкл'}, каталог моделей ${cfg.catalogTtlMs ? cfg.catalogTtlMs + 'ms' : 'выкл (строго по карте)'}, JSON-удержание ${cfg.jsonHoldMs ? cfg.jsonHoldMs + 'ms' : 'выкл'}, вставший поток ${cfg.stallMs ? cfg.stallMs + 'ms' : 'выкл'})`);
+  log(`listening on http://127.0.0.1:${PORT} -> ${UPSTREAM} (idle ${IDLE_MS}ms, попыток ${cfg.maxAttempts} x ${RETRY_DELAY_MS}ms, мульти-запрос ${hedgeOff(cfg) ? 'выкл' : cfg.hedgeMs + 'ms (дублей ≤' + cfg.maxHedges + ')'}, пре-коммит ${cfg.preCommitMs ? cfg.preCommitMs + 'ms' : 'off'}, upstream_timeout ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? cfg.holdMs + 'ms (≤' + HOLD_MAX_LAUNCHES + ' повторов)' : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? cfg.emptyStreamMs + 'ms (≤' + EMPTY_MAX_RETRIES + ')' : 'выкл'}, каталог моделей ${cfg.catalogTtlMs ? cfg.catalogTtlMs + 'ms' : 'выкл (строго по карте)'}, JSON-удержание ${cfg.jsonHoldMs ? cfg.jsonHoldMs + 'ms' : 'выкл'}, вставший поток ${cfg.stallMs ? cfg.stallMs + 'ms' : 'выкл'}, фолбэк пула ${cfg.poolFallbackModel ? cfg.poolFallbackModel : 'выкл'})`);
 
   ev.note('boot');
   log(`gpt-конвертер: ${GPT_PROXY_ENABLED ? HAIKU_GPT_PROXY : 'off (чужой шлюз — gpt остаётся на ' + upstream.host + ')'}`);

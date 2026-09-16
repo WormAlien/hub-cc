@@ -147,6 +147,12 @@ function children() {
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
         { port: 20170, name: 'Odyssey keepalive', respawn: false },
+        // Конвертер Odyssey (Anthropic → OpenAI): им gpt-модели шлюза уводятся на путь,
+        // где расход настоящий. Живёт ровно как keepalive - поднимает его активация,
+        // поэтому и `respawn: false`. Порт 20171 лежит внутри диапазона кастомов
+        // (20150-20250), и одна эта строка держит его отданным: `lib/custom-ports.js`
+        // читает список отсюда, а не из второго места, которое надо помнить обновлять.
+        { port: 20171, name: 'Odyssey конвертер', respawn: false },
         { port: 20169, name: 'B.AI keepalive', respawn: false },
         { port: 20168, name: 'UniKey keepalive', respawn: false },
         { port: 20162, name: 'HCNsec keepalive', respawn: false },

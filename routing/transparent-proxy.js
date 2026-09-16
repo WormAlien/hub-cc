@@ -14741,6 +14741,23 @@ const OD_UPSTREAM = 'https://odysseyapi.tech';
 const OD_KEEPALIVE_PORT = 20170;
 const OD_KEEPALIVE_URL = `http://localhost:${OD_KEEPALIVE_PORT}`;
 const OD_MODELMAP_FILE = path.join(__dirname, 'odyssey-modelmap.json');
+
+// ── Конвертер Odyssey: Anthropic → OpenAI ────────────────────────────────────
+//
+// 🎯 Зачем он тут. На антропик-пути (`/v1/messages`) odyssey отдаёт `usage` НУЛЯМИ у
+// всех моделей: живой замер 16.09 через наш стек - `{"input_tokens":0,"output_tokens":0}`.
+// Claude Code считает контекст сессии ровно из этих чисел, поэтому в статуслайне вместо
+// `⧉ 139k/1M` стоит `⧉ ?`, а в «Здоровье» и в деньгах расхода по шлюзу нет вовсе.
+// На `/v1/chat/completions` расход настоящий (`{"prompt_tokens": 17, ...}`), поэтому
+// gpt-модели уводим туда: keepalive отдаёт их конвертеру, тот переводит форму и
+// приносит цифры обратно.
+//
+// 🪤 Ходит только gpt-подобное (`isGptLike` в keepalive). Claude-цели остаются нативным
+// путём, чтобы не терять антропик-фичи: решение вики - флаг `anthropic` шлюзу не ставить,
+// а расход добирать там, где он настоящий. Цена - лишний хоп для gpt-моделей.
+const OD_CONVERTER_PORT = Number(process.env.OD_CONVERTER_PORT || 20171);
+const OD_CONVERTER_URL = `http://127.0.0.1:${OD_CONVERTER_PORT}`;
+const OD_CONVERTER_CONFIG = path.join(os.homedir(), '.claude', 'odyssey-openai-proxy.json');
 // Резерв «угадать грант» (см. newapiBalance). У odyssey грант ЕСТЬ и известен:
 // **$5 кредита при регистрации, без карты** (докладная площадки, замер 16.09).
 // Поэтому резерв не «на глаз», а по факту: ступень 5 = эти $5. Точную цифру
@@ -15013,8 +15030,43 @@ async function kkKeepaliveSpawn() {
         return { ok: false, error: e.message };
     }
 }
+async function odConverterSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(OD_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        // Конфиг тот же, что у конвертеров Custom-провайдеров: `upstream` с `/v1`
+        // (конвертер сам добавляет `/chat/completions`), ключ из файла, карта пустая -
+        // имена у odyssey строго неймспейсные, менять их нечем и незачем.
+        fs.writeFileSync(OD_CONVERTER_CONFIG, JSON.stringify({
+            port: OD_CONVERTER_PORT,
+            upstream: OD_BASE_URL,
+            keyFile: OD_ACTIVE_KEY_FILE,
+            modelMap: {},
+            providerName: 'Odyssey',
+        }, null, 2), 'utf8');
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), OD_CONVERTER_CONFIG], {
+            detached: true, stdio: 'ignore', env: { ...process.env },
+        });
+        watchChildExit(child, 'конвертер Odyssey', OD_CONVERTER_PORT);
+        child.unref();
+        logLine(`odyssey конвертер spawn: :${OD_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`odyssey конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
 async function odKeepaliveSpawn() {
     try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive: без него gpt-модели уедут нативным
+        // путём и вернут нулевой расход - то есть ровно то, от чего уходим.
+        await odConverterSpawn();
         const net = require('net');
         const free = await new Promise(resolve => {
             const sock = net.createServer();
@@ -15031,6 +15083,10 @@ async function odKeepaliveSpawn() {
                 KEY_FILE: OD_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: OD_SESSIONS_FILE,
                 MODELMAP_FILE: OD_MODELMAP_FILE,
+                // gpt-модели идут через конвертер odyssey, а не нативным путём:
+                // у нативного `usage` нулевой, у OpenAI-пути настоящий.
+                HAIKU_GPT_PROXY: OD_CONVERTER_URL,
+                GPT_PROXY_FORCE: '1',
                 ...(process.env.OD_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.OD_PRE_COMMIT_MS } : {}),
             },
         });

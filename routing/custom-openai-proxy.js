@@ -336,7 +336,13 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     function processChunk(chunk) {
         const choice = (chunk.choices && chunk.choices[0]) || null;
         if (chunk.usage) {
-            usage = { input_tokens: chunk.usage.prompt_tokens || 0, output_tokens: chunk.usage.completion_tokens || 0 };
+            // 🪤 Ноль от шлюза НЕ затирает оценку: часть шлюзов отвечает
+            // `prompt_tokens: 0` (или не отвечает вовсе), и тогда честнее отдать
+            // приблизительное число, чем ноль - на нуле Claude Code рисует `⧉ ?`.
+            usage = {
+                input_tokens: chunk.usage.prompt_tokens || usage.input_tokens,
+                output_tokens: chunk.usage.completion_tokens || usage.output_tokens,
+            };
         }
         if (!choice) return;
         const delta = choice.delta || {};
@@ -380,7 +386,14 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         // Без reasonedChars оценка врала в разы на reasoner-моделях: у них мыслей
         // бывает больше, чем ответа, а при обрыве до `content` оценка была бы 1 токен.
         const fallbackOut = Math.max(1, Math.ceil((streamedChars + reasonedChars) / 4));
-        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { output_tokens: usage.output_tokens || fallbackOut } });
+        // 🎯 `input_tokens` в финальном событии обязателен. Claude Code берёт контекст
+        // сессии ИМЕННО отсюда (как и в `message_start`, там честный ноль - токенов ещё
+        // нет): без него окно считается нулевым и в статуслайне вместо `⧉ 139k/1M`
+        // появляется `⧉ ?`. Тот же пропуск чинили 16.09 в соседнем конвертере -
+        // `agentrouter-proxy.js:1052`, Responses-ветка (владелец на `gpt-6-astra[1m]`).
+        // Значение настоящее: `prompt_tokens` из ответа шлюза (у OpenAI-пути он есть),
+        // а если шлюз его не прислал - оценка, заложенная в `usage` при старте.
+        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens || fallbackOut } });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
     }

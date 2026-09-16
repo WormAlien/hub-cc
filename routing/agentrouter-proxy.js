@@ -1040,10 +1040,16 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFai
             clientRes.end();
             return;
         }
+        // 🪤 `input_tokens` обязателен в финальном событии, хотя в `message_start` его
+        // взять неоткуда (там токенов ещё нет, и мы честно пишем 0). Клиент складывает
+        // контекст сессии из ЭТОГО события: если его не отдать, Claude Code считает
+        // израсходованное за ноль, и в статуслайне вместо `⧉ 139k/1M` появляется `⧉ ?`.
+        // Живой случай 16.09: владелец на `agentrouter/gpt-6-astra[1m]` видел `⧉ ?`,
+        // хотя апстрим присылал `input_tokens: 13` в `response.completed` — мы его выбрасывали.
         sseWrite(clientRes, 'message_delta', {
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { output_tokens: usage.output_tokens },
+            usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
         });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();

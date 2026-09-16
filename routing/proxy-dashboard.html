@@ -11,6 +11,86 @@
      🪤 Порядок важен: Tailwind собирает CSS из <style type="text/tailwindcss"> ниже, то
      есть его скрипт обязан загрузиться ДО первого рендера — держим его первым и без
      defer/async, как было с CDN. -->
+<!-- 🪤 Компилятор Tailwind живёт в САМОЙ странице и пересобирает таблицу стилей на каждой
+     правке DOM. Замер 16.09: его наблюдатель получает 15 вызовов в секунду (за 12 с покоя -
+     11 163 добавления узлов), и каждый вызов заводит пересборку. Под загруженной машиной это
+     59 % главного потока, 34 паузы за 12 с (худшая 798 мс) и 15 fps в покое.
+     Здесь его колбэк заворачивается в троттл: пересборка идёт не чаще раза в 700 мс, а все
+     пропущенные правки КОПЯТСЯ и отдаются следующим вызовом. Это не «заморозка»: класс,
+     впервые появившийся в рантайме, всё равно соберётся, только не мгновенно.
+     Сверх этого стоит фильтр по НОВИЗНЕ: тикающие часы, счётчики и круговой опрос правят DOM
+     сотнями узлов в секунду, но классы в них те же самые - пересобирать нечего, и такую
+     пачку колбэк не получает вовсе. Сборка идёт только на незнакомый класс.
+     Заворачивается ровно один наблюдатель - по подписи `childList+subtree` на documentElement;
+     собственные наблюдатели дашборда (тема, классы плиток, .tw-boot) идут мимо, как шли.
+     Разбор и замеры: [[Дашборд лагучий - Tailwind пересобирает CSS в браузере]]. -->
+<script>
+(function () {
+  var Orig = window.MutationObserver;
+  if (!Orig) return;
+  var WINDOW_MS = 700;
+  var known = null;                       // классы, о которых Tailwind уже знает
+  function classesOf(node, out) {
+    if (!node || node.nodeType !== 1) return;
+    if (node.classList) for (var i = 0; i < node.classList.length; i++) out.push(node.classList[i]);
+    if (node.querySelectorAll) {
+      var kids = node.querySelectorAll('[class]');
+      for (var k = 0; k < kids.length; k++) for (var j = 0; j < kids[k].classList.length; j++) out.push(kids[k].classList[j]);
+    }
+  }
+  function ownClasses(node, out) {
+    if (node && node.nodeType === 1 && node.classList) for (var i = 0; i < node.classList.length; i++) out.push(node.classList[i]);
+  }
+  function hasNewClasses(records) {
+    if (known === null) known = new Set();
+    var names = [], fresh = false;
+    for (var i = 0; i < records.length; i++) {
+      var r = records[i];
+      if (r.type === 'childList') { for (var a = 0; a < r.addedNodes.length; a++) classesOf(r.addedNodes[a], names); }
+      else if (r.type === 'attributes' && r.attributeName === 'class') ownClasses(r.target, names);
+    }
+    for (var n = 0; n < names.length; n++) if (!known.has(names[n])) { known.add(names[n]); fresh = true; }
+    return fresh;
+  }
+  function makeThrottled(cb) {
+    var last = 0, timer = null, pending = [], pendObs = null, fresh = false;
+    function flush() {
+      timer = null;
+      if (!pending.length) return;
+      var batch = pending; pending = [];
+      last = Date.now();
+      if (!fresh) return;                 // только старые классы - Tailwind тут не нужен
+      fresh = false;
+      try { cb(batch, pendObs); }
+      catch (e) { setTimeout(function () { throw e; }); }
+    }
+    return function (muts, obs) {
+      for (var i = 0; i < muts.length; i++) pending.push(muts[i]);
+      pendObs = obs;
+      if (hasNewClasses(muts)) fresh = true;
+      var wait = WINDOW_MS - (Date.now() - last);
+      if (wait <= 0) { if (timer) { clearTimeout(timer); timer = null; } flush(); return; }
+      if (!timer) timer = setTimeout(flush, wait);
+    };
+  }
+  function Patched(cb) {
+    var throttle = false;
+    var wrapped = makeThrottled(cb);
+    var obs = new Orig(function (muts, o) { return throttle ? wrapped(muts, o) : cb(muts, o); });
+    var origObserve = obs.observe.bind(obs);
+    obs.observe = function (target, opts) {
+      opts = opts || {};
+      // точная подпись наблюдателя Tailwind: documentElement + childList + subtree + фильтр по class
+      if (target === document.documentElement && opts.childList && opts.subtree &&
+          opts.attributeFilter && opts.attributeFilter.indexOf('class') !== -1) throttle = true;
+      return origObserve(target, opts);
+    };
+    return obs;
+  }
+  Patched.prototype = Orig.prototype;
+  window.MutationObserver = Patched;
+})();
+</script>
 <script src="/vendor/tailwindcss-browser-4.js"></script>
 <script src="/vendor/sortable-1.15.6.min.js"></script>
 <link href="/vendor/fonts.css" rel="stylesheet">

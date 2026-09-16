@@ -22,6 +22,10 @@
 const fs = require('fs');
 const path = require('path');
 
+// Ступени выбора ключа аккаунта живут в одном месте - `lib/active-key.js`: там же резолвер
+// для keepalive. Вторая копия этих ступеней разошлась бы с ним (так уже было до 16.09).
+const { pickAccountKey } = require('./active-key');
+
 const CACHE_FILE = path.join(__dirname, '..', 'custom-models-cache.json');
 
 // Хосты шлюзов, которых нет в MONEY_GW: там только денежные шлюзы, а снимок каталога есть
@@ -63,14 +67,7 @@ function textOnly(models) {
     return out;
 }
 
-// Ключ аккаунта из пула. Порядок: активный, потом живой, потом ЛЮБОЙ с ключом.
-// 🪤 Третья ступень обязательна: у odyssey все аккаунты `unknown`/`dead`, и на первых
-// двух ступенях пул отдавал пустоту, хотя ключи рабочие (живой замер: каталог приходит).
-function pickAccountKey(list) {
-    const arr = Array.isArray(list) ? list.filter(a => a && a.api_key) : [];
-    const pick = arr.find(a => a.active) || arr.find(a => a.status === 'live') || arr[0];
-    return pick ? String(pick.api_key).trim() : '';
-}
+// Ключ аккаунта из пула берётся из `active-key.js` (см. require выше).
 
 // Читаем снимок каталога. Ключ в файле — базовый URL шлюза (`https://gorouter.app/v1`).
 function readSnapshot(cacheFile) {

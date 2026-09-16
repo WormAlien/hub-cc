@@ -93,6 +93,23 @@ const COUNT_TOKENS_FALLBACK = process.env.COUNT_TOKENS_FALLBACK !== '0';
 const AR_ACTIVE_KEY_FILE = process.env.KEY_FILE
     || path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
 
+// 🎯 Пул аккаунтов того же шлюза: если файла активации нет, ключ берём оттуда. Без этого
+// маршрут через префикс падал на `401 This API key is not valid` - наверх уходил клиентский
+// токен от АКТИВНОГО шлюза, и чужой шлюз его отвергал (живой замер 16.09, odyssey).
+// Имя файла пула приходит env'ом от того, кто запускает прокси (spawn в transparent-proxy).
+const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
+const activeKeyLib = require('./lib/active-key');
+
+let poolKeyLogged = '';                       // чтобы «взял из пула» не сыпалось в лог каждый запрос
+function activeKeyNow() {
+    const r = activeKeyLib.resolveKey({ keyFile: AR_ACTIVE_KEY_FILE, sessionsFile: SESSIONS_FILE });
+    if (r.source === 'pool' && poolKeyLogged !== r.key) {
+        poolKeyLogged = r.key;
+        logLine(`ключ активации не задан - беру из пула аккаунтов ***${r.key.slice(-6)}`);
+    }
+    return r.key;
+}
+
 // Ремап claude-haiku* (CC шлёт для быстрых подзадач) на gpt-модель через локальный
 // agentrouter-proxy :20132 (у agentrouter gpt через /v1/messages сломан — нужен
 // Anthropic→OpenAI конвертер; эмулируем gpt-прокси, не меняя claude-путь).
@@ -1012,8 +1029,9 @@ function refreshCatalog(force, cb) {
   if (catalog.fetching) { if (cb) cb(false); return; }
   if (!force && !catalogStale()) { if (cb) cb(true); return; }
   catalog.fetching = true;
-  let key = '';
-  try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключ инжектит не всегда мы */ }
+  // Ключ тот же, что у запросов: файл активации, а без него - пул. Каталог молчал
+  // (`401: пустой список`) ровно потому, что файла не было, а пул никто не спрашивал.
+  const key = activeKeyNow();
   const headers = Object.assign({ accept: 'application/json', 'accept-encoding': 'identity' }, CC_FALLBACK_HEADERS);
   if (key) { headers.authorization = `Bearer ${key}`; headers['x-api-key'] = key; }
   const req = upRequester({
@@ -2348,15 +2366,17 @@ const server = http.createServer((req, res) => {
     // Он же — `fromKey` для авторотации: дашборду нужно знать, на КАКОМ аккаунте
     // прилетел отказ. Читается на каждую попытку, поэтому попытка после ротации
     // уезжает уже с новым ключом сама, без перезапуска прокси.
+    // 🎯 Файла нет (шлюз не активирован) - ключ берётся из пула аккаунтов: без этого
+    // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
-    try {
-      const arKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim();
+    {
+      const arKey = activeKeyNow();
       if (arKey) {
         sentKey = arKey;
         headers.authorization = `Bearer ${arKey}`;
         headers['x-api-key'] = arKey;
       }
-    } catch {}
+    }
     // Длину тела пересчитываем ВСЕГДА, а не только при ремапе. Тело меняет не один
     // ремап: срезка context_management/output_config укорачивает и passthrough-запросы
     // (голая glm-5.3 от CC — ремапа нет, tgt=null), а Node отправляет заголовок со

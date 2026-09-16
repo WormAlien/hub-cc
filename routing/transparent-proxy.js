@@ -10214,6 +10214,42 @@ function leagueBalance() {
     return { balance: round2(balance), spent: round2(spent), keys, unknown };
 }
 
+// ── Канонический счётчик Claude Code для Лиги ────────────────────────────────
+// Живёт рядом с `leagueSelf`, но считается отдельной подсистемой: `routing/league-cc-stats.js`
+// читает кеш `~/.claude/stats-cache.json` и транскрипты по правилам самого Claude Code
+// (total = вход+выход+чтение кеша+запись кеша; дни по UTC; вложенные агенты в токены, но не
+// в сессии и активность). Прежняя метрика `tok` продолжает считаться и уезжать как есть -
+// менять её на месте нельзя: у соседей на старом коде смена определения выглядит как скачок.
+//
+// 🪤 Скан 3,9 ГиБ транскриптов нельзя делать в обработчике запроса: холодный проход занимает
+// ~21 с. Поэтому снимок строится фоном, обновляется не чаще TICK, а `leagueSelf` только
+// читает готовое. Первый вызов после старта процесса запускает прогрев и возвращает
+// «нет данных» - это честнее, чем подвесить дашборд.
+const LEAGUE_CC_TICK_MS = 5 * 60 * 1000;
+let LEAGUE_CC = null, LEAGUE_CC_TIMER = null;
+function leagueCcStats() {
+    if (!LEAGUE_CC) {
+        try {
+            const lib = require('./league-cc-stats.js');
+            LEAGUE_CC = lib.createStatsCache({});
+            LEAGUE_CC.library = lib;
+            // Прогрев сразу, обновления - фоном. `unref` обязателен: таймер не должен
+            // держать процесс живым после остановки сервера.
+            LEAGUE_CC.refresh().catch(() => {});
+            LEAGUE_CC_TIMER = setInterval(() => LEAGUE_CC.refresh().catch(() => {}), LEAGUE_CC_TICK_MS);
+            if (LEAGUE_CC_TIMER.unref) LEAGUE_CC_TIMER.unref();
+        } catch (e) {
+            LEAGUE_CC = { snapshot: () => null, library: null };
+        }
+    }
+    return LEAGUE_CC;
+}
+function leagueCcEnvelope() {
+    const c = leagueCcStats();
+    if (!c.library) return null;
+    return c.library.envelopeFrom(c.snapshot());
+}
+
 // Свой срез целиком. Метрики: токены (вход+выход), деньги (сожжено `sp` и налито `tu`),
 // активность (промпты), аккаунты (кривая — УРОВЕНЬ счётчика, итоги в `tot` — прирост
 // внутри окна). Окна: скользящие сутки по часам, 7 и 30 дней по суткам, всё время по
@@ -10319,7 +10355,10 @@ function leagueSelf() {
         // Ключи бакетов отдаём ЦЕЛИКОМ, а не подписями для оси: соседей надо
         // совмещать по времени, а не по индексу — у каждой установки своя дата
         // первого дня, и «всё время» у всех разной длины. Подпись клиент сделает сам.
-        keys: { h24: hKeys.keys, d7: k7.keys, d30: k30.keys, all: allKeys },
+        keys: { h24: hKeys.keys, d7: k7.keys, d30: k30.keys, all: allKeys },        // Канонический счётчик Claude Code. Отдельным полем, а не вместо `tok`: он отвечает
+        // на вопрос «сколько потратил этот человек», а `tok` остаётся прежней метрикой, пока
+        // все участники не обновятся. Кто не обновился - того в этом поле просто нет.
+        ccStats: leagueCcEnvelope(),
         tok, sp, act, acc: accCurve, tu,
         tot: {
             tokD: sum(tok.h24), tokW: sum(tok.d7), tokM: sum(tok.d30), tokA: sum(tok.all),
@@ -14097,6 +14136,7 @@ async function goKeepaliveSpawn() {
                 PORT: String(GO_KEEPALIVE_PORT),
                 UPSTREAM: GO_UPSTREAM,
                 KEY_FILE: GO_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: GO_SESSIONS_FILE,
                 MODELMAP_FILE: GO_MODELMAP_FILE,
                 ...(process.env.GO_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.GO_PRE_COMMIT_MS } : {}),
             },
@@ -14959,6 +14999,7 @@ async function kkKeepaliveSpawn() {
                 PORT: String(KK_KEEPALIVE_PORT),
                 UPSTREAM: KK_UPSTREAM,
                 KEY_FILE: KK_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: KK_SESSIONS_FILE,
                 MODELMAP_FILE: KK_MODELMAP_FILE,
                 ...(process.env.KK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KK_PRE_COMMIT_MS } : {}),
             },
@@ -14988,6 +15029,7 @@ async function odKeepaliveSpawn() {
                 PORT: String(OD_KEEPALIVE_PORT),
                 UPSTREAM: OD_UPSTREAM,
                 KEY_FILE: OD_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: OD_SESSIONS_FILE,
                 MODELMAP_FILE: OD_MODELMAP_FILE,
                 ...(process.env.OD_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.OD_PRE_COMMIT_MS } : {}),
             },
@@ -15017,6 +15059,7 @@ async function baiKeepaliveSpawn() {
                 PORT: String(BAI_KEEPALIVE_PORT),
                 UPSTREAM: BAI_UPSTREAM,
                 KEY_FILE: BAI_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: BAI_SESSIONS_FILE,
                 MODELMAP_FILE: BAI_MODELMAP_FILE,
                 ...(process.env.BAI_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.BAI_PRE_COMMIT_MS } : {}),
             },
@@ -15278,6 +15321,7 @@ async function ukKeepaliveSpawn() {
                 PORT: String(UK_KEEPALIVE_PORT),
                 UPSTREAM: UK_UPSTREAM,
                 KEY_FILE: UK_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: UK_SESSIONS_FILE,
                 MODELMAP_FILE: UK_MODELMAP_FILE,
                 ...(process.env.UK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.UK_PRE_COMMIT_MS } : {}),
             },
@@ -15427,6 +15471,7 @@ async function apKeepaliveSpawn() {
                 PORT: String(AP_KEEPALIVE_PORT),
                 UPSTREAM: AP_UPSTREAM,
                 KEY_FILE: AP_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: AP_SESSIONS_FILE,
                 MODELMAP_FILE: AP_MODELMAP_FILE,
                 ...(process.env.KK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KK_PRE_COMMIT_MS } : {}),
             },
@@ -18061,6 +18106,7 @@ async function hnKeepaliveSpawn() {
                 PORT: String(HN_KEEPALIVE_PORT),
                 UPSTREAM: HN_UPSTREAM,
                 KEY_FILE: HN_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: HN_SESSIONS_FILE,
                 MODELMAP_FILE: HN_MODELMAP_FILE,
                 ...(process.env.HN_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.HN_PRE_COMMIT_MS } : {}),
             },
@@ -18731,6 +18777,7 @@ async function akKeepaliveSpawn() {
             detached: true, stdio: 'ignore', env: {
                 ...process.env, PORT: String(AK_KEEPALIVE_PORT), UPSTREAM: AK_UPSTREAM,
                 KEY_FILE: AK_ACTIVE_KEY_FILE, MODELMAP_FILE: AK_MODELMAP_FILE,
+                SESSIONS_FILE: AK_SESSIONS_FILE,
                 ...(process.env.AK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.AK_PRE_COMMIT_MS } : {}),
             },
         });
@@ -19758,6 +19805,7 @@ async function rmKeepaliveSpawn() {
             detached: true, stdio: 'ignore', env: {
                 ...process.env, PORT: String(RM_KEEPALIVE_PORT), UPSTREAM: RM_UPSTREAM,
                 KEY_FILE: RM_ACTIVE_KEY_FILE, MODELMAP_FILE: RM_MODELMAP_FILE,
+                SESSIONS_FILE: RM_SESSIONS_FILE,
                 ...(process.env.RM_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.RM_PRE_COMMIT_MS } : {}),
             },
         });
@@ -20427,12 +20475,15 @@ async function handleOdAutoregStart(req, res) {
         if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'odyssey/auto-add-loop.py не найден' });
 
         const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'own';
+        // Сколько аккаунтов завести за запуск. Раньше прогон вставал на первом успехе, и
+        // «завести три» означало три нажатия кнопки с ротацией адресов между ними.
+        const count = Math.max(1, Math.min(9, parseInt(body.count, 10) || 1));
         const label = String(body.label || '').trim().replace(/[^\w-]/g, '_')
             || ('od_' + Date.now());
         // Ярус - переключатель, а не приговор: при пустом или мёртвом пуле владелец
         // вправе пройти напрямую явным выбором (у Odyssey капча от этого строже).
         const py = process.env.PYTHON || 'python';
-        const proc = spawn(py, ['-u', script, label, '--tier', tier], {
+        const proc = spawn(py, ['-u', script, label, '--tier', tier, '--count', String(count)], {
             cwd: path.join(__dirname, '..'),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -20440,7 +20491,7 @@ async function handleOdAutoregStart(req, res) {
         });
         Object.assign(odAutoreg, {
             proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),
-            label, tier, stdout: [], stderr: [], stage: null, result: null,
+            label, tier, count, stdout: [], stderr: [], stage: null, result: null,
             exitCode: null, signal: null,
         });
         const pushLines = (which, chunk) => {
@@ -21166,6 +21217,7 @@ async function jwKeepaliveSpawn() {
                 PORT: String(JW_KEEPALIVE_PORT),
                 UPSTREAM: JW_UPSTREAM,
                 KEY_FILE: JW_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: JW_SESSIONS_FILE,
                 MODELMAP_FILE: JW_MODELMAP_FILE,
                 ALLOW_PAID_HEDGE: '1',
                 ...(process.env.JW_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.JW_PRE_COMMIT_MS } : {}),
@@ -22057,6 +22109,7 @@ async function skKeepaliveSpawn() {
                 PORT: String(SK_KEEPALIVE_PORT),
                 UPSTREAM: SK_UPSTREAM,
                 KEY_FILE: SK_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: SK_SESSIONS_FILE,
                 MODELMAP_FILE: SK_MODELMAP_FILE,
                 ...(process.env.SK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.SK_PRE_COMMIT_MS } : {}),
             },
@@ -22709,6 +22762,7 @@ async function tsKeepaliveSpawn() {
                 PORT: String(TS_KEEPALIVE_PORT),
                 UPSTREAM: TS_UPSTREAM,
                 KEY_FILE: TS_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: TS_SESSIONS_FILE,
                 MODELMAP_FILE: TS_MODELMAP_FILE,
                 ...(process.env.TS_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TS_PRE_COMMIT_MS } : {}),
             },
@@ -23428,6 +23482,7 @@ async function tbKeepaliveSpawn() {
                 PORT: String(TB_KEEPALIVE_PORT),
                 UPSTREAM: TB_BASE_URL,
                 KEY_FILE: TB_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: TB_SESSIONS_FILE,
                 MODELMAP_FILE: TB_MODELMAP_FILE,
                 ...(process.env.TB_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TB_PRE_COMMIT_MS } : {}),
             },
@@ -24399,6 +24454,7 @@ async function xpKeepaliveSpawn() {
                 PORT: String(XP_KEEPALIVE_PORT),
                 UPSTREAM: XP_BASE_URL,
                 KEY_FILE: XP_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: XP_SESSIONS_FILE,
                 MODELMAP_FILE: XP_MODELMAP_FILE,
                 ...(process.env.XP_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.XP_PRE_COMMIT_MS } : {}),
             },

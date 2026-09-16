@@ -317,6 +317,41 @@ try {
     fs.rmSync(path.join(FAKE, '.claude', 'backends.json'));
     ok(barModel('agentrouter[1m]').includes('unknown/agentrouter[1m]'),
         'без реестра имя шлюза не распознаётся и ведёт себя как обычная модель');
+
+    // ── пул наливки пуст: бар обязан сказать это вслух И назвать адрес ───────
+    // 🪤 Реактивный фолбэк не виден в тир-карте: карта остаётся на claude-opus-5, а
+    // keepalive на каждый запрос ловит 402 и повторяет фолбэком. Бар, читающий только
+    // карту, показывал нормальную модель — владелец 16.09 проработал так полночи.
+    // И «⛔ пул пуст» без адреса бесполезно: он всё равно не понимал, на чём работает.
+    registry(FAKE, 'ar-modelmap.json');
+    fs.writeFileSync(GW_MAP, JSON.stringify({ opus: 'claude-opus-5' }, null, 2) + '\n');
+    fs.writeFileSync(path.join(FAKE, '.claude', 'settings.json'),
+        JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://localhost:20100' } }) + '\n');
+    fs.writeFileSync(path.join(FAKE, '.claude', 'active-backend.json'),
+        JSON.stringify({ backend: 'agentrouter', upstream: 'http://localhost:20133' }) + '\n');
+    fs.writeFileSync(path.join(STAGE, 'routing', 'ar-pooldrop.json'),
+        JSON.stringify({ provider: 'agentrouter', deadModel: 'claude-opus-5', fallback: 'deepseek-v4-flash' }) + '\n');
+    const qFile = path.join(FAKE, '.claude', 'ar-quota-state.json');
+    const qWrite = (state, dropMs) => fs.writeFileSync(qFile, JSON.stringify({
+        opus: { state, checkedAt: new Date().toISOString(), dropAt: new Date(dropMs).toISOString(), keyTail: 'AAAA' },
+    }) + '\n');
+    const curDrop = Date.now() - (Date.now() % 28800000);
+    qWrite('exhausted', curDrop);
+    const dry = barModel('claude-opus-5[1m]', { home: FAKE });
+    ok(dry.includes('пул пуст'), `пул пуст виден в баре (${show(dry.slice(0, 70))})`);
+    ok(dry.includes('deepseek-v4-flash'), 'и назван адрес, куда уедет: без него пометка бесполезна');
+    qWrite('exhausted', curDrop - 28800000);
+    ok(!barModel('claude-opus-5[1m]', { home: FAKE }).includes('пул пуст'),
+        'запись прошлой партии мертва: после налива пул как раз полон, и «пуст» было бы враньём');
+    qWrite('available', curDrop);
+    ok(!barModel('claude-opus-5[1m]', { home: FAKE }).includes('пул пуст'),
+        'квота есть — пометки нет');
+    fs.writeFileSync(qFile, JSON.stringify({
+        opus: { state: 'exhausted', checkedAt: new Date().toISOString(), dropAt: new Date(curDrop).toISOString(), keyTail: 'AAAA' },
+        gpt: { state: 'available', checkedAt: new Date().toISOString(), dropAt: new Date(curDrop).toISOString(), keyTail: 'AAAA' },
+    }) + '\n');
+    ok(!barModel('gpt-6-astra[1m]', { home: FAKE }).includes('пул пуст'),
+        'пустая полоса Opus не красит запрос к GPT: полосы кончаются порознь');
 } finally {
     try { fs.rmSync(FAKE, { recursive: true, force: true }); } catch { /* temp */ }
     try { fs.rmSync(STAGE, { recursive: true, force: true }); } catch { /* temp */ }

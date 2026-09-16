@@ -22,11 +22,14 @@ const path = require('path');
 const { URL } = require('url');
 
 const catalog = require('./media-catalog');
+const mediaKeys = require('./media-keys');
 const queue = require('./media-queue');
 
 const ROUTING = path.join(__dirname, '..');
-const PROVIDERS_FILE = path.join(ROUTING, 'custom-providers.json');
-const MODELS_CACHE_FILE = path.join(ROUTING, 'media-models-cache.json');
+// 🪤 Оба пути перекрываются переменными окружения — регресс `tools/check-media.js` гоняет
+// настоящие ручки на своей карточке провайдера и своём кеше, не заглядывая в живой реестр.
+const PROVIDERS_FILE = process.env.MEDIA_PROVIDERS_FILE || path.join(ROUTING, 'custom-providers.json');
+const MODELS_CACHE_FILE = process.env.MEDIA_MODELS_CACHE_FILE || path.join(ROUTING, 'media-models-cache.json');
 const PREFIX = '/__media/api/';
 
 // ── Ответы ───────────────────────────────────────────────────────────────────
@@ -83,10 +86,10 @@ function saveModelsCache(doc) {
     fs.renameSync(tmp, MODELS_CACHE_FILE);
 }
 
-/** Спросить у провайдера `/v1/models`. Ключ берём активный. */
+/** Спросить у провайдера `/v1/models`. Ключ выбирает `media-keys` — как и очередь. */
 function fetchModels(provider) {
     return new Promise((resolve, reject) => {
-        const key = (provider.keys || []).find(k => k.active) || (provider.keys || [])[0];
+        const key = mediaKeys.pick(provider);
         if (!key || !key.apiKey) return reject(new Error('у провайдера нет ключа'));
         let target;
         try { target = new URL(String(provider.baseUrl).replace(/\/+$/, '') + '/models'); }
@@ -126,18 +129,29 @@ async function modelsFor(provider, force) {
     return { models, scannedAt: cache[provider.id].scannedAt, fromCache: false };
 }
 
-/** Сводка по провайдеру: сколько у него моделей каждого типа. Ключи наружу не отдаются. */
+/**
+ * Сводка по провайдеру: сколько у него моделей каждого типа и какой ключ выбран.
+ * 🪤 Ключи наружу не отдаются НИКОГДА — только маски и индекс: студия адресует ключ
+ * позицией в карточке, а значение остаётся на сервере.
+ */
 function providerSummary(provider, models) {
     const cls = catalog.classify(provider.id, models || []);
-    const keys = provider.keys || [];
-    const active = keys.find(k => k.active) || keys[0];
+    const keys = (provider.keys || []).filter(k => k && k.apiKey);
+    const active = mediaKeys.pick(provider);
+    const counts = { image: cls.image.length, video: cls.video.length, other: cls.other.length };
     return {
         id: provider.id,
         name: provider.name,
         baseUrl: provider.baseUrl,
         hasKey: Boolean(active && active.apiKey),
-        keyMask: active && active.apiKey ? '…' + String(active.apiKey).slice(-8) : null,
-        counts: { image: cls.image.length, video: cls.video.length, other: cls.other.length },
+        keyMask: mediaKeys.mask(active && active.apiKey),
+        // Рычаг выбора — только там, где есть медиа-генерация и из чего выбирать.
+        // То же условие продублировано отказом на сервере, см. `keys/active`.
+        hasMedia: counts.image + counts.video > 0,
+        keysCount: keys.length,
+        keyIndex: active ? keys.findIndex(k => k === active) : -1,
+        keyMasks: keys.map(k => mediaKeys.mask(k.apiKey)),
+        counts,
     };
 }
 
@@ -281,6 +295,29 @@ async function dispatch(req, res, route, query) {
         const art = queue.artifactPath(id, index);
         if (!art) return json(res, 404, { error: 'файл не найден' });
         return serveFile(req, res, art);
+    }
+
+    // POST keys/active — какой ключ карточки тратит студия. `index: null` — снять выбор.
+    if (req.method === 'POST' && route === 'keys/active') {
+        const body = await readBody(req);
+        const provider = findProvider(body.provider);
+        if (!provider) return json(res, 404, { error: 'провайдер не найден' });
+        const models = (loadModelsCache()[provider.id] || {}).models || [];
+        const cls = catalog.classify(provider.id, models);
+        // 🪤 Отказ приходит с СЕРВЕРА, а не только прячется в интерфейсе: иначе рычаг
+        // дёрнули бы запросом там, где он бессмыслен — у текстового провайдера.
+        if (cls.image.length + cls.video.length === 0) {
+            return json(res, 400, { error: 'у провайдера нет медиа-моделей — выбирать не из чего' });
+        }
+        const keys = (provider.keys || []).filter(k => k && k.apiKey);
+        if (body.index === null || body.index === undefined || body.index === '') {
+            mediaKeys.set(provider.id, null);
+        } else {
+            const i = Number(body.index);
+            if (!Number.isInteger(i) || i < 0 || i >= keys.length) return json(res, 400, { error: 'плохой индекс ключа' });
+            mediaKeys.set(provider.id, keys[i].apiKey);
+        }
+        return json(res, 200, { provider: providerSummary(provider, models) });
     }
 
     return json(res, 404, { error: `неизвестный маршрут MEDIA: ${route}` });

@@ -1,0 +1,5 @@
+{
+  "opus": "deepseek-v4.1-flash",
+  "sonnet": "deepseek-v4.1-flash",
+  "haiku": "qwen3.8-27b"
+}

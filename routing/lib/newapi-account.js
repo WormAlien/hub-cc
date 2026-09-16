@@ -220,6 +220,17 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    // odysseyapi.tech — НЕ New-API вовсе: свой шлюз на Next.js, вход через Clerk
+    // (`clerk.odysseyapi.tech`), публичных /api/user/* нет — `GET /api/status` отдаёт
+    // HTML страницы, а не JSON панели (замер 16.09). Поэтому classic: точного остатка
+    // тут ждать неоткуда, у вкладки баланс РУЧНОЙ (✏️ set-balance) до браузерного чтения.
+    'odysseyapi.tech': 'classic',
+    // chat.b.ai — НЕ New-API панель: аккаунт живёт в отдельном приложении на Next.js,
+    // вход только Google OAuth, публичных /api/user/* у него нет (проверено 15.09).
+    // Стоит classic как безопасная сторона: баланс у вкладки РУЧНОЙ (✏️ set-balance),
+    // пока не найдена ручка точного остатка. Промах сюда дешёвый — kindEff поднимет
+    // classic до jwt по куке профиля, если панель окажется jwt-веткой.
+    'chat.b.ai': 'classic',
     // emtf.aipm9527.online — classic: кука `session`, как у agentrouter и gorouter.
     // Проверено живой пробой 09.09: в профиле acct_ap_..._0 лежит cookie `session`,
     // `new_api_refresh` нет. Первоначально стояло `jwt` от клона kktoken-шаблона.
@@ -247,6 +258,17 @@ const HOST_AUTH = {
     // иначе 401 «не предоставлен New-Api-User» — на classic-ветке это уже учтено.
     'api.wisdomsatan.club': 'classic',
     'www.aikeysapi.com': 'classic',
+    // www.getunikey.ai — classic: ДОГАДКА по косвенным признакам (2026-09-15), живого
+    // входа не было — на регистрации и на входе стоит Turnstile, автоматически не
+    // залогиниться. Признаки за classic: во фронтовом бандле нет ни `new_api_refresh`,
+    // ни `/api/user/auth/refresh` (у jwt-ветки они есть), а ближайший родственник по
+    // пути входа (www.aikeysapi.com, тот же `POST /api/user/login`) стоит classic.
+    // 🪤 Промах здесь дешёвый ровно в одну сторону: `kindEff` выбирает по содержимому
+    // профиля и умеет поднять classic→jwt, когда найдёт куку `new_api_refresh`, а
+    // обратно не опускает. Поэтому `jwt` авансом тут был бы дороже, чем classic.
+    // Проверить ПЕРВЫМ живым логином: цифра баланса обязана прийти из /api/user/self,
+    // а не из guessGrant.
+    'www.getunikey.ai': 'classic',
 };
 
 function authKind(host) {
@@ -945,6 +967,62 @@ function hostGate(host, fn) {
     return next;
 }
 
+// Второй шлюз частоты: не аккаунт, а пара «исходящий прокси + хост».
+// Инцидент с agentrouter.org (разбор 15.09): бан домашнего IP одновременно переводит
+// аккаунты на fallback, и несколько липких назначений бьют с одного прокси подряд.
+// Хостовая очередь не видит исходящий адрес; accountFetch/apiFetchRawAuth к тому же
+// вызывают directFirstRequest без внутреннего hostGate. Поэтому нужен отдельный хвост.
+const PROXY_GATE = new Map();       // proxyId|host → хвост цепочки
+const PROXY_LAST_START = new Map(); // proxyId|host → когда СТАРТОВАЛ последний запрос (мс)
+// Фоновый баланс может подождать, но минутная очередь fallback после того же бана
+// выглядит как зависший дашборд. 30с ограничивают ОЖИДАНИЕ старта, не сам HTTP-запрос.
+const PROXY_GATE_MAX_WAIT_MS = 30_000;
+
+function proxyGate(proxyId, host, fn) {
+    const key = `${proxyId}|${host}`;
+    const gap = HOST_GAP_OVERRIDE[host] || HOST_MIN_GAP_MS;
+    const prev = PROXY_GATE.get(key) || Promise.resolve();
+    const deadline = Date.now() + PROXY_GATE_MAX_WAIT_MS;
+    let expired = false, started = false, timer;
+    const timeoutError = () => new Error(
+        `proxy fallback: ожидание очереди ${key} превысило ${PROXY_GATE_MAX_WAIT_MS / 1000} с; запрос не отправлен`);
+    // Таймер начинается при постановке, а не после prev: зависший предыдущий запрос
+    // тоже расходует бюджет. Одного Promise.race мало: просроченное звено иначе позже
+    // всё равно отправит HTTP, хотя вызывающий уже получил отказ.
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            if (started) return;
+            expired = true;
+            reject(timeoutError());
+        }, PROXY_GATE_MAX_WAIT_MS);
+    });
+    const run = async () => {
+        if (expired || Date.now() >= deadline) throw timeoutError();
+        // Как у hostGate, период МЕЖДУ СТАРТАМИ: время HTTP уже входит в gap.
+        // Замер выше: 3-4 запроса с хвостовым сном добавляли до 10с без пользы для WAF.
+        // После последнего запроса не спим; добираем только недостающую часть периода.
+        const wait = gap - (Date.now() - (PROXY_LAST_START.get(key) || 0));
+        if (wait > 0) {
+            if (Date.now() + wait >= deadline) throw timeoutError();
+            await new Promise(r => setTimeout(r, wait));
+        }
+        if (expired || Date.now() >= deadline) throw timeoutError();
+        started = true;
+        clearTimeout(timer);
+        PROXY_LAST_START.set(key, Date.now());
+        return fn();
+    };
+    // Ошибка предыдущего звена не рвёт очередь, как и в hostGate.
+    const next = prev.then(run, run);
+    // Хвост именно next, НЕ race: таймаут ожидающего не освобождает ещё работающего
+    // предшественника и не даёт следующему запросу обогнать его. Просроченный run
+    // пропустит отправку, когда очередь дойдёт до него.
+    const tail = next.then(() => {}, () => {});
+    PROXY_GATE.set(key, tail);
+    tail.then(() => { if (PROXY_GATE.get(key) === tail) PROXY_GATE.delete(key); });
+    return Promise.race([next, timeout]).finally(() => clearTimeout(timer));
+}
+
 // WAF отвечает HTML с кодом 200. Без этой проверки такой ответ выглядел бы как
 // «200, но без данных» и причина была бы неочевидна.
 function wafBlocked(res, text) {
@@ -1027,7 +1105,11 @@ async function directFirstRequest({ host, accountId = null, profileDir = null, f
             proxyFallbackError: 'прокси fallback не настроен' };
     }
     try {
-        const retry = await viaProxy(px.proxy);
+        // Только fallback: direct сохраняет прежний путь и не занимает прокси-очередь.
+        // apiFetch уже держит hostGate(host), но карты и ключи шлюзов независимы:
+        // host → proxyId|host → fetchVia. Обратного ожидания hostGate из callback НЕТ,
+        // поэтому нет цикла блокировок. Raw-auth/accountFetch входят сюда и без hostGate.
+        const retry = await proxyGate(px.proxy.id, host, () => viaProxy(px.proxy));
         const out = { ...retry, viaProxy: true, originalFailure };
         if (!retry.ok) out.proxyFallbackError = retry.waf
             ? `proxy fallback WAF HTML (HTTP ${retry.status})`
@@ -1210,7 +1292,7 @@ async function accountSelf(opts) {
   } catch (e) {
     // Сетевые обрывы отдаём результатом: вызывающая сторона откатится на анкер,
     // а не потеряет весь расчёт баланса из-за одного таймаута.
-    return { ok: false, error: (e.cause && e.cause.code) || e.message };
+    return selfFailure((e.cause && e.cause.code) || e.message);
   }
 }
 
@@ -1221,14 +1303,69 @@ function selfOk(host, data, qpu, meta) {
     return selfToBalance(data, qpu, meta);
 }
 
+// Почему попытка взять точную цифру не далась — машинным полем, а не текстом.
+//
+// 🪤 Текст `error` читает человек и он же попадает в тесты, поэтому менять его ради UI нельзя.
+// Но и разбирать его регуляркой на фронте нельзя тем более: `сессия профиля недействительна
+// (HTTP 401)` и `WAF просит JS-челлендж…` — это ПРОТИВОПОЛОЖНЫЕ факты про логин («мёртв» и
+// «неизвестно»), а в таблице 13.09 они выглядели одинаково. Отсюда отдельное поле.
+//
+// Набор намеренно узкий: только то, что интерфейс обязан различать.
+//   deferred     — запрос НЕ отправляли (идёт пауза после серии отказов). Не то же, что сбой.
+//   no_profile   — у аккаунта нет каталога профиля (залп не довёл заведение до конца)
+//   no_cookie    — профиль есть, а годной куки нет
+//   login_expired— jwt-ветка: refresh-кука отвергнута шлюзом
+//   login_dead   — 401/403 на JWT или на classic-пути (состояние куки = состояние сайта:
+//                  это ЕДИНСТВЕННЫЙ случай, доказывающий разлогин)
+//   no_proof     — WAF, и куки-пруфа `acw_sc__v2` в профиле нет: про логин не знаем НИЧЕГО
+//   waf          — WAF отбил даже с пруфом
+//   rate_limited — 429
+//   no_uid       — New-API не назвал цель запроса; это состояние ПАНЕЛИ, не обязательно логина
+//   browser_open — браузер этого аккаунта открыт и держит куки: точный чек невозможен В ПРИНЦИПЕ,
+//                  пока окно живо. Ждать нечего, надо закрыть окно
+//   relogin_unverified — вход в ЛК был ПОСЛЕ показанной цифры, а переспросить шлюз не удалось
+//                  (класс ложного 401 на отставшей копии куки). Ставится не здесь, а в
+//                  дашборде (`newapiApplyBalance`). Означает «не подтверждено», НЕ «мёртв»
+//   transport    — до шлюза не достучались (сеть, туман туннеля, таймаут)
+//   other        — всё прочее (в том числе `self: HTTP 5xx`)
+const SELF_FAILURE_KINDS = ['deferred', 'no_profile', 'no_cookie', 'login_expired', 'login_dead',
+    'no_proof', 'waf', 'rate_limited', 'no_uid', 'browser_open', 'relogin_unverified',
+    'transport', 'other'];
+
+function classifySelfFailure(error) {
+    const text = String((error && (error.error || error.message)) || '');
+    if (!text) return 'other';
+    if (/не удалось определить New-Api-User id/.test(text)) return 'no_uid';
+    if (/сессия профиля истекла/.test(text)) return 'login_expired';
+    if (/сессия профиля недействительна \(HTTP 40[13]\)/.test(text)) return 'login_dead';
+    if (/слишком часто \(429\)/.test(text)) return 'rate_limited';
+    // Пруф отличаем ДО общей ветки WAF: «WAF и пруфа нет» и «WAF даже с пруфом» — разные причины.
+    if (/пруфа \(acw_sc__v2\) у нас нет/.test(text)) return 'no_proof';
+    if (/WAF/.test(text)) return 'waf';
+    if (/браузер этого аккаунта ОТКРЫТ/.test(text)) return 'browser_open';
+    if (/вход выполнялся после этой цифры/.test(text)) return 'relogin_unverified';
+    if (/нет профиля с куками|профиль не найден на диске|профиля аккаунта нет/.test(text)) return 'no_profile';
+    if (/нет годной куки|куки нет|профиль пуст/.test(text)) return 'no_cookie';
+    if (/пауза ещё \d+с/.test(text)) return 'deferred';
+    if (/^(fetch failed|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN)/.test(text)
+        || /timeout|socket hang up/i.test(text)) return 'transport';
+    return 'other';
+}
+
+// Раскладываем отказ на текст (для человека и тестов) и вид (для машины). Вызывается на каждом
+// `ok: false` — иначе новую ветку отказа забудут разметить, и она молча станет `other`.
+function selfFailure(error, extra = {}) {
+    return { ok: false, error, failureKind: classifySelfFailure({ error }), ...extra };
+}
+
 async function accountSelfInner({ host, profileDir, accessToken = null, userId = null, accountId = null, force = false }) {
-    if (!host) return { ok: false, error: 'host обязателен' };
+    if (!host) return selfFailure('host обязателен');
     const kind = authKind(host);
     const cooling = hostCoolingDown(host);
     // Клик владельца по цифре (force) имеет право на ОДИН пробный запрос сквозь паузу:
     // бан у WAF короткий, и чаще всего к моменту клика он уже снят. Автоматические тики
     // паузу соблюдают — именно они её и вызывают.
-    if (cooling && !force) return { ok: false, error: `шлюз отбивает по частоте, пауза ещё ${cooling}с` };
+    if (cooling && !force) return selfFailure(`шлюз отбивает по частоте, пауза ещё ${cooling}с`);
     if (cooling && force) console.log(`[newapi] ${host}: пауза ещё ${cooling}с, но клик владельца — пробую один раз`);
 
     const request = { host, profileDir, accountId, force };
@@ -1257,10 +1394,10 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     }
 
     if (!profileDir || !fs.existsSync(profileDir)) {
-        return { ok: false, error: 'нет профиля с куками' };
+        return selfFailure('нет профиля с куками');
     }
     const cookie = effectiveCookieHeader(host, profileDir, jar);
-    if (!cookie) return { ok: false, error: cookieFailReason(profileDir, host) };
+    if (!cookie) return selfFailure(cookieFailReason(profileDir, host));
 
     // 🪤 Панель может переехать на jwt, а таблица AUTH об этом не узнает — и тогда classic-путь
     // обречён на вечный 401. Ровно это случилось с `gorouter.app` (разбор 29.08): в профиле
@@ -1278,10 +1415,10 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         const rt = await refreshAccessToken(host, cookie, jar, jarK, request);
         if (!rt.ok) {
             const expired = rt.status === 401 || rt.status === 403;
-            return {
-                ok: false, stale: expired,
-                error: expired ? 'сессия профиля истекла — открой ЛК аккаунта, чтобы обновить' : `refresh: ${rt.error}`,
-            };
+            return selfFailure(
+                expired ? 'сессия профиля истекла — открой ЛК аккаунта, чтобы обновить'
+                    : `refresh: ${rt.error}`,
+                { stale: expired });
         }
         // Кешируем access-токен, чтобы следующий чек не жёг одноразовую refresh-куку.
         const j = loadJar();
@@ -1297,7 +1434,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         const r = await apiFetch(host, '/api/user/self', { bearer: rt.token, ...request });
         if (r.status === 200 && r.json && r.json.data) return selfOk(host, r.json.data, qpu, meta);
         if (rt.user && rt.user.quota != null) return selfOk(host, rt.user, qpu, meta);
-        return { ok: false, error: `self: HTTP ${r.status}` };
+        return selfFailure(`self: HTTP ${r.status}`);
     }
 
     // classic: нужен New-Api-User — берём id из подписанной сессионной куки.
@@ -1305,7 +1442,7 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
     const sess = cookies.find(c => (c.host === host || c.host.endsWith('.' + host)) && c.name === 'session');
     const cookieUid = sess ? sessionUserId(sess.value) : null;
     const uid = userId || cookieUid;
-    if (!uid) return { ok: false, error: 'не удалось определить New-Api-User id' };
+    if (!uid) return selfFailure('не удалось определить New-Api-User id');
     let r = await apiFetch(host, '/api/user/self', { cookie, userId: uid, jar, jarK, ...request });
     // Переданный id мог протухнуть: в записи пула лежит id прежнего аккаунта, а куки в
     // профиле — уже от нового. New-API на такую пару отвечает 401, и это неотличимо от
@@ -1328,19 +1465,16 @@ async function accountSelfInner({ host, profileDir, accessToken = null, userId =
         // диск не попадает), а наш клиент JS не исполняет. Пруф теперь приносит в jar
         // сам браузер — см. putJarCookies и harvestCookiesToJar в agentrouter/open-session.js.
         const hasProof = /(^|;\s*)acw_sc__v2=/.test(String(cookie || ''));
-        return {
-            ok: false,
-            error: r.waf
-                ? (hasProof
-                    ? 'WAF отбил запрос даже с пруфом (acw_sc__v2) — пауза 10 мин'
-                    : 'WAF просит JS-челлендж, а пруфа (acw_sc__v2) у нас нет: открой ЛК кнопкой 🌐 или ⚡ — браузер добудет куку. Пауза 10 мин')
-                : 'слишком часто (429), пауза 10 мин',
-        };
+        return selfFailure(r.waf
+            ? (hasProof
+                ? 'WAF отбил запрос даже с пруфом (acw_sc__v2) — пауза 10 мин'
+                : 'WAF просит JS-челлендж, а пруфа (acw_sc__v2) у нас нет: открой ЛК кнопкой 🌐 или ⚡ — браузер добудет куку. Пауза 10 мин')
+            : 'слишком часто (429), пауза 10 мин');
     }
     if (r.status === 401 || r.status === 403) {
-        return { ok: false, error: `сессия профиля недействительна (HTTP ${r.status})`, stale: true };
+        return selfFailure(`сессия профиля недействительна (HTTP ${r.status})`, { stale: true });
     }
-    return { ok: false, error: `self: HTTP ${r.status}` };
+    return selfFailure(`self: HTTP ${r.status}`);
 }
 
 // classic-инстансы New-API принимают access-токен в Authorization БЕЗ схемы Bearer.
@@ -1509,5 +1643,6 @@ module.exports = {
     quotaPerUnit, quotaToUsd, statusMeta, usdToLocal, hostGate,
     loadJar, saveJar, jarKey, effectiveCookieHeader, putJarCookies,
     accountSelf, refreshAccessToken, mintAccessToken, listAccountKeys,
-    accountProxy, accountFetch,
+    accountProxy, accountFetch, proxyGate,
+    SELF_FAILURE_KINDS, classifySelfFailure,
 };

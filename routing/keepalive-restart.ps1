@@ -56,7 +56,17 @@ $perPort = @{
   # /v1 suffix for model listing only - putting it here would send /v1/v1/messages and
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
+  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20170 = @{ UPSTREAM = 'https://odysseyapi.tech'; KEY_FILE = "$profileDir\.claude\odyssey-active-key.txt";
+  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
+             MODELMAP_FILE = (Join-Path $dir 'odyssey-modelmap.json') }
+  20169 = @{ UPSTREAM = 'https://chat.b.ai'; KEY_FILE = "$profileDir\.claude\bai-active-key.txt";
+  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
+             MODELMAP_FILE = (Join-Path $dir 'bai-modelmap.json') }
   # HCNsec (New API): bare root here too - keepalive appends /v1/messages itself. The
   # /v1 base URL (HN_BASE_URL in transparent-proxy.js) is for model listing only;
   # putting it here would send /v1/v1/messages and the gateway answers 404.

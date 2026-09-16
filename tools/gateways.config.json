@@ -32,5 +32,24 @@
     "HOST": "llm.fluxnat.dev", "PORT": 20167, "FOLDER": "fluxnat",
     "ICON": "🌀", "COLOR": "fuchsia", "REF": "",
     "github": true, "ref": false, "flatRate": false, "anthropic": true
+  },
+
+  "getunikey": {
+    "p": "uk", "P": "UK", "full": "getunikey", "NAME": "UniKey",
+    "HOST": "www.getunikey.ai", "PORT": 20168, "FOLDER": "getunikey",
+    "ICON": "🔑", "COLOR": "sky", "REF": "6ssC",
+    "github": false, "ref": true, "flatRate": false, "anthropic": true
+  },
+  "bai": {
+    "p": "bai", "P": "BAI", "full": "bai", "NAME": "B.AI",
+    "HOST": "chat.b.ai", "PORT": 20169, "FOLDER": "bai",
+    "ICON": "🅱️", "COLOR": "amber", "REF": "6H755H",
+    "github": false, "ref": true, "flatRate": false, "anthropic": true
+  },
+  "odyssey": {
+    "p": "od", "P": "OD", "full": "odyssey", "NAME": "Odyssey",
+    "HOST": "odysseyapi.tech", "PORT": 20170, "FOLDER": "odyssey",
+    "ICON": "🧭", "COLOR": "lime", "REF": "",
+    "github": false, "ref": false, "flatRate": false, "anthropic": false
   }
 }

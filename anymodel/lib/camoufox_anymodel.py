@@ -126,11 +126,27 @@ async def _click_turnstile_widget(page):
     """
     # — Метод 1: page.frames ------------------------------------------------
     try:
+        # 🔴 Берём НЕ первый попавшийся CF-фрейм, а ВИДИМЫЙ. Замер 16.09 на Odyssey:
+        # рядом с настоящим виджетом (300×65) Turnstile держит скрытый фрейм-«часовой»
+        # 1×1. Первый по списку оказался как раз он, клик ушёл в точку (24,0) - в пустоту,
+        # и капча «не решалась» на ровном месте, хотя в соседнем прогоне тот же код
+        # сработал за три секунды (там первым в списке был настоящий фрейм).
         cf_frame = None
         for f in page.frames:
-            if "challenges.cloudflare" in f.url or "turnstile" in f.url:
+            if "challenges.cloudflare" not in f.url and "turnstile" not in f.url:
+                continue
+            try:
+                el = await f.frame_element()
+                box = await page.evaluate(
+                    """el => { const r = el.getBoundingClientRect();
+                       return r.width > 0 ? {x:r.x, y:r.y, w:r.width, h:r.height} : null; }""",
+                    el)
+            except Exception:
+                continue
+            if box and box["w"] >= 50 and box["h"] >= 20:
                 cf_frame = f
                 break
+            log("captcha", f"фрейм CF {box['w']:.0f}×{box['h']:.0f} - мелкий, пропускаю")
         if cf_frame:
             log("captcha", f"CF frame: {cf_frame.url[:80]}")
             try:

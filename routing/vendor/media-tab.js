@@ -240,6 +240,44 @@
     say('Промпт и модель подставлены', 'ok');
   }
 
+  // ── Ключ провайдера ───────────────────────────────────────────────────────
+
+  // Пока ключ один — просто маска, как было. Когда их несколько (по аккаунту на грант),
+  // появляется выбор: студия тратит выбранный. 🪤 Рычаг только там, где есть медиа и есть
+  // из чего выбирать; у текстового провайдера он бессмыслен, и сервер это подтверждает
+  // отказом — прятать условие в интерфейсе недостаточно.
+  // 🪤 Наружу ключ не отдаётся ни в одну сторону: кнопка адресует ключ ИНДЕКСОМ.
+  function keyPickHtml(prov) {
+    if (!prov || !prov.hasKey) return '';
+    if (!prov.hasMedia || !(prov.keysCount > 1)) {
+      return `<div class="text-dim text-[11px] mt-1 font-mono">ключ ${esc(prov.keyMask)}</div>`;
+    }
+    const btns = (prov.keyMasks || []).map((m, i) => `
+      <button class="md-mini${i === prov.keyIndex ? ' md-mode-on' : ''}" data-key="${i}"
+              title="тратить этот ключ">${i === prov.keyIndex ? '✓' : ''} ${esc(m || '—')}</button>`).join('');
+    return `
+      <div class="mt-2">
+        <label class="md-label">ключ · тратится выбранный</label>
+        <div class="flex flex-wrap gap-1.5">${btns}</div>
+      </div>`;
+  }
+
+  async function setMediaKey(index) {
+    const prov = S.providers.find((p) => p.id === S.providerId);
+    if (!prov) return;
+    try {
+      const d = await api('keys/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: prov.id, index }),
+      });
+      const i = S.providers.findIndex((p) => p.id === prov.id);
+      if (i >= 0 && d && d.provider) S.providers[i] = d.provider;
+      say('Ключ для медиа переключён', 'ok');
+      render();
+    } catch (e) { say('Не удалось переключить ключ: ' + e.message, 'err'); }
+  }
+
   // ── Разметка ──────────────────────────────────────────────────────────────
 
   function renderTask() {
@@ -259,7 +297,7 @@
           </option>`).join('')}
       </select>
       ${prov && !prov.hasKey ? '<div class="text-crimson text-[11px] mt-1">✕ у провайдера нет ключа</div>' : ''}
-      ${prov && prov.keyMask ? `<div class="text-dim text-[11px] mt-1 font-mono">ключ ${esc(prov.keyMask)}</div>` : ''}
+      ${keyPickHtml(prov)}
 
       <div class="md-modes mt-3">
         <button class="md-mode${S.mode === 'image' ? ' md-mode-on' : ''}" data-mode="image">🖼 Изображение</button>
@@ -339,6 +377,7 @@
     const advBtn = $('md-adv'); if (advBtn) advBtn.onclick = toggleAdvanced;
     const goBtn = $('md-go'); if (goBtn) goBtn.onclick = generate;
     host.querySelectorAll('[data-mode]').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
+    host.querySelectorAll('[data-key]').forEach((b) => { b.onclick = () => setMediaKey(Number(b.dataset.key)); });
   }
 
   function renderResult() {

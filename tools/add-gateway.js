@@ -593,6 +593,48 @@ function extractRegion(lines, start, span) {
 }
 
 /** Иголка в коде ЭТАЛОНА для этой точки. */
+
+/**
+ * Артефакты ЧУЖОГО шлюза внутри региона эталона. Эталон и цель живут в ОДНОМ файле, поэтому
+ * копия уже испорченного региона размножает чужую поломку: 15.09 кнопка вкладки getunikey
+ * влезла внутрь кнопки kktoken (вставка шла после якорной строки), и следующий шлюз склонировал
+ * мусор — в сайдбаре оказались четыре открывающих <button> на три закрывающих.
+ */
+function foreignMarkers(text, srcName, config) {
+    const out = [];
+    const names = Object.values(config || {}).filter(v => v && v.full && v.full !== srcName).map(v => v.full);
+    for (const n of names) {
+        const probes = ['data-tab="' + n + '"', 'data-tab-content="' + n + '"', 'nav-count-' + n + '"'];
+        const hit = probes.find(s => text.includes(s));
+        if (hit) out.push(n);
+    }
+    return out;
+}
+
+/**
+ * Структурная проверка разметки дашборда — то, что node --check в HTML не видит.
+ * Обе поломки 15.09 ловились бы здесь: дубль id (nav-count-getunikey дважды от клона мусора)
+ * и кнопка навигации, не закрытая до следующей (обрыв, из-за которого поехали пункты меню).
+ */
+function checkHtmlStructure(text) {
+    const problems = [];
+    const ids = new Map();
+    for (const m of text.matchAll(/\sid="([^"]+)"/g)) {
+        if (/\$\{|<%|\{\{/.test(m[1])) continue;
+        ids.set(m[1], (ids.get(m[1]) || 0) + 1);
+    }
+    for (const [id, n] of ids) if (n > 1) problems.push('дубль id «' + id + '» ×' + n);
+    const nav = [...text.matchAll(/<button[^>]*data-tab="[^"]+"/g)];
+    if (nav.length) {
+        const seg = text.slice(nav[0].index, nav[nav.length - 1].index);
+        const parts = seg.split(/<button[^>]*data-tab="/).slice(1);
+        parts.slice(0, -1).forEach((part, i) => {
+            if (!part.includes('</button>')) problems.push('кнопка вкладки №' + (i + 1) + ' не закрыта до следующей');
+        });
+    }
+    return problems;
+}
+
 function refFor(point, rule, src) {
     return subst(rule.ref != null ? rule.ref : (Array.isArray(point.expect) ? point.expect[0] : point.expect), src);
 }
@@ -672,8 +714,21 @@ function applyPoint(point, rule, src, dst, pairs, files) {
     const span = rule.span || 'line';
     const region = extractRegion(lines, start, span);
     if (region.error) { p.status = 'bad'; p.note = region.error; return p; }
+    // 🪤 Регион эталона может быть уже испорчен предыдущей вставкой (эталон и цель — один файл).
+    // Копия такого региона размножает чужую поломку, поэтому это дефект, а не копирование.
+    {
+        const foreign = foreignMarkers(lines.slice(start, region.end + 1).join('\n'), src.full, loadConfig());
+        if (foreign.length) {
+            p.status = 'bad';
+            p.note = 'в регионе эталона артефакты чужого шлюза: ' + foreign.join(', ');
+            return p;
+        }
+    }
 
-    p.at = start + 1;
+    // 🪤 Регион вставляется ПОСЛЕ своей последней строки, а не после якорной: иначе копия
+    // влезает ВНУТРЬ копируемого объекта или функции (проверено на kktoken/CC_HEADERS:
+    // SyntaxError, и на функциях — вложенные копии, грабля #19).
+    p.at = region.end + 1;
     p.anchor = stripCr(lines[start]);
     p.lines = lines
         .slice(start, region.end + 1)
@@ -792,6 +847,15 @@ function runApply(name, spec, config, write) {
         console.log(`${ok ? C.ok + 'синтаксис ок' : C.bad + 'СИНТАКСИС СЛОМАН'}${C.off} ${rel}${ok ? '' : `\n${r.stderr.slice(0, 400)}`}`);
     }
 
+    for (const rel of [...byFile.keys()].filter(f => f.endsWith('.html'))) {
+        const problems = checkHtmlStructure(fs.readFileSync(path.join(REPO, rel), 'utf8'));
+        if (problems.length) {
+            syntaxOk = false;
+            console.log(C.bad + 'РАЗМЕТКА СЛОМАНА' + C.off + ' ' + rel + '\n  ' + problems.slice(0, 6).join('\n  '));
+        } else {
+            console.log(C.ok + 'разметка ок' + C.off + ' ' + rel);
+        }
+    }
     if (!syntaxOk) {
         console.error(`\n${C.bad}Файлы сломаны. Откат: скопируй из ${path.relative(REPO, backupDir).split(path.sep).join('/')}${C.off}`);
         return 1;
@@ -842,4 +906,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles };
+module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, checkHtmlStructure };

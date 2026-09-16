@@ -41,6 +41,15 @@ function isPoolModel(id) {
     return POOL_MODEL_RE.test(String(id == null ? '' : id).trim());
 }
 
+// Семья пула: `claude` | `gpt` | '' (беспуловая). Две полосы кончаются порознь,
+// поэтому опускать надо ровно свою — см. правило в `poolDrop`.
+function poolFamily(id) {
+    const s = String(id == null ? '' : id).trim().toLowerCase();
+    if (s.startsWith('claude')) return 'claude';
+    if (s.startsWith('gpt')) return 'gpt';
+    return '';
+}
+
 // Имя бэкапа для файла карты. Держим рядом с самим файлом: `rename`/чтение идут по
 // одному тому, а глазом видно, к какой карте бэкап относится.
 //   ar-modelmap.json        → ar-modelmap.pooldrop.bak.json
@@ -211,8 +220,13 @@ function poolDrop(file, markerFile, opts = {}) {
     }
 
     const patch = {};
+    const deadFam = poolFamily(deadModel);
     for (const [k, v] of Object.entries(before)) {
-        if (v === deadModel || isPoolModel(v)) patch[k] = fb;
+        // 🪤 Переключаем СВОЮ семью, а не «любую пуловую». Полосы у Claude и GPT разные:
+        // 15.09 пул Opus был пуст, а GPT ещё отдавался; 16.09 наоборот оба разом. Общее
+        // правило `isPoolModel` уводило бы на фолбэк и чужую семью — то есть трафик
+        // уезжал бы с рабочего пула, и владелец видел бы дипсик, не понимая почему.
+        if (v === deadModel || (deadFam && poolFamily(v) === deadFam)) patch[k] = fb;
     }
 
     let tiers = before;
@@ -273,7 +287,7 @@ function poolRestore(file, bakFile) {
 }
 
 module.exports = {
-    isPoolModel, POOL_MODEL_RE,
+    isPoolModel, POOL_MODEL_RE, poolFamily,
     bakOf, markerFor, poolDropFiles,
     readTiers, readMarker, writeMarker, clearMarker,
     poolDrop, poolRestore,

@@ -32,6 +32,12 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    bai:     { host: 'chat.b.ai',        path: '/chat?invite_code=', label: 'B.AI' },   // форма СВОЯ: приглашение в чат, не /sign-up
+    // getunikey (2026-09-15) — New API, форма `/sign-up?aff=`. Реф-программа у площадки
+    // ЕСТЬ (админ-настройки QuotaForInviter/QuotaForInvitee, живая карточка «Referral
+    // Program» в кошельке), но начисляется от ПОПОЛНЕНИЯ приглашённого: «Earn rewards
+    // when your referrals add funds». Пачка пустых регистраций реф-бонуса не даёт.
+    getunikey:   { host: 'www.getunikey.ai',  path: '/sign-up?aff=',  label: 'UniKey' },
     aikeysapi:   { host: 'www.aikeysapi.com', path: '/register?aff=', label: 'AIKeysAPI' },
     aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
     // WisdomSatan (2026-09-10) — New API v0.11.5, но форма `/register?aff=`, как у
@@ -71,6 +77,14 @@ const SHAPES = {
     // настроить то, чего нет. Резолв при этом обязан остаться: `url('truesota')` просит
     // `truesota/open-session.js` (и отдаёт корень сайта, пока своего кода нет).
     truesota:    { host: 'true-sota.com',     path: '/register?aff=', label: 'TrueSOTA', legacy: true },
+    // Tu-zi (2026-09-15) — New API, форма `/register?aff=`. Код живой, проверено публичной
+    // `GET /api/user/invite/validate?aff=72jPY9ub` → `valid:true` без авторизации.
+    // 🪤 Параметр называется `aff`, не `code`: с `?code=` приходит «邀请码无效», и это
+    // легко принять за мёртвый код. Вкладки у шлюза НЕТ — он подключён медиа-провайдером
+    // через реестр кастомов (`custom-providers.json`), поэтому запись даёт только ссылку
+    // в «Настройках»; чтобы её можно было открыть, нужен `tuzi/open-session.js`.
+    // Авторега — решение владельца 15.09: не трогать (грант ~$0.10 на аккаунт).
+    tuzi:        { host: 'api.tu-zi.com',     path: '/register?aff=', label: 'Tu-zi' },
     // 🪤 XPeach — ЛЕГАСИ (решение владельца 2026-08-22): все ключи `403 banned`,
     // регистрация не проходит, вкладка живёт в скрытой группе «Чтим память».
     // Из резолва его не убираем — `xpeach/open-session.js` по-прежнему просит url(),

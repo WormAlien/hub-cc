@@ -1,0 +1,309 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   proxies-tab.css — вкладка «СВОИ ПРОКСИ» (:8200)
+
+   Правила те же, что у models-tab.css и media-tab.css: цвета берутся ТОЛЬКО из
+   токенов тем — var(--color-bg | --color-surface | --color-elevated | --color-line |
+   --color-line-soft | --color-ink | --color-muted | --color-dim | --color-faint) и
+   акцентов (--color-emerald | --color-amber | --color-crimson | --color-azure |
+   --color-violet).
+
+   🪤 Префикс `--color-` обязателен. Дашборд объявляет токены через Tailwind 4
+      `@theme` в OKLCH и навешивает `--color-*` инлайном на <html>; коротких имён
+      вида `--surface` в глобальной области НЕТ. `var(--surface)` даст пустое
+      значение и вкладку без стилей.
+
+   🪤 Своих hex здесь быть не должно: захардкоженный цвет делает панель тёмным
+      островом на светлых темах (daylight/paper). Смешивать только
+      `color-mix(in oklab, …)` — в oklch оттенок идёт по кругу и даёт не тот цвет.
+
+   🔴 Почему вкладка НЕ на Tailwind-утилитах, в отличие от статики дашборда.
+      Tailwind здесь браузерный и собирает классы со СТАТИЧЕСКОГО HTML. Разметка
+      этой вкладки целиком рисуется из JS, то есть в сборку не попадает: классы
+      вида `text-muted`/`bg-surface` просто не будут сгенерированы, и вкладка
+      отрисуется голым текстом. Поэтому вся форма — здесь, семантическими
+      классами `px-*`. Приём тот же, что у md-* (media-tab.css) и моделей.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.px-wrap {
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Шапка ─────────────────────────────────────────────────────────────────── */
+
+.px-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.px-title {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.px-sub {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin: 4px 0 0;
+}
+
+.px-chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.px-chip {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line-soft);
+  color: var(--color-muted);
+  white-space: nowrap;
+}
+
+.px-chip-on   { border-color: color-mix(in oklab, var(--color-emerald) 45%, transparent); color: var(--color-emerald); }
+.px-chip-off  { border-color: color-mix(in oklab, var(--color-crimson) 45%, transparent); color: var(--color-crimson); }
+
+/* ── Карточки ──────────────────────────────────────────────────────────────── */
+
+.px-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line-soft);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.px-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  margin: 0;
+}
+
+.px-card-title .px-count {
+  font-weight: 400;
+  color: var(--color-faint);
+  margin-left: 6px;
+}
+
+.px-hint {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.px-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-emerald);
+  font-size: 11px;
+}
+
+.px-note-faint {
+  font-size: 11px;
+  color: var(--color-faint);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── Предупреждения и уведомления ──────────────────────────────────────────── */
+
+.px-warn, .px-notice {
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid transparent;
+}
+
+.px-warn {
+  border-color: color-mix(in oklab, var(--color-amber) 40%, transparent);
+  background: color-mix(in oklab, var(--color-amber) 8%, transparent);
+  color: var(--color-amber);
+}
+
+.px-notice-ok {
+  border-color: color-mix(in oklab, var(--color-emerald) 40%, transparent);
+  background: color-mix(in oklab, var(--color-emerald) 8%, transparent);
+  color: var(--color-emerald);
+}
+
+.px-notice-err {
+  border-color: color-mix(in oklab, var(--color-crimson) 40%, transparent);
+  background: color-mix(in oklab, var(--color-crimson) 8%, transparent);
+  color: var(--color-crimson);
+}
+
+.px-empty {
+  border: 1px solid color-mix(in oklab, var(--color-azure) 40%, transparent);
+  background: color-mix(in oklab, var(--color-azure) 6%, transparent);
+  border-radius: 12px;
+  padding: 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-azure);
+}
+
+/* ── Форма ввода списка ────────────────────────────────────────────────────── */
+
+.px-textarea {
+  width: 100%;
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--color-ink);
+  resize: vertical;
+  min-height: 96px;
+  box-sizing: border-box;
+}
+
+.px-textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
+}
+
+.px-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── Кнопки ────────────────────────────────────────────────────────────────── */
+
+.px-btn {
+  font-size: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  color: var(--color-ink);
+  cursor: pointer;
+  font-weight: 500;
+  transition: border-color .15s, color .15s;
+}
+
+.px-btn:hover:not(:disabled) { border-color: var(--color-muted); }
+.px-btn:disabled { opacity: .5; cursor: default; }
+
+.px-btn-ok    { border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent); color: var(--color-emerald); background: color-mix(in oklab, var(--color-emerald) 10%, transparent); }
+.px-btn-azure { border-color: color-mix(in oklab, var(--color-azure) 50%, transparent);   color: var(--color-azure);   background: color-mix(in oklab, var(--color-azure) 10%, transparent); }
+.px-btn-danger{ border-color: color-mix(in oklab, var(--color-crimson) 50%, transparent); color: var(--color-crimson); background: color-mix(in oklab, var(--color-crimson) 10%, transparent); }
+
+.px-btn-mini {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line-soft);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.px-btn-mini:hover { color: var(--color-ink); border-color: var(--color-muted); }
+
+/* ── Таблицы ───────────────────────────────────────────────────────────────── */
+
+.px-table-wrap { overflow-x: auto; max-height: 560px; overflow-y: auto; }
+
+.px-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.px-table thead th {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--color-faint);
+  font-weight: 500;
+  padding: 0 12px 8px 0;
+  white-space: nowrap;
+}
+
+.px-table tbody tr { border-top: 1px solid var(--color-line-soft); }
+.px-table td { padding: 8px 12px 8px 0; vertical-align: top; }
+
+.px-mono  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--color-ink); word-break: break-all; }
+.px-mono-dim { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--color-muted); word-break: break-all; }
+.px-cell-xs { font-size: 11px; color: var(--color-muted); }
+.px-cell-num { font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; color: var(--color-muted); }
+
+/* ── Статусы: цвет + знак + слово ──────────────────────────────────────────── */
+
+.px-alive   { font-size: 11px; color: var(--color-emerald); white-space: nowrap; }
+.px-dead    { font-size: 11px; color: var(--color-crimson); white-space: nowrap; }
+.px-tier-own    { font-size: 11px; color: var(--color-violet); }
+.px-tier-scraped{ font-size: 11px; color: var(--color-faint); }
+.px-tier-none   { font-size: 11px; color: var(--color-dim); }
+.px-warn-text   { font-size: 11px; color: var(--color-amber); }
+.px-key         { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--color-ink); }
+
+/* ── Фильтры ───────────────────────────────────────────────────────────────── */
+
+.px-select {
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--color-ink);
+  max-width: 260px;
+}
+
+.px-stats { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--color-muted); }
+.px-stats b { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-ink); }
+
+.px-loading { padding: 32px 24px; font-size: 13px; color: var(--color-muted); }
+
+/* ── Поля ручного ввода ─────────────────────────────────────────────────────── */
+
+/* Сетка, а не флекс-строка: полей пять, и на узком экране они должны переноситься
+   сами, не растягивая карточку. */
+.px-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-line-soft);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--color-elevated) 40%, transparent);
+}
+
+.px-field { display: flex; flex-direction: column; gap: 4px; }
+
+.px-field > span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--color-faint);
+}
+
+.px-input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--color-ink);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.px-input:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
+}

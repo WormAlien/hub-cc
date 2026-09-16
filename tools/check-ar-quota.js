@@ -46,8 +46,74 @@ check(/arqState\(fresh \? \(e\.state === 'available' \? 'fresh' : 'burned'\)/.te
   'exhausted result marks clocks burned');
 check(/arqState\(fresh \? \(e\.state === 'available' \? 'fresh' : 'burned'\)/.test(html),
   'available result marks clocks fresh');
-check(/if \(pool === VIEW\) arqState\(/.test(html),
+check(/if \(pool === VIEW\) \{[^}]*arqState\(/.test(html),
   'красится только показываемая полоса: две полосы в один цвет не свести');
+
+// ── Явная строка «что отвечает и когда кончилась квота» ─────────────────────
+// Владелец 16.09 не понял этого по мелкой подписи в карточке конфига: панель маппинга
+// показывала claude-opus-5, а строка про фолбэк - deepseek, и обе были правы про РАЗНЫЕ
+// пути. Теперь состояние считает ОДНА функция по двум источникам сразу: квота (файл
+// состояния) + то, что реально отвечает (карта активного пути из `gatewayTiers`).
+check(html.includes('id="arq-pool-state"'), 'в карточке часов есть явная строка состояния');
+check(/function stPoolLine\(pool\)/.test(html), 'строку рисует одна функция, а не два места');
+check(/AR_MAP = \(p && p\.gatewayTiers\)/.test(html),
+  '«что отвечает» берётся из карты активного пути, а не из памяти о дропе');
+check(/квота кончилась \$\{at\} \(\$\{why\}\) · отвечает/.test(html),
+  'пул пуст и трафик ушёл: сказано, когда кончилась и куда ушёл');
+check(/а карта стоит на \$\{arpool\}/.test(html),
+  'пул пуст, но карта возвращена: сказано, что каждый запрос сначала упрётся в 402');
+check(/⚠️ пул пуст по \$\{dead\}[\s\S]{0,120}но карта уже на \$\{serving\}/.test(html),
+  'строка в карточке конфига сверяется с картой, а не повторяет память о дропе');
+
+// ── Баннер «Маршрутов» обязан ВЫЗЫВАТЬСЯ, а не просто существовать ───────────
+// 🪤 Живой баг 16.09: `routesDropAt` звал `pad`, который объявлен внутри IIFE часов и
+// оттуда не виден, - вкладка «Маршруты» падала на рендере (`pad is not defined`), и
+// нашла это другая сессия, а не регресс. `node --check` такое не ловит: файл синтаксически
+// цел, ошибка в области видимости и всплывает только при вызове. Поэтому здесь функция
+// ВЫПОЛНЯЕТСЯ на настоящей дате.
+{
+    const s3 = html.indexOf('const routesDropAt =');
+    check(s3 > 0, 'помощник баннера существует');
+    if (s3 > 0) {
+        const e3 = html.indexOf('\n};', s3);
+        const body = html.slice(s3, e3 + 3);
+        let out = null, err = null;
+        try {
+            out = new Function(body + '\nreturn routesDropAt;')()(new Date().toISOString());
+        } catch (e) { err = e.message; }
+        check(err === null && /^\d{2}:\d{2}$|^\d{2}\.\d{2} \d{2}:\d{2}$/.test(String(out)),
+            `дата дропа форматируется при вызове, без ReferenceError (${err || out})`);
+        // Прочерк на мусоре, а не «Invalid Date» на экране.
+        try {
+            out = new Function(body + '\nreturn routesDropAt;')()('не-дата');
+            check(out === '—', 'битая дата даёт прочерк, а не «Invalid Date»');
+        } catch (e) { check(false, 'битая дата уронила форматирование: ' + e.message); }
+    }
+}
+
+// ── Селектор один, и он применяет себя сам ───────────────────────────────────
+// Владелец 16.09: «я не понимаю всё равно зачем нам дубль селектора». Второй такой же
+// в блоке часов был и убран: два зеркала ОДНОГО ключа разъезжаются (сначала общий
+// «Применить» затирал чужую правку, потом понадобилась синхронизация двух зеркал).
+// Настройка живёт там, где живёт сам ключ; часы только НАЗЫВАЮТ адрес строкой состояния.
+check(html.includes('id="ar-keepalive-pooldrop"'), 'селектор «при пустом пуле пускать в» есть');
+check(!html.includes('arq-pooldrop'), 'второго селектора того же ключа нет — дубль убран');
+check(/при пустом пуле пускать в/.test(html), 'селектор подписан словами владельца');
+check(/sel\.onchange = async \(\) => \{[\s\S]{0,400}?poolFallbackModel: sel\.value/.test(html),
+  'селектор применяет себя сам, по onchange');
+check(!/patch\.poolFallbackModel/.test(html),
+  '«Применить» фолбэк не шлёт: иначе он затирает правку, сделанную мимо кнопки');
+check(/sel\.value = prev;[\s\S]{0,200}?не применён/.test(html),
+  'неудачная запись откатывает выбор и говорит об этом, а не оставляет врать панель');
+check(/pooldropFill\(pfx, data\.cfg\.poolFallbackModel \|\| ''\);\s*\n\s*KEEPALIVE_STATE/.test(html),
+  'селектор обновляется на каждом тике статов, а не только при полной загрузке');
+check(/if \(!force && sel\.dataset\.filled === want\) return;/.test(html),
+  'повторная отрисовка того же значения не пересобирает разметку каждый тик');
+// Часы значение ЧИТАЮТ (чтобы назвать адрес в строке), но не пишут.
+check(/async function arqFbSync/.test(html) && /await arqFbSync\(\)/.test(html),
+  'карточка часов читает фолбэк для строки состояния');
+check(/отвечает \$\{serving\}|поедет на \$\{FB/.test(html),
+  'строка состояния называет адрес: «пул пуст» без адреса бесполезно');
 
 // ── Две полосы в интерфейсе ─────────────────────────────────────────────────
 check(html.includes('id="arq-check-gpt"'), 'вторая кнопка - проверка полосы GPT');
@@ -71,8 +137,60 @@ check(!/<input id="ar-keepalive-pooldrop"/.test(html), 'текстовое по�
 check(/pooldropCatalog\[name\] = d\.models/.test(html), 'список берётся из каталога шлюза');
 check(/pooldropFill\(pfx, data\.cfg\.poolFallbackModel/.test(html),
   'селектор выставляет текущее значение с сервера, а не первый пункт списка');
-check(/\['', \.\.\.cat, String\(current \|\| ''\)\]/.test(html),
-  'текущее значение остаётся в списке даже при пустом каталоге - иначе «Применить» молча выключит фичу');
+check(/\['', \.\.\.cat, want\]/.test(html),
+  'текущее значение остаётся в списке даже при пустом каталоге - иначе выбор молча выключит фичу');
+
+// ── Автопроверка квоты по таймингу наливки ──────────────────────────────────
+// Решение «пора ли проверять» вырезается из монолита и гоняется на синтетических
+// временах: оно будит ПЛАТНЫЙ шлюз, а таймер в 60 с глазами не проверить.
+{
+    const probeLib2 = require('../routing/lib/ar-quota-probe');
+    const ql = require('../routing/lib/pooldrop');
+    const src2 = fs.readFileSync(DASH, 'utf8');
+    const head = 'function arQuotaAutoTickNow(';
+    const s2 = src2.indexOf(head);
+    check(s2 > 0, 'решение автопроверки вынесено в функцию, а не заперто в таймере');
+    if (s2 > 0) {
+        const end = src2.indexOf('\n}\n', s2);
+        const body = src2.slice(s2, end + 3);
+        const ticked = new Set();
+        let markerExists = true;
+        const autoTick = new Function('AR_QUOTA_AUTOTICK', 'arQuotaTicked', 'AR_QUOTA_POOLS',
+            'AR_QUOTA_WINDOWS_MS', 'arQuotaDropAt', 'poolDropLib', 'tierMapFile', 'fs', `
+            ${body}
+            return arQuotaAutoTickNow;`)(
+            true, ticked, probeLib2.AR_QUOTA_POOLS, [2 * 60000, 20 * 60000],
+            probeLib2.arQuotaDropAt, ql, () => '/x/ar-modelmap.json',
+            { existsSync: () => markerExists },
+        );
+        const BATCH = Date.UTC(2026, 8, 16, 8, 0, 0);      // 11:00 МСК
+        const at = (ms) => autoTick(BATCH + ms);
+        check(at(60_000).length === 0, 'за минуту до отметки проба не идёт: партия ещё не налита');
+        check(at(2 * 60_000).length === 2, 'через 2 минуты после наливки проверяются обе полосы');
+        check(at(2 * 60_000 + 30_000).length === 0, 'в том же окне второй раз не проверяем — шлюз платный');
+        check(at(20 * 60_000).length === 2, 'вторая отметка через 20 минут: налив бывает с задержкой');
+        check(at(60 * 60_000).length === 0, 'через час после наливки проба не идёт: окно прошло');
+        check(at(2 * 60_000).length === 0, 'следующая партия — своё окно, но не раньше её отметки');
+        ticked.clear();
+        const NEXT = BATCH + 8 * 3600 * 1000;              // 19:00 МСК
+        check(autoTick(NEXT + 2 * 60_000).length === 2, 'на новой партии автопроверка снова срабатывает');
+        ticked.clear();
+        // 🪤 Гейт «проверяем только при живом маркере пул-дропа» был и снят 16.09: он
+        // молчал ровно в том случае, ради которого существует, - когда никто ещё не поймал
+        // 402 и состояние просто неизвестно. Владелец: «пока я вручную не кликну, хуй что
+        // мне скажет, что у нас уже дипсик». Цена снятия - 12 крошечных проб в сутки.
+        markerExists = false;
+        check(autoTick(BATCH + 2 * 60_000).length === 2,
+            'проверяем в каждую партию независимо от маркера: иначе состояние неизвестно, пока не кликнешь');
+        markerExists = true;
+    }
+    // Замер на старте дашборда: после рестарта состояние известно сразу, а не с партии.
+    check(/setTimeout\(\(\) => \{[\s\S]{0,220}?arQuotaProbeAsync\(pool\)[\s\S]{0,80}?\}, 10_000\)/.test(src),
+        'на старте дашборда состояние квоты замеряется сразу, а не ждёт ближайшей партии');
+    check(/function arQuotaProbeAsync\(pool\)/.test(src),
+        'проба вынесена отдельной функцией: её зовут и таймер, и старт');
+    check(/arQuotaProbeAsync\(pool\);\n\}, 60_000\)/.test(src), 'и таймер по-прежнему зовёт её же');
+}
 
 // ── Quota dial schedule: three batches a day since 2026-09-10 (MSK 03/11/19, 8h step).
 // Статика по HTML: сетку в браузере из регресса не прогонишь, но следы старой
@@ -167,7 +285,7 @@ check(Object.keys(arQuotaReadPools('{ это не JSON')).length === 0, 'бит�
 check(Object.keys(arQuotaReadPools('[]')).length === 0, 'массив вместо объекта не даёт мусорных полос');
 
 // Автофолбэк обязан ставить состояние полосы - иначе часы о нём не узнают.
-check(/arQuotaPoolForModel\(deadModel\)/.test(src), 'пул-дроп определяет полосу по мёртвой модели');
+check(/arQuotaPoolForModel\(deadModel/.test(src), 'пул-дроп определяет полосу по мёртвой модели');
 check(/source: 'drop'/.test(src), 'состояние от фолбэка помечено источником');
 check(/source: 'probe'/.test(src), 'состояние от пробы помечено источником');
 check(/'\/__switch\/api\/ar\/quota-state'/.test(src) && /const pools = \{\}/.test(src),

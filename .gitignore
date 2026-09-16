@@ -146,6 +146,11 @@ routing/keepalive-config-*.json
 routing/keepalive-config-*.json.v*.bak
 # Суточная история времени ответа (минутные бакеты, у каждого своя)
 routing/keepalive-latency-*.json
+# Пул-дроп: маркер «карта опущена на фолбэк» и бэкапы карт на возврат. Это состояние
+# КОНКРЕТНОЙ машины в конкретный день, а не код: в git ему делать нечего, а `add -A`
+# утащил бы его в коммит и устроил конфликты на каждом дропе.
+routing/*-pooldrop.json
+routing/*-modelmap.pooldrop.bak.json
 # История событий прокси: те же минутные бакеты, что латентность — данные, не конфиг
 routing/keepalive-events-*.json
 routing/keepalive-events-*.json.tmp
@@ -281,6 +286,10 @@ opencode.json
 # ── Профили Camoufox/FireFox для проб (cookies, logins, кеш) ───────────────
 *probe*_prof/
 freemodel/lib/camoufox_emailnator_profile_*/
+# 🪤 Профиль почтовой пробы лежал прямо в дереве и под правило `*probe*_prof/` не
+# подходил: имя каталога `profiles`, а не `*_prof`. 178 файлов кеша и живых куков
+# уехали бы в публичный репо первым же `git add -A`. Нашлось 16.09 перед пушем.
+_research/profiles/
 
 # ── Автореги: аккаунты и живые сессии ───────────────────────────────────────
 helpcoder/accounts/
@@ -428,6 +437,28 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/odyssey-sessions.json
+routing/bai-sessions.json
+
+# ── UniKey / getunikey (вкладка дашборда): приватные данные ────────────────────
+# Профили браузера (куки панели, логины, кеш) и живые сессии — НИКОГДА не коммитить:
+# репозиторий публичный. `gh-sessions` у этого шлюза нет вовсе (github: false — вход
+# только Google OAuth или почтой), поэтому и строки под неё нет. Код (open-session.js)
+# и modelmap коммитим.
+getunikey/profiles/
+getunikey/sessions/
+routing/getunikey-sessions.json
+
+# ── B.AI / bai (вкладка дашборда): приватные данные ────────────────────────────
+# Профили браузера (куки Google-входа, кеш) и живые сессии — НИКОГДА не коммитить.
+# gh-sessions нет: GitHub-входа у площадки не существует (github: false).
+bai/profiles/
+bai/sessions/
+# 🪤 Второй, СТАРЫЙ профиль: имя без `s` (`camoufox-profile`, а не `profiles`),
+# поэтому под правило выше он не попадал — `git add -A` утащил бы в публичный репо
+# 68 МБ живых куков и `logins.db`. Нашлось 16.09 перед пушем дашборда.
+bai/camoufox-profile/
+routing/bai-sessions.json
 
 # ── HCNsec (вкладка дашборда): приватные данные ────────────────────────────────
 # Девятый шлюз, заводится 31.08. Закрываем ДО первого прогона сессии, а не после:
@@ -453,6 +484,17 @@ routing/hcnsec-sessions.json
 wisdomsatan/profiles/
 wisdomsatan/sessions/
 routing/wisdomsatan-sessions.json
+
+# ── Odyssey / odyssey (вкладка дашборда): приватные данные ─────────────────────
+# Одиннадцатый шлюз, заводится 16.09. Закрываем ДО первого прогона сессии — правило
+# выучено 31.08, когда живые куки двух шлюзов лежали в дереве нетрекаемыми и один
+# `git add -A` опубликовал бы их в публичный репозиторий.
+# Папки gh-sessions тут нет намеренно: GitHub-входа у площадки не существует
+# (github: false), как и Google — вход держит Clerk, соцвход только Discord.
+# odyssey-modelmap.json — безопасный конфиг маппинга, его коммитим.
+odyssey/profiles/
+odyssey/sessions/
+routing/odyssey-sessions.json
 
 # ── Менеджер Outlook-ящиков (2026-08-31) ─────────────────────────────────────
 # В пуле живые пароли от почт, в профилях — куки залогиненных ящиков. Закрыто ДО
@@ -538,3 +580,14 @@ routing/proxy-dashboard.html.bak-*
 *~
 *.bak-*
 *.bak
+
+# Креды своих прокси пула: логины и пароли. Как и proxy-assign.json, не в git.
+routing/own-proxies.txt
+
+# ── Файлы с вписанным секретом, пойманные стражем 16.09 перед пушем дашборда ────
+# 🪤 `odyssey/.signup-state.json` несёт email, пароль аккаунта и ЖИВОЙ ключ `sk-ody…`
+# (он же уже заведён в пул) — это состояние прогона регистрации, а не код.
+# `_research/probe-camoufox-proxy.py` — пароль прокси литералом в теле пробы.
+# Оба лежали нетрекаемыми ровно до первого `git add -A`; страж остановил коммит.
+.signup-state.json
+_research/probe-camoufox-proxy.py

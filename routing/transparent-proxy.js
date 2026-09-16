@@ -43,6 +43,10 @@ const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForMode
 // возврата. `tierMapFile`/`writeTierMap` передаются инъекцией — см. `poolDropTiers`.
 const poolDropLib = require('./lib/pooldrop');
 
+// Источники каталога моделей для вкладки «Маршруты»: живой ключ → ключ аккаунта из пула →
+// наш снимок каталога. Разбор цепочки — в самом модуле.
+const routesCatalogLib = require('./lib/routes-catalog');
+
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
 function loadEnv(file) {
@@ -1108,7 +1112,21 @@ function poolDropTiers(provider, deadModel, fallback) {
     const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
     if (files.error) return { ok: false, error: files.error };
 
-    // Идемпотентность: маркер — источник истины. Уже опущено → ничего не трогаем.
+    // ── Состояние квоты пишем ДО раннего выхода ──────────────────────────────
+    // 🪤 Пока это стояло ниже, связка «прокси поймал 402 → бар узнал» была разорвана:
+    // при живом маркере функция выходила раньше и состояние НЕ писалось. Именно поэтому
+    // владелец 16.09 сидел на дипсике и не знал: маркер от прошлого дропа висел, каждый
+    // новый 402 упирался в «already: true», а файл состояния заполнял только ручной клик.
+    // Теперь любой пойманный 402 обновляет состояние, даже когда карта уже опущена.
+    const qPool = arQuotaPoolForModel(deadModel || '');
+    if (qPool) {
+        let qKey = '';
+        try { qKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключа нет — хвост будет пустым */ }
+        arQuotaPut(qPool, { ...buildArQuotaCache({ state: 'exhausted' }, qKey, Date.now()), source: 'drop' });
+        logLine(`квота ${qPool}: помечена исчерпанной при фолбэке (${deadModel})`);
+    }
+
+    // Идемпотентность: маркер — источник истины. Уже опущено → карту не трогаем.
     // Иначе повторный 402 (keepalive ретраит, кнопку нажали дважды) переписал бы бэкап
     // уже переключённым файлом, и «вернуть как было» вернуло бы фолбэк.
     const prev = poolDropLib.readMarker(files.markerFile);
@@ -1164,18 +1182,6 @@ function poolDropTiers(provider, deadModel, fallback) {
                 backupFiles: out.backupFiles,
             });
         } catch (e) { errors.push(`маркер не записан: ${e.message}`); }
-    }
-    // ── Часы обязаны узнать о фолбэке сами ──────────────────────────────────
-    // Заявка владельца 15.09: «надо чтобы тут показывало, что квота кончилась при
-    // фоллбэке». До этого состояние знала только ручная проба, и часы продолжали
-    // светить «квота есть», пока пул уже пуст. Пишем ту же запись, что пишет проба,
-    // отличая источник: `source: 'drop'` против `'probe'`.
-    const qPool = arQuotaPoolForModel(deadModel);
-    if (qPool) {
-        let qKey = '';
-        try { qKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключа нет — хвост будет пустым */ }
-        arQuotaPut(qPool, { ...buildArQuotaCache({ state: 'exhausted' }, qKey, Date.now()), source: 'drop' });
-        logLine(`квота ${qPool}: помечена исчерпанной при фолбэке (${deadModel})`);
     }
     const changed = out.backupFiles.length;
     logLine(`pool-drop ${provider}: ${deadModel} → ${fb}, карт ${changed}, тиров ${Object.keys(out.tiers).length}+${Object.keys(out.routesTiers).length}`);
@@ -1265,36 +1271,89 @@ function poolRestoreTiers(provider) {
 // Вкладка провайдера берёт каталог из своего `state.<p>Models`, который наполняется
 // лениво при первом открытии вкладки и требует api_key из сессии этой вкладки. На
 // standalone-вкладке «Маршруты» ни того, ни другого нет — а список моделей нужен для
-// её же `<select>`. Поэтому ключ берём из `<prefix>-active-key.txt` (тот же, что у
-// keepalive), а сам каталог достаём петлёй через СУЩЕСТВУЮЩИЙ `/<ep>/models`: он уже
-// умеет ходить в шлюз напрямую (мимо мёртвого keepalive) и кеширует ответ на 5 минут.
-// Так десять bespoke-фетчеров переиспользуются без единой копии их логики.
+// её же `<select>`. Поэтому цепочку источников строим ЗДЕСЬ, а не в браузере:
+//   1. живой ключ `<prefix>-active-key.txt` (тот же, что у keepalive)
+//   2. ключ любого аккаунта пула — у odyssey и aikeysapi активации нет вовсе
+//   3. наш снимок `custom-models-cache.json` — шлюзы, которые живьём не отвечают
+// Сам каталог достаём петлёй через СУЩЕСТВУЮЩИЙ `/<ep>/models`: он уже умеет ходить в
+// шлюз напрямую (мимо мёртвого keepalive) и кеширует ответ на 5 минут. Так десять
+// bespoke-фетчеров переиспользуются без единой копии их логики.
+//
+// 🎯 Только текстовые модели: картинка целью тира — это упавший запрос (решение 16.09).
+// Разбор фильтра и ступеней ключа — `lib/routes-catalog.js`.
 function handleRoutesModels(req, res) {
     const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
     const provider = String(url.searchParams.get('provider') || '');
     const ep = ROUTE_EP[provider];
     const keyPrefix = CC_MODEL_PREFIX[provider];
     if (!ep || !keyPrefix) return jsonRes(res, 200, { ok: true, models: [], note: 'провайдер без каталога' });
-    let key = '';
-    try { key = fs.readFileSync(path.join(os.homedir(), '.claude', `${keyPrefix}-active-key.txt`), 'utf8').trim(); } catch { /* ключа нет */ }
+
+    // `source` отвечает на вопрос «откуда список»: живой каталог, ключ аккаунта или
+    // снимок с диска. Вкладке это нужно, чтобы честно пометить несвежесть, а не выдать
+    // месячной давности список за сегодняшний.
+    const done = (models, source, note, extra) =>
+        jsonRes(res, 200, Object.assign({ ok: true, provider, models, source, note }, extra || {}));
+
+    // Петля на себя же: переиспользуем handleXxModels целиком, включая его кеш и заголовки.
+    const askGateway = (key, cb) => {
+        const upstream = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`;
+        const rq = http.get(upstream, { timeout: 12000 }, (r) => {
+            const buf = [];
+            r.on('data', c => buf.push(c));
+            r.on('end', () => {
+                let j = {};
+                try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
+                const raw = Array.isArray(j.models) ? j.models.map(m => (typeof m === 'string' ? { id: m } : m)) : [];
+                cb(routesCatalogLib.textOnly(raw), j);
+            });
+        });
+        rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
+        rq.on('error', () => cb([], {}));
+    };
+
+    // Снимок с диска. Хост берём из реестра денежных шлюзов (`MONEY_GW`, ключ там —
+    // короткий тег, поэтому ищем по `tag`), у остальных — из таблицы модуля.
+    const fromSnapshot = () => {
+        const g = Object.values(MONEY_GW).find(x => x && x.tag === provider);
+        const host = (g && g.host) || routesCatalogLib.EXTRA_HOSTS[provider] || '';
+        const snap = routesCatalogLib.snapshotFor(host);
+        if (!snap) {
+            return done([], 'none',
+                'каталога нет ни живьём, ни в снимке — в списке только значения тир-карты');
+        }
+        return done(snap.models, 'snapshot',
+            `снимок каталога от ${new Date(snap.ts || 0).toISOString().slice(0, 10)}`,
+            { staleDays: snap.staleDays });
+    };
+
+    const fallThrough = (models, j, source) => {
+        if (models.length) return done(models, source, j.note, { cached: !!j.cached });
+        return fromSnapshot();
+    };
+
     // Не `isRealKey`: тот требует префикс `sk-`, а у части шлюзов ключи иного вида —
     // отсеклись бы валидные. Пустой пропускаем, остальное отдаём апстриму: плохой ключ
     // вернётся пустым каталогом (401 → `models: []`), а не ошибкой вкладки.
-    if (!key) return jsonRes(res, 200, { ok: true, models: [], note: 'нет активного ключа — открой вкладку шлюза и выбери аккаунт' });
-    // Петля на себя же: переиспользуем handleXxModels целиком, включая его кеш и заголовки.
-    const upstream = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`;
-    const rq = http.get(upstream, { timeout: 12000 }, (r) => {
+    let activeKey = '';
+    try { activeKey = fs.readFileSync(path.join(os.homedir(), '.claude', `${keyPrefix}-active-key.txt`), 'utf8').trim(); } catch { /* ключа нет */ }
+    if (activeKey) return askGateway(activeKey, (m, j) => fallThrough(m, j, 'live'));
+
+    // Активного ключа нет — спрашиваем ключ у пула аккаунтов. Ручка та же, которой
+    // пользуется вкладка шлюза (`/<ep>/sessions`), поэтому ничего нового не появляется.
+    const pool = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/sessions`;
+    const rq = http.get(pool, { timeout: 8000 }, (r) => {
         const buf = [];
         r.on('data', c => buf.push(c));
         r.on('end', () => {
             let j = {};
             try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
-            const models = Array.isArray(j.models) ? j.models.map(m => (typeof m === 'string' ? m : m && m.id)).filter(Boolean) : [];
-            jsonRes(res, 200, { ok: true, provider, models, cached: !!j.cached, note: j.note });
+            const key = routesCatalogLib.pickAccountKey(j.sessions);
+            if (!key) return fromSnapshot();
+            askGateway(key, (m, jj) => fallThrough(m, jj, 'accounts'));
         });
     });
     rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
-    rq.on('error', (e) => jsonRes(res, 200, { ok: true, models: [], note: e.code || e.message }));
+    rq.on('error', () => fromSnapshot());
 }
 
 function handleRoutes(res) {
@@ -12064,6 +12123,74 @@ setInterval(() => {
     arBalanceMaybe(key);
 }, AR_BALANCE_TICK_MS).unref?.();
 
+// ── Автопроверка квоты по таймингу наливки ──────────────────────────────────
+// Заявка владельца 16.09: «квота должна проверяться по таймингу пополнения ±».
+// Партии 03/11/19 МСК (сетка 8 ч) — проба идёт через 2 и через 20 минут после границы:
+// «用完即止» относится к КОНЦУ партии, а налив может и подзадержаться, поэтому одним
+// замером ровно в 03:00 не обойтись.
+//
+// 🪤 Проверяем ТОЛЬКО когда есть маркер пул-дропа: смысл автопроверки — ВЕРНУТЬ карту,
+// а не будить платный шлюз ради любопытства. Нет дропа — нет и запросов.
+// 🪤 Идём петлёй через СВОЙ ЖЕ роут: он уже умеет всё (проба, возврат карты, кеш, лог),
+// и второй реализации этого пути не заводится — тот же приём, что у каталога моделей.
+const AR_QUOTA_AUTOTICK = process.env.AR_QUOTA_AUTOTICK !== '0';
+const AR_QUOTA_WINDOWS_MS = [2 * 60_000, 20 * 60_000];
+const arQuotaTicked = new Set();          // `партия:окно` — по разу, а не каждую минуту
+
+// Пора ли проверять — отдельной функцией: решение простое, но оно будит ПЛАТНЫЙ шлюз,
+// а таймер в 60 с с ним не разглядеть. Возвращает полосы к пробе; пусто = не пора.
+// 🪤 Маркер пул-дропа здесь больше НЕ спрашивается, и это исправление моей же ошибки:
+// гейт «проверяем, только если уже дропнуло» молчал ровно в том случае, ради которого
+// существует - когда никто ещё не поймал 402 и состояние просто неизвестно. Владелец
+// 16.09: «пока я вручную не кликну, хуй что мне скажет, что у нас уже дипсик».
+// Цена снятого гейта - 12 крошечных проб в сутки (2 полосы × 2 окна × 3 партии).
+function arQuotaAutoTickNow(now) {
+    if (!AR_QUOTA_AUTOTICK) return [];
+    const batch = arQuotaDropAt(Number(now));
+    if (!Number.isFinite(batch)) return [];
+    const since = Number(now) - batch;
+    for (const w of AR_QUOTA_WINDOWS_MS) {
+        if (since < w || since > w + 60_000) continue;       // минутное окно вокруг отметки
+        const key = `${batch}:${w}`;
+        if (arQuotaTicked.has(key)) return [];               // в этом окне уже проверяли
+        arQuotaTicked.add(key);
+        return Object.keys(AR_QUOTA_POOLS);
+    }
+    return [];
+}
+
+// Одна проба полосы — петлёй через СВОЙ ЖЕ роут: он уже умеет всё (проба, возврат карты
+// из бэкапа, запись состояния, лог), и второй реализации этого пути не заводится.
+function arQuotaProbeAsync(pool) {
+    const q = http.request({
+        hostname: '127.0.0.1', port: LISTEN_PORT, method: 'POST',
+        path: `/__switch/api/ar/quota-check?pool=${encodeURIComponent(pool)}`,
+    }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+            let j = null;
+            try { j = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* пусто */ }
+            logLine(`автопроверка квоты: ${pool} -> ${j ? j.state : 'нет ответа'}`
+                + `${j && j.restored ? ' (карта возвращена из бэкапа)' : ''}`);
+        });
+    });
+    q.on('error', (e) => logLine(`автопроверка квоты ${pool}: ${e.message}`));
+    q.end();
+}
+
+setInterval(() => {
+    for (const pool of arQuotaAutoTickNow(Date.now())) arQuotaProbeAsync(pool);
+}, 60_000).unref?.();
+
+// Замер на старте: после рестарта дашборда состояние должно быть известно СРАЗУ, а не с
+// ближайшей партии - иначе часы и бар молчат до 03:00/11:00/19:00, и владелец снова
+// узнаёт о подмене последним. Задержка нужна, чтобы сервер успел начать слушать.
+setTimeout(() => {
+    if (!AR_QUOTA_AUTOTICK) return;
+    for (const pool of Object.keys(AR_QUOTA_POOLS)) arQuotaProbeAsync(pool);
+}, 10_000).unref?.();
+
 // Гвард для nudge-режима остальных провайдеров (GoRouter/Tabi/XPeach/JustWoker):
 // один пересчёт на ключ в полёте. У AgentRouter своя, более полная машинерия выше
 // (AR_BALANCE_INFLIGHT + троттлинг + автотик) — это лёгкий аналог для тех,
@@ -14582,6 +14709,12 @@ const OD_MODELMAP_FILE = path.join(__dirname, 'odyssey-modelmap.json');
 // а `~` светится до первого браузерного чтения.
 const OD_GRANT_STEP = 5;
 const OD_DEFAULT_GRANT = 5;
+// 🔴 Эти две константы у Odyssey ОТСУТСТВОВАЛИ, хотя использовались в двух местах
+// (`handleOdShare` и импорт сессии) - то есть обе ручки падали с `ReferenceError` и вместо
+// сохранения сессии отдавали 500. У соседних шлюзов (`AR_*`, `KK_*`) такие константы есть;
+// здесь их просто забыли. Из-за этого «поделиться сессией» и импорт у Odyssey не работали.
+const OD_SHARE_SCRIPT = path.join(__dirname, '..', 'odyssey', 'share-session.js');
+const OD_SESSIONS_DIR = path.join(__dirname, '..', 'odyssey', 'sessions');
 const OD_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const BAI_SESSIONS_FILE = path.join(__dirname, 'bai-sessions.json');
@@ -14958,16 +15091,91 @@ async function kkBalance(target, opts = {}) {
     });
 }
 async function odBalance(target, opts = {}) {
-    return newapiBalance({
-        target: typeof target === 'string' ? { api_key: target } : (target || {}),
-        host: 'odysseyapi.tech',
-        ccHeaders: OD_CC_HEADERS,
-        usageUrl: 'https://odysseyapi.tech/v1/dashboard/billing/usage',
-        subUrl: null,
-        guessGrant: spent => Math.max(OD_DEFAULT_GRANT, Math.ceil(spent / OD_GRANT_STEP) * OD_GRANT_STEP),
-        force: !!opts.force,
-    });
+    // 🔴 У Odyssey НЕТ billing-ручек, и это замер, а не догадка:
+    //   GET /v1/dashboard/billing/usage        → 404 route_not_found
+    //   GET /v1/dashboard/billing/subscription → 404 route_not_found
+    // Значит путь New API (ключом) тут не мог работать НИКОГДА: вкладка стучалась туда,
+    // где у площадки ничего нет, и цифра не появлялась при живом аккаунте. Баланс Odyssey
+    // показывает только кабинет, поэтому чек идёт ПО КУКАМ - снимком сессии аккаунта.
+    const cabinet = await odBalanceFromCabinet(target);
+    if (cabinet) return cabinet;
+    // Снимка нет (аккаунт заведён не авторегой и в кабинет ещё не заходили) - честно
+    // говорим, что делать, вместо «ошибка чека».
+    return { status: 'unknown', error: 'нет снимка сессии: открой аккаунт кнопкой 🌐' };
 }
+
+
+// Метка профиля браузера по адресу аккаунта. Авторега пишет её в мета-файлы прогонов
+// (`odyssey/sessions/_meta/<метка>.json` - там же email и пароль), а в записи пула метки нет.
+// Нужна для читалки: она открывает ИМЕННО профиль аккаунта, иначе кабинета не увидеть.
+function odProfileFor(account) {
+    try {
+        const dir = path.join(__dirname, '..', 'odyssey', 'sessions', '_meta');
+        const email = String((account && account.email) || '').toLowerCase();
+        if (!email) return null;
+        for (const f of fs.readdirSync(dir)) {
+            if (!f.endsWith('.json')) continue;
+            try {
+                const d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+                if (String(d.email || '').toLowerCase() === email) return f.replace(/\.json$/, '');
+            } catch { /* битый мета-файл пропускаем */ }
+        }
+    } catch { /* каталога нет - считаем, что метки неизвестны */ }
+    return null;
+}
+
+// Читает кабинет БРАУЗЕРОМ: профиль аккаунта, тот же прокси, страницы /billing и /usage.
+//
+// 🔴 Почему не запросом с куками, как было в первой версии. Снимок сессии недолговечен:
+// первый запрос с ним проходит (200), второй получает 307 - Clerk проворачивает сессию, и без
+// браузера она не подхватывается (замер 16.09 на двух аккаунтах; в своих профилях оба живы).
+// Поэтому зовём `odyssey/read-account.py`: он открывает профиль аккаунта через его же прокси и
+// читает со страниц кабинета ОСТАТОК и РАСХОД - владелец 16.09: «надо придумать, как читать
+// трату по API, потому что там $5 фиксировано». Расход у подарочного аккаунта не падает от
+// остатка: $5 лежат, а трата видна отдельной строкой.
+async function odBalanceFromCabinet(target) {
+    const profile = odProfileFor(target || {});
+    if (!profile) return null;
+    const py = process.env.PYTHON || 'python';
+    const script = path.join(__dirname, '..', 'odyssey', 'read-account.py');
+    if (!fs.existsSync(script)) return null;
+
+    const args = [script, profile];
+    if (target && target.id) args.push('--account', String(target.id));
+    const outText = await new Promise((resolve) => {
+        let buf = '';
+        const proc = spawn(py, ['-u', ...args], {
+            cwd: path.join(__dirname, '..'), windowsHide: true,
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        });
+        proc.stdout.on('data', d => { buf += String(d); });
+        proc.stderr.on('data', () => {});
+        proc.on('error', () => resolve(buf));
+        proc.on('close', () => resolve(buf));
+        // Браузерный чек медленнее сетевого: профиль поднимается ~15 с. Потолок с запасом.
+        setTimeout(() => { try { proc.kill(); } catch {} }, 90000);
+    });
+
+    const line = outText.split(String.fromCharCode(10))
+        .map(s => s.trim()).filter(l => l.startsWith('{')).pop();
+    if (!line) return { status: 'unknown', error: 'читалка аккаунта не ответила (смотри лог дашборда)' };
+    let d;
+    try { d = JSON.parse(line); } catch { return { status: 'unknown', error: 'ответ читалки не разобран' }; }
+    if (!d.ok) return { status: 'dead', error: d.error || 'кабинет не прочитан - открой 🌐 и войди' };
+
+    return {
+        status: 'live',
+        balanceSource: 'cabinet-browser',
+        via: `профиль ${profile}`,
+        balance: typeof d.balance === 'number' ? d.balance : null,
+        // `spent` кабинет отдаёт отдельной строкой (страница Usage, периоды 24ч/7д/30д).
+        // Если трат не было, у свежего аккаунта там «No usage in this range» - тогда null.
+        spent: (typeof d.spend === 'number' ? d.spend
+            : (typeof d.spend7 === 'number' ? d.spend7 : null)),
+        gift: d.gift === true ? true : (d.gift === false ? false : null),
+    };
+}
+
 async function baiBalance(target, opts = {}) {
     return newapiBalance({
         target: typeof target === 'string' ? { api_key: target } : (target || {}),
@@ -16013,7 +16221,7 @@ async function handleKkAdd(req, res) {
 async function handleOdAdd(req, res) {
     try {
         const body = await readJsonBody(req);
-        const { email, api_key, name } = body;
+        const { email, api_key, name, password } = body;
         const mail = String(email || '').trim();
         if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
         // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
@@ -16032,12 +16240,33 @@ async function handleOdAdd(req, res) {
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            // Пароль кладём в запись: у Odyssey вход в кабинет - почта с паролем, и без
+            // него человек не вернётся в аккаунт, если сессия протухнет (владелец, 16.09).
+            ...(String(password || '').trim() ? { password: String(password).trim() } : {}),
             ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         odSave(sessions);
         logLine(`odyssey add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
             + (link.how ? ` · ${link.how}` : ''));
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Пароль задним числом: аккаунт завели раньше, чем в записи появилось это поле, а сессия
+// у него уже могла протухнуть - вход руками тогда единственный путь.
+async function handleOdSetPassword(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const password = String(body.password || '').trim();
+        if (!id || !password) return jsonRes(res, 400, { error: 'id и password обязательны' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        target.password = password;
+        odSave(sessions);
+        logLine(`odyssey set-password: ${target.email || id}`);
+        jsonRes(res, 200, { ok: true, id });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 async function handleBaiAdd(req, res) {
@@ -20132,6 +20361,150 @@ async function handleRmAutoregStop(_req, res) {
         rmAutoreg.signal = 'STOP';
         logLine(`rumeng autoreg stop requested: pid=${proc.pid}`);
         return jsonRes(res, 200, { ok: true, stopped: true, ...rmAutoregPublic() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// ─────────────────────── Odyssey: авторега с одним кликом ───────────────────────
+//
+// Скрипт `odyssey/auto-add.py` (Python - иначе никак: капчу Clerk проходит только движок
+// Camoufox, а он сюда приходит из Python-мира). Делает всё сам: прокси из общего пула,
+// gmail-ящик на 22.do, форма, ALTCHA, код из письма, ключ. Человеку остаётся клик по
+// капче - и только на «плохих» адресах: замер 16.09, на одном тест-прокси регистрация
+// уходит молча, на другом Clerk показывает отдельный виджет.
+const odAutoreg = {
+    proc: null,
+    pid: null,
+    running: false,
+    startedAt: null,
+    label: null,
+    tier: null,
+    stdout: [],
+    stderr: [],
+    stage: null,
+    result: null,
+    exitCode: null,
+    signal: null,
+};
+
+// Коды возврата `odyssey/auto-add.py` (см. его заголовок). Тексты - для человека, поэтому
+// говорят, что ДЕЛАТЬ, а не «код 6».
+const OD_AUTOADD_FAIL = {
+    1: 'скрипт не запустился - смотри лог дашборда',
+    2: 'капча не пройдена: регистрация не ушла за 10 минут. Попробуй другой прокси - на части адресов капча проходит молча',
+    3: 'код из письма не получен за 200 с - письмо не дошло на этот адрес, повтори прогон',
+    4: 'аккаунт создан, но ключ снять не удалось: жми Повтор (зайдёт тем же профилем и доберёт ключ)',
+    5: 'прокси не получен: пул отказал. Напрямую регистрация не идёт намеренно - проверь пул или выбери другой ярус',
+    6: 'gmail-ящик не взят: 22.do не выдал адрес без плюса. Это лотерея сервиса, повтори прогон',
+};
+
+function odAutoregPublic() {
+    return {
+        running: odAutoreg.running,
+        pid: odAutoreg.pid,
+        startedAt: odAutoreg.startedAt,
+        label: odAutoreg.label,
+        tier: odAutoreg.tier,
+        stdout: odAutoreg.stdout.slice(-40),
+        stderr: odAutoreg.stderr.slice(-20),
+        stage: odAutoreg.stage,
+        result: odAutoreg.result,
+        exitCode: odAutoreg.exitCode,
+        signal: odAutoreg.signal,
+        failText: odAutoreg.exitCode != null ? (OD_AUTOADD_FAIL[odAutoreg.exitCode] || null) : null,
+    };
+}
+
+async function handleOdAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        if (odAutoreg.running && odAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторега Odyssey уже идёт', ...odAutoregPublic() });
+        }
+        // Зовём ОБЁРТКУ, а не драйвер: она перебирает прокси, потому что на части адресов
+        // капча Turnstile не поддаётся вовсе (виджет висит и не нажимается ни кодом, ни
+        // человеком - замер 16.09). Драйвер при этом остаётся прежним и проверенным.
+        const script = path.join(__dirname, '..', 'odyssey', 'auto-add-loop.py');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'odyssey/auto-add-loop.py не найден' });
+
+        const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'own';
+        const label = String(body.label || '').trim().replace(/[^\w-]/g, '_')
+            || ('od_' + Date.now());
+        // Ярус - переключатель, а не приговор: при пустом или мёртвом пуле владелец
+        // вправе пройти напрямую явным выбором (у Odyssey капча от этого строже).
+        const py = process.env.PYTHON || 'python';
+        const proc = spawn(py, ['-u', script, label, '--tier', tier], {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        });
+        Object.assign(odAutoreg, {
+            proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),
+            label, tier, stdout: [], stderr: [], stage: null, result: null,
+            exitCode: null, signal: null,
+        });
+        const pushLines = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                // 🪤 Этап берём ТОЛЬКО из машинного маркера: человекочитаемые строки
+                // меняются при любой правке формулировки, и регулярка по ним однажды
+                // молча покажет не тот шаг.
+                if (line.startsWith('OD_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('OD_STAGE '.length));
+                        if (s && typeof s.stage === 'string') {
+                            odAutoreg.stage = { ...s, at: new Date().toISOString() };
+                        }
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                // Итог - отдельным полем, а не сырым JSON-ом на весь экран.
+                if (line.startsWith('OD_AUTOADD_RESULT ')) {
+                    try { odAutoreg.result = JSON.parse(line.slice('OD_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
+                }
+                odAutoreg[which].push(line);
+                if (odAutoreg[which].length > 100) odAutoreg[which].shift();
+            }
+        };
+        proc.stdout.on('data', d => pushLines('stdout', d));
+        proc.stderr.on('data', d => pushLines('stderr', d));
+        proc.on('error', e => { odAutoreg.stderr.push(e.message); });
+        proc.on('exit', (code, signal) => {
+            odAutoreg.running = false;
+            odAutoreg.pid = null;
+            odAutoreg.exitCode = code;
+            odAutoreg.signal = signal || null;
+            odAutoreg.proc = null;
+            // Ключ в пул вписывает САМ скрипт - штатной ручкой `/__switch/api/od/add`
+            // (см. `register_in_dashboard` в auto-add.py). Здесь только след в логе:
+            // вторая запись того же аккаунта разошлась бы с первой.
+            logLine(`odyssey autoreg exited: label=${label} tier=${tier} code=${code} signal=${signal || '-'}`);
+        });
+        logLine(`odyssey autoreg launched: label=${label} tier=${tier} pid=${proc.pid}`);
+        jsonRes(res, 200, { ok: true, ...odAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleOdAutoregStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...odAutoregPublic() });
+}
+
+async function handleOdAutoregStop(_req, res) {
+    const proc = odAutoreg.proc;
+    if (!odAutoreg.running || !proc) {
+        return jsonRes(res, 200, { ok: true, stopped: false, ...odAutoregPublic() });
+    }
+    try {
+        // Windows: убиваем всё дерево. Без /T дочерний Camoufox пережил бы «остановку»,
+        // о которой UI уже отчитался.
+        if (process.platform === 'win32') {
+            await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }).catch(() => {});
+        } else {
+            try { proc.kill('SIGTERM'); } catch {}
+        }
+        odAutoreg.signal = 'STOP';
+        logLine(`odyssey autoreg stop requested: pid=${proc.pid}`);
+        return jsonRes(res, 200, { ok: true, stopped: true, ...odAutoregPublic() });
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -26327,6 +26700,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/key')       return handleOdSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/set-password') return handleOdSetPassword(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
@@ -26454,6 +26828,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/rm/autoreg/status') return handleRmAutoregStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/start') return handleRmAutoregStart(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/stop') return handleRmAutoregStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/od/autoreg/status') return handleOdAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/autoreg/start') return handleOdAutoregStart(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/autoreg/stop') return handleOdAutoregStop(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/find-proxy') return handleRmFindProxyStart(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/rm/autoreg/find-proxy') return handleRmFindProxyStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/rm/autoreg/find-proxy/stop') return handleRmFindProxyStop(req, res);

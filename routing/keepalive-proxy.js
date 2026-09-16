@@ -1283,6 +1283,8 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'odysseyapi.tech': 'od',
+  'chat.b.ai': 'bai',
   'www.getunikey.ai': 'uk',
   'emtf.aipm9527.online': 'ap',
   'www.aikeysapi.com': 'ak',

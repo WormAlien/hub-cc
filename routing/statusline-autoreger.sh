@@ -703,12 +703,94 @@ elif [ "$provider" = "wisdomsatan" ] && [ -f "$ROUTING/wisdomsatan-sessions.json
     gauge_from_balance_cache "$ROUTING/wisdomsatan-sessions.json" "$PROF/.claude/wisdomsatan-active-key.txt" "ws/balance" 90
 fi
 
+# ---- пул наливки: молчать про него = врать ---------------------------------
+# 🪤 Реактивный фолбэк НЕ виден в тир-карте. Когда пул кончился, карта остаётся на
+# `claude-opus-5`, а keepalive на КАЖДЫЙ запрос ловит 402 и повторяет фолбэком.
+# Бар, читающий только карту, показывал `agentrouter/claude-opus-5[1m]` — то есть
+# нормальную модель, — а ответ приходил с deepseek. Владелец 16.09 проработал так
+# полночи, узнав об этом только из логов. Источник правды о пуле — файл состояния
+# квоты, тот же, что кормит часы в дашборде (`~/.claude/ar-quota-state.json`).
+pool_dry=0
+pool_fb=""
+if [ "${map_prefix:-}" = "ar" ]; then
+    # Полоса — по модели, которую ЗАПРОСИЛИ, а не по той, что уедет: когда карта уже
+    # подменяет цель на беспуловую (deepseek/glm), по цели полосу не определить вовсе —
+    # а вопрос «пул пуст?» относится ровно к запрошенному тиру. Цель смотрим первой лишь
+    # потому, что она и есть фактический адрес, когда она пуловая.
+    pool_pfx=""
+    case "${mm_val:-${model_id%\[1m\]}}" in
+        claude[-_]*) pool_pfx="opus" ;;
+        gpt[-_]*)    pool_pfx="gpt" ;;
+    esac
+    if [ -z "$pool_pfx" ]; then
+        case "${mm_tier:-}" in
+            opus|sonnet|haiku) pool_pfx="opus" ;;
+            gpt)               pool_pfx="gpt" ;;
+            *)
+                case "${model_id%\[1m\]}" in
+                    claude[-_]*) pool_pfx="opus" ;;
+                    gpt[-_]*)    pool_pfx="gpt" ;;
+                esac ;;
+        esac
+    fi
+    if [ -n "$pool_pfx" ] && [ -r "$HOME/.claude/ar-quota-state.json" ]; then
+        q_raw="$(cat "$HOME/.claude/ar-quota-state.json" 2>/dev/null)"
+        q_state=""
+        # Полосы лежат словарём: {"opus":{"state":…},"gpt":{…}}. Формат v1 (плоская
+        # запись без ключей полос) читается как opus — он лежит на диске у всех, кто
+        # обновляется, и «после апдейта пул исчез» выглядело бы поломкой часов.
+        if [[ "$q_raw" =~ \"$pool_pfx\"[[:space:]]*:[[:space:]]*\{[^}]*\"state\"[[:space:]]*:[[:space:]]*\"([a-z]+)\" ]]; then
+            q_state="${BASH_REMATCH[1]}"
+        elif [ "$pool_pfx" = "opus" ] && [[ "$q_raw" =~ ^[[:space:]]*\{[^}]*\"state\"[[:space:]]*:[[:space:]]*\"([a-z]+)\" ]]; then
+            q_state="${BASH_REMATCH[1]}"
+        fi
+        # Свежесть — по ПАРТИИ, а не по TTL: запись прошлой партии мертва, и «пул пуст»
+        # по ней врал бы ровно наоборот (после налива пул как раз полон). Сетка 8 ч от
+        # 19:00 МСК; по модулю якорь даёт 0, поэтому вычитаем остаток от 8 ч.
+        if [ "$q_state" = "exhausted" ]; then
+            q_drop_ms=0
+            if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"dropAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+                q_drop_ms=$(( $(date -d "${BASH_REMATCH[1]}" +%s 2>/dev/null || echo 0) * 1000 ))
+            fi
+            q_now_ms=$(( $(date +%s) * 1000 ))
+            q_cur_ms=$(( q_now_ms - q_now_ms % 28800000 ))
+            [ "$q_drop_ms" = "$q_cur_ms" ] && pool_dry=1
+        fi
+        # Куда уедет при пустом пуле. «⛔ пул пуст» без адреса бесполезно: владелец
+        # 16.09 видел пометку и всё равно не понимал, на чём работает. Берём ту же
+        # настройку, что читает keepalive (`poolFallbackModel`), а если конфига нет —
+        # цель из маркера пул-дропа.
+        if [ "$pool_dry" = "1" ]; then
+            for f in "$ROUTING/keepalive-config-20133.json" "$ROUTING/ar-pooldrop.json"; do
+                [ -r "$f" ] || continue
+                if [[ "$(<"$f")" =~ \"(poolFallbackModel|fallback)\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+                    pool_fb="${BASH_REMATCH[2]}"
+                    break
+                fi
+            done
+        fi
+    fi
+fi
+
 # ---- render ----------------------------------------------------------------
 RESET=$'\033[0m'
 DIM=$'\033[2m'
 MODEL_COL=$'\033[38;5;180m'
 SEP=$'\033[38;5;240m'
 MONEY=$'\033[38;5;42m'
+# Пул пуст — факт про то, ЧТО ОТВЕЧАЕТ, а не про карту тиров. Стоит сразу после модели
+# и заметным красным: иначе бар выглядит совершенно нормально ровно в тот момент,
+# когда модель подменили под ногами.
+POOL_MARK=""
+if [ "$pool_dry" = "1" ]; then
+    # Адрес пишем только если бар ещё его не показал: когда карта уже подменяет цель,
+    # стрелка →фолбэк стоит слева, и второй раз то же слово было бы шумом.
+    if [ -n "$pool_fb" ] && [ "$map_target" != "$pool_fb" ]; then
+        POOL_MARK=$' \033[1;38;2;255;107;128m⛔ пул пуст → '"$pool_fb"$'\033[0m'
+    else
+        POOL_MARK=$' \033[1;38;2;255;107;128m⛔ пул пуст\033[0m'
+    fi
+fi
 
 if [ -n "$map_target" ]; then
     MAP_ARROW=$'\033[38;5;243m'
@@ -718,16 +800,16 @@ if [ -n "$map_target" ]; then
     # которого владелец не делал. Поэтому здесь `agentrouter→opus-5[1m]`: слева шлюз,
     # справа во что развернётся, ровно один раз каждое.
     if [ "$route_bare" = "1" ]; then
-        printf '%s%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+        printf '%s%s%s%s→%s%s%s%s' "$MODEL_COL" "$provider" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET" "$POOL_MARK"
     else
-        printf '%s%s/%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
+        printf '%s%s/%s%s%s→%s%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET" "$POOL_MARK"
     fi
 elif [ "$route_nomap" = "1" ]; then
     # Цель не задана → front-door ответит 400, запрос наверх не уйдёт. Красным, а не
     # тускло: это отказ, а не «просто нет стрелки».
-    printf '%s%s%s→%s%s?%s' "$MODEL_COL" "$provider" $'\033[38;5;243m' "$RESET" $'\033[1;38;2;255;107;128m' "$RESET"
+    printf '%s%s%s→%s%s?%s%s' "$MODEL_COL" "$provider" $'\033[38;5;243m' "$RESET" $'\033[1;38;2;255;107;128m' "$RESET" "$POOL_MARK"
 else
-    printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
+    printf '%s%s/%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET" "$POOL_MARK"
 fi
 
 # ---- /effort: тем же цветом, каким уровень подсвечен в самом Claude Code -----

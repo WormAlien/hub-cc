@@ -1,0 +1,576 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+odyssey/od_common.py
+
+Шаги, общие для всех окон Odyssey: прокси из общего пула, ящик на 22.do, клики,
+чтение адреса. Берут отсюда и записыватель (`record-signup-camoufox.py`), и драйвер
+автореги (`auto-add.py`).
+
+Зачем отдельный модуль. Ящик на 22.do и получение прокси - не «две похожие строчки», а
+два неочевидных шага с граблями, каждая из которых стоила прогона: «Random» крутит ДОМЕН,
+а не локальную часть; gmail приходит только через Random и выпадает не с первого раза; у
+`fetchVia` тело читается методом, а не свойством. Две копии этого разъедутся за неделю -
+ровно то, что уже случилось в этом репозитории с ожиданием кода почты, где правка в либе
+не касалась дубля в чужом скрипте.
+"""
+
+import asyncio
+import json
+import re
+import sys
+import urllib.request
+from pathlib import Path
+
+# 🔴 Вывод в UTF-8 принудительно. В консоли Windows кодировка cp866, и ЛЮБАЯ строка с
+# эмодзи роняла прогон целиком: замер 16.09 - проба ящика умерла на `log("ПОЧТА", f"✅ адрес
+# готов: …")` с `UnicodeEncodeError: 'charmap' codec can't encode character '✅'`.
+# Дашборд ставит PYTHONIOENCODING сам, а ручной запуск из терминала - нет, поэтому
+# кодировку задаём здесь, а не надеемся на окружение.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+DIR = Path(__file__).resolve().parent
+# Метка последнего выданного прокси. Нужна драйверу: после регистрации он привязывает
+# аккаунт к ТОМУ ЖЕ адресу (`--bind-key <id> --bind-label <метка>`), иначе чек баланса
+# пойдёт через другой IP, а `cf_clearance` привязан к нему - кабинет ответит 307.
+LAST_PROXY = {"label": None}
+BRIDGE = DIR.parent / "routing" / "lib" / "proxy-for.js"
+
+SIGNUP_URL = "https://odysseyapi.tech/sign-up"
+CONSOLE_URL = "https://odysseyapi.tech/dashboard"
+API_KEYS_URL = "https://odysseyapi.tech/api-keys"
+BILLING_URL = "https://odysseyapi.tech/billing"
+MAIL_22DO_URL = "https://22.do/"
+
+POOL_HOST = "odysseyapi.tech"
+# Зонд пула: у Next.js нет `/api/status` из соглашения New API, зато ALTCHA-челлендж
+# отдаёт 200 JSON без авторизации (замер 16.09).
+POOL_PREFLIGHT_PATH = "/api/auth/altcha/challenge"
+
+# 🪤 Потолок нажатий с запасом: в разведке gmail выпадал раз в три-четыре нажатия, а на
+# живом прогоне - только на 32-м.
+RANDOM_MAX_TRIES = 80
+
+DOMAIN_RE = re.compile(r"@([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+CODE_RE = re.compile(r"\b(\d{6})\b")
+
+
+def short_url(url):
+    m = re.match(r"https?://([^/]+)(/[^\s]*)?", url or "")
+    return (m.group(1) + (m.group(2) or "")) if m else (url or "")
+
+
+# Схлопывание пробелов вынесено в функцию не для красоты: `re.sub(r"\s+", ...)` внутри
+# f-строки - это обратный слеш в выражении, а он там запрещён до Python 3.12.
+def flat(s, n):
+    return re.sub(r"\s+", " ", str(s if s is not None else ""))[:n]
+
+
+def open_log(path, echo=True):
+    """Лог в файл и на экран. Строки пишутся сразу: сессия агента уже умирала посреди
+    прогона, и единственным носителем записи оставался диск."""
+    fh = open(path, "a", encoding="utf-8")
+
+    def log(kind, msg):
+        line = f"[{__import__('datetime').datetime.now():%H:%M:%S}] {str(kind):<9} {msg}"
+        if echo:
+            print(line, flush=True)
+        fh.write(line + "\n")
+        fh.flush()
+
+    log.file = fh
+    return log
+
+
+
+# ── сети: подарок $5 даётся один раз на сеть ──────────────────────────────────
+
+def load_used_networks():
+    """Сети, с которых аккаунт уже заводили. Пишет их авторега после регистрации."""
+    try:
+        d = json.loads((DIR / "networks-used.json").read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def asn_for_ip(ip, timeout=10):
+    """ASN провайдера по адресу. Для площадки «сеть» - это провайдер, а не подсеть:
+    три прокси одного хоста (`154.221.x`, `154.219.x`) оказались ОДНОЙ сетью AS202656."""
+    try:
+        req = urllib.request.Request(f"http://ip-api.com/json/{ip}?fields=as,isp,country")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return str((json.loads(r.read().decode("utf-8") or "{}").get("as")) or "").strip()
+    except Exception:
+        return ""
+
+
+def ip_of_label(label):
+    m = re.search(r"//(?:[^@/]*@)?([^:/]+)", str(label or ""))
+    return m.group(1) if m else ""
+
+
+# ── прокси из общего пула ─────────────────────────────────────────────────────
+
+async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGHT_PATH, pin=None,
+                        exclude=None):
+    """Прокси из ОБЩЕГО пула через мост на Node. Своей копии правил пула тут нет.
+
+    `pin` - конкретная строка прокси (`http://user:pass@ip:port`). Нужна не для красоты:
+    требовательность Turnstile зависит от IP выхода (замер 16.09 - один тест-прокси
+    проходит молча, другой требует интерактивного клика), и чтобы проверить это
+    утверждение, а не поверить в него, нужен способ закрепить адрес. При `pin` пул
+    не спрашивается вовсе - привязки не трогаем.
+
+    Контракт пула соблюдаем буквально: `ok:false` - «НЕ ХОДИТЬ ВООБЩЕ». Молча уйти
+    напрямую - это ровно тот тихий провал, из-за которого автореги когда-то
+    регистрировались с домашнего IP и никто об этом не знал.
+    """
+    if pin:
+        parts = pin
+        m = re.match(r"^(?P<scheme>\w+)://(?:(?P<user>[^:@/]+):(?P<pass>[^@/]*)@)?(?P<host>[^:/]+):(?P<port>\d+)$", pin)
+        if not m:
+            raise RuntimeError(f"--proxy не разобран: {pin}")
+        cfg = {"server": f"{m.group('scheme')}://{m.group('host')}:{m.group('port')}"}
+        if m.group("user"):
+            cfg["username"] = m.group("user")
+            cfg["password"] = m.group("pass") or ""
+        LAST_PROXY["label"] = cfg["server"]
+        log("ПРОКСИ", f"{cfg['server']} · закреплён вручную (--proxy), пул не спрашивал")
+        return cfg
+
+    if tier == "none":
+        log("ПРОКСИ", "ярус none - идём напрямую")
+        return None
+
+    cmd = ["node", str(BRIDGE), "--key", key, "--host", host,
+           "--path", probe_path, "--tier", tier, "--force"]
+    # Уже пробованные адреса: капча Turnstile на части IP не поддаётся вообще, и
+    # единственный выход - следующий прокси из того же яруса.
+    if exclude:
+        cmd += ["--exclude", ",".join(exclude)]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    raw, err = await proc.communicate()
+    text = (raw or b"").decode("utf-8", "replace").strip()
+    lines = [l for l in text.splitlines() if l.strip().startswith("{")]
+    if not lines:
+        detail = flat((text or (err or b"").decode("utf-8", "replace")), 200)
+        raise RuntimeError(f"мост пула не ответил JSON (код {proc.returncode}): {detail}")
+
+    ans = json.loads(lines[-1])
+    if not ans.get("ok"):
+        raise RuntimeError(f"пул отказал в прокси: {ans.get('error')}")
+    if ans.get("direct"):
+        log("ПРОКСИ", f"⚠️ пул отправил напрямую: {ans.get('reason')}")
+        return None
+    LAST_PROXY["label"] = ans.get("label")
+    log("ПРОКСИ", f"{ans.get('label')} · ярус {ans.get('tier')} · привязка {ans.get('how')}")
+    return ans.get("browser")
+
+
+async def acquire_fresh_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGHT_PATH,
+                              attempts=6, tried=None):
+    """Прокси из СВЕЖЕЙ сети: с которой подарок $5 ещё не брали.
+
+    🔴 Зачем отдельная функция, а не проверка после регистрации. Подарок даётся один раз на
+    сеть, и аккаунт на уже отработанной сети получается сразу с нулевым балансом - владелец
+    16.09: «аккаунт с нулевым балансом не создаём, там сразу видно». Значит сеть надо
+    выбирать ДО регистрации: берём адрес у пула, спрашиваем его ASN и, если сеть уже в
+    списке траченных, просим следующий (`--exclude`). Аккаунт на мёртвой сети просто не
+    появится - вместо того чтобы появиться и оказаться бесполезным.
+    """
+    tried = list(tried or [])
+    used = load_used_networks()
+    for i in range(1, attempts + 1):
+        browser = await acquire_proxy(tier, key, log, host, probe_path, exclude=tried)
+        label = LAST_PROXY.get("label") or ""
+        ip = ip_of_label(label)
+        if not ip:
+            return browser
+        asn = asn_for_ip(ip)
+        if not asn:
+            log("СЕТЬ", f"ASN адреса {ip} не спросился - беру его как есть")
+            return browser
+        if asn not in used:
+            log("СЕТЬ", f"{asn} - сеть свежая, подарок должен быть (попытка {i})")
+            return browser
+        log("СЕТЬ", f"{asn} уже трачен ({used[asn][:40]}…) - беру следующий адрес")
+        tried.append(label)
+    log("СЕТЬ", f"свежих сетей не нашлось за {attempts} попыток - иду с последним адресом")
+    return browser
+
+
+# ── 22.do: адрес на gmail ─────────────────────────────────────────────────────
+
+async def robust_click(page, selector, log, what="", timeout=9000, prefer_js=False):
+    """Клик, который не сдаётся на первом отказе.
+
+    🪤 Тот же клик проходил в headless-разведке и падал в окне записи: у кнопки может быть
+    перекрытие (баннер, рекламный iframe), а с `humanize=10.0` Camoufox ещё и ведёт мышь
+    нарочно медленно - один клик занимал **30 секунд**. Поэтому три попытки по возрастанию
+    грубости, а `prefer_js` для СВОЕЙ автоматики: там, где человеческое движение мыши
+    ничего не даёт, ждать его бессмысленно.
+    """
+    loc = page.locator(selector).first
+    try:
+        await loc.wait_for(state="visible", timeout=timeout)
+    except Exception:
+        return False, "не появилась на странице"
+
+    js_click = ("клик из JS", lambda: page.evaluate(
+        "sel => { const e = document.querySelector(sel); if (e) e.click(); }", selector))
+    mouse_click = ("обычный клик", lambda: loc.click(timeout=timeout))
+    force_click = ("force-клик", lambda: loc.click(timeout=timeout, force=True))
+    plan = [js_click, mouse_click, force_click] if prefer_js else [mouse_click, force_click, js_click]
+
+    last = ""
+    for how, action in plan:
+        try:
+            await action()
+            return True, how
+        except Exception as e:
+            last = flat(str(e).splitlines()[0], 70)
+    return False, f"все три способа не прошли (последняя ошибка: {last})"
+
+
+
+
+
+async def goto_retry(page, url, log, tries=4, pause_s=3):
+    """Переход с повтором.
+
+    🪤 `Page.goto: NS_BINDING_ABORTED` - не «сайт недоступен», а «навигацию отменили»:
+    приложение в этот же момент уходило на свою страницу (сразу после `complete` Clerk
+    уводит с `/sign-up`), и наш переход столкнулся с его переходом. Лечится не ожиданием
+    «подольше», а повтором: второй заход обычно уже никому не мешает.
+    """
+    last = ""
+    for i in range(1, tries + 1):
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            return True
+        except Exception as e:
+            last = flat(str(e).splitlines()[0], 80)
+            if log:
+                log("ПЕРЕХОД", f"попытка {i} на {short_url(url)} сорвалась: {last}")
+            await page.wait_for_timeout(pause_s * 1000)
+    # Последняя проверка: возможно, приложение само привело нас куда надо.
+    if url.split("//")[-1].split("/")[0] in (page.url or ""):
+        return True
+    if log:
+        log("ПЕРЕХОД", f"❌ {short_url(url)} не открылся ({last})")
+    return False
+
+
+async def click_button_by_text(page, text, log=None, timeout=20000):
+    """Нажимает видимую кнопку по её тексту. Без CSS-селекторов вообще.
+
+    🔴 Зачем так. Селекторы вида `button:has-text("…")` - это синтаксис Playwright, а не
+    CSS: `document.querySelector` на них падает, и JS-запасной путь (нужный при медленном
+    `humanize`) теряет кнопку. Именно на этом встал прогон 16.09: «Create API key» не
+    находился ни мышью (таймаут), ни из JS (там синтаксическая ошибка), хотя кнопка на
+    странице была. Поиск по тексту одинаково понимают оба пути, поэтому он и выбран.
+    """
+    js = """(want) => {
+        const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const nodes = [...document.querySelectorAll('button, a, [role="button"], input[type="submit"]')];
+        const hit = nodes.find(e => vis(e) && norm(e.innerText || e.value).includes(want));
+        if (!hit) return false;
+        hit.click();
+        return true;
+    }"""
+    try:
+        done = await page.evaluate(js, text.lower())
+    except Exception as e:
+        if log:
+            log("КЛИК", f"поиск кнопки «{text}» сорвался: {flat(str(e).splitlines()[0], 70)}")
+        done = False
+    if done:
+        return True, "клик из JS по тексту"
+
+    # Запасной путь: обычный клик - если кнопка есть, но JS-путь её не увидел (например,
+    # текст лежит во вложенном узле с другим регистром).
+    try:
+        await page.locator(f"button:has-text('{text}')").first.click(timeout=timeout)
+        return True, "клик мышью"
+    except Exception as e:
+        return False, f"кнопка «{text}» не найдена ({flat(str(e).splitlines()[0], 60)})"
+
+
+async def read_22do_domain(page):
+    """Домен, который сейчас выбран на главной 22.do."""
+    for sel in ("div.choices__item", ".mail-con-input", ".choices__inner"):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count():
+                t = (await loc.inner_text()).strip()
+                m = DOMAIN_RE.search(t)
+                if m:
+                    return m.group(1).lower()
+                if t.startswith("@"):
+                    return t[1:].strip().lower()
+        except Exception:
+            pass
+    return ""
+
+
+async def read_22do_address(page):
+    """Адрес ящика: по селекторам, затем по хешу URL, затем по тексту страницы.
+
+    🔴 Первый прогон драйвера (16.09) упал именно здесь: селекторы не совпали, и функция
+    вернула пусто - хотя адрес на странице был. «Не прочитался» и «адрес не выдан» снаружи
+    неотличимы, а стоят по-разному, поэтому проб три, и последняя - по регулярке в тексте.
+    """
+    for sel in ("#copyEmail", ".mf-panel-address", ".mf-address-row .mf-mono"):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count():
+                t = flat(await loc.inner_text(), 80)
+                if "@" in t:
+                    return t
+        except Exception:
+            pass
+
+    if "@" in (page.url or ""):
+        candidate = page.url.split("#")[-1].strip("/ ")
+        candidate = candidate.replace("inbox/", "").strip("/ ")
+        if "@" in candidate and " " not in candidate:
+            return candidate
+
+    try:
+        body = await page.inner_text("body")
+    except Exception:
+        return ""
+    for m in re.finditer(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", body or ""):
+        cand = m.group(0).strip(".")
+        # Служебные адреса сайта адресом ящика не являются - иначе в «адрес» попадёт
+        # `abuse@22.do` из подвала (на этих граблях уже стояли 16.09).
+        if cand.lower().startswith(("abuse@", "support@", "info@")):
+            continue
+        return cand
+    return ""
+
+
+def clean_22do_address(addr, allow_plus=False):
+    """Годится ли адрес: ТОЛЬКО `gmail.com` (и по умолчанию без плюса).
+
+    🔴 `googlemail.com` здесь запрещён намеренно, и это не придирка: у 22.do «Change»
+    выдаёт его наравне с gmail, а я в первой версии проверки принимал оба домена - и
+    прогон 16.09 ушёл регистрироваться на `…@googlemail.com`. Владелец это остановил.
+    Нужен ровно `gmail.com`; домены самого 22.do Clerk отвергнет: у него включены
+    `block_email_subaddresses` и `block_disposable_email_domains` (проверено живьём
+    по `/v1/environment`).
+
+    🪤 `allow_plus` - для ОПЫТА, а не для боя. Замер 16.09: 22.do выдаёт gmail только с
+    плюсом (25 «Change» подряд - ни одного чистого), и надо проверить ФАКТОМ, отвергает
+    ли такой адрес Clerk, а не верить в это по названию настройки. Флаг ставит
+    вызывающий, и в постоянном режиме он выключен.
+    """
+    if not addr or "@" not in addr:
+        return False
+    local, _, domain = addr.rpartition("@")
+    if domain.lower() != "gmail.com":
+        return False
+    return allow_plus or "+" not in local
+
+
+
+async def reset_22do_session(page, log):
+    """Сбрасывает сессию 22.do, чтобы следующий раунд дал НОВЫЙ адрес.
+
+    🔴 Без этого раунды бессмысленны, и это замер 16.09: сервис помнит выданный адрес в
+    своей сессии и возвращает ТОТ ЖЕ плюс-алиас в каждом круге - шесть раундов подряд
+    приносили один и тот же `jokarkasm.4.5+qhy6y@gmail.com`. Новый адрес выдаётся только
+    новой сессии, поэтому чистим куки и хранилище страницы.
+
+    🪤 Куки чистим ВСЕ, а не только домена 22.do (в Python-API Playwright фильтра нет), и
+    это безопасно именно тут: шаг ящика идёт ДО первой навигации на odysseyapi.tech, то
+    есть сессии площадки в этот момент ещё не существует.
+    """
+    try:
+        await page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
+    except Exception:
+        pass
+    try:
+        await page.context.clear_cookies()
+        log("ПОЧТА", "сессию 22.do сбросил - адрес будет новый")
+        return True
+    except Exception as e:
+        log("ПОЧТА", f"сбросить куки не вышло: {flat(str(e), 60)}")
+        return False
+
+
+async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=6, allow_plus=False):
+    """Крутит «Random» до домена gmail.com, жмёт «Open» и отдаёт ГОДНЫЙ адрес.
+
+    🔴 Разведка 16.09: кнопка «Random» (`button#mail-random`) крутит **ДОМЕН**, а не
+    локальную часть. В выпадающем списке (Choices.js) gmail НЕТ - он приходит только
+    через «Random», поэтому выбрать его прямо нельзя, только крутить.
+
+    🪤 Домен `gmail.com` сам по себе ещё не гарантия: 22.do умеет выдать и плюс-алиас
+    (`…+0pmg2u4bh@gmail.com`). Такой адрес Clerk отвергнет, поэтому адрес проверяется
+    (`clean_22do_address`), и если не подошёл - раунд повторяется с чистого листа: сайт
+    генерирует и локальную часть, и домен заново.
+    """
+    for rnd in range(1, rounds + 1):
+        if rnd > 1:
+            # Новый раунд - новая сессия: иначе сервис вернёт тот же плюс-алиас.
+            await reset_22do_session(page, log)
+        try:
+            await page.goto(MAIL_22DO_URL, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4000)
+        except Exception as e:
+            log("ПОЧТА", f"22.do не открылся: {flat(str(e).splitlines()[0], 80)}")
+            return ""
+
+        seen = []
+        for i in range(1, tries + 1):
+            dom = await read_22do_domain(page)
+            seen.append(dom)
+            if dom == "gmail.com":
+                log("ПОЧТА", f"gmail.com выпал на {i}-м нажатии «Random» (раунд {rnd})")
+                break
+            ok, how = await robust_click(page, "button#mail-random", log, "Random",
+                                         timeout=25000, prefer_js=True)
+            if not ok:
+                log("ПОЧТА", f"«Random» не нажался: {how}")
+                return ""
+            await page.wait_for_timeout(900)
+        else:
+            log("ПОЧТА", f"❌ gmail.com не выпал за {tries} нажатий "
+                         f"(видели: {', '.join(sorted(set(seen))[:8])})")
+            return ""
+
+        ok, how = await robust_click(page, "button#into-mailbox", log, "Open",
+                                     timeout=30000, prefer_js=True)
+        if not ok:
+            log("ПОЧТА", f"«Open» не нажался: {how}")
+            return ""
+        await page.wait_for_timeout(6000)
+
+        addr = await read_22do_address(page)
+        if clean_22do_address(addr, allow_plus):
+            log("ПОЧТА", f"✅ адрес готов: {addr}")
+            return addr
+
+        # 🔴 Кнопку «Change» в ящике я пробовал и ОТКАЗАЛСЯ от неё. Она меняет ДОМЕН
+        # вместе с адресом: после удачного gmail первый же «Change» уводил на `outlook.com`,
+        # второй - на `fft.edu.do`, и адреса там приходили с плюсом. Вернуть домен на gmail
+        # из ящика нельзя - кнопка «Random» живёт на ГЛАВНОЙ, и попытка нажать её из ящика
+        # падала («не появилась на странице»). Владелец это видел и справедливо сказал:
+        # «опять такая почта».
+        #
+        # Правильный путь - тот, которым он добывал gmail руками: начать ЗАНОВО с главной
+        # страницы. Локальная часть генерируется при «Open», поэтому новый раунд даёт новый
+        # адрес. Дороже по времени, зато перебор идёт ТОЛЬКО внутри gmail.
+        log("ПОЧТА", f"адрес «{addr or 'не прочитался'}» не беру (нужен gmail без плюса) - "
+                     f"раунд {rnd} из {rounds} заново")
+    return ""
+    return ""
+
+
+async def reload_22do_inbox(page, log):
+    """Обновить список писем. Кнопка есть не всегда - молчание тут нормально."""
+    for sel in ("button.mf-panel-btn", "button:has-text('Reload')"):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count():
+                await loc.click(timeout=8000)
+                await page.wait_for_timeout(2500)
+                return True
+        except Exception:
+            continue
+    for attempt in (1, 2):
+        try:
+            await page.reload(wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+            return True
+        except Exception as e:
+            # 🪤 `NS_BINDING_ABORTED` - не «сайт лёг», а «навигацию отменили»: страница в
+            # этот момент сама куда-то уходила. Второй заход обычно проходит.
+            if attempt == 2:
+                log("ПОЧТА", f"обновить ящик не вышло: {flat(str(e).splitlines()[0], 60)}")
+    return False
+
+
+
+# Ручка ящика 22.do: отдаёт письма JSON-ом. Замер 16.09 - тело запроса
+# {"email":"<адрес>","lastime":<unixtime>}, ответ {"status":true,"data":…}.
+MAILBOX_API_JS = """async (arg) => {
+    const r = await fetch('/action/mailbox/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: arg.email, lastime: arg.lastime }),
+    });
+    const text = await r.text();
+    return text.slice(0, 20000);
+}"""
+
+
+
+# Ручка ящика: {"email":…,"lastime":…}. Замер 16.09 - отвечает `{"status":false,
+# "msg":"Authentication required"}`, если уходит без авторизации сеанса, поэтому
+# основной путь НЕ она, а список писем на странице (см. ниже).
+MAILBOX_API_JS = """async (arg) => {
+    const r = await fetch('/action/mailbox/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: arg.email, lastime: arg.lastime }),
+    });
+    return (await r.text()).slice(0, 20000);
+}"""
+
+# Код виден в ТЕМЕ письма: «035789 is your verification code» (скриншот владельца 16.09).
+# Поэтому ищем шесть цифр рядом со словами про код, а не тащим текст всего письма.
+SUBJECT_CODE_RE = re.compile(r"(?:^|\D)(\d{6})(?:\D|$)")
+
+
+async def fetch_22do_code(page, log, timeout_s=120, poll_s=2, email=None):
+    """Ждёт письмо и берёт код из ТЕМЫ - частым чтением, без перезагрузок.
+
+    🔴 Замер 16.09 вечером (владелец: «письмо приходит, ты ещё 4 раза страницу обновляешь»):
+    письмо от Odyssey приходит за ~15 с, а прежний цикл замечал его через 30+ с, потому что
+    каждые 12 секунд жал «Refresh» и читал страницу раз в 4 секунды. Ни то, ни другое не
+    нужно: список писем обновляется сам, а чтение текста страницы стоит доли секунды.
+    Поэтому: читаем каждые 2 секунды, «Refresh» - только если письма нет дольше 20 секунд.
+
+    Код стоит в теме («035789 is your verification code»), поэтому берём шесть цифр из строки,
+    где есть слово про код. Чужие письма в ящике (например «PwC account activation») при этом
+    не подсунут свои цифры.
+    """
+    addr = email or await read_22do_address(page)
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    started = asyncio.get_event_loop().time()
+    lap = 0
+    refreshed = False
+    while asyncio.get_event_loop().time() < deadline:
+        lap += 1
+        try:
+            text = await page.inner_text("body")
+        except Exception:
+            text = ""
+
+        for line in (text or "").splitlines():
+            low = line.lower()
+            if ("code" in low or "verification" in low or "verify" in low) and "@" not in line:
+                m = SUBJECT_CODE_RE.search(line)
+                if m:
+                    log("ПОЧТА", f"код из темы письма ({lap}-е чтение): {m.group(1)}")
+                    return m.group(1)
+
+        # 🔴 Обновлять список НАДО, и это поправка владельца: «без перезагрузки письмо не
+        # увидишь». Список сам не обновляется - новое письмо появляется только после
+        # «Refresh». Но и частить незачем: кнопка нажимается раз в 4 секунды (каждая пара
+        # кругов), а читаем текст каждые 2 секунды - так письмо ловится через 2-4 секунды
+        # после того, как сайт его отдал, вместо прежних 12-30.
+        if lap % 2 == 0:
+            await reload_22do_inbox(page, log)
+        await page.wait_for_timeout(poll_s * 1000)
+    log("ПОЧТА", f"код не появился за {timeout_s} с (адрес {addr or '?'})")
+    return ""

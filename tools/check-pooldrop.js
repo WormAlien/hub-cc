@@ -46,9 +46,16 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pooldrop-'));
 process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { } });
 
 const logLines = [];
+// Записи состояния квоты, которые делает пул-дроп: (полоса, запись). Настоящий
+// `arQuotaPut` пишет в `~/.claude/ar-quota-state.json` - боевой файл владельца,
+// и регрессу туда нельзя. Подставлен свой, а собирается запись НАСТОЯЩИМ
+// `buildArQuotaCache` из модуля: проверяем форму, а не заглушку.
+const quotaWrites = [];
+const probeLib = require('../routing/lib/ar-quota-probe');
 // `__dirname` и `CC_MODEL_PREFIX` — параметры, а не свободные имена: так `tierMapFile`
 // строит пути от TMP, а не от боевого `routing/`.
-const sandbox = new Function('fs', 'path', 'poolDropLib', 'logLine', '__dirname', 'CC_MODEL_PREFIX', `
+const sandbox = new Function('fs', 'path', 'poolDropLib', 'logLine', '__dirname', 'CC_MODEL_PREFIX',
+    'arQuotaPoolForModel', 'arQuotaPut', 'buildArQuotaCache', 'AR_ACTIVE_KEY_FILE', `
     ${extract('tierMapFile')}
     ${extract('writeTierMap')}
     ${extract('resolveProviderKey')}
@@ -58,6 +65,10 @@ const sandbox = new Function('fs', 'path', 'poolDropLib', 'logLine', '__dirname'
 `)(
     fs, path, poolDropLib, (s) => logLines.push(s), TMP,
     { agentrouter: 'ar', gorouter: 'gorouter' },
+    probeLib.arQuotaPoolForModel,
+    (pool, entry) => { quotaWrites.push([pool, entry]); return {}; },
+    probeLib.buildArQuotaCache,
+    path.join(TMP, 'ar-active-key.txt'),
 );
 
 const { tierMapFile, resolveProviderKey, poolDropTiers, poolRestoreTiers } = sandbox;
@@ -107,7 +118,7 @@ const drop = () => poolDropTiers('agentrouter', DEAD, FB);
 console.log('пул-дроп: тир-карта на фолбэк и обратно\n');
 
 // ── 1. Опускание: что переключено, что нет ───────────────────────────────────
-check('переключены только пуловые цели, беспуловые и пустые не тронуты', () => {
+check('переключена только СВОЯ семья, чужая полоса и беспуловые не тронуты', () => {
     reset();
     const r = drop();
     assert.strictEqual(r.ok, true, `drop не прошёл: ${r.error}`);
@@ -116,7 +127,9 @@ check('переключены только пуловые цели, беспул
 
     const m = read(map);
     assert.strictEqual(m.opus, FB, 'claude-opus-5 не переключён');
-    assert.strictEqual(m.sonnet, FB, 'gpt-5.6-sol не переключён');
+    // 🪤 Полосы Claude и GPT кончаются ПОРОЗНЬ (15.09 пул Opus был пуст, а GPT отдавался),
+    // поэтому дроп по claude-* не смеет уводить gpt-цели: трафик уехал бы с рабочего пула.
+    assert.strictEqual(m.sonnet, 'gpt-5.6-sol', 'чужая семья (gpt) уведена на фолбэк — этого делать нельзя');
     assert.strictEqual(m.haiku, 'glm-5.3', 'беспуловая модель задета — этого делать нельзя');
     assert.strictEqual(m.gpt, 'deepseek-v4-flash', 'пул не должен трогать уже беспуловый тир');
     assert.strictEqual(m.default, '', 'пустой тир должен остаться пустым, а не получить фолбэк');
@@ -125,6 +138,15 @@ check('переключены только пуловые цели, беспул
     assert.strictEqual(rt.default, FB, 'routes.default не переключён');
     assert.strictEqual(rt.opus, FB, 'routes.opus не переключён');
     assert.strictEqual(rt.haiku, 'glm-5.3', 'routes.haiku — беспуловая, трогать нельзя');
+
+    // Обратная сторона: когда кончается GPT, уезжает ТОЛЬКО gpt-семья.
+    reset();
+    const g = poolDropTiers('agentrouter', 'gpt-6-astra', FB);
+    assert.strictEqual(g.ok, true, `дроп по gpt не прошёл: ${g.error}`);
+    const m2 = read(map);
+    assert.strictEqual(m2.sonnet, FB, 'gpt-цель не переключена при пуле GPT');
+    assert.strictEqual(m2.opus, 'claude-opus-5', 'claude-цель уведена при пуле GPT — полосы разные');
+    assert.strictEqual(m2.haiku, 'glm-5.3', 'беспуловая задета при пуле GPT');
 });
 
 check('бэкапы обеих карт созданы и совпадают с исходником побайтово', () => {
@@ -277,6 +299,45 @@ check('префикс провайдера принимается наравне
     assert.strictEqual(r.ok, true, `дроп по префиксу упал: ${r.error}`);
     assert.strictEqual(read(map).opus, FB, 'карта не переключилась по префиксу');
     assert.strictEqual(poolRestoreTiers('ar').ok, true, 'возврат по префиксу не прошёл');
+});
+
+check('фолбэк помечает полосу квоты исчерпанной — иначе часы о нём не узнают', () => {
+    // Заявка владельца 15.09: часы должны показывать, что квота кончилась, КОГДА
+    // СРАБОТАЛ ФОЛБЭК, а не только по ручной проверке. Состояние пишется той же
+    // записью, что у пробы, и отличается только источником.
+    reset();
+    quotaWrites.length = 0;
+    drop();
+    const w = quotaWrites.find(([p]) => p === 'opus');
+    assert.ok(w, 'состояние полосы не записано — часы о фолбэке не узнают');
+    assert.strictEqual(w[1].state, 'exhausted', 'полоса помечена не как исчерпанная');
+    assert.strictEqual(w[1].source, 'drop', 'источник не отличён от ручной проверки');
+    assert.ok(w[1].dropAt, 'нет привязки к партии — запись не погаснет по наливу');
+});
+
+check('беспуловая модель полосы не имеет — состояние ей не пишется', () => {
+    // У deepseek/glm пула нет, и «квота исчерпана» на них была бы враньём.
+    reset();
+    quotaWrites.length = 0;
+    poolDropTiers('agentrouter', 'deepseek-v4-flash', FB);
+    assert.strictEqual(quotaWrites.length, 0, 'беспуловая модель пометила полосу квоты');
+});
+
+check('повторный 402 при ЖИВОМ маркере всё равно обновляет состояние', () => {
+    // 🪤 Это и была разорванная связка владельца 16.09: «пока я вручную не кликну, хуй что
+    // мне скажет, что у нас уже дипсик». Запись состояния стояла ПОСЛЕ раннего выхода
+    // «маркер уже есть» — то есть пока висел маркер от прошлого дропа, каждый новый
+    // пойманный 402 упирался в `already: true` и состояние НЕ писал. Файл заполнял только
+    // ручной клик, а бар читает именно файл.
+    reset();
+    drop();
+    assert.ok(poolDropLib.readMarker(marker), 'сцена бессмысленна: маркера нет');
+    quotaWrites.length = 0;
+    const again = drop();                       // второй 402 по тому же пулу
+    assert.strictEqual(again.already, true, 'повторный вызов должен остаться идемпотентным по карте');
+    const w = quotaWrites.find(([p]) => p === 'opus');
+    assert.ok(w, 'состояние не обновлено при живом маркере — бар снова ничего не узнает');
+    assert.strictEqual(w[1].source, 'drop', 'источник не отличён от ручной проверки');
 });
 
 // ── 4. Отказы: ноль записей ──────────────────────────────────────────────────

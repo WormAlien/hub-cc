@@ -96,9 +96,22 @@ const dashSrc = [
     cutFn(tp, 'function poolRestoreTiers('),
     cutFn(tp, 'function jsonRes('),
 ].join('\n');
+// Записи состояния квоты: настоящий `arQuotaPut` пишет в ~/.claude — стенду туда нельзя.
+// Подставлен свой, а собирается запись НАСТОЯЩИМ buildArQuotaCache: проверяем форму.
+const probeLib = require(path.join(REPO, 'routing', 'lib', 'ar-quota-probe.js'));
+const quotaWrites = [];
+// Последний ответ каждого роута. 🪤 Без этого стенд был СЛЕП: падение внутри
+// `poolDropTiers` (недостающая зависимость) не роняло ни одной проверки, потому что
+// карты к тому моменту уже записаны, а ответ роута никто не смотрел.
+const dashLast = {};
 const dash = new Function('fs', 'path', 'poolDropLib', 'logLine', '__dirname',
+    'arQuotaPoolForModel', 'arQuotaPut', 'buildArQuotaCache', 'AR_ACTIVE_KEY_FILE',
     `${dashSrc}\nreturn { poolDropTiers, poolRestoreTiers, jsonRes, resolveProviderKey, CC_MODEL_PREFIX };`
-)(fs, path, poolDropLib, (m) => console.log(`  \x1b[35m[дашборд]\x1b[0m ${m}`), TMP);
+)(fs, path, poolDropLib, (m) => console.log(`  \x1b[35m[дашборд]\x1b[0m ${m}`), TMP,
+    probeLib.arQuotaPoolForModel,
+    (pool, entry) => { quotaWrites.push(pool); return {}; },
+    probeLib.buildArQuotaCache,
+    path.join(TMP, 'ar-active-key.txt'));
 
 // Роут-блоки — тот самый код, который в бою диспатчит URL. Их и исполняем.
 const routeSrc = [
@@ -163,7 +176,10 @@ function dashboardServer() {
         // сработает никогда. Ответ роута и есть то, что мы хотим видеть — логируем его.
         const origEnd = res.end.bind(res);
         res.end = (chunk, ...rest) => {
-            if (chunk) console.log(`  \x1b[35m[дашборд]\x1b[0m → ${String(chunk).slice(0, 220)}`);
+            if (chunk) {
+                dashLast[req.url] = String(chunk);
+                console.log(`  \x1b[35m[дашборд]\x1b[0m → ${String(chunk).slice(0, 220)}`);
+            }
             return origEnd(chunk, ...rest);
         };
         return runRoutes(dash.poolDropTiers, dash.poolRestoreTiers, dash.jsonRes, req, res);
@@ -261,12 +277,21 @@ const nap = (ms) => new Promise((r) => setTimeout(r, ms));
         console.log('\n── Сцена 2: фолбэк включён ──');
         await post(kpPort, '/__config', { poolFallbackModel: FB });
         gw.seen.length = 0; gw.requests = 0; dashStat.poolDrop = 0;
+        dashLast['/__switch/api/routes/pool-drop'] = '';
+        quotaWrites.length = 0;
         r = await ask(kpPort, DEAD);
         chk('клиент получил УСПЕХ, а не 402 — сессия выжила', r.status === 200 && /message_stop/.test(r.body), `статус ${r.status}`);
         chk('в ответе нет in-band ошибки (её Claude Code не умеет повторять)', !/event: error/.test(r.body));
         chk('шлюз спрошен дважды: первая попытка умерла на 402', gw.requests === 2, `запросов ${gw.requests}`);
         chk(`вторая попытка ушла на ${FB}`, gw.seen[1] === FB, `было ${gw.seen[1]}`);
         chk('дашборд получил ровно один pool-drop (без повторов и циклов)', dashStat.poolDrop === 1, `пришло ${dashStat.poolDrop}`);
+        // 🪤 Ответ роута, а не только факт вызова: падение ВНУТРИ poolDropTiers
+        // (недостающая зависимость) до этой проверки не роняло ничего - карты к тому
+        // моменту уже записаны, и стенд зеленел на сломанном коде.
+        chk('пул-дроп ответил ok:true', /"ok":true/.test(dashLast['/__switch/api/routes/pool-drop'] || ''),
+            (dashLast['/__switch/api/routes/pool-drop'] || 'ответа нет').slice(0, 140));
+        chk('фолбэк пометил полосу Opus исчерпанной — часы узнают сами',
+            quotaWrites.includes('opus'), `записано полос: ${JSON.stringify(quotaWrites)}`);
         const afterDrop = readMap(MAP);
         chk(`ПЕРСИСТЕНТНОСТЬ: карта на диске переключена на ${FB}`, afterDrop.opus === FB && afterDrop.sonnet === FB, JSON.stringify(afterDrop));
         chk('беспуловый haiku не тронут', afterDrop.haiku === 'glm-5.3', `haiku=${afterDrop.haiku}`);

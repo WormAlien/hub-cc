@@ -98,6 +98,7 @@
      Отдаёт их тот же :8200 маршрутом /vendor/*, как и остальную локальную вендор-пачку. -->
 <link rel="stylesheet" href="/vendor/models-tab.css">
 <link rel="stylesheet" href="/vendor/media-tab.css">
+<link rel="stylesheet" href="/vendor/proxies-tab.css">
 <!-- 🪤 Анти-FOUC: Tailwind собирается В БРАУЗЕРЕ, и это гонка с первой отрисовкой.
      Замер 10.09 в Chrome: CSS готов на 173 мс, первая отрисовка на 236 мс — запас всего
      63 мс. Zen (Firefox) на холодном кеше эту гонку ПРОИГРЫВАЕТ: страница успевает
@@ -676,6 +677,11 @@ function randomThemeId() {
         <span class="flex-1">Модели</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-models">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="proxies" title="Свои прокси: купленные и SOCKS5 из XGATE. Липкая привязка аккаунт→прокси, ёмкость считается по паре «прокси × хост», здесь же ребаланс осиротевших и перевеса">
+        <span class="w-5 text-center text-[14px]">🔌</span>
+        <span class="flex-1">Свои прокси</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-proxies" title="своих адресов в пуле">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="routes" title="Шпаргалка префиксного роутинга: чем адресовать каждый шлюз в /model и куда его тир-карта переписывает модель. Показывает только видимые вкладки.">
         <span class="w-5 text-center text-[14px]">🔀</span>
         <span class="flex-1">Маршруты</span>
@@ -749,6 +755,21 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🪙</span>
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="odyssey" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
+        <span class="w-5 text-center text-[14px]">🧭</span>
+        <span class="flex-1">Odyssey</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-odyssey">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="getunikey" title="New API поверх www.getunikey.ai. Подарок ~4 742 кредита, капча Turnstile, нативный /v1/messages. Автореги нет — вход руками">
+        <span class="w-5 text-center text-[14px]">🔑</span>
+        <span class="flex-1">UniKey</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-getunikey">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="bai" title="B.AI. Без депозита доступны flash-модели (deepseek, qwen, glm); Claude и ещё 40 моделей открываются депозитом">
+        <span class="w-5 text-center text-[14px]">🅱️</span>
+        <span class="flex-1">B.AI</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-bai">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aipm" title="New API поверх emtf.aipm9527.online. Платная панель, без гранта.">
         <span class="w-5 text-center text-[14px]">🔷</span>
@@ -5202,6 +5223,12 @@ window.finNavCount = async () => {
          Здесь — три пустых контейнера с фиксированными id, их имена менять нельзя:
          на них завязан внешний файл.
          🪤 Ключ джойна модели во внешнем коде — `${bk}|${m}`, оба куска lowercase + trim. -->
+    <!-- Вкладка «Свои прокси». Весь код (window.PROXIES) — во внешней паре
+         /vendor/proxies-tab.js + .css, как «Модели» и «MEDIA»: разметка здесь только
+         корневая, чтобы инлайновый блок дашборда не пух. -->
+    <div data-tab-content="proxies" id="tab-proxies">
+      <div id="proxies-root"></div>
+    </div>
     <div data-tab-content="models">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
@@ -6205,7 +6232,7 @@ window.finNavCount = async () => {
              разметку — по той же причине, что у ar-checkin ниже: пересборка рамки мигает. -->
         <div id="arq-big" class="arq rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between gap-3 mb-1">
-            <h2 class="text-sm font-semibold tracking-tight">⏳ До сброса квоты</h2>
+            <h2 class="text-sm font-semibold tracking-tight">⏳ До сброса квоты <span id="arq-pool-name" class="text-[10px] font-mono text-dim"></span></h2>
             <div class="flex items-center gap-1 shrink-0">
               <button type="button" class="arq-nav arq-prev px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Предыдущий вид">‹</button>
               <span class="arq-name text-[10px] font-mono w-[68px] text-center text-dim"></span>
@@ -6214,9 +6241,19 @@ window.finNavCount = async () => {
           </div>
           <p class="text-xs text-muted mb-2">Три партии в сутки: <span class="font-mono text-ink">03:00</span>, <span class="font-mono text-ink">11:00</span> и <span class="font-mono text-ink">19:00</span> МСК (00/08/16 Пекина). Партия конечная — «用完即止», кончиться может раньше срока.</p>
           <div class="flex justify-center py-1"><span class="arq-host"></span></div>
+          <!-- Что отвечает СЕЙЧАС и когда кончилась квота. Отдельной строкой и заметным
+               цветом: владелец 16.09 не понял этого по мелкой подписи в карточке конфига. -->
+          <p id="arq-pool-state" class="text-xs font-mono leading-tight text-center text-muted mb-1.5" aria-live="polite"></p>
           <div class="mt-2 flex flex-col items-center gap-1.5">
-            <button id="arq-check" type="button" onclick="arqCheckQuota()" class="text-xs px-3 py-1.5 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить квоту</button>
+            <!-- Полос две, и они разные: Claude и GPT наливают вместе, но кончаются
+                 порознь. Кнопка проверяет СВОЮ полосу и переводит на неё циферблат;
+                 вторая строка показывает состояние второй полосы, не переключаясь. -->
+            <div class="flex items-center gap-2">
+              <button id="arq-check" type="button" onclick="arqCheckQuota('opus')" class="text-xs px-3 py-1.5 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить Opus</button>
+              <button id="arq-check-gpt" type="button" onclick="arqCheckQuota('gpt')" class="text-xs px-3 py-1.5 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить GPT</button>
+            </div>
             <span id="arq-check-result" class="text-xs text-faint font-mono" aria-live="polite">—</span>
+            <span id="arq-check-result-gpt" class="text-xs text-faint font-mono" aria-live="polite">—</span>
           </div>
         </div>
 
@@ -6260,6 +6297,18 @@ window.finNavCount = async () => {
               <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
               <input id="ar-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
             </label>
+            <!-- Фолбэк при пустом пуле — только у agentrouter: пул наливки конечный, и
+                 шлюз отвечает 402 «budget pool quota has been exhausted». Селектор, а не
+                 строка: список берётся из каталога САМОГО шлюза (та же ручка, что у
+                 вкладки «Маршруты»), поэтому вписать модель, которой у шлюза нет, нельзя.
+                 «— выкл —» = фича выключена, запрос уходит в шлюз как есть.
+                 🪤 Селектор ОДИН на всю панель: он применяет себя сам по onchange. Второй
+                 такой же в карточке часов был и убран 16.09 — два зеркала одного ключа
+                 разъезжаются, а строка состояния в часах и так называет адрес. -->
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">при пустом пуле пускать в</span>
+              <select id="ar-keepalive-pooldrop" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono"></select>
+            </label>
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
               <input id="ar-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
@@ -6277,6 +6326,11 @@ window.finNavCount = async () => {
               <button onclick="arResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
               <span id="ar-keepalive-status" class="text-xs text-faint font-mono">—</span>
             </div>
+            <!-- Строка состояния фолбэка — отдельным ПОЛНЫМ рядом под полями, а не третьей
+                 строкой внутри столбца w-40: текст длинный и в 160px он разворачивался бы
+                 в шесть строк, растягивая всю строку карточки. Показывается только когда
+                 есть о чём сказать (`hidden`), иначе висел бы пустой зазор. -->
+            <span id="ar-keepalive-pooldrop-state" class="w-full text-[10px] leading-tight" hidden aria-live="polite"></span>
           </div>
           <div class="mt-3 flex gap-3 items-start" id="ar-lat-box">
             <div class="flex-1 min-w-0">
@@ -7158,6 +7212,524 @@ window.finNavCount = async () => {
         </div>
       </div>
     </div>
+
+    <div data-tab-content="odyssey">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-lime">🧭</span> <a href="https://odysseyapi.tech/sign-up" data-ref-link="odyssey" target="_blank" rel="noopener" title="регистрация (реф-программы у площадки нет)" class="text-ink underline underline-offset-4 hover:text-lime">Odyssey</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-lime text-xs">odysseyapi.tech/v1</code> · клик по ключу = активный (через keepalive <code class="font-mono text-lime text-xs">:20170</code>) · вход Clerk: почта с паролем или код на почту, соцвход — только Discord · <b>Opus в каталоге нет</b>, потолок <code class="font-mono text-xs">anthropic/claude-sonnet-4-6</code> · $5 подарочных при регистрации, подписка $14.99 за сутки вместо токенов</p>
+          </div>
+        </header>
+
+        <!-- 🤖 Авторег Odyssey: ПОЛУАВТОМАТ, и это не недоделка, а измерение.
+             Скрипт `odyssey/auto-add.py` делает всё сам: берёт прокси из общего пула,
+             берёт gmail-ящик на 22.do («Random» до домена gmail.com), заполняет форму,
+             проходит ALTCHA, добирает код из письма, создаёт ключ и заводит аккаунт в пул
+             штатной ручкой `/__switch/api/od/add`. Человеку остаётся клик по капче Clerk -
+             и только на «строгих» адресах: замер 16.09 показал, что с одного тест-прокси
+             регистрация уходит молча за 9 секунд, а с другого Clerk показывает отдельный
+             виджет «Verify you are human». Поэтому ярус - переключатель в панели. -->
+        <div class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="text-sm font-semibold">🤖 Авторег</h2>
+              <span class="text-[10px] text-faint font-mono">ящик, форма, ALTCHA, код и ключ — сам; капча — клик</span>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <label class="text-[10px] text-faint font-mono" for="od-autoreg-tier">ярус</label>
+              <select id="od-autoreg-tier" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60" title="own — свои прокси из пула (рекомендуется), scraper — публичные, none — напрямую">
+                <option value="own" selected>свои</option>
+                <option value="scraper">скрапер</option>
+                <option value="none">напрямую</option>
+              </select>
+              <button id="od-autoreg-start" onclick="odAutoregStart()" class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium" title="Скрипт заведёт аккаунт целиком; если Clerk потребует капчу — подойди к окну и прожми её">🤖 Завести аккаунт</button>
+              <button id="od-autoreg-stop" onclick="odAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+              <span id="od-autoreg-status" class="text-[10px] font-mono text-faint"></span>
+            </div>
+          </div>
+          <div id="od-autoreg-log-wrap" class="hidden mt-3 rounded-xl bg-surface border border-line-soft p-3">
+            <div class="flex items-center justify-between gap-2 mb-2">
+              <span id="od-autoreg-stage" class="text-[10px] font-mono text-faint"></span>
+              <button onclick="odAutoregLogHide()" class="text-[10px] text-faint hover:text-ink">скрыть</button>
+            </div>
+            <pre id="od-autoreg-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+            <pre id="od-autoreg-log-err" class="hidden text-[10px] font-mono leading-relaxed bg-crimson/5 border border-crimson/40 rounded-lg p-2.5 mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-crimson"></pre>
+          </div>
+        </div>
+
+        <div id="od-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). У odyssey все три тира смотрят в
+             единственную Claude-модель каталога: opus, sonnet и haiku → anthropic/claude-sonnet-4-6.
+             Имена строго неймспейсные (`author/slug`) — голое `claude-sonnet-4-6` шлюз
+             не принимает, отвечает 404 model_not_found. Ставить сюда `claude-opus-*`
+             нельзя: Opus на площадке нет вовсе. Дешёвая замена для haiku, если
+             понадобится, — `deepseek/deepseek-v4-flash` ($0.028/$0.084, 1M). -->
+        <div id="od-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · Opus в каталоге нет</h2>
+            <button onclick="loadOdModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="od-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20170).
+             🪤 Флаг `anthropic` у этого шлюза НЕ выставлен намеренно: нативный
+             `/v1/messages` отдаёт `usage` нулями (все модели, и в стриме тоже — замер
+             16.09), и запросы Claude Code шли бы в журнал с нулевым расходом. Работает
+             конвертер на OpenAI-путь, там цифры настоящие. Ставить «попыток на запрос»
+             в 1 можно — 403-кромки, как у соседей, у площадки не замечено. -->
+        <div id="od-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20170 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="odLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="od-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="od-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="od-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="od-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="od-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="odApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="odResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="od-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="od-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="od-lat-chart" class="w-full"></div>
+              <div id="od-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="od-lat-windows"></div>
+          </div>
+          <div id="od-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="od-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="od-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="od-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="od-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="od-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="od-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="od-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="od-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadOdModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="od-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadOdSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadOdSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="odCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="odMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="odShowAdd()" class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium">➕ Добавить</button>
+          <button onclick="odShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="od-filter" oninput="newapiFilterChange('od')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-lime/60">
+          <select id="od-sort" onchange="newapiSortChange('od')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-lime/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="od-add-form" class="hidden rounded-xl bg-surface border border-lime/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="od-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-lime/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="od-add-key" placeholder="пусто = открою регистрацию и возьму ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-lime/60">
+            </label>
+            <button onclick="odAdd()" class="text-xs px-4 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium">Сохранить</button>
+            <button onclick="odShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="od-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="odShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (профиль odyssey уже залогинен).</p>
+          <textarea id="od-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="od-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="odImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="odShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="od-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20170</code> keepalive → <code class="text-ink">odysseyapi.tech</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-ody-…</code> — бери в кабинете Odyssey (Billing → API keys)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 имена строго неймспейсные (<code class="text-ink">author/slug</code>), <code class="text-ink">max_tokens</code> выше потолка не отбивается</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://odysseyapi.tech/dashboard" target="_blank" class="text-lime hover:underline">кабинет</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="bai">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">🅱️</span> <a href="https://chat.b.ai/sign-up?aff=6H755H" data-ref-link="bai" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-amber">B.AI</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-amber text-xs">chat.b.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-amber text-xs">:20169</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+          </div>
+        </header>
+
+        <div id="bai-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). У bai все три тира смотрят в Opus:
+             opus → claude-opus-5, sonnet и haiku → claude-opus-4-8. Ставить сюда sonnet/gpt
+             нельзя — таких моделей на шлюзе нет, запрос вернётся пустым 403. -->
+        <div id="bai-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог opus-only</h2>
+            <button onclick="loadBaiModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="bai-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20169).
+             🪤 Ретраи здесь не роскошь: у bai каждый ЧЕТВЁРТЫЙ POST /v1/messages
+             отдаёт пустой 403 от кромки Cloudflare (замер 31.08 — отказы на 4/8/12/16/20
+             из 20). Ставить «попыток на запрос» в 1 = каждый четвёртый запрос в лицо. -->
+        <div id="bai-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20169 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="baiLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="bai-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="bai-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="bai-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="bai-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="bai-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="baiApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="baiResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="bai-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="bai-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="bai-lat-chart" class="w-full"></div>
+              <div id="bai-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="bai-lat-windows"></div>
+          </div>
+          <div id="bai-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="bai-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="bai-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="bai-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="bai-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="bai-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="bai-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="bai-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="bai-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadBaiModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="bai-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadBaiSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadBaiSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="baiCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="baiMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="baiShowAdd()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">➕ Добавить</button>
+          <button onclick="baiShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="bai-filter" oninput="newapiFilterChange('bai')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-amber/60">
+          <select id="bai-sort" onchange="newapiSortChange('bai')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="bai-add-form" class="hidden rounded-xl bg-surface border border-amber/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="bai-add-email" oninput="newapiAddGhHint('bai')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-amber/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="bai-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
+            </label>
+            <button onclick="baiAdd()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('bai')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
+            <button onclick="baiShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="bai-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="bai-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="baiShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/bai уже залогинены).</p>
+          <textarea id="bai-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="bai-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="baiImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="baiShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="bai-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20169</code> keepalive → <code class="text-ink">chat.b.ai</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://chat.b.ai/sign-up?aff=6H755H" data-ref-link="bai" target="_blank" class="text-amber hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ═════════ TAB: UNIKEY ══════════ -->
+    <div data-tab-content="getunikey">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-sky">🔑</span> <a href="https://www.getunikey.ai/sign-up?aff=6ssC" data-ref-link="getunikey" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">UniKey</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">www.getunikey.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20168</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+          </div>
+        </header>
+
+        <div id="uk-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). У getunikey все три тира смотрят в Opus:
+             opus → claude-opus-5, sonnet и haiku → claude-opus-4-8. Ставить сюда sonnet/gpt
+             нельзя — таких моделей на шлюзе нет, запрос вернётся пустым 403. -->
+        <div id="uk-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог opus-only</h2>
+            <button onclick="loadUkModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="uk-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20168).
+             🪤 Ретраи здесь не роскошь: у getunikey каждый ЧЕТВЁРТЫЙ POST /v1/messages
+             отдаёт пустой 403 от кромки Cloudflare (замер 31.08 — отказы на 4/8/12/16/20
+             из 20). Ставить «попыток на запрос» в 1 = каждый четвёртый запрос в лицо. -->
+        <div id="uk-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20168 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="ukLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="uk-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="uk-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="uk-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="uk-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="uk-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="ukApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="ukResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="uk-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="uk-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="uk-lat-chart" class="w-full"></div>
+              <div id="uk-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="uk-lat-windows"></div>
+          </div>
+          <div id="uk-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="uk-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="uk-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="uk-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="uk-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="uk-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="uk-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="uk-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="uk-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadUkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="uk-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadUkSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadUkSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="ukCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="ukMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="ukShowAdd()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">➕ Добавить</button>
+          <button onclick="ukShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="uk-filter" oninput="newapiFilterChange('uk')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-sky/60">
+          <select id="uk-sort" onchange="newapiSortChange('uk')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-sky/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="uk-add-form" class="hidden rounded-xl bg-surface border border-sky/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="uk-add-email" oninput="newapiAddGhHint('uk')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-sky/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="uk-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60">
+            </label>
+            <button onclick="ukAdd()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Сохранить</button>
+            <!-- 🪤 GitHub-входа у площадки нет (github_oauth: false): кнопки «🐙 из менеджера»
+                 здесь быть не должно — она звала бы менеджер GitHub-аккаунтов, которого у этого
+                 шлюза не существует. Прецедент такой же вырезки — вкладка hcnsec. -->
+            <button onclick="ukShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="uk-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="uk-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="ukShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/getunikey уже залогинены).</p>
+          <textarea id="uk-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="uk-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="ukImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="ukShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="uk-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20168</code> keepalive → <code class="text-ink">www.getunikey.ai</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://www.getunikey.ai/sign-up?aff=6ssC" data-ref-link="getunikey" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
 
     <!-- ═════════ TAB: KKTOKEN ══════════ -->
     <div data-tab-content="aipm">
@@ -8870,7 +9442,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -8903,7 +9475,8 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [],
+  kktoken: [], odyssey: [], bai: [],
+  getunikey: [],
   aipm: [],
   kkModels: [],
   kkActiveModel: '',
@@ -9111,6 +9684,9 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'odyssey') { if (!state.loaded.odyssey) { state.loaded.odyssey = true; loadOdSessions(false); } odLoadKeepalive(); }
+  if (name === 'bai') { if (!state.loaded.bai) { state.loaded.bai = true; loadBaiSessions(false); } baiLoadKeepalive(); }
+  if (name === 'getunikey') { if (!state.loaded.getunikey) { state.loaded.getunikey = true; loadUkSessions(false); } ukLoadKeepalive(); }
     if (name === 'aipm') { if (!state.loaded.aipm) { state.loaded.aipm = true; loadApSessions(false); } apLoadKeepalive(); }
   if (name === 'hcnsec') { if (!state.loaded.hcnsec) { state.loaded.hcnsec = true; loadHnSessions(false); } hnLoadKeepalive(); }
   if (name === 'aikeysapi') { if (!state.loaded.aikeysapi) { state.loaded.aikeysapi = true; loadAkSessions(false); } akLoadKeepalive(); }
@@ -9165,6 +9741,9 @@ function showTab(name) {
   // а во внешнем /vendor/models-tab.js. Он подключён в конце body, то есть на F5 с
   // открытой вкладкой «Модели» showTab отработает раньше, чем MODELS появится.
   if (name === 'models' && typeof MODELS !== 'undefined' && MODELS.load) { MODELS.load(); }
+  // Тот же гвард, что у «Моделей»: скрипт вкладки подключён в конце body, и на F5 с уже
+  // открытой вкладкой showTab отработает раньше, чем PROXIES появится.
+  if (name === 'proxies' && typeof PROXIES !== 'undefined' && PROXIES.load) { PROXIES.load(); }
 }
 document.querySelectorAll('.nav-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
@@ -9183,9 +9762,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken',
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald',
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -9444,6 +10023,21 @@ async function restartFrontdoor() {
 // скрытыми, а третий висел бы в списке навсегда.
 const ROUTES_TAB_OF = { fm_openai: 'freemodel', vyce_openai: 'vyceai' };
 
+// Когда пул-дроп случился, словами. Пустая/битая дата — прочерк, а не «Invalid Date»:
+// маркер пишет сервер, но его могли править руками.
+//
+// 🪤 `pad` объявлен ВНУТРИ IIFE в другом блоке скрипта (`(() => {…})()` на `:36133`),
+// то есть отсюда не виден вовсе — вызов бросал `ReferenceError` на каждом рендере с
+// дропом, и `loadRoutes` обрывался до `innerHTML`: вкладка навсегда застревала на
+// «загружаю…». Свой форматтер локально, а не общий из чужой области видимости.
+const routesDropAt = iso => {
+  const pad = n => String(n).padStart(2, '0');
+  const d = new Date(iso || 0);
+  if (!Number.isFinite(d.getTime())) return '—';
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date().toDateString() ? t : `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${t}`;
+};
+
 async function loadRoutes(force) {
   const el = $('routes-box');
   if (!el) return;
@@ -9505,8 +10099,19 @@ async function loadRoutes(force) {
       : '<div class="text-xs text-muted">провайдеров нет — реестр пуст. Активируй любой шлюз в дашборде, и он появится здесь.</div>';
     return;
   }
+  // ── Карта опущена на фолбэк ──────────────────────────────────────────────
+  // Владелец обязан видеть это ЗДЕСЬ, где он правит тиры: иначе он меняет
+  // `opus` и не понимает, почему в списке стоит deepseek. И сразу сказано, что
+  // возврат из бэкапа его правку не перетрёт (сервер это проверяет по mtime).
+  const drops = shown.filter(p => p.pooldrop);
+  const dropBanner = drops.length
+    ? `<div class="text-xs text-amber mb-3">⛔ пул пуст по ${esc(drops.map(p => p.pooldrop.deadModel).filter(Boolean).join(', '))}`
+      + `: карта на ${esc(drops[0].pooldrop.fallback || '—')} с ${esc(routesDropAt(drops[0].pooldrop.droppedAt))}.`
+      + ' Ваши правки тиров возврат из бэкапа не перетрёт.</div>'
+    : '';
   el.innerHTML = `
     <div class="text-xs text-muted mb-3">${rows.length} провайдер(ов) ${note}</div>
+    ${dropBanner}
     <div id="routes-rows" class="space-y-2">${rows.join('')}</div>`;
   // Обвязка — после отрисовки: контейнер только что создан, Sortable вешается на него,
   // а не на прежний (тот умер вместе со старым innerHTML).
@@ -9593,50 +10198,23 @@ function routesRefreshCmd(name) {
   if (box && p) box.outerHTML = routesCmdHtml(p);
 }
 
-// Подтянуть каталоги моделей видимых провайдеров и обновить их селекты. Ключ сервер
-// берёт из `<prefix>-active-key.txt`, каталог — из кеша `/<ep>/models`, поэтому вкладку
-// шлюза открывать не нужно. Мёртвый шлюз вернёт пустой список — селект останется с
-// текущими значениями, а не опустеет.
+// Подтянуть каталоги моделей видимых провайдеров и обновить их селекты. Цепочку
+// источников (живой ключ → ключ аккаунта из пула → наш снимок каталога) ведёт СЕРВЕР,
+// ручка `/__switch/api/routes/models`: у odyssey и aikeysapi файла активного ключа нет
+// вовсе, а у gorouter, tabi и rumeng шлюз живьём не отвечает — снимок лежит на диске.
+// Здесь только рисуем то, что пришло, и помечаем несвежесть.
 //
-// 🎯 Каталог шлюза, у которого ещё НЕТ файла активного ключа. `<prefix>-active-key.txt`
-// пишется при активации аккаунта, поэтому у только что заведённого шлюза его нет: AIKeysAPI
-// 12.09 — четыре живых аккаунта, ни один не активирован, и каталог приходил пустым, хотя
-// шлюз отдаёт восемь моделей. Требовать активацию только ради списка неправильно ещё и
-// потому, что активация переключает активный шлюз Claude Code целиком.
-//
-// Ключ для запроса каталога берём из списка аккаунтов шлюза: ничего не переключаем и никуда
-// не пишем — только читаем. Карта эндпоинтов узкая и намеренно: у остальных шлюзов файл
-// ключа есть (их активировали хотя бы раз), выдумывать им фолбэк незачем.
-const ROUTES_EP_OF = { aikeysapi: 'ak' };
-async function routesCatalogFromAccounts(name) {
-  const ep = ROUTES_EP_OF[name];
-  if (!ep) return [];
-  const s = await (await fetch(`/__switch/api/${ep}/sessions`)).json();
-  const list = (s && s.sessions) || [];
-  const pick = list.find(a => a && a.active && a.api_key)
-    || list.find(a => a && a.api_key && a.status === 'live');
-  if (!pick) return [];
-  const d = await (await fetch(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(pick.api_key)}`)).json();
-  const arr = (d && Array.isArray(d.models)) ? d.models : [];
-  // В каталоге рядом с текстовыми моделями лежат картинки и видео — тиром им быть незачем.
-  // 🪤 Одного `openai` в типах мало: `gpt-image-2` заявляет и его, и `openai-video`, то есть
-  // прошёл бы фильтр и попал в тир. Поэтому отсекаем всё, что отдаёт ещё и видео-эндпоинт.
-  return arr.map(m => (typeof m === 'string' ? { id: m } : m))
-    .filter(m => !m.supported_endpoint_types
-      || (m.supported_endpoint_types.includes('openai')
-        && !m.supported_endpoint_types.some(t => t.includes('video'))))
-    .map(m => m.id).filter(Boolean);
-}
+// 🪤 Фильтр медиа и ступени выбора ключа живут на сервере (`lib/routes-catalog.js`) —
+// В ОДНОМ месте. Копия здесь была до 16.09 и разошлась с ним: у odyssey она выбрасывала
+// каталог целиком, потому что пустой `supported_endpoint_types` читала как «медиа».
+const routesCatalogMeta = {};                       // имя → {source, note, staleDays}
 async function routesLoadCatalogs(names) {
   await Promise.all(names.map(async (name) => {
     try {
       const d = await (await fetch(`/__switch/api/routes/models?provider=${encodeURIComponent(name)}`)).json();
-      let models = (d && Array.isArray(d.models)) ? d.models : [];
-      // Серверный путь молчит, когда файла ключа нет — тогда спрашиваем по ключу аккаунта.
-      if (!models.length) {
-        try { models = await routesCatalogFromAccounts(name); } catch (e) { /* нет списка аккаунтов — не беда */ }
-      }
-      if (!models.length) return;                        // нечем обогащать — оставляем как есть
+      const models = (d && Array.isArray(d.models)) ? d.models : [];
+      if (d) routesCatalogMeta[name] = { source: d.source || '', note: d.note || '', staleDays: d.staleDays };
+      if (!models.length) return;                   // нечем обогащать — оставляем как есть
       routesCatalog[name] = models;
       // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.
       // Обогащаем только те тиры, что есть в разметке: `gpt` на этой вкладке не
@@ -9645,8 +10223,23 @@ async function routesLoadCatalogs(names) {
         const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
         if (sel) sel.innerHTML = routesOptions(name, sel.value);
       }
+      routesMarkCatalogSource(name);
     } catch { /* каталог не обязателен — тихо пропускаем */ }
   }));
+}
+
+// Откуда список моделей. Показываем ТОЛЬКО когда список не живой: снимок месячной
+// давности и «только значения тир-карты» — разные вещи, и знать про это владельцу нужно
+// (свежий каталог сам себя объясняет). Подсказкой на селекте, а не строкой в разметке:
+// геометрию строки трогать нельзя, её держит проба.
+function routesMarkCatalogSource(name) {
+  const meta = routesCatalogMeta[name];
+  if (!meta || !meta.note || meta.source === 'live') return;
+  const id = routesId(name);
+  for (const tier of ['default', 'opus', 'sonnet', 'haiku']) {
+    const sel = document.getElementById(`routes-sel-${id}-${tier}`);
+    if (sel) sel.title = meta.note;
+  }
 }
 
 // HTML команды копирования (отдельно, чтобы перерисовывать при смене opus).
@@ -12155,7 +12748,7 @@ function customRender() {
 function arPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
-  let staleKeys = 0, errKeys = 0, inexactKeys = 0, freshestTs = 0;
+  let staleKeys = 0, errKeys = 0, inexactKeys = 0, logoutKeys = 0, freshestTs = 0;
   for (const s of (sessions || [])) {
     total++;
     if (s.status === 'live') live++;
@@ -12177,12 +12770,16 @@ function arPoolStats(sessions) {
     // точный баланс не берётся (пауза шлюза, истекла сессия — лечится входом в ЛК).
     if (s.balanceError) errKeys++;
     else if (s.selfError && s.balanceSource !== 'self' && s.profile) inexactKeys++;
+    // Разлогин считаем отдельно от «неточной цифры»: это не степень точности, а состояние
+    // аккаунта — по этим записям нужен заход браузером, а не ожидание. Включаем и jwt-ветку
+    // (`login_expired`), и classic (`login_dead`): для владельца это одно и то же «входа нет».
+    if (s.selfFailureKind === 'login_dead' || s.selfFailureKind === 'login_expired') logoutKeys++;
     const ts = s.balanceCheckedAt ? Date.parse(s.balanceCheckedAt) : 0;
     if (ts > freshestTs) freshestTs = ts;
     if (!ts || Date.now() - ts > 15 * 60_000) staleKeys++;
   }
   const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
-  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct, staleKeys, errKeys, inexactKeys, freshestTs };
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct, staleKeys, errKeys, inexactKeys, logoutKeys, freshestTs };
 }
 
 // «5с / 12м / 3ч / 2д назад» — короткий возраст цифры для шапки шкалы.
@@ -12701,6 +13298,7 @@ function renderArGauge() {
       actBal !== null ? `<span class="text-amber" title="эта же цифра в статусбаре Claude Code">★ активный $${actBal.toFixed(2)}</span>` : '',
       `<span class="text-faint" title="возраст самой свежей проверки баланса">обновлено ${agoShort(st.freshestTs)} назад</span>`,
       st.errKeys > 0 ? `<span class="text-crimson/80" title="usage-эндпоинт не ответил — не знаем даже, жив ли ключ. Показана прошлая цифра.">${st.errKeys} ⚠ не проверено</span>` : '',
+      st.logoutKeys > 0 ? `<span class="text-crimson" title="Шлюз отверг сессию этих аккаунтов (HTTP 401/403) — они разлогинены, куки в профиле при этом выглядят целыми. Лечится только заходом через браузер кнопкой 🌐 на строке аккаунта.">🔴 ${st.logoutKeys} разлогинено</span>` : '',
       st.inexactKeys > 0 ? `<span class="text-faint" title="точный баланс из ЛК взять не удалось (пауза шлюза, профиль не сопоставлен, сессия истекла) — показана вписанная цифра или прикидка. Ключи при этом живые.">${st.inexactKeys} ~ без точной цифры</span>` : '',
     ].filter(Boolean).join(''),
     note: st.withBalance && st.withBalance < st.total
@@ -12961,13 +13559,81 @@ function keepaliveSummary(cfg, defaults, state) {
     ? (cfg.maxHedges === 0 && cfg.hedgeMs > 0 ? why : 'выкл')
     : `${sec(cfg.hedgeMs)}${typeof cfg.maxHedges === 'undefined' ? '' : ` (дублей ≤${cfg.maxHedges})`}`;
   let s = `мульти-запрос ${hedge} · попыток ${cfg.maxAttempts} · пре-коммит ${sec(cfg.preCommitMs)}`;
+  // Фолбэк при пустом пуле — строка, а не число, и в этом весь подвох: старый диффит ниже
+  // сравнивал через Number(), а Number('deepseek-v4-flash') — NaN, и NaN !== NaN дал бы
+  // вечное «⚠ не дефолт». Пустое значение = фича выключена, говорим это словом.
+  s += ` · фолбэк при пустом пуле ${cfg.poolFallbackModel ? cfg.poolFallbackModel : 'выкл'}`;
   // Расхождение с поставочными дефолтами видно сразу: у юзера мог остаться
   // keepalive-config-<PORT>.json с прошлых экспериментов, а он приоритетнее кода.
   if (defaults) {
-    const drift = Object.keys(defaults).filter(k => Number(cfg[k]) !== Number(defaults[k]));
+    const numeric = v => typeof v === 'number' || (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)));
+    const drift = Object.keys(defaults).filter(k => (numeric(cfg[k]) && numeric(defaults[k]))
+      ? Number(cfg[k]) !== Number(defaults[k])
+      : String(cfg[k]) !== String(defaults[k]));
     s += drift.length ? ` · ⚠ не дефолт (${drift.join(', ')})` : ' · дефолт';
   }
   return s;
+}
+
+// ── Селектор фолбэка при пустом пуле ────────────────────────────────────────
+// Список берётся из каталога САМОГО шлюза — той же ручкой, что наполняет тиры на
+// вкладке «Маршруты». Так в поле нельзя вписать модель, которой у шлюза нет: руками
+// это ровно та ошибка, ради которой фича и делалась (фолбэк, которого нет, = сырой 402).
+const POOLDROP_PROVIDER = { ar: 'agentrouter' };   // pfx карточки → имя в реестре
+const pooldropCatalog = {};                        // имя → список моделей (на сессию)
+const pooldropLoading = {};                        // имя → запрос уже идёт
+function pooldropFill(pfx, current, force) {
+  const sel = $(pfx + '-keepalive-pooldrop');
+  if (!sel) return;
+  const want = String(current || '');
+  // Уже нарисовано ровно это значение — разметку не пересобираем: тик статов идёт
+  // каждые 3 секунды, а пересборка селекта мигает (та же грабля, что у циферблата).
+  if (!force && sel.dataset.filled === want) return;
+  const name = POOLDROP_PROVIDER[pfx];
+  const cat = (name && pooldropCatalog[name]) || [];
+  // 🪤 Текущее значение обязано быть в списке, даже если каталог его не знает (модель
+  // сняли, каталог не доехал). Иначе «Применить» отправило бы пустоту и МОЛЧА выключило
+  // фичу — ровно тот класс, с которым воюет весь пул-дроп.
+  const seen = new Set();
+  const opts = ['', ...cat, want]
+    .filter(v => !seen.has(v) && (seen.add(v), true));
+  sel.innerHTML = opts.map(id =>
+    `<option value="${esc(id)}"${id === want ? ' selected' : ''}>${id ? esc(id) : '— выкл —'}</option>`).join('');
+  sel.dataset.filled = want;
+  // Применяет себя сам: зеркал два, и общий «Применить» неизбежно затирал бы одно другим.
+  sel.onchange = async () => {
+    const prev = sel.dataset.filled || '';
+    sel.disabled = true;
+    try {
+      const r = await fetch(KEEPALIVE_API[pfx] + '/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poolFallbackModel: sel.value }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || j.ok === false) throw new Error((j && j.error) || `HTTP ${r.status}`);
+      sel.dataset.filled = sel.value;
+    } catch (e) {
+      sel.value = prev;                       // откат: на сервере осталось прежнее
+      sel.dataset.filled = prev;
+      const st = $(pfx + '-keepalive-status');
+      if (st) st.textContent = 'ошибка: фолбэк не применён — ' + e.message;
+    } finally { sel.disabled = false; }
+  };
+  // Каталог тянем в фоне: селектор уже рабочий (текущее значение на месте), а список
+  // обогатится, когда доедет. Ждать нельзя — до ответа «Применить» отправило бы пусто.
+  if (name && !pooldropCatalog[name] && !pooldropLoading[name]) {
+    pooldropLoading[name] = true;
+    fetch(`/__switch/api/routes/models?provider=${encodeURIComponent(name)}`)
+      .then(r => r.json())
+      .then(d => {
+        pooldropLoading[name] = false;
+        if (d && Array.isArray(d.models) && d.models.length) {
+          pooldropCatalog[name] = d.models;
+          pooldropFill(pfx, sel.value, true);          // выбор сохраняем
+        }
+      })
+      .catch(() => { pooldropLoading[name] = false; });
+  }
 }
 
 async function loadKeepaliveCard(pfx, api, statsOnly) {
@@ -13007,6 +13673,10 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
       if (maxhedges && typeof data.cfg.maxHedges !== 'undefined') maxhedges.value = String(data.cfg.maxHedges);
       if (precommit) precommit.value = String(Math.round((data.cfg.preCommitMs || 0) / 1000));
     }
+    // Селектор фолбэка обновляем на КАЖДОМ тике, включая statsOnly: зеркал два, и без
+    // этого правка в соседнем селекторе не доезжала сюда до перезагрузки страницы.
+    // Повторная отрисовка того же значения не страшна — pooldropFill сравнивает и выходит.
+    pooldropFill(pfx, data.cfg.poolFallbackModel || '');
     KEEPALIVE_STATE[pfx] = data;
     // Ручка дублей на плоскотарифном шлюзе не крутится: прокси всё равно зажмёт её в 0,
     // и молча вернувшийся ноль выглядел бы как поломка панели. Лучше сразу видно почему.
@@ -13033,6 +13703,59 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
   // на вкладке GoRouter он не появлялся вообще. А история за сутки лежит в файле и
   // отдаётся дашбордом с диска — показывать её можно без живого прокси.
   if (!statsOnly) { latRenderWindows(pfx); latLoadChart(pfx); }
+  loadPoolDropState(pfx);
+}
+
+// ── «Пул пуст, карта переключена» — состояние фолбэка на карточке keepalive ────
+// Источник — тот же `GET /__switch/api/routes`, что рисует вкладку «🔀 Маршруты»: дашборд
+// кладёт туда маркер `<pfx>-pooldrop.json`, который пишет ручка pool-drop (переключение
+// карты прокси на фолбэк при 402 «budget pool quota has been exhausted»).
+// 🪤 Поле ОПЦИОНАЛЬНО и может отсутствовать: провайдер не в реестре, дашборд старой
+// версии, обычный шлюз без пула. Тогда просто ничего не показываем — и молчим в консоль,
+// иначе это выглядело бы как поломка панели.
+const POOL_DROP_NAMES = { ar: ['ar', 'agentrouter'] };   // pfx карточки → имена в реестре бэкендов
+let poolDropAt = 0, poolDropBusy = false;
+async function loadPoolDropState(pfx) {
+  const el = $(pfx + '-keepalive-pooldrop-state');
+  const names = POOL_DROP_NAMES[pfx];
+  if (!el || !names) return;
+  // Тик статов идёт раз в 3с, а ручка «Маршрутов» перечитывает с диска реестр и все карты
+  // тиров. Маркер живёт от пула до пула (часами), так что 15с — с большим запасом.
+  const now = Date.now();
+  if (poolDropBusy || now - poolDropAt < 15000) return;
+  poolDropBusy = true; poolDropAt = now;
+  try {
+    const d = await (await fetch('/__switch/api/routes')).json();
+    const p = ((d && d.providers) || []).find(x => x && names.includes(x.name));
+    const dd = p && p.pooldrop;
+    // Класс ставим целиком, а не переключаем цвет поверх text-faint: у двух утилит
+    // одинаковая специфичность, и «кто из них ниже в таблице стилей» решал бы цвет,
+    // а не смысл. Ровно так же поступает соседний код панели (`st.className = ...`).
+    if (!dd) { el.textContent = ''; el.title = ''; el.hidden = true; el.className = 'w-full text-[10px] leading-tight'; return; }
+    const dead = dd.deadModel || '?';
+    const fb = dd.fallback || '—';
+    // Дата — локальная (МСК), как и везде в панели: ISO в UTC читался бы как «вчера».
+    const when = dd.droppedAt
+      ? new Date(dd.droppedAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '')
+      : '';
+    // 🪤 «Карта на <фолбэк>» — утверждение, которое надо ПРОВЕРИТЬ, а не помнить. Маркер
+    // живёт до возврата, а карту владелец правит руками и раньше: 16.09 панель маппинга
+    // показывала claude-opus-5, а эта строка — deepseek, и обе были правы про РАЗНЫЕ пути
+    // (обычная карта против routes-карты). Отсюда «не понятно нихуя»: строка врала про тот
+    // путь, на который владелец смотрел. Сверяем с картой АКТИВНОГО пути (`gatewayTiers`).
+    const poolTier = /^gpt[-_]/i.test(dead) ? 'gpt' : 'opus';
+    const serving = (p.gatewayTiers && p.gatewayTiers[poolTier]) || '';
+    if (serving && serving !== fb) {
+      el.textContent = `⚠️ пул пуст по ${dead}${when ? ' с ' + when : ''}, но карта уже на ${serving} — каждый запрос сначала упрётся в 402`;
+      el.className = 'w-full text-[10px] leading-tight text-amber';
+    } else {
+      el.textContent = `⛔ пул пуст по ${dead}, отвечает ${fb}${when ? ' с ' + when : ''}`;
+      el.className = 'w-full text-[10px] leading-tight text-crimson';
+    }
+    el.title = `переключено ${dd.droppedAt || '—'} · вернётся само, когда проба квоты увидит пул налитым`;
+    el.className = 'w-full text-[10px] leading-tight text-crimson';
+    el.hidden = false;
+  } catch (e) { /* молча: следующий тик попробует снова */ } finally { poolDropBusy = false; }
 }
 
 async function applyKeepaliveCard(pfx, api, retried) {
@@ -13047,6 +13770,11 @@ async function applyKeepaliveCard(pfx, api, retried) {
     if (Number.isFinite(attempts) && attempts > 0) patch.maxAttempts = attempts;
     if (maxhedgesRaw !== undefined && maxhedgesRaw !== '' && Number.isFinite(Number(maxhedgesRaw))) patch.maxHedges = Number(maxhedgesRaw);
     if (Number.isFinite(precommitSec)) patch.preCommitMs = Math.round(precommitSec * 1000);
+    // 🪤 `poolFallbackModel` в патче НЕТ намеренно. Это зеркало: второй такой же селектор
+    // живёт в карточке часов, и «Применить» уносило СВОЙ (возможно устаревший) выбор,
+    // затирая чужой — владелец 16.09 поменял значение в одних часах, нажал «Применить»
+    // в карточке Keepalive и получил обратно старое. Селектор применяет себя сам, по
+    // `onchange` (см. pooldropFill): одна правка — один POST, и затирать нечего.
     const res = await fetch(api + '/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
@@ -13092,6 +13820,10 @@ async function resetKeepaliveCard(pfx, api) {
   set(pfx + '-keepalive-attempts', d.maxAttempts);
   set(pfx + '-keepalive-maxhedges', d.maxHedges);
   set(pfx + '-keepalive-precommit', Math.round((d.preCommitMs || 0) / 1000));
+  // Фолбэк при пустом пуле — часть поставочных настроек, значит «Рекомендованные» его
+  // тоже возвращают. Через `pooldropFill`, а не `set`: у селектора значение ставится
+  // только если такой пункт есть в списке, иначе выбор молча остался бы прошлым.
+  pooldropFill(pfx, d.poolFallbackModel || '');
   await applyKeepaliveCard(pfx, api);
 }
 
@@ -13106,6 +13838,9 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  od: '/__switch/api/od/keepalive',
+  bai: '/__switch/api/bai/keepalive',
+  uk: '/__switch/api/uk/keepalive',
   ap: '/__switch/api/ap/keepalive',
   hn: '/__switch/api/hn/keepalive',
   ak: '/__switch/api/ak/keepalive',
@@ -13472,6 +14207,9 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
+const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
+const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
 // ts-трио пропустили при заведении вкладки TrueSOTA: `tsLoadKeepalive()` зовётся из
 // switchTab и трёх кнопок карточки, а определения не было — открытие вкладки падало
@@ -13518,6 +14256,9 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  odyssey: ['od', '/__switch/api/od/keepalive'],
+  bai: ['bai', '/__switch/api/bai/keepalive'],
+  getunikey: ['uk', '/__switch/api/uk/keepalive'],
   aipm: ['ap', '/__switch/api/ap/keepalive'],
   hcnsec: ['hn', '/__switch/api/hn/keepalive'],
   aikeysapi: ['ak', '/__switch/api/ak/keepalive'],
@@ -13649,7 +14390,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -13843,19 +14584,81 @@ function applySelfSeen(s, data) {
 // dead → 🔴; есть balance → $XX.XX цветом по доле остатка; иначе кнопка 💰 для чека.
 // Вторая строка — кликабельная выдача «из $175»: у разных аккаунтов она разная (125/175/личный
 // больше), поэтому её можно вписать руками. Показываем цифру, а не иконку — иконку не видно.
-// Маркер свежести: баланс в сессии — это кеш, который периодически обновляет статус-бар
-// (GET /__switch/api/{ar,go,tb}/balance?api_key=…). ⟳ = баланс проверен статус-баром <2 мин
-// назад, ~ = кеш устарел (статус-бар обновит при следующем рендере), пусто = ещё не проверялось.
+// ── Маркер свежести ЦИФРЫ: ⟳ = её только что называл шлюз, ~ = цифра старая ──
+//
+// 🔴 Правилось 15.09 по живой жалобе «слетели балансы на старые после ребута».
+//
+// Здесь читалось `balanceCheckedAt`, и это отвечало не на тот вопрос. Два поля рядом
+// означают разное:
+//
+//   balanceCheckedAt — когда МЫ ходили проверять (и в этот раз не смогли переспросить);
+//   selfCheckedAt    — когда ШЛЮЗ называл эту цифру.
+//
+// Пока чек не проходит, первое обновляется на каждом прогоне, а второе стоит. Поэтому
+// метка бодро писала «обновлено 12с назад» у цифры двухдневной давности: у `exhaustedar`
+// проверка шла 4.7 ч назад, а цифра была снята 73.8 ч назад — и разрыв растёт ровно там,
+// где цифра старее (замер: 22 записи из 33, обратных случаев ноль).
+//
+// ⁉️ И это не «штамп протух»: `balanceCheckedAt` свежий ЧЕСТНО — мы правда ходили. Врала
+// именно метка, читавшая не то поле. Урок: прежде чем звать поле врущим, проверить, на
+// какой вопрос оно отвечает — правильная правка здесь одна, на фронте.
+//
+// Кеш-ветви (`selfCached`) намеренно НЕ переспрашивают шлюз, поэтому у них `selfCheckedAt`
+// и есть возраст показанной цифры. Ветвь `reused` подтверждает цифру замером расхода и
+// возвращает `selfCheckedAt` свежим от прошлого чека — то есть метка честна и там.
 function balanceFreshMark(s) {
-  const ts = s && s.balanceCheckedAt;
+  const ts = s && (s.selfCheckedAt || s.balanceCheckedAt);
   if (!ts) return '';
   const ageS = (Date.now() - new Date(ts).getTime()) / 1000;
   if (!isFinite(ageS) || ageS < 0) return '';
-  const fmt = ageS < 60 ? `${Math.round(ageS)}с` : `${Math.round(ageS / 60)}м`;
+  const fmt = ageS < 60 ? `${Math.round(ageS)}с` : (ageS < 3600 ? `${Math.round(ageS / 60)}м` : `${Math.round(ageS / 3600)}ч`);
   if (ageS < 120) {
-    return `<span class="text-emerald text-[10px] leading-none" title="обновлено статус-баром ${fmt} назад">⟳</span>`;
+    return `<span class="text-emerald text-[10px] leading-none" title="шлюз называл эту цифру ${fmt} назад">⟳</span>`;
   }
-  return `<span class="text-faint text-[10px] leading-none" title="кеш устарел ${fmt} назад — статус-бар обновит при следующей проверке">~</span>`;
+  // ⚠️ В подписи было «статус-бар обновит при следующей проверке» — этого не случится, если
+  // чеки падают (15.09 так и было: успешного чека не прошло ни одно из 33). Обещать
+  // обновление, которого нет, — та же ложь, только в другую сторону.
+  return `<span class="text-faint text-[10px] leading-none" title="цифру называл шлюз ${fmt} назад; расход с тех пор измерялся, а переспросить цифру не удалось">~</span>`;
+}
+
+// ── Вердикт про ЛОГИН: чего раньше в таблице не было вообще ──
+//
+// Заявка владельца 13.09: «кучу аккаунтов разлогинилось, а баланс не актуальный — заранее
+// видно, есть логин или нет?» Проверить заранее нечем (пруфа `acw_sc__v2` нет ни у одного
+// аккаунта, любой запрос отбивается WAF и растит паузу на весь хост), поэтому отвечаем
+// иначе: показываем вердикт там, где он УЖЕ известен по прошедшим чекам.
+//
+// 🪤 Зачем отдельная метка, если есть `selfError`: его текст читает человек, а 401 и WAF в
+// нём выглядят одинаково — «точную цифру взять не вышло». Между тем это противоположные
+// факты: 401 = «сессия мертва, нужен браузер», WAF = «про логин не знаем НИЧЕГО». Владелец
+// решает по этой разнице, жать ⚡ или нет, — поэтому вид приезжает отдельным полем
+// `selfFailureKind` от бэкенда, а не разбирается из текста здесь.
+//
+// 🔴 — доказанный разлогин. ⚠️ — логин НЕ проверен (неизвестность, не факт поломки).
+// Пустая строка — вердикта нет: чек прошёл или причина к логину не относится.
+function loginVerdictMark(s) {
+  const v = {
+    login_dead:     ['🔴', 'разлогинен', 'crimson',
+      'Сессия отвергнута шлюзом (HTTP 401/403) — аккаунт разлогинен. Куки в профиле при этом на месте и выглядят целыми, поэтому проверкой файла это не ловится. Лечится только браузером: 🌐 откроет ЛК и войдёт заново.'],
+    login_expired:  ['🔴', 'вход протух', 'crimson',
+      'Refresh-кука отвергнута шлюзом — вход протух. Нужен заход через браузер кнопкой 🌐.'],
+    relogin_unverified: ['🔵', 'вход был, не переспрошен', 'azure',
+      'Вход в ЛК выполнялся ПОСЛЕ показанной цифры, а переспросить шлюз не удалось. Это НЕ «разлогинен»: чек идёт по кукам профиля, а браузер держит актуальную копию в памяти и на диск её не сбрасывает — отсюда ложный 401 сразу после входа. Состояние входа не подтверждено, но и не опровергнуто: нажми 💰 на строке, чтобы переспросить.'],
+    no_proof:       ['⚠️', 'логин не проверен', 'amber',
+      'Шлюз отдал JS-челлендж Aliyun, а куки-пруфа `acw_sc__v2` у аккаунта нет: наш HTTP-клиент JS не исполняет. Поэтому про логин НЕ ИЗВЕСТНО НИЧЕГО — это не «разлогинен». Пруф приносит браузер: нажми 🌐 (или ⚡ при чек-ине), и проверка баланса снова заработает.'],
+    waf:            ['⚠️', 'логин не проверен', 'amber',
+      'Шлюз отбил запрос WAF-заглушкой даже с куки-пруфом. Живость логина по этому ответу определить нельзя.'],
+    rate_limited:   ['⚠️', 'логин не проверен', 'amber',
+      'Шлюз ответил «слишком часто» (429). Про логин ответа нет.'],
+    no_profile:     ['⚪', 'профиля нет', 'faint',
+      'У аккаунта нет каталога профиля с куками — заведение не доведено до конца. Логина нет по определению: открой ЛК кнопкой 🌐 и войди, тогда аккаунт станет рабочим.'],
+    no_cookie:      ['⚪', 'куки нет', 'faint',
+      'Профиль есть, а годной куки в нём нет. Нужен заход через браузер кнопкой 🌐.'],
+    browser_open:   ['⏳', 'окно открыто', 'azure',
+      'Браузер этого аккаунта открыт и держит куки в памяти — точный чек невозможен в принципе, пока окно живо. Закрой окно ЛК и повтори.'],
+  }[s && s.selfFailureKind];
+  if (!v) return '';
+  return `<span class="text-${v[2]} text-[10px] leading-none ml-1" title="${esc(v[3])}">${v[0]} ${esc(v[1])}</span>`;
 }
 
 // ── Ячейка баланса: цифра + бейдж источника + одна кнопка (общее для AR/GO/TB) ──
@@ -14082,14 +14885,14 @@ function newapiBalanceCell(s, kJ, prov, sym = '$', keyOk = isRealKey) {
       return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
         + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(ltip)}"`
         + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">${lsym}${lshown.toFixed(2)}</button>`
-        + `${balanceSourceBadge(s)}${balanceFreshMark(s)}</span>`
+        + `${balanceSourceBadge(s)}${balanceFreshMark(s)}${loginVerdictMark(s)}</span>`
         + `<span class="font-mono text-[9px] text-muted leading-none mt-0.5">≈ ${sym}${shown.toFixed(2)}</span>${edit}</span>`;
     }
     const tip = `Остаток ${sym}${shown.toFixed(2)} (${(BAL_SRC[s.balanceSource] || {}).label || 'источник неизвестен'})${spentTip}${negTip} · клик = пересчитать`;
     return `<span class="inline-flex flex-col items-center"><span class="inline-flex items-center">`
       + `<button onclick='${prov}CheckBalance(${kJ})' title="${esc(tip)}"`
       + ` class="font-mono text-[13px] font-semibold ${color} hover:underline leading-none">${sym}${shown.toFixed(2)}</button>`
-      + `${balanceSourceBadge(s)}${balanceFreshMark(s)}</span>${edit}</span>`;
+      + `${balanceSourceBadge(s)}${balanceFreshMark(s)}${loginVerdictMark(s)}</span>${edit}</span>`;
   }
   return `<span class="inline-flex flex-col items-center">${actBtn(`${prov}CheckBalance(${kJ})`, 'Чек баланса', '💰', 'amber')}${edit}</span>`;
 }
@@ -14257,6 +15060,17 @@ async function arCheckBalance(api_key) {
         applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
+      // 🔴 Вид отказа — по тем же правилам, что и текст: пришёл → ставим, не пришёл → снимаем.
+      //
+      // Патч перечисляет поля ПОИМЁННО, и забытое живёт до F5. `selfFailureKind` в списке не
+      // было, поэтому строка показывала НОВУЮ цифру и СТАРЫЙ вердикт — жалоба владельца 16.09:
+      // «баланс чекнулся, но статус аккаунта не поменялся». Ровно тот же класс, что колонка 🎁
+      // (см. комментарий к `handleArBalance`): точечный патч дрейфует, если поле не названо.
+      //
+      // Ставим ВНЕ ветки `live`: у мёртвого ключа вердикт как раз и появляется (401 → login_dead),
+      // и без этого он не доехал бы до плашки вообще.
+      if (data.selfFailureKind) s.selfFailureKind = data.selfFailureKind;
+      else delete s.selfFailureKind;
       // Метка чек-ина приходит вместе с балансом: именно этот чек её и мог поставить
       // (бэкенд видит рост выдачи). Без переноса в state колонка 🎁 не менялась бы
       // до перезагрузки страницы.
@@ -16403,6 +17217,1605 @@ async function kkSaveModelMap() {
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
+function odPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (OD_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderOdGauge() {
+  moneyAutoFetch('odyssey').then(() => moneyRotateToHistory('odyssey')).catch(() => {});
+  const st = odPoolStats(state.odyssey);
+  renderEnergyGauge($('od-energy'), {
+    title: 'Odyssey · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-lime">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-lime">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20170 → odysseyapi.tech (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadOdSessions(probe) {
+  if (probe) $('od-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/od/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.odyssey = data.sessions || [];
+    if ($('nav-count-odyssey')) $('nav-count-odyssey').textContent = state.odyssey.length;
+    await newapiEnsureGhNames(state.odyssey);
+    renderOd();
+    renderOdGauge();
+    loadOdModels();
+    loadOdModelMap();
+    if (probe) toast('✓ Odyssey: статусы обновлены', 'success');
+  } catch (e) {
+    $('od-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadOdSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/od/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.odyssey = data.sessions || [];
+    if ($('nav-count-odyssey')) $('nav-count-odyssey').textContent = state.odyssey.length;
+    renderOd();
+    renderOdGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadOdModels(force) {
+  const keys = state.odyssey
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('od-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('od-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/od/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderOdModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('od-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderOdModels(models) {
+  if (models) state.odModels = models;
+  const list = state.odModels || [];
+  let active = state.odActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/od/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.odActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('od-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — lime, а lime же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-lime/15 border border-lime/50 text-lime' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='odSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + odyssey-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "odyssey")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderOdModelMap();
+}
+async function odSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/od/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.odModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.odActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderOdModels(state.odModels);
+  } catch (e) { toast('odSelectModel: ' + e.message, 'error'); }
+}
+
+function renderOd() {
+  const { list: all, total, q } = newapiRows(state.odyssey, 'od');
+  if (!all.length) {
+    $('od-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-lime text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-lime/5' : '';
+    const activeTag = active ? '<span class="text-lime mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = odBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderOdModels.
+    const keyCell = noKey ? noKeyCell(`odSetKey(${idJ})`) : `<button onclick='odActivate(${kJ})' title="Сделать активным (keepalive :20170 → odysseyapi.tech)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-lime/10 border-lime/50 text-lime' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">
+        ${s.password
+          ? `<button onclick='odCopyPass(${JSON.stringify(s.password)})' title="Скопировать пароль. Вход в кабинет: этот email + пароль" class="font-mono text-[11px] px-2 py-1 rounded border bg-surface border-line-soft text-muted hover:text-ink">🔒 пароль</button>`
+          : `<button onclick='odSetPass(${idJ})' title="Пароль не сохранён (аккаунт заведён раньше этой правки). Впиши вручную - потом сможешь войти в кабинет" class="text-[11px] px-2 py-1 rounded border border-dashed border-line-soft text-faint hover:text-ink">＋ пароль</button>`}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'od')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`odCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`odShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`odSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`odRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`odActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`odPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'od', idJ)}
+        ${actBtn(`odOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс odyssey)', '🌐', 'violet')}
+        ${actBtn(`odDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('od-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'Пароль', align: 'center', w: 'w-24' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'od', q),
+    { sortProv: 'od', accent: 'lime' }
+  );
+}
+
+function odBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'od'); }
+
+function odShowAdd(show = true) {
+  $('od-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('od');
+  if (show) { $('od-add-email').value = ''; $('od-add-key').value = ''; $('od-add-email').focus(); }
+}
+async function odAdd() {
+  const email = $('od-add-email').value.trim();
+  const api_key = $('od-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/od/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.od }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      odShowAdd(false);
+      loadOdSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) odOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function odDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/od/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadOdSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function odShare(id) {
+  const cur = state.odyssey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/od/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Odyssey',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function odShowImport(show = true) {
+  $('od-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('od-import-text').value = '';
+    $('od-import-preview').innerHTML = '';
+    $('od-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function odImport() {
+  const share = $('od-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('od-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/od/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('od-import-preview').innerHTML = '';
+    odShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadOdSessions(false);
+  } catch (e) {
+    $('od-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли odyssey).
+async function odSetKey(id) {
+  const cur = state.odyssey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли odyssey после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/od/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadOdSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (odSetKey).
+async function odRename(id) {
+  const cur = state.odyssey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/od/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadOdSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function odActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/od/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'odyssey';
+      state.urls.odyssey = 'http://localhost:20170';
+      paintStatus();
+      loadOdSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function odPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/od/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.odyssey.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.odyssey[idx].status = data.status;
+    renderOd();
+    renderOdGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function odCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/od/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.odyssey.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderOd();
+    renderOdGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function odCheckAllBalances() {
+  $('od-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/od/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.odyssey = data.sessions || [];
+    renderOd();
+    renderOdGauge();
+    balanceBatchToast(state.odyssey);
+  } catch (e) {
+    $('od-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function odSetBalance(api_key) {
+  return newapiSetBalanceUI('od', api_key, () => state.odyssey, () => { renderOd(); renderOdGauge(); });
+}
+
+function odMapProfiles() {
+  return newapiMapProfilesUI('od', () => loadOdSessions(false));
+}
+
+async function odOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/od/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function odCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+// Пароль аккаунта: копирование и вписывание вручную.
+//
+// 🔴 Зачем. Авторега пароль ПРИДУМЫВАЕТ сама, и до 16.09 он нигде не сохранялся: аккаунт
+// есть, а войти в кабинет руками нечем (владелец: «надо сохранять логин пароль чтобы я мог
+// зайти вручную потом»). Теперь драйвер пишет его в запись аккаунта, а вкладка показывает:
+// есть пароль - кнопка копирования, нет (аккаунты до правки) - кнопка «＋ пароль» с ручкой
+// `/od/set-password` задним числом.
+async function odCopyPass(pass) {
+  try {
+    await navigator.clipboard.writeText(pass);
+    toast('🔒 пароль скопирован', 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+
+async function odSetPass(id) {
+  const pass = prompt('Пароль для входа в кабинет (email + пароль):');
+  if (!pass) return;
+  try {
+    const r = await fetch('/__switch/api/od/set-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, password: pass.trim() }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast('🔒 пароль записан', 'success');
+    renderOd();
+  } catch (e) { toast('пароль: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → odyssey-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadOdModelMap() {
+  try {
+    const res = await fetch('/__switch/api/od/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.odModelMap = data.modelMap || {};
+    renderOdModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderOdModelMap() {
+  const mm = state.odModelMap || {};
+  const models = (state.odModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /od/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя odyssey-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="od-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('od-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='odSaveModelMap()' class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function odSaveModelMap() {
+  const mm = {
+    opus: $('od-mm-opus')?.value || '',
+    sonnet: $('od-mm-sonnet')?.value || '',
+    haiku: $('od-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/od/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.odModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function baiPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (BAI_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderBaiGauge() {
+  moneyAutoFetch('bai').then(() => moneyRotateToHistory('bai')).catch(() => {});
+  const st = baiPoolStats(state.bai);
+  renderEnergyGauge($('bai-energy'), {
+    title: 'B.AI · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-amber">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-amber">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20169 → chat.b.ai (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadBaiSessions(probe) {
+  if (probe) $('bai-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/bai/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.bai = data.sessions || [];
+    if ($('nav-count-bai')) $('nav-count-bai').textContent = state.bai.length;
+    await newapiEnsureGhNames(state.bai);
+    renderBai();
+    renderBaiGauge();
+    loadBaiModels();
+    loadBaiModelMap();
+    if (probe) toast('✓ B.AI: статусы обновлены', 'success');
+  } catch (e) {
+    $('bai-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadBaiSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/bai/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.bai = data.sessions || [];
+    if ($('nav-count-bai')) $('nav-count-bai').textContent = state.bai.length;
+    renderBai();
+    renderBaiGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadBaiModels(force) {
+  const keys = state.bai
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('bai-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('bai-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/bai/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderBaiModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('bai-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderBaiModels(models) {
+  if (models) state.baiModels = models;
+  const list = state.baiModels || [];
+  let active = state.baiActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/bai/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.baiActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('bai-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — amber, а amber же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-amber/15 border border-amber/50 text-amber' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='baiSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + bai-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "bai")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderBaiModelMap();
+}
+async function baiSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/bai/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.baiModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.baiActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderBaiModels(state.baiModels);
+  } catch (e) { toast('baiSelectModel: ' + e.message, 'error'); }
+}
+
+function renderBai() {
+  const { list: all, total, q } = newapiRows(state.bai, 'bai');
+  if (!all.length) {
+    $('bai-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-amber text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-amber/5' : '';
+    const activeTag = active ? '<span class="text-amber mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = baiBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderBaiModels.
+    const keyCell = noKey ? noKeyCell(`baiSetKey(${idJ})`) : `<button onclick='baiActivate(${kJ})' title="Сделать активным (keepalive :20169 → chat.b.ai)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-amber/10 border-amber/50 text-amber' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'bai')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`baiCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`baiShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`baiSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`baiRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`baiActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`baiPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'bai', idJ)}
+        ${actBtn(`baiOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс bai)', '🌐', 'violet')}
+        ${actBtn(`baiDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('bai-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'bai', q),
+    { sortProv: 'bai', accent: 'amber' }
+  );
+}
+
+function baiBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'bai'); }
+
+function baiShowAdd(show = true) {
+  $('bai-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('bai');
+  if (show) { $('bai-add-email').value = ''; $('bai-add-key').value = ''; $('bai-add-email').focus(); }
+}
+async function baiAdd() {
+  const email = $('bai-add-email').value.trim();
+  const api_key = $('bai-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/bai/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.bai }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      baiShowAdd(false);
+      loadBaiSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) baiOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function baiDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/bai/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadBaiSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function baiShare(id) {
+  const cur = state.bai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/bai/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'B.AI',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function baiShowImport(show = true) {
+  $('bai-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('bai-import-text').value = '';
+    $('bai-import-preview').innerHTML = '';
+    $('bai-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function baiImport() {
+  const share = $('bai-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('bai-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/bai/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('bai-import-preview').innerHTML = '';
+    baiShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadBaiSessions(false);
+  } catch (e) {
+    $('bai-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли bai).
+async function baiSetKey(id) {
+  const cur = state.bai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли bai после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/bai/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadBaiSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (baiSetKey).
+async function baiRename(id) {
+  const cur = state.bai.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/bai/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadBaiSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function baiActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/bai/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'bai';
+      state.urls.bai = 'http://localhost:20169';
+      paintStatus();
+      loadBaiSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function baiPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/bai/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.bai.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.bai[idx].status = data.status;
+    renderBai();
+    renderBaiGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function baiCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/bai/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.bai.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderBai();
+    renderBaiGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function baiCheckAllBalances() {
+  $('bai-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/bai/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.bai = data.sessions || [];
+    renderBai();
+    renderBaiGauge();
+    balanceBatchToast(state.bai);
+  } catch (e) {
+    $('bai-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function baiSetBalance(api_key) {
+  return newapiSetBalanceUI('bai', api_key, () => state.bai, () => { renderBai(); renderBaiGauge(); });
+}
+
+function baiMapProfiles() {
+  return newapiMapProfilesUI('bai', () => loadBaiSessions(false));
+}
+
+async function baiOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/bai/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function baiCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → bai-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadBaiModelMap() {
+  try {
+    const res = await fetch('/__switch/api/bai/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.baiModelMap = data.modelMap || {};
+    renderBaiModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderBaiModelMap() {
+  const mm = state.baiModelMap || {};
+  const models = (state.baiModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /bai/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя bai-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="bai-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('bai-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='baiSaveModelMap()' class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function baiSaveModelMap() {
+  const mm = {
+    opus: $('bai-mm-opus')?.value || '',
+    sonnet: $('bai-mm-sonnet')?.value || '',
+    haiku: $('bai-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/bai/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.baiModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
+// ── UniKey: функции вкладки (§2.13, клон kktoken) ──
+function ukPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (UK_GRANT_STEP). У getunikey подарок при регистрации ЕСТЬ, но он на
+      // порядок меньше шага (4 742 кредита ≈ $0.47), поэтому $5 честно показывает пустой
+      // аккаунт пустым. Точная цифра приходит из /api/user/self куками профиля.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderUkGauge() {
+  moneyAutoFetch('getunikey').then(() => moneyRotateToHistory('getunikey')).catch(() => {});
+  const st = ukPoolStats(state.getunikey);
+  renderEnergyGauge($('uk-energy'), {
+    title: 'UniKey · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-sky">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-sky">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20168 → www.getunikey.ai (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadUkSessions(probe) {
+  if (probe) $('uk-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/uk/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.getunikey = data.sessions || [];
+    if ($('nav-count-getunikey')) $('nav-count-getunikey').textContent = state.getunikey.length;
+    await newapiEnsureGhNames(state.getunikey);
+    renderUk();
+    renderUkGauge();
+    loadUkModels();
+    loadUkModelMap();
+    if (probe) toast('✓ UniKey: статусы обновлены', 'success');
+  } catch (e) {
+    $('uk-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadUkSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/uk/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.getunikey = data.sessions || [];
+    if ($('nav-count-getunikey')) $('nav-count-getunikey').textContent = state.getunikey.length;
+    renderUk();
+    renderUkGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadUkModels(force) {
+  const keys = state.getunikey
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('uk-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('uk-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/uk/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderUkModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('uk-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderUkModels(models) {
+  if (models) state.ukModels = models;
+  const list = state.ukModels || [];
+  let active = state.ukActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/uk/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.ukActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('uk-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — sky, а sky же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-sky/15 border border-sky/50 text-sky' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='ukSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + getunikey-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "getunikey")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderUkModelMap();
+}
+async function ukSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/uk/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.ukModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.ukActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderUkModels(state.ukModels);
+  } catch (e) { toast('ukSelectModel: ' + e.message, 'error'); }
+}
+
+function renderUk() {
+  const { list: all, total, q } = newapiRows(state.getunikey, 'uk');
+  if (!all.length) {
+    $('uk-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-sky text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-sky/5' : '';
+    const activeTag = active ? '<span class="text-sky mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = ukBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderUkModels.
+    const keyCell = noKey ? noKeyCell(`ukSetKey(${idJ})`) : `<button onclick='ukActivate(${kJ})' title="Сделать активным (keepalive :20168 → www.getunikey.ai)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-sky/10 border-sky/50 text-sky' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'uk')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`ukCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`ukShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`ukSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`ukRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`ukActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`ukPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'uk', idJ)}
+        ${actBtn(`ukOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс getunikey)', '🌐', 'violet')}
+        ${actBtn(`ukDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('uk-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'uk', q),
+    { sortProv: 'uk', accent: 'sky' }
+  );
+}
+
+function ukBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'uk'); }
+
+function ukShowAdd(show = true) {
+  $('uk-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('uk');
+  if (show) { $('uk-add-email').value = ''; $('uk-add-key').value = ''; $('uk-add-email').focus(); }
+}
+async function ukAdd() {
+  const email = $('uk-add-email').value.trim();
+  const api_key = $('uk-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/uk/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.uk }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      ukShowAdd(false);
+      loadUkSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) ukOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function ukDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/uk/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadUkSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function ukShare(id) {
+  const cur = state.getunikey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/uk/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'UniKey',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function ukShowImport(show = true) {
+  $('uk-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('uk-import-text').value = '';
+    $('uk-import-preview').innerHTML = '';
+    $('uk-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function ukImport() {
+  const share = $('uk-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('uk-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/uk/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('uk-import-preview').innerHTML = '';
+    ukShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadUkSessions(false);
+  } catch (e) {
+    $('uk-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли getunikey).
+async function ukSetKey(id) {
+  const cur = state.getunikey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли getunikey после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/uk/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadUkSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (ukSetKey).
+async function ukRename(id) {
+  const cur = state.getunikey.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/uk/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadUkSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function ukActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/uk/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'getunikey';
+      state.urls.getunikey = 'http://localhost:20168';
+      paintStatus();
+      loadUkSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function ukPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/uk/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.getunikey.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.getunikey[idx].status = data.status;
+    renderUk();
+    renderUkGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function ukCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/uk/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.getunikey.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderUk();
+    renderUkGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function ukCheckAllBalances() {
+  $('uk-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/uk/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.getunikey = data.sessions || [];
+    renderUk();
+    renderUkGauge();
+    balanceBatchToast(state.getunikey);
+  } catch (e) {
+    $('uk-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function ukSetBalance(api_key) {
+  return newapiSetBalanceUI('uk', api_key, () => state.getunikey, () => { renderUk(); renderUkGauge(); });
+}
+
+function ukMapProfiles() {
+  return newapiMapProfilesUI('uk', () => loadUkSessions(false));
+}
+
+async function ukOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/uk/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function ukCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → getunikey-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadUkModelMap() {
+  try {
+    const res = await fetch('/__switch/api/uk/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.ukModelMap = data.modelMap || {};
+    renderUkModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderUkModelMap() {
+  const mm = state.ukModelMap || {};
+  const models = (state.ukModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /uk/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя getunikey-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="uk-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('uk-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='ukSaveModelMap()' class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function ukSaveModelMap() {
+  const mm = {
+    opus: $('uk-mm-opus')?.value || '',
+    sonnet: $('uk-mm-sonnet')?.value || '',
+    haiku: $('uk-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/uk/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.ukModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+
 
 
 // ═══════════════════ KKTOKEN ════════════════════════════════════════
@@ -18187,8 +20600,91 @@ async function akAutoregStop() {
   } catch (e) { toast('Стоп: ' + e.message, 'error'); }
 }
 
-function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak', '$', akIsRealKey); }
-function akShowAdd(show = true) {
+// ── 🤖 Авторег Odyssey ───────────────────────────────────────────────────────────
+//
+// Панель показывает прогон скрипта `odyssey/auto-add.py`: этап (машинный маркер OD_STAGE
+// отдаёт сервер), живой лог и итог. Полуавтомат: звать человека к окну нужно только если
+// Clerk потребует капчу.
+function odAutoregLogHide() {
+  $('od-autoreg-log-wrap').classList.add('hidden');
+}
+
+async function odAutoregStatus({ quiet = false } = {}) {
+  try {
+    const r = await fetch('/__switch/api/od/autoreg/status');
+    const d = await r.json();
+    const running = !!d.running;
+    $('od-autoreg-start').classList.toggle('hidden', running);
+    $('od-autoreg-stop').classList.toggle('hidden', !running);
+    $('od-autoreg-tier').disabled = running;
+
+    const stageName = d.stage && d.stage.stage ? d.stage.stage : null;
+    const stageNote = d.stage && d.stage.note ? (' · ' + d.stage.note) : '';
+    // Текст статуса говорит, что ПРОИСХОДИТ и что ДЕЛАТЬ, а не «code 4»: причина отказа
+    // приходит с сервера готовой фразой (OD_AUTOADD_FAIL), и дублировать её тут незачем.
+    $('od-autoreg-status').textContent = running
+      ? (stageName ? `идёт: ${stageName}${stageNote}` : 'идёт')
+      : (d.result && d.result.ok
+        ? `готово · ${d.result.email || 'ключ в пуле'}`
+        : (d.failText ? 'ошибка: ' + d.failText : 'ожидание'));
+
+    if (running || (d.stdout && d.stdout.length) || (d.stderr && d.stderr.length)) {
+      $('od-autoreg-log-wrap').classList.remove('hidden');
+    }
+    if (d.stdout && d.stdout.length) {
+      const pre = $('od-autoreg-log');
+      // Автопрокрутка только если человек уже внизу: иначе он читает середину, а лог
+      // дёргается под рукой.
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24;
+      pre.textContent = d.stdout.join('\n');
+      if (atBottom) pre.scrollTop = pre.scrollHeight;
+    }
+    const errPre = $('od-autoreg-log-err');
+    errPre.textContent = (d.stderr || []).join('\n');
+    errPre.classList.toggle('hidden', !(d.stderr && d.stderr.length));
+    $('od-autoreg-stage').textContent = stageName ? `этап: ${stageName}${stageNote}` : '';
+    return running;
+  } catch (e) {
+    if (!quiet) toast('Авторег Odyssey: ' + e.message, 'error');
+    return false;
+  }
+}
+
+async function odAutoregStart() {
+  const tier = $('od-autoreg-tier').value;
+  try {
+    const r = await fetch('/__switch/api/od/autoreg/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    $('od-autoreg-log').textContent = '';
+    $('od-autoreg-log-err').textContent = '';
+    $('od-autoreg-log-err').classList.add('hidden');
+    $('od-autoreg-log-wrap').classList.remove('hidden');
+    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier})`, 'success');
+    await odAutoregStatus({ quiet: true });
+    if (state.odAutoregTimer) clearInterval(state.odAutoregTimer);
+    state.odAutoregTimer = setInterval(async () => {
+      const running = await odAutoregStatus({ quiet: true });
+      if (!running) { clearInterval(state.odAutoregTimer); state.odAutoregTimer = null; }
+    }, 2500);
+  } catch (e) { toast('Авторег Odyssey: ' + e.message, 'error'); }
+}
+
+async function odAutoregStop() {
+  if (!confirm('Остановить авторег Odyssey? Незавершённый аккаунт может не попасть в пул.')) return;
+  try {
+    const r = await fetch('/__switch/api/od/autoreg/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка отправлена' : 'прогон уже завершён', 'info');
+    await odAutoregStatus({ quiet: true });
+  } catch (e) { toast('Стоп: ' + e.message, 'error'); }
+}
+
+function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak', '$', akIsRealKey); }function akShowAdd(show = true) {
   $('ak-add-form').classList.toggle('hidden', !show);
   if (show) { $('ak-add-email').value = ''; $('ak-add-pass').value = ''; $('ak-add-key').value = ''; $('ak-add-email').focus(); }
 }
@@ -24670,6 +27166,9 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  odyssey:     { id: 'odyssey',     p: 'od', stateKey: 'odyssey',     base: 5,   sym: '$',  label: 'Odyssey',     icon: '🧭', color: 'lime', reload: () => loadOdSessionsLight() },
+  bai:     { id: 'bai',     p: 'bai', stateKey: 'bai',     base: 5,   sym: '$',  label: 'B.AI',     icon: '🅱️', color: 'amber', reload: () => loadBaiSessionsLight() },
+  getunikey:     { id: 'getunikey',     p: 'uk', stateKey: 'getunikey',     base: 5,   sym: '$',  label: 'UniKey',     icon: '🔑', color: 'sky', reload: () => loadUkSessionsLight() },
   aipm: { id: 'aipm', p: 'ap', stateKey: 'aipm', base: 5, sym: '$', label: 'AIPM', icon: '🔷', color: 'indigo', minBal: 0.10, reload: () => loadApSessionsLight() },
   // base: 0 — про выдачу HCNsec ничего не известно: панель платная, гранта не заявлено,
   // а живая проба показала только каталог и ответы моделей. Ноль здесь значит «делить не
@@ -28215,7 +30714,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -28536,6 +31035,9 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'odyssey':       loadOdSessionsLight(); break;
+      case 'bai':       loadBaiSessionsLight(); break;
+      case 'getunikey':     loadUkSessionsLight(); break;
       case 'aipm': loadApSessionsLight(); break;
       case 'hcnsec':        loadHnSessionsLight(); break;
       case 'rumeng':        loadRmSessionsLight(); break;
@@ -28608,6 +31110,9 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'odyssey',     fn: () => loadOdSessionsLight() },
+  { tab: 'bai',     fn: () => loadBaiSessionsLight() },
+  { tab: 'getunikey',     fn: () => loadUkSessionsLight() },
   { tab: 'aipm', fn: () => loadApSessionsLight() },
   { tab: 'hcnsec',      fn: () => loadHnSessionsLight() },
   { tab: 'aikeysapi',   fn: () => loadAkSessionsLight() },
@@ -28623,6 +31128,19 @@ const NAV_COUNT_JOBS = [
   { tab: 'svrtr',       fn: () => loadSvrtrSessions(false) },
   { tab: 'helpcoder',   fn: () => loadHelpcoderSessions(false) },
   { tab: 'media',       fn: () => (typeof MEDIA !== 'undefined') && MEDIA.load(), mark: 'media' },
+  // Свои прокси: ТОЛЬКО цифра, без рендера вкладки. Так же, как cun/ot/vyceai ниже, и по
+  // той же причине - цена.
+  //
+  // 🪤 Сначала здесь стоял полный `PROXIES.load()`, и это было ошибкой: он тянет всё
+  // состояние (14 КБ, 59 привязок) и ПЕРЕСОБИРАЕТ вкладку целиком - 1368 узлов, 32 КБ
+  // разметки. Очередь крутится по кругу каждые 20 с для всех видимых вкладок, то есть
+  // пересборка шла и когда вкладка закрыта. На дашборде, где Tailwind собирается в
+  // браузере и следит за DOM, это лишний пересмотр огромной страницы на каждом круге -
+  // а первый круг совпадает со стартом страницы, когда идёт первая сборка стилей.
+  // Владелец: «обновляешь страницу, она пиздец как долго грузится, именно эта вкладка».
+  // Бейджу нужно одно число - его и берём, остальное дорисует первый заход.
+  { tab: 'proxies',     fn: () => navCountOnly('/__switch/api/proxies/state', 'nav-count-proxies',
+      d => (d.counts || {}).own ?? '—') },
   { tab: 'github',      fn: () => loadGhKeys(),                 mark: 'github' },
   // Ящики: /ol/list — чтение локального JSON, в Microsoft не ходит (сессии проверяет
   // только явная кнопка), поэтому в дешёвый круговой тик его брать можно.
@@ -33846,6 +36364,74 @@ document.addEventListener('visibilitychange', () => document.hidden ? stop() : s
 window.arqState = s => document.querySelectorAll('.arq').forEach(n => {
   if (s) n.dataset.arqState = s; else delete n.dataset.arqState; });
 
+/* ── Что реально отвечает ─────────────────────────────────────────────────
+   Состояние квоты — это «можно ли туда ходить», а не «куда ходим СЕЙЧАС».
+   Второе видно только по самой карте тиров, и когда владелец вернул её на
+   пуловую модель при пустом пуле, честный ответ — «карта на opus, запрос
+   сначала упрётся в 402». Ровно на этом он и запутался 16.09: панель маппинга
+   показывала claude-opus-5, а строка про фолбэк — deepseek, и оба были правы
+   про РАЗНЫЕ пути. */
+let AR_MAP = null;
+let FB = '';                           // куда пускать при пустом пуле (тот же ключ, что в карточке Keepalive)
+async function arMapSync() {
+  try {
+    const d = await (await fetch('/__switch/api/routes')).json();
+    const p = ((d && d.providers) || []).find(x => x && x.name === 'agentrouter');
+    AR_MAP = (p && p.gatewayTiers) || null;
+  } catch (e) { /* ручки нет — строку не рисуем, а не врём */ }
+}
+/* ── Куда пускать при пустом пуле ─────────────────────────────────────────
+   Тот же ключ, что в карточке Keepalive ниже (`poolFallbackModel`), и та же ручка:
+   два зеркала одного значения — так же, как тир-карта живёт и в карточке шлюза, и на
+   вкладке «Маршруты». Здесь он нужен потому, что вопрос «а куда оно идёт?» возникает
+   ровно там, где видно «пул пуст»: владелец 16.09 видел пометку и не понимал адреса. */
+// Куда пускать при пустом пуле — ЗНАЧЕНИЕ для строки состояния, а не орган управления.
+// 🪤 Селектор тут был и убран 16.09: два селектора одного ключа неизбежно разъезжаются
+// (сначала общий «Применить» затирал чужую правку, потом понадобилась синхронизация двух
+// зеркал). Настройка живёт там, где живёт сам ключ — в карточке Keepalive; часы только
+// НАЗЫВАЮТ адрес, чтобы вопрос «а куда оно идёт?» не оставался без ответа.
+async function arqFbSync() {
+  let v = null;
+  try {
+    const st = await (await fetch('/__switch/api/keepalive/state')).json();
+    v = String((st && st.cfg && st.cfg.poolFallbackModel) || '');
+  } catch (e) { return; }               // ручки нет — строку не портим, а не врём пустотой
+  if (v === FB) return;
+  FB = v;
+  stPoolLine(VIEW);
+}
+
+function stPoolLine(pool) {
+  const el = document.getElementById('arq-pool-state');
+  if (!el || pool !== VIEW) return;
+  const e = stLoad()[pool];
+  const fresh = stFresh(e, Date.now());
+  const arpool = POOL_MODEL[pool];
+  const serving = AR_MAP ? String(AR_MAP[pool] || '') : '';
+  const at = fresh ? (() => { const d = new Date(e.checkedAt); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; })() : '';
+  const why = e && e.source === 'drop' ? 'при фолбэке' : 'по проверке';
+  const name = POOLS[pool];
+  let txt, cls;
+  if (!fresh) {
+    txt = `${name}: про квоту неизвестно — нажми «Проверить ${pool === 'gpt' ? 'GPT' : 'Opus'}»`;
+    cls = 'text-muted';
+  } else if (e.state === 'exhausted' && serving && serving !== arpool) {
+    txt = `⛔ ${name}: квота кончилась ${at} (${why}) · отвечает ${serving}`;
+    cls = 'text-crimson';
+  } else if (e.state === 'exhausted') {
+    txt = `⚠️ ${name}: квота кончилась ${at} (${why}), а карта стоит на ${arpool} — поедет на ${FB || 'фолбэк'}, но каждый запрос сначала упрётся в 402`;
+    cls = 'text-amber';
+  } else if (serving && serving !== arpool) {
+    txt = `ℹ️ ${name}: квота есть, но трафик идёт на ${serving}`;
+    cls = 'text-muted';
+  } else {
+    txt = `✅ ${name}: квота есть (проверено ${at}) · отвечает ${arpool}`;
+    cls = 'text-emerald';
+  }
+  el.textContent = txt;
+  el.className = 'text-xs font-mono leading-tight text-center ' + cls;
+}
+
 /* ── Кеш результата проверки ──────────────────────────────────────────────
    Без него любой F5 сбрасывал цвет и строку, и чтобы снова узнать состояние —
    жечь ещё одну живую пробу Opus. Два слоя: localStorage работает сразу, файл
@@ -33869,26 +36455,60 @@ const stFresher = (a, b) => {
   if (!Number.isFinite(tb)) return a;
   return tb > ta ? b : a;
 };
-function stLoad() {
-  try { return JSON.parse(localStorage.getItem(KEY_ST)); } catch (e) { return null; } }
-function stSave(e) {
-  try { localStorage.setItem(KEY_ST, JSON.stringify(e)); } catch (e2) { /* живёт до перезагрузки */ } }
+/* ── Две полосы ───────────────────────────────────────────────────────────
+   Claude и GPT наливают вместе (партии одни), но кончаются порознь: 15.09 пул
+   Opus был пуст, а GPT отдавался. Поэтому и кеш, и серверный файл — словарь по
+   полосам, а циферблат красится по ПОКАЗЫВАЕМОЙ: свести две полосы в один цвет
+   нечем. Вторая полоса видна строкой под своей кнопкой. */
+const KEY_POOL = 'ar-quota-pool';
+const POOLS = { opus: 'Opus 5', gpt: 'GPT Astra' };
+const POOL_MODEL = { opus: 'claude-opus-5', gpt: 'gpt-6-astra' };
+let VIEW = (() => { try { const v = localStorage.getItem(KEY_POOL); return POOLS[v] ? v : 'opus'; } catch (e) { return 'opus'; } })();
 
-/* Показ восстановленной записи. Строка честно говорит, что это прошлая проверка и
-   когда она была: выдавать кеш за свежий ответ шлюза нельзя — партия «用完即止»
-   может кончиться в любой момент, и «Квота есть» часовой давности вводит в заблуждение. */
-function stApply(e) {
-  if (!stFresh(e, Date.now())) return false;
-  arqState(e.state === 'available' ? 'fresh' : 'burned');
-  const out = document.getElementById('arq-check-result');
+function stLoad() {
+  try {
+    const d = JSON.parse(localStorage.getItem(KEY_ST)) || {};
+    if (d.state) return { opus: d };            // запись v1 (одна полоса) = opus
+    return (d && typeof d === 'object' && !Array.isArray(d)) ? d : {};
+  } catch (e) { return {}; }
+}
+function stSave(pool, e) {
+  const d = stLoad();
+  if (e) d[pool] = e; else delete d[pool];
+  try { localStorage.setItem(KEY_ST, JSON.stringify(d)); } catch (e2) { /* живёт до перезагрузки */ } }
+const stEl = pool => document.getElementById(pool === 'gpt' ? 'arq-check-result-gpt' : 'arq-check-result');
+
+/* Показ одной полосы: своя строка + циферблат, если полоса показываемая.
+   Строка честно говорит, ОТКУДА состояние: «по проверке» — ручной клик,
+   «при фолбэке» — 402, который поймал keepalive. Это разные факты, и владелец
+   просил видеть именно второй. */
+function stPaint(pool) {
+  const e = stLoad()[pool];
+  const fresh = stFresh(e, Date.now());
+  const out = stEl(pool);
   if (out) {
-    const d = new Date(e.checkedAt);
-    const at = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    out.className = e.state === 'available' ? 'text-xs text-emerald font-mono'
-                                            : 'text-xs text-amber font-mono';
-    out.textContent = (e.state === 'available' ? 'Квота есть' : 'Квота закончилась') + ` · проверено в ${at}`;
+    if (!fresh) { out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; }
+    else {
+      const d = new Date(e.checkedAt);
+      const why = e.source === 'drop' ? 'при фолбэке' : 'по проверке';
+      out.className = e.state === 'available' ? 'text-xs text-emerald font-mono'
+                                              : 'text-xs text-amber font-mono';
+      out.textContent = (e.state === 'available' ? 'Квота есть' : 'Квота закончилась')
+        + ` · ${why} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
   }
-  return true;
+  if (pool === VIEW) { arqState(fresh ? (e.state === 'available' ? 'fresh' : 'burned') : ''); stPoolLine(pool); }
+}
+
+/* Переключение показываемой полосы. Кнопка проверки тоже зовёт это — нажал
+   «Проверить GPT», и циферблат перешёл на GPT. */
+function arqView(pool) {
+  if (!POOLS[pool]) return;
+  VIEW = pool;
+  try { localStorage.setItem(KEY_POOL, pool); } catch (e) { /* окно без хранилища */ }
+  const lbl = document.getElementById('arq-pool-name');
+  if (lbl) lbl.textContent = POOLS[pool];
+  Object.keys(POOLS).forEach(stPaint);
 }
 
 /* Гашение по наливу, пока вкладка открыта. Дашборд висит сутками, и без этого
@@ -33896,52 +36516,58 @@ function stApply(e) {
    вранье, от которого защищает инвалидация при загрузке. Зовётся из тика 1 Гц;
    срабатывает один раз на партию, дальше запись уже удалена. */
 function stExpire(now) {
-  const e = stLoad();
-  if (!e || stFresh(e, now)) return;
-  try { localStorage.removeItem(KEY_ST); } catch (e2) { /* хранилище закрыто */ }
-  arqState('');
-  const out = document.getElementById('arq-check-result');
-  if (out) { out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; }
+  Object.keys(POOLS).forEach(p => {
+    const e = stLoad()[p];
+    if (e && !stFresh(e, now)) stSave(p, null);
+    stPaint(p);
+  });
 }
 
 /* Слои сверяются по checkedAt, а НЕ по приоритету слоя: иначе браузер с устаревшей
    записью затирал бы свежую серверную, и наоборот сразу после рестарта :8200.
-   404 — это ещё не перезапущенный сервер, штатная ситуация, а не ошибка. */
+   404 — это ещё не перезапущенный сервер, штатная ситуация, а не ошибка.
+   Опрашивается и по таймеру, а не только при загрузке: фолбэк случается ПОСРЕДИ
+   дня, и часы обязаны покраснеть сами, без F5 и без клика. */
 async function stSync() {
-  const local = stLoad();
-  stApply(local);
-  let remote = null;
+  await arMapSync();                    // что отвечает СЕЙЧАС — из карты шлюза
+  await arqFbSync();                    // и куда пускать при пустом пуле — только для строки
+  Object.keys(POOLS).forEach(stPaint);
+  let remote = {};
   try {
     const r = await fetch('/__switch/api/ar/quota-state');
-    if (r.ok) { const j = await r.json(); if (j && j.state) remote = j; }
+    if (r.ok) { const j = await r.json(); remote = (j && j.pools) || {}; }
   } catch (e) { /* ручки ещё нет — живём на localStorage */ }
-  const best = stFresher(local, remote);
-  if (best && best !== local) stSave(best);
-  if (best && best !== local) stApply(best);
+  Object.keys(POOLS).forEach(p => {
+    const best = stFresher(stLoad()[p], remote[p]);
+    if (best && best !== stLoad()[p]) { stSave(p, best); stPaint(p); }
+  });
 }
 
-window.arqCheckQuota = async function arqCheckQuota() {
-  const btn = document.getElementById('arq-check');
-  const out = document.getElementById('arq-check-result');
+window.arqCheckQuota = async function arqCheckQuota(pool) {
+  pool = POOLS[pool] ? pool : VIEW;
+  arqView(pool);                       // нажал «Проверить GPT» — циферблат перешёл на GPT
+  const btn = document.getElementById(pool === 'gpt' ? 'arq-check-gpt' : 'arq-check');
+  const out = stEl(pool);
   if (!btn || !out || btn.disabled) return;
   btn.disabled = true;
   out.className = 'text-xs text-faint font-mono';
-  out.textContent = 'проверяю claude-opus-5…';
+  out.textContent = `проверяю ${POOL_MODEL[pool]}…`;
   try {
-    const res = await fetch('/__switch/api/ar/quota-check', { method: 'POST' });
+    const res = await fetch('/__switch/api/ar/quota-check', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pool }),
+    });
     const data = await res.json();
-    if (data.state === 'available') {
-      arqState('fresh');
-      out.className = 'text-xs text-emerald font-mono';
-      out.textContent = 'Квота есть';
-      stSave({ state: 'available', checkedAt: data.checkedAt || new Date().toISOString(),
-               dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
-    } else if (data.state === 'exhausted') {
-      arqState('burned');
-      out.className = 'text-xs text-amber font-mono';
-      out.textContent = 'Квота закончилась';
-      stSave({ state: 'exhausted', checkedAt: data.checkedAt || new Date().toISOString(),
-               dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
+    if (data.state === 'available' || data.state === 'exhausted') {
+      stSave(pool, { state: data.state, source: 'probe',
+                     checkedAt: data.checkedAt || new Date().toISOString(),
+                     dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
+      stPaint(pool);
+      // Возврат тир-карты из бэкапа — факт этой же проверки: пул налили, и тиры
+      // снова боевые. Молчать об этом нельзя, иначе владелец не поймёт, почему
+      // трафик уехал обратно на пуловую модель.
+      if (data.restored) out.textContent += ' · карта возвращена';
+      else if (data.restored === false && data.restoredError) out.textContent += ' · карта не возвращена';
     } else {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
@@ -33970,8 +36596,15 @@ function init() {
   if (next) next.addEventListener('click', () => step(1));
   build();
   start();
-  /* После build(): stApply красит уже существующие узлы, а build() их пересобирает. */
+  /* После build(): stPaint красит уже существующие узлы, а build() их пересобирает. */
   stSync();
+  arqView(VIEW);
+  /* Опрос обеих полос: фолбэк случается посреди дня, и часы обязаны покраснеть сами,
+     без F5 и без клика. 30 с — вкладка открыта сутками, а ручка читает локальный файл,
+     так что частить незачем. Возврат на вкладку опрашиваем сразу: пока её не было,
+     состояние могло поменяться дважды. */
+  setInterval(stSync, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) stSync(); });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();
@@ -34184,6 +36817,10 @@ setTimeout(() => { ladProbeRole(); }, 2500);
 <!-- Вкладка «MEDIA» — тем же приёмом: весь код (window.MEDIA) во внешней паре файлов.
      Разбор — docs/MEDIA-TAB-SEAM.md, регресс — tools/check-media.js. -->
 <script src="/vendor/media-tab.js"></script>
+
+<!-- Вкладка «Свои прокси» — тем же приёмом: код (window.PROXIES) во внешней паре файлов.
+     Регресс — tools/check-proxy-mapping.js (логика пула) и tools/check-proxy-admin.js. -->
+<script src="/vendor/proxies-tab.js"></script>
 
 </body>
 </html>

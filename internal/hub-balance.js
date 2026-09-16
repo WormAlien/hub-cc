@@ -26,6 +26,9 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    { id: 'od', file: 'odyssey-sessions.json', name: 'Odyssey' },
+    { id: 'bai', file: 'bai-sessions.json', name: 'B.AI' },
+    { id: 'uk', file: 'getunikey-sessions.json', name: 'UniKey' },
     { id: 'ap', file: 'aipm-sessions.json', name: 'AIPM' },
     { id: 'ak', file: 'aikeysapi-sessions.json', name: 'AIKeysAPI' },
     // HCNsec (31.08) — девятый шлюз. Тариф токенный (не плоский за запрос), остаток

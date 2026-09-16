@@ -25,10 +25,14 @@ const { URL } = require('url');
 
 const catalog = require('./media-catalog');
 const dialects = require('./media-dialects');
+const mediaKeys = require('./media-keys');
 
 const ROUTING = path.join(__dirname, '..');
-const OUT_DIR = path.join(ROUTING, 'media-out');
-const HISTORY_FILE = path.join(ROUTING, 'media-history.jsonl');
+// 🪤 Каталоги перекрываются переменными окружения — этим пользуется регресс
+// `tools/check-media.js`, который гоняет НАСТОЯЩИЙ код очереди. Без перекрытия его прогон
+// оставил бы фантомное задание в живой библиотеке студии и дописал бы его в живую историю.
+const OUT_DIR = process.env.MEDIA_OUT_DIR || path.join(ROUTING, 'media-out');
+const HISTORY_FILE = process.env.MEDIA_HISTORY_FILE || path.join(ROUTING, 'media-history.jsonl');
 
 const MAX_PARALLEL = 2;              // шлюз общий с рабочими сессиями — не топим его
 const REQUEST_TIMEOUT_MS = 180000;   // картинка секунды, видео минуты
@@ -196,7 +200,9 @@ function enqueue(spec) {
     const dialect = dialects.dialectFor(profile);
     if (!dialect) throw new Error(`для модели ${spec.model} нет диалекта (тип: ${profile.kind})`);
 
-    const key = (spec.provider.keys || []).find(k => k.active) || (spec.provider.keys || [])[0];
+    // Какой ключ тратить, решает `media-keys`: выбор в студии → активный → первый.
+    // Раньше здесь брался первый активный, и второй аккаунт в карточке не тратился никогда.
+    const key = mediaKeys.pick(spec.provider);
     if (!key || !key.apiKey) throw new Error(`у провайдера ${spec.provider.name} нет ключа`);
 
     const job = {
@@ -228,13 +234,20 @@ async function runJob(job) {
         let res = job.dialect.parse(await requestJson(job.baseUrl, job.apiKey, built));
 
         // Асинхронное задание — опрашиваем, пока не готово.
+        // 🪤 Идентификатор держим здесь, в цикле, а не в ответе опроса: `parsePoll` возвращает
+        // только статус и файлы, поэтому `res.jobId` после первого опроса теряется, и второй
+        // опрос уезжал на `/videos/null` — задание падало через 5 с, уже ПОСЛЕ списания денег.
+        // Провайдер вправе вернуть новый id, поэтому обновляем, а не фиксируем навсегда.
+        let upstreamJobId = res.jobId || null;
         let polls = 0;
         while (res.status === 'pending' && job.dialect.poll) {
             if (++polls > POLL_LIMIT) throw new Error(`задание не завершилось за ${POLL_LIMIT * POLL_INTERVAL_MS / 1000} с`);
+            // Опрос по пустому id — это ровно тот молчаливый 404, который мы чиним.
+            if (!upstreamJobId) throw new Error('провайдер не назвал id задания — опрашивать нечего');
             await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-            const pollJson = await requestJson(job.baseUrl, job.apiKey, job.dialect.poll(res.jobId));
+            const pollJson = await requestJson(job.baseUrl, job.apiKey, job.dialect.poll(upstreamJobId));
             res = job.dialect.parsePoll(pollJson);
-            if (res.status === 'pending' && !res.jobId) res.jobId = job.upstreamJobId || null;
+            if (res.jobId) upstreamJobId = res.jobId;
         }
         if (res.status !== 'done' || !res.artifacts.length) throw new Error('провайдер не вернул файл');
 

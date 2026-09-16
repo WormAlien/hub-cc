@@ -422,19 +422,24 @@ function convertClaudeToOpenAI(claudeReq) {
                 },
             }));
     }
-    // gpt-6-astra: тулы требуют явного reasoning_effort="none" (2026-09-12).
-    // Шлюз по умолчанию включает для этой модели reasoning и сам подставляет
-    // reasoning_effort — а апстрим (`MaaS_GP_6_astra_…`) отвергает комбинацию
-    // «function tools + reasoning_effort»: 400 на КАЖДОМ запросе с тулами, независимо
-    // от max_tokens и от наличия `thinking` (то есть Claude Code с астрой не работал
-    // в принципе — он всегда шлёт тулы). Проверено пробами: без tools → 200;
-    // с 1 и с 40 тулами, а также в streaming → 200 ТОЛЬКО с reasoning_effort="none".
-    // Другие значения не годятся: low/medium/high → тот же 400, а "minimal" модель не
-    // поддерживает вовсе («Unsupported value»). Ставим поле лишь при наличии тулов —
-    // без них дефолт работает и лишнее поле не нужно.
-    if (openaiReq.tools && openaiReq.tools.length && /astra/i.test(String(claudeReq.model || ''))) {
-        openaiReq.reasoning_effort = 'none';
-    }
+    // gpt-6-astra: костыль `reasoning_effort: "none"` (12.09) УДАЛЁН 16.09.2026.
+    //
+    // Что выяснилось живьём 16.09, когда полоса gpt налилась (пробы — tools/probe-astra-live.js):
+    //   /v1/chat/completions + tools → 400 «Function tools with reasoning_effort are not
+    //     supported for MaaS_GP_6_astra_20260903_off in /v1/chat/completions. To use function
+    //     tools, use /v1/responses or set reasoning_effort to 'none'»
+    //   /v1/responses + tools → 200, настоящий function_call  ✅
+    //
+    // 🪤 Почему костыль перестал работать: апстрим теперь ОТВЕРГАЕТ само значение 'none' —
+    // у владельца живая сессия падала с «Unsupported value: 'reasoning_effort' does not
+    // support 'none' with this model. Supported values are: 'low', 'medium', 'high', 'xhigh'».
+    // То есть поле не просто бесполезно, оно стало причиной отказа: 400 на каждом запросе
+    // с тулами. Замена на low/medium/high не спасает — любое значение даёт тот же 400
+    // «Function tools with reasoning_effort are not supported».
+    //
+    // Astra уходит на Responses-путь (useResponsesPath выше) и до этого места не доходит,
+    // поэтому ветку не «оставляем на всякий случай», а снимаем целиком: живой код без
+    // потребителя — это мина на будущий рефакторинг.
     if (claudeReq.tool_choice) {
         const tc = claudeReq.tool_choice;
         if (tc.type === 'auto') openaiReq.tool_choice = 'auto';
@@ -622,6 +627,446 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     });
 }
 
+// ══════════════════════ ANTHROPIC → OPENAI RESPONSES (gpt-6-astra) ══════════════════════
+// Вендор AgentRouter (объявление 2026-09-15): для gpt-6-astra надлежит ходить в
+// `/v1/responses`, а не в `/v1/chat/completions` — иначе связка «function tools +
+// reasoning» отвергается: `Function tools with reasoning_effort are not supported
+// for gpt-6-astra in /v1/chat/completions`.
+//
+// Это заменяет костыль `reasoning_effort: "none"` от 12.09 (он ниже, в
+// convertClaudeToOpenAI, оставлен для chat-пути). Смысл правки: Astra получает
+// reasoning обратно — на chat-пути мы его намеренно глушили, а это её главное
+// достоинство. Здесь reasoning НЕ глушится.
+//
+// 🪤 Флаг `store: false` обязателен: Responses по умолчанию сохраняет ответ на
+// стороне вендора. Нам это не нужно (мы стейтлесс-прокси и не хотим гонять через
+// чужое хранилище тела сессий CC).
+//
+// 🔴 ПОЧЕМУ ФЛАГ ВЫКЛЮЧЕН. Ни разу не проверено живьём: на момент написания
+// квота GPT-полосы выжжена (обе полосы `exhausted` в ~/.claude/ar-quota-state.json),
+// пробы 15.09 в 12:26 МСК дали `402 Budget pool quota has been exhausted` и на
+// chat-пути, и на Responses. Что эндпоинт СУЩЕСТВУЕТ — подтверждено (`402` от
+// бюджетного слоя, а не `unknown endpoint`; на мусорной модели — `503` с
+// «无可用渠道» по модели). Что Astra на нём отдаёт tool_call — НЕ подтверждено.
+// Ошибка «run this through Responses» ни разу не воспроизведена живьём.
+// Порядок включения — в [[AgentRouter]] § «gpt-6-astra: Responses вместо chat».
+const ASTRA_RESPONSES_ENABLED = true;
+const ASTRA_RE = /astra/i;
+function isAstraModel(m) { return ASTRA_RE.test(String(m || '')); }
+function useResponsesPath(model) { return ASTRA_RESPONSES_ENABLED && isAstraModel(model); }
+
+// Tools у Responses плоские: не {type:'function', function:{...}}, а {type:'function', name, parameters}.
+// strict не ставим (СС-схемы не всегда его переживают), но additionalProperties:false нужен,
+// иначе строгий валидатор апстрима может отвергнуть схему.
+function toolToResponses(t) {
+    const params = t.input_schema || { type: 'object', properties: {} };
+    return {
+        type: 'function',
+        name: t.name,
+        description: cyrEncode(t.description || ''),
+        parameters: { ...params, additionalProperties: false },
+    };
+}
+
+function convertClaudeToResponses(claudeReq) {
+    const input = [];
+    const sys = cyrEncode(systemToText(claudeReq.system));
+
+    for (const msg of claudeReq.messages || []) {
+        const content = msg.content;
+        if (typeof content === 'string') {
+            input.push({ role: msg.role, content: [{ type: 'input_text', text: cyrEncode(content) }] });
+            continue;
+        }
+        if (!Array.isArray(content)) continue;
+
+        if (msg.role === 'user') {
+            // tool_result у Responses — отдельный item верхнего уровня (не текст внутрь
+            // сообщения). `call_id` связывает его с function_call из предыдущей реплики.
+            for (const tr of content.filter(b => b.type === 'tool_result')) {
+                input.push({
+                    type: 'function_call_output',
+                    call_id: tr.tool_use_id,
+                    output: cyrEncode(toolResultToText(tr)) || '(empty)',
+                });
+            }
+            const rest = content.filter(b => b.type === 'text' || b.type === 'image');
+            if (rest.length) {
+                const parts = contentPartsFromClaude(rest).map(p => {
+                    if (p.type === 'text') return { type: 'input_text', text: cyrEncode(p.text) };
+                    return { type: 'input_image', image_url: p.image_url.url };
+                });
+                input.push({ role: 'user', content: parts });
+            }
+        } else if (msg.role === 'assistant') {
+            // Текст — сообщением, вызовы — отдельными function_call item'ами.
+            const texts = content.filter(b => b.type === 'text').map(b => cyrEncode(b.text));
+            if (texts.length) {
+                input.push({ role: 'assistant', content: [{ type: 'output_text', text: texts.join('\n') }] });
+            }
+            for (const tu of content.filter(b => b.type === 'tool_use')) {
+                input.push({
+                    type: 'function_call',
+                    call_id: tu.id,
+                    name: tu.name,
+                    arguments: JSON.stringify(tu.input || {}),
+                });
+            }
+        }
+    }
+
+    const req = {
+        model: claudeReq.model,
+        input,
+        // 🪤 Пол по max_output_tokens — та же причина, что и в chat-конвертере: проба
+        // валидации модели у CC шлёт `max_tokens: 1`, и Astra на крошечном потолке
+        // отвечает 400 «Could not finish the message…». Здесь поле зовётся иначе.
+        max_output_tokens: Math.max(isAstraModel(claudeReq.model) ? 16 : 1,
+            Math.min(claudeReq.max_tokens || 4096, MAX_TOKENS_LIMIT)),
+        stream: !!claudeReq.stream,
+        store: false,
+    };
+    if (sys) req.instructions = sys;
+    if (claudeReq.temperature !== undefined) req.temperature = claudeReq.temperature;
+    if (claudeReq.top_p !== undefined) req.top_p = claudeReq.top_p;
+
+    if (claudeReq.tools && claudeReq.tools.length) {
+        req.tools = claudeReq.tools.filter(t => t && t.name).map(toolToResponses);
+    }
+    // tool_choice у Responses плоский: 'auto' | 'required' | {type:'function', name}
+    if (claudeReq.tool_choice && req.tools && req.tools.length) {
+        const tc = claudeReq.tool_choice;
+        if (tc.type === 'auto') req.tool_choice = 'auto';
+        else if (tc.type === 'any') req.tool_choice = 'required';
+        else if (tc.type === 'tool' && tc.name) req.tool_choice = { type: 'function', name: tc.name };
+    }
+    return req;
+}
+
+// Responses → Anthropic. Не-стриминговый путь.
+function convertResponsesToClaude(resp, claudeReq) {
+    const content = [];
+    let stopReason = 'end_turn';
+
+    for (const item of resp.output || []) {
+        if (item.type === 'message') {
+            for (const c of item.content || []) {
+                if (c.type === 'output_text' && c.text) content.push({ type: 'text', text: cyrDecode(c.text) });
+            }
+        } else if (item.type === 'function_call') {
+            let parsed = {};
+            try { parsed = JSON.parse(item.arguments || '{}'); } catch {}
+            content.push({
+                type: 'tool_use',
+                id: item.call_id || item.id,
+                name: item.name,
+                input: parsed,
+            });
+        }
+        // reasoning-айтемы намеренно пропускаем: это внутренняя кухня модели,
+        // в Anthropic-формате им соответствия нет (redact-thinking).
+    }
+
+    if (resp.status === 'incomplete') {
+        stopReason = resp.incomplete_details && resp.incomplete_details.reason === 'max_output_tokens'
+            ? 'max_tokens' : 'end_turn';
+    }
+    if (content.some(b => b.type === 'tool_use')) stopReason = 'tool_use';
+    if (!content.length) content.push({ type: 'text', text: '' });
+
+    return {
+        id: resp.id ? String(resp.id).replace(/^resp/, 'msg') : `msg_${Date.now()}`,
+        type: 'message',
+        role: 'assistant',
+        model: claudeReq.model,
+        content,
+        stop_reason: stopReason,
+        stop_sequence: null,
+        usage: {
+            input_tokens: (resp.usage && resp.usage.input_tokens) || 0,
+            output_tokens: (resp.usage && resp.usage.output_tokens) || 0,
+        },
+    };
+}
+
+// ══════════════════════ STREAMING: OpenAI Responses SSE → Anthropic SSE ══════════════════════
+// Словарь событий у Responses свой. Маппим только то, что нужно CC:
+//   response.output_text.delta        → text_delta
+//   response.output_item.added        → content_block_start (function_call)
+//   response.function_call_arguments.delta → input_json_delta
+//   response.output_item.done         → content_block_stop + id приходит позже, чем name
+//   response.completed                → usage + stop_reason
+// События reasoning и прочие молча игнорируем — незамапленное не должно ронять поток.
+//
+// 🪤 ГЛАВНАЯ ГРАБЛЯ ЭТОГО ПУТИ (найдена 16.09 живой приёмкой): отказ приходит не кодом HTTP,
+// а СОБЫТИЕМ внутри `200`. Когда апстрим режет по лимиту, поток выглядит так:
+//
+//   HTTP 200 | response.created | response.failed
+//   {"type":"error","error":{"type":"too_many_requests","code":"rate_limit_exceeded",
+//    "message":"Your requests to gpt-6-astra … in eastus have exceeded rate limit."}}
+//
+// Наивный маппер это молча проглатывает: заголовки уже отданы `200`, событие неизвестно —
+// и клиент получает `message_start` → сразу `message_stop` с ПУСТЫМ контентом. Именно это
+// владелец видел как «отвечает только со второй попытки» (второй запрос попадал в свободное
+// окно). Замер 16.09: 2-3 пустых потока из 4.
+//
+// Поэтому здесь пре-коммит буфер: пока не пришло первое ОСМЫСЛЕННОЕ событие, заголовки
+// клиенту не отдаются. Это даёт две вещи, обе нужны:
+//   1. отказ можно превратить в честный HTTP-код (`429`), который CC понимает и ретраит сам;
+//   2. отказ можно ПОВТОРИТЬ здесь же, пока клиент ещё ничего не получил (см. CONVERTER_RETRIES).
+// Плата — ожидание первого события перед отдачей заголовков; на этом пути оно и так есть,
+// потому что шлюз молчит до первого токена.
+const RESPONSES_TRANSIENT_CODES = new Set(['rate_limit_exceeded', 'too_many_requests', 'server_error', 'overloaded']);
+const RESPONSES_ATTEMPTS = 3;   // 1 попытка + 2 повтора на транзиентном отказе
+
+// Текст отказа из события `response.failed`/`error`. Формы различаются: у `error` полезное
+// лежит в `.error`, у `response.failed` — в `.response.error`. Читаем обе, не угадывая.
+function responsesErrorInfo(ev) {
+    const e = (ev && ev.type === 'response.failed' && ev.response && ev.response.error)
+        || (ev && ev.error)
+        || null;
+    if (!e) return null;
+    return {
+        code: e.code || e.type || 'unknown',
+        message: e.message || JSON.stringify(e).slice(0, 300),
+        transient: RESPONSES_TRANSIENT_CODES.has(e.code) || RESPONSES_TRANSIENT_CODES.has(e.type),
+    };
+}
+
+// Обёртка: буферизует до первого осмысленного события, на транзиентном отказе повторяет
+// запрос целиком, и только если все попытки провалились — отдаёт клиенту честный код.
+// Стриминговый ответ Responses → Anthropic SSE, БЕЗ внутренних повторов.
+//
+// 🪤 История: сначала здесь стояла обёртка с автоповтором (1 попытка + 2 на транзиентном
+// отказе). Она подвесила астру в бою: стриминг-запрос не отдавал ни байта и висел до
+// таймаута. Повтор внутри стрима — лишняя сложность на нашем слое, и цена ошибки высока.
+//
+// Повтор отдан тому, кто умеет его делать правильно: отказ перед первым контентом
+// превращается в честный HTTP-код (429), а ретраит его сам Claude Code — это его штатное
+// поведение, и он умеет уважать `retry-after`, чего наша обёртка не умела.
+//
+// Что осталось от пре-коммита: заголовки клиенту отдаются только на первом осмысленном
+// событии, поэтому отказ до контента можно превратить в КОД, а не в пустой 200.
+function handleResponsesStreaming(clientRes, claudeReq, upRes) {
+    const stream = createResponsesEmitter(clientRes, claudeReq, {
+        onCommit: () => {},
+        onTransientFail: (info) => {
+            logLine(`responses: отказ до контента (${info.code}) — отдаю 429, ретраит клиент`);
+            claudeError(clientRes, 429, info.message, 'rate_limit_error');
+        },
+        onHardFail: (info) => {
+            logLine(`responses: отказ до контента (${info.code}) — отдаю 502`);
+            claudeError(clientRes, 502, info.message, 'api_error');
+        },
+    });
+    upRes.on('data', (d) => stream.push(d.toString('utf8')));
+    upRes.on('end', () => stream.finish());
+    upRes.on('error', () => stream.abort('upstream stream error'));
+}
+
+// Разбор событий Responses в Anthropic-SSE. Заголовки отдаёт только при commit() —
+// то есть когда пришло первое осмысленное событие (текст, тул или терминальное).
+function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFail, onHardFail }) {
+    let started = false;
+    let ended = false;
+    let failed = false;   // отказ уже отдан наружу — finish() не должен перекрыть его «пустотой»
+    let nextBlockIndex = 0;
+    let textBlockIndex = null;
+    const toolBlocks = new Map();
+    let usage = { input_tokens: 0, output_tokens: 0 };
+    let stopReason = 'end_turn';
+    let buffer = '';
+
+    function commit() {
+        if (started) return;
+        started = true;
+        clientRes.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+        });
+        const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        sseWrite(clientRes, 'message_start', {
+            type: 'message_start',
+            message: {
+                id: msgId, type: 'message', role: 'assistant', model: claudeReq.model,
+                content: [], stop_reason: null, stop_sequence: null,
+                usage: { input_tokens: 0, output_tokens: 0 },
+            },
+        });
+        sseWrite(clientRes, 'ping', { type: 'ping' });
+        onCommit && onCommit();
+    }
+
+    function ensureTextBlock() {
+        commit();
+        if (textBlockIndex !== null) return textBlockIndex;
+        textBlockIndex = nextBlockIndex++;
+        sseWrite(clientRes, 'content_block_start', {
+            type: 'content_block_start', index: textBlockIndex,
+            content_block: { type: 'text', text: '' },
+        });
+        return textBlockIndex;
+    }
+
+    function closeTextBlock() {
+        if (textBlockIndex === null) return;
+        sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: textBlockIndex });
+        textBlockIndex = null;
+    }
+
+    function closeAllToolBlocks() {
+        for (const tb of toolBlocks.values()) {
+            if (tb.started && !tb.closed) {
+                sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
+                tb.closed = true;
+            }
+        }
+    }
+
+    function onToolBlock(index, tb) {
+        if (tb.started) return;
+        if (!tb.name) return;
+        commit();
+        closeTextBlock();
+        tb.claudeIndex = nextBlockIndex++;
+        sseWrite(clientRes, 'content_block_start', {
+            type: 'content_block_start', index: tb.claudeIndex,
+            content_block: { type: 'tool_use', id: tb.id || `toolu_${Date.now()}_${index}`, name: cyrDecode(tb.name), input: {} },
+        });
+        tb.started = true;
+    }
+
+    function processEvent(ev) {
+        const type = ev.type;
+
+        // ── Отказы апстрима: приходят событием внутри 200 ──
+        if (type === 'error' || type === 'response.failed') {
+            const info = responsesErrorInfo(ev);
+            if (!info) return;
+            if (!started) {
+                // Клиенту ещё ничего не отдали — это можно исправить, а не только сообщить.
+                failed = true;   // чтобы finish() не перекрыл отказ «пустым потоком»
+                if (info.transient) return onTransientFail(info);
+                return onHardFail(info);
+            }
+            // Поток уже начался: отдаём ошибку событием и закрываем (writeHead недопустим).
+            return finish(info.message, 'api_error');
+        }
+
+        if (type === 'response.output_text.delta') {
+            const idx = ensureTextBlock();
+            sseWrite(clientRes, 'content_block_delta', {
+                type: 'content_block_delta', index: idx,
+                delta: { type: 'text_delta', text: cyrDecode(ev.delta || '') },
+            });
+            return;
+        }
+
+        if (type === 'response.output_item.added') {
+            const it = ev.item || {};
+            if (it.type === 'function_call') {
+                const oi = ev.output_index || 0;
+                const tb = { claudeIndex: -1, id: it.call_id || it.id, name: it.name || '', started: false, closed: false };
+                toolBlocks.set(oi, tb);
+                onToolBlock(oi, tb);
+            }
+            return;
+        }
+
+        if (type === 'response.function_call_arguments.delta') {
+            const oi = ev.output_index || 0;
+            let tb = toolBlocks.get(oi);
+            if (!tb) {
+                tb = { claudeIndex: -1, id: null, name: '', started: false, closed: false };
+                toolBlocks.set(oi, tb);
+            }
+            onToolBlock(oi, tb);
+            if (tb.started && ev.delta) {
+                sseWrite(clientRes, 'content_block_delta', {
+                    type: 'content_block_delta', index: tb.claudeIndex,
+                    delta: { type: 'input_json_delta', partial_json: cyrDecode(ev.delta) },
+                });
+            }
+            return;
+        }
+
+        if (type === 'response.output_item.done') {
+            const it = ev.item || {};
+            const oi = ev.output_index || 0;
+            const tb = toolBlocks.get(oi);
+            if (tb) {
+                if (!tb.id && (it.call_id || it.id)) tb.id = it.call_id || it.id;
+                if (tb.started && !tb.closed) {
+                    sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
+                    tb.closed = true;
+                }
+            }
+            return;
+        }
+
+        if (type === 'response.completed') {
+            const r = ev.response || {};
+            if (r.usage) {
+                usage = {
+                    input_tokens: r.usage.input_tokens || 0,
+                    output_tokens: r.usage.output_tokens || 0,
+                };
+            }
+            if (r.status === 'incomplete' && r.incomplete_details) {
+                stopReason = r.incomplete_details.reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
+            }
+            if (toolBlocks.size) stopReason = 'tool_use';
+            return;
+        }
+        // Прочее (response.created, in_progress, reasoning.*) — молча мимо.
+    }
+
+    function finish(errorMessage, errorType) {
+        if (ended) return;
+        ended = true;
+        // Поток, в котором не было НИ ОДНОГО осмысленного события, — это не «пустой ответ»,
+        // а отказ. Наружу его отдаём кодом, а не пустым 200: см. граблю в шапке.
+        // Если отказ уже отдан событием (failed), не перекрываем его этой веткой.
+        if (!started) {
+            if (failed) return;
+            return onHardFail({ code: 'empty_stream', message: errorMessage || 'upstream вернул поток без содержимого' });
+        }
+        closeTextBlock();
+        closeAllToolBlocks();
+        if (errorMessage) {
+            sseWrite(clientRes, 'error', { type: 'error', error: { type: errorType || 'api_error', message: errorMessage } });
+            clientRes.end();
+            return;
+        }
+        sseWrite(clientRes, 'message_delta', {
+            type: 'message_delta',
+            delta: { stop_reason: stopReason, stop_sequence: null },
+            usage: { output_tokens: usage.output_tokens },
+        });
+        sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
+        clientRes.end();
+    }
+
+    return {
+        push(chunk) {
+            buffer += chunk;
+            let nl;
+            while ((nl = buffer.indexOf('\n')) >= 0) {
+                const line = buffer.slice(0, nl).trim();
+                buffer = buffer.slice(nl + 1);
+                if (!line.startsWith('data:')) continue;
+                const payload = line.slice(5).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try { processEvent(JSON.parse(payload)); } catch {}
+            }
+        },
+        finish: () => finish(),
+        abort: (m) => finish(m || 'upstream stream error', 'api_error'),
+    };
+}
+
 // ══════════════════════ HANDLERS ══════════════════════
 
 const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
@@ -662,6 +1107,104 @@ function handleMessages(req, res, body) {
         stats.lastModel = `${claudeReq.model} → passthrough`;
         logLine(`/v1/messages ${claudeReq.model} → passthrough stream=${!!claudeReq.stream}`);
         return handlePassthrough(req, res, body);
+    }
+
+    // gpt-6-astra → Responses API вместо chat/completions (см. блок
+    // «ANTHROPIC → OPENAI RESPONSES» выше).
+    if (useResponsesPath(claudeReq.model)) {
+        let respReq;
+        try { respReq = convertClaudeToResponses(claudeReq); }
+        catch (e) { return claudeError(res, 400, 'convert failed: ' + e.message, 'invalid_request_error'); }
+
+        stats.requests++;
+        stats.lastModel = `${claudeReq.model} → responses`;
+        logLine(`/v1/messages ${claudeReq.model} → /v1/responses stream=${!!claudeReq.stream} items=${respReq.input.length} tools=${(respReq.tools || []).length}`);
+
+        const san = wafSanitize(JSON.stringify(respReq));
+        if (san.hits) {
+            stats.sanitized += san.hits;
+            logLine(`waf sanitize: ${san.hits} hit(s) — нейтрализована фраза из блок-листа шлюза`);
+        }
+        if (san.b64) {
+            stats.sanitized += san.b64;
+            logLine(`waf sanitize: ${san.b64} base64-образ(а) → [image omitted] (иначе 400 content-blocked)`);
+        }
+
+        const makeRequest = (onResponse, onError) =>
+            upstreamRequest('/v1/responses', apiKey, san.text, onResponse, onError);
+
+        if (claudeReq.stream) {
+            stats.streamed++;
+            const streamReq = makeRequest((upRes) => {
+                if (upRes.statusCode !== 200) {
+                    let errBody = '';
+                    upRes.on('data', c => errBody += c);
+                    upRes.on('end', () => {
+                        let message = errBody.slice(0, 500);
+                        try { message = JSON.parse(errBody).error?.message || message; } catch {}
+                        logLine(`responses upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);
+                        if (CONTENT_FILTER_RE.test(message)) dumpBlocked(san.text, upRes.statusCode);
+                        claudeError(res, upRes.statusCode, message,
+                            upRes.statusCode === 429 ? 'rate_limit_error'
+                                : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error');
+                    });
+                    return;
+                }
+                handleResponsesStreaming(res, claudeReq, upRes);
+            }, (err) => {
+                // 🪤 Этот обработчик пропустить нельзя: без него сокет апстрима умирает
+                // молча, клиент не получает ни байта и висит до своего таймаута — ровно
+                // то, чем закончилась первая версия этой ветки.
+                logLine(`responses upstream error: ${err.message}`);
+                claudeError(res, 502, 'upstream: ' + err.message);
+            });
+            res.on('close', () => { if (!res.writableEnded && streamReq && !streamReq.destroyed) streamReq.destroy(); });
+            return;
+        }
+
+        const respUpReq = makeRequest((upRes) => {
+            if (upRes.statusCode !== 200) {
+                let errBody = '';
+                upRes.on('data', c => errBody += c);
+                upRes.on('end', () => {
+                    let message = errBody.slice(0, 500);
+                    try { message = JSON.parse(errBody).error?.message || message; } catch {}
+                    logLine(`upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);
+                    if (CONTENT_FILTER_RE.test(message)) dumpBlocked(san.text, upRes.statusCode);
+                    const errType = upRes.statusCode === 401 ? 'authentication_error'
+                        : upRes.statusCode === 429 ? 'rate_limit_error'
+                        : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error';
+                    claudeError(res, upRes.statusCode, message, errType);
+                });
+                return;
+            }
+            let b = '';
+            upRes.on('data', c => b += c);
+            upRes.on('end', () => {
+                try {
+                    const parsed = JSON.parse(b);
+                    // 🪤 Отказ может приехать телом с кодом 200 (та же семья, что ловится в
+                    // стриме): `{error:{code:'rate_limit_exceeded',…}}` или `status:'failed'`.
+                    // Без этой ветки клиент получил бы пустое сообщение вместо ошибки.
+                    const failed = parsed.error || parsed.status === 'failed' || parsed.status === 'incomplete' && !(parsed.output || []).length;
+                    if (failed) {
+                        const info = responsesErrorInfo(parsed) || { code: 'failed', message: 'upstream вернул отказ', transient: false };
+                        logLine(`responses (non-stream) отказ: ${info.code} — ${String(info.message).slice(0, 160)}`);
+                        return claudeError(res, info.transient ? 429 : 502, info.message,
+                            info.transient ? 'rate_limit_error' : 'api_error');
+                    }
+                    writeJSON(res, 200, convertResponsesToClaude(parsed, claudeReq));
+                } catch (e) {
+                    claudeError(res, 502, 'bad upstream response: ' + e.message);
+                }
+            });
+        }, (err) => {
+            logLine(`upstream error: ${err.message}`);
+            claudeError(res, 502, 'upstream: ' + err.message);
+        });
+
+        res.on('close', () => { if (!respUpReq.writableEnded) respUpReq.destroy(); });
+        return;
     }
 
     let openaiReq;
@@ -1080,6 +1623,170 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual(miniSol.max_tokens, 1, 'остальным шлюзам единица законна — не трогаем');
     const bigAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', max_tokens: 32000, messages: [{ role: 'user', content: 'hi' }] });
     assert.strictEqual(bigAstra.max_tokens, 32000, 'настоящий запрос пол не задевает');
+
+    // ── gpt-6-astra: Responses-путь (2026-09-15) ──
+    // Флаг на момент коммита выключен — живьём не проверено (квота выжжена).
+    // Тестируем чистые конвертеры: они не зависят от флага и обязаны быть верны
+    // к моменту включения. Ошибка в форме запроса не проявится локально, поэтому
+    // форму проверяем явно и по шагам.
+
+    // Роутинг: на Responses уходит ТОЛЬКО astra, и только при включённом флаге.
+    assert.strictEqual(useResponsesPath('gpt-5.6-sol'), false, 'не-astra остаётся на chat');
+    assert.strictEqual(useResponsesPath('deepseek-v4-flash'), false, 'deepseek — не Responses');
+    assert.strictEqual(isAstraModel('gpt-6-astra'), true, 'astra распознаётся');
+    assert.strictEqual(useResponsesPath('gpt-6-astra'), ASTRA_RESPONSES_ENABLED,
+        'astra идёт на Responses ровно тогда, когда флаг включён');
+
+    // Форма запроса: тулы ПЛОСКИЕ (name рядом с type), а не вложены в function.
+    const rq = convertClaudeToResponses({
+        model: 'gpt-6-astra',
+        max_tokens: 4096,
+        system: 'You are a helpful assistant.',
+        messages: [{ role: 'user', content: 'Weather in Rostov? Use the tool.' }],
+        tools: [{ name: 'get_weather', description: 'Get weather.', input_schema: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] } }],
+    });
+    assert.ok(rq.tools && rq.tools.length === 1, 'тул доехал');
+    assert.strictEqual(rq.tools[0].name, 'get_weather', 'имя тула на верхнем уровне (плоская форма)');
+    assert.strictEqual(rq.tools[0].function, undefined, 'вложенного function быть не должно');
+    assert.strictEqual(rq.tools[0].type, 'function', 'тип тула — function');
+    assert.strictEqual(rq.tools[0].parameters.additionalProperties, false, 'additionalProperties:false добавлен');
+    assert.strictEqual(rq.instructions, 'You are a helpful assistant.', 'system → instructions');
+    assert.strictEqual(rq.store, false, 'store:false обязателен — иначе вендор хранит ответ');
+    assert.ok(Array.isArray(rq.input) && rq.input.length === 1, 'input — массив айтемов');
+    assert.strictEqual(rq.input[0].content[0].type, 'input_text', 'текст в Responses — input_text');
+
+    // Ответ модели (assistant) с тулом: текст сообщением, вызов — отдельным function_call.
+    const rq2 = convertClaudeToResponses({
+        model: 'gpt-6-astra',
+        messages: [
+            { role: 'user', content: 'погода?' },
+            { role: 'assistant', content: [
+                { type: 'text', text: 'Сейчас посмотрю.' },
+                { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Ростов' } },
+            ] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'солнечно' }] },
+        ],
+    });
+    const fc = rq2.input.find(i => i.type === 'function_call');
+    assert.ok(fc, 'function_call собран из tool_use');
+    assert.strictEqual(fc.call_id, 'toolu_1', 'call_id = id тула (иначе апстрим не свяжет ответ)');
+    assert.strictEqual(fc.name, 'get_weather', 'имя вызова');
+    assert.strictEqual(fc.arguments, JSON.stringify({ city: 'Ростов' }), 'аргументы сериализованы');
+    const fco = rq2.input.find(i => i.type === 'function_call_output');
+    assert.ok(fco, 'tool_result → function_call_output');
+    assert.strictEqual(fco.call_id, 'toolu_1', 'output связан тем же call_id');
+    assert.strictEqual(fco.output, 'солнечно', 'содержимое результата на месте');
+
+    // Astra не глушит reasoning НИ НА ОДНОМ пути. Раньше chat-путь подставлял
+    // reasoning_effort:"none" как костыль — 16.09 апстрим стал отвергать само это
+    // значение, и живая сессия падала с «'none' does not support … Supported values are:
+    // 'low', 'medium', 'high', 'xhigh'». Теперь поле не выставляется нигде.
+    assert.strictEqual(rq.reasoning_effort, undefined, 'на Responses reasoning_effort не ставится');
+    const chatAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
+    assert.strictEqual(chatAstra.reasoning_effort, undefined, 'костыль удалён: chat-путь тоже НЕ ставит reasoning_effort');
+    const chatSol = convertClaudeToOpenAI({ model: 'gpt-5.6-sol', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
+    assert.strictEqual(chatSol.reasoning_effort, undefined, 'и другим GPT-моделям поле не подставляется');
+
+    // Пол по max_output_tokens — та же грабля с пробой валидации CC (`max_tokens: 1`),
+    // но поле в Responses зовётся иначе.
+    const miniResp = convertClaudeToResponses({ model: 'gpt-6-astra', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] });
+    assert.ok(miniResp.max_output_tokens >= 16, `Responses: пол тоже должен поднимать 1 → 16, а не ${miniResp.max_output_tokens}`);
+    assert.strictEqual(miniResp.max_tokens, undefined, 'старого имени поля в Responses нет');
+
+    // Ответ → Anthropic: function_call превращается в tool_use с распарсенным input,
+    // reasoning-айтемы не протекают в content.
+    const conv = convertResponsesToClaude({
+        id: 'resp_abc', status: 'completed',
+        output: [
+            { type: 'reasoning', summary: [] },
+            { type: 'message', content: [{ type: 'output_text', text: 'Держи.' }] },
+            { type: 'function_call', call_id: 'toolu_9', name: 'get_weather', arguments: '{"city":"Ростов"}' },
+        ],
+        usage: { input_tokens: 11, output_tokens: 22 },
+    }, { model: 'gpt-6-astra' });
+    assert.strictEqual(conv.content.length, 2, 'reasoning не протёк в content (только текст + тул)');
+    assert.strictEqual(conv.content[0].type, 'text', 'текст первым');
+    assert.strictEqual(conv.content[1].type, 'tool_use', 'вызов → tool_use');
+    assert.deepStrictEqual(conv.content[1].input, { city: 'Ростов' }, 'arguments распарсены в input');
+    assert.strictEqual(conv.stop_reason, 'tool_use', 'наличие тула = stop_reason tool_use');
+    assert.strictEqual(conv.usage.output_tokens, 22, 'usage переведён из Resp-полей');
+    assert.ok(/^msg/.test(conv.id), 'id переименован из resp_ в msg');
+
+    // Незавершённый по потолку ответ — это max_tokens, а не end_turn.
+    const convInc = convertResponsesToClaude({
+        id: 'resp_x', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' },
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'обры' }] }],
+        usage: {},
+    }, { model: 'gpt-6-astra' });
+    assert.strictEqual(convInc.stop_reason, 'max_tokens', 'incomplete по потолку = max_tokens');
+
+    // ── Отказы стримингового Responses: приходят СОБЫТИЕМ внутри 200 ──
+    // Найдено 16.09 живой приёмкой: наивный маппер проглатывал `response.failed` и отдавал
+    // клиенту пустой `message_start → message_stop`. Владелец видел это как «отвечает со
+    // второй попытки». Проверяем разбор обеих форм и решение «повторить / отдать код».
+    const eq = responsesErrorInfo({ type: 'error', error: { type: 'too_many_requests', code: 'rate_limit_exceeded', message: 'exceeded rate limit' } });
+    assert.strictEqual(eq.code, 'rate_limit_exceeded', 'код читается из .error');
+    assert.strictEqual(eq.transient, true, 'rate_limit_exceeded транзиентен — повторяем');
+    const ef = responsesErrorInfo({ type: 'response.failed', response: { error: { code: 'rate_limit_exceeded', message: 'x' } } });
+    assert.strictEqual(ef.code, 'rate_limit_exceeded', 'код читается и из .response.error');
+    assert.strictEqual(ef.transient, true, 'и там транзиентен');
+    const ehard = responsesErrorInfo({ type: 'error', error: { code: 'invalid_prompt', message: 'bad' } });
+    assert.strictEqual(ehard.transient, false, 'незнакомый код не считаем транзиентным — не жжём повторы');
+    assert.strictEqual(responsesErrorInfo({ type: 'response.created' }), null, 'не-ошибочное событие разбора не даёт');
+
+    // Эмиттер: проверяем три исхода на поддельном clientRes.
+    function fakeRes() {
+        const r = { headers: null, chunks: [], writableEnded: false, destroyed: false };
+        r.writeHead = (code, h) => { r.headers = { code, h }; };
+        r.write = (s) => { r.chunks.push(s); return true; };
+        r.end = () => { r.writableEnded = true; };
+        r.on = () => {};
+        return r;
+    }
+    const SSE = o => `data: ${JSON.stringify(o)}\n`;
+    const runEmitter = (events) => {
+        const res = fakeRes();
+        const seen = { commit: 0, transient: null, hard: null };
+        const em = createResponsesEmitter(res, { model: 'gpt-6-astra' }, {
+            onCommit: () => { seen.commit += 1; },
+            onTransientFail: (i) => { seen.transient = i; },
+            onHardFail: (i) => { seen.hard = i; },
+        });
+        events.forEach(e => em.push(SSE(e)));
+        em.finish();
+        return { res, seen };
+    };
+
+    // 1. Транзиентный отказ ДО контента: клиенту НИЧЕГО не отдали, это можно повторить.
+    const t1 = runEmitter([
+        { type: 'response.created' },
+        { type: 'response.failed', response: { error: { code: 'rate_limit_exceeded', message: 'exceeded rate limit' } } },
+    ]);
+    assert.strictEqual(t1.res.headers, null, 'пре-коммит: заголовки НЕ отданы — отказ можно повторить');
+    assert.strictEqual(t1.seen.commit, 0, 'commit не случился');
+    assert.strictEqual(t1.seen.transient && t1.seen.transient.code, 'rate_limit_exceeded', 'отдан как транзиентный');
+    assert.strictEqual(t1.seen.hard, null, 'жёсткого отказа нет');
+
+    // 2. Успех: тул доезжает, заголовки отданы ровно один раз.
+    const t2 = runEmitter([
+        { type: 'response.created' },
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'get_weather' } },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"city":"Rostov"}' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'call_1' } },
+        { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 7 } } },
+    ]);
+    assert.strictEqual(t2.res.headers && t2.res.headers.code, 200, 'успех отдаёт 200');
+    assert.strictEqual(t2.seen.commit, 1, 'commit ровно один');
+    const t2all = t2.res.chunks.join('');
+    assert.ok(/content_block_start/.test(t2all), 'блок тула открыт');
+    assert.ok(/"name":"get_weather"/.test(t2all), 'имя тула уехало');
+    assert.ok(/tool_use/.test(t2all), 'stop_reason tool_use');
+    assert.strictEqual(t2.seen.transient, null, 'повтор не потребовался');
+
+    // 3. Поток без содержимого и БЕЗ события-ошибки: это тоже отказ, а не «пустой ответ».
+    const t3 = runEmitter([{ type: 'response.created' }, { type: 'response.in_progress' }]);
+    assert.strictEqual(t3.seen.hard && t3.seen.hard.code, 'empty_stream', 'пустой поток = отказ, а не пустой 200');
+    assert.strictEqual(t3.res.headers, null, 'клиенту ничего не отдано');
 
     console.log('agentrouter-proxy selftest: OK');
     process.exit(0);

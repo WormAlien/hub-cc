@@ -33,8 +33,15 @@ const latencyStore = require('./latency-store.js');
 // (инцидент 13.09, дважды за день). Обязана грузиться В ШАПКЕ: `*Save` живут выше
 // блока с outlook-pool, и `const` в TDZ уронил бы первую же запись.
 const { writeJsonSync: durableWriteJson, assertNotZeroed } = require('./lib/durable-write');
-const { AR_QUOTA_BODY, classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
+const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForModel,
+        arQuotaBodyFor, arQuotaReadPools,
+        classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
         arQuotaKeyTail } = require('./lib/ar-quota-probe');
+// Пул-дроп: тир-карта на фолбэк при `402 Budget pool quota has been exhausted` и
+// возврат из бэкапа, когда пул нальют. Чистая логика над путями живёт в lib (регресс
+// гоняет её на временных файлах); сюда приходят только две ручки и общая функция
+// возврата. `tierMapFile`/`writeTierMap` передаются инъекцией — см. `poolDropTiers`.
+const poolDropLib = require('./lib/pooldrop');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
@@ -211,6 +218,45 @@ const BACKENDS = {
         // ключ живёт в kktoken-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    // getunikey — первый шлюз, заведённый генератором. Его запись была размножена
+    // вставками соседей (см. odyssey ниже); оставлена ОДНА, как и задумано.
+    getunikey: {
+        label: 'UniKey',
+        base_url: 'http://localhost:20168',
+        api_key: 'dummy',           // real key keepalive reads from getunikey-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20168) → www.getunikey.ai (БЕЗ /v1).
+        // Активация через handleUkActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в getunikey-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у getunikey каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    bai: {
+        label: 'B.AI',
+        base_url: 'http://localhost:20169',
+        api_key: 'dummy',           // real key keepalive reads from bai-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20169) → chat.b.ai (БЕЗ /v1).
+        // Активация через handleBaiActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в bai-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у bai каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    odyssey: {
+        label: 'Odyssey',
+        base_url: 'http://localhost:20170',
+        api_key: 'dummy',           // real key keepalive reads from odyssey-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20170) → odysseyapi.tech (БЕЗ /v1).
+        // Активация через handleOdActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в odyssey-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Чего у odyssey НЕТ: кромки Cloudflare с пустым 403 на каждом четвёртом
+        // запросе (это свойство соседей — kktoken, getunikey). Ретраи здесь страховка
+        // от штатных 429/5xx площадки, а не от 403.
     },
     aipm: {
         label: 'AIPM',
@@ -414,6 +460,9 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    odyssey: 'odyssey',
+    bai: 'bai',
+    getunikey: 'getunikey',
     aipm: 'aipm',
     aikeysapi: 'aikeysapi',
     ak: 'aikeysapi',
@@ -697,7 +746,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 // route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
 const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
@@ -874,7 +923,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -991,6 +1040,226 @@ function routeWriteTier(provider, tier, value) {
     return { ok: true, provider, tier, value: clean, tiers: out };
 }
 
+// ── Пул-дроп: тир-карта на фолбэк при пустом пуле наливки ────────────────────
+//
+// Контекст. Шлюз `agentrouter` выдаёт Claude- и GPT-модели только во время наливки
+// пула. 15.09 в 04:52 МСК пул кончился посреди живой сессии, прилетел
+// `402 Budget pool quota has been exhausted`. Ловит и ретраит его keepalive; здесь —
+// ПЕРСИСТЕНТНОСТЬ: карта на диске (видно в дашборде, переживает рестарт) + бэкап,
+// чтобы «вернуть как было» было физически возможно.
+//
+// Почему дашборд, а не keepalive. Тиры пишет ровно один владелец — дашборд (см.
+// memory `modelmap_written_by_dashboard`). Второй писатель в тот же файл дал бы
+// гонку: keepalive затёр бы правку владельца, а владелец — правку keepalive.
+//
+// Обвязка на две карты одна: и `<prefix>-modelmap.json` (активный шлюз), и
+// `<prefix>-routes-modelmap.json` (префиксный путь) падают и возвращаются вместе,
+// маркер на провайдера один.
+//
+// Инъекция `tierMapFile`/`writeTierMap` — намеренно: копий этих двух функций в репо
+// не заводим (вторая разъедется с первой), а lib не может их потребовать сам, потому
+// что `require('./transparent-proxy.js')` поднял бы боевой сервер и зациклился.
+// Состояние пул-дропа одного провайдера: `null` = не опущен.
+//
+// Отдельная функция, а не чтение маркера в `handleRoutes`, по двум причинам: маркер
+// читает тот же модуль, что его пишет (второй разбор формата разъехался бы с первым),
+// и ответ вкладки не должен падать из-за одного битого маркера — `null` тут означает
+// «не знаем», а не «сломалось».
+// Имя провайдера и его ПРЕФИКС — разные пространства имён, и стык между ними оказался дырой.
+//
+// Keepalive знает только префикс: он выводит его из имени хоста (`GW_BY_HOST`:
+// agentrouter.org → 'ar') и ровно его шлёт в `pool-drop`. А таблица путей ключуется ИМЕНЕМ
+// провайдера (`CC_MODEL_PREFIX = { agentrouter: 'ar', … }`), поэтому `tierMapFile('ar')`
+// возвращал null и `poolDropTiers('ar')` отказывал: «провайдер 'ar' не редактируется».
+// То есть тир-карта на диск не писалась НИКОГДА, и сессия выживала только памятью процесса —
+// а персистентность и была половиной замысла.
+// 🎯 Поймано сквозным стендом, а не модульными регрессами: те по отдельности правы —
+// keepalive шлёт то, что знает, дашборд ищет то, что у него есть; врёт только стык.
+// Принимаем оба написания. Префиксов-двойников в таблице нет, поэтому обратный поиск
+// однозначен (у `aikeysapi` есть алиас `ak`, но ключ `aikeysapi` находится первой ветвью).
+function resolveProviderKey(name) {
+    const key = String(name || '').trim();
+    if (!key) return '';
+    if (CC_MODEL_PREFIX[key]) return key;                  // пришло имя провайдера
+    for (const [n, prefix] of Object.entries(CC_MODEL_PREFIX)) {
+        if (prefix === key) return n;                      // пришёл префикс
+    }
+    return key;                                            // незнакомое — откажет обычным путём
+}
+
+function poolDropState(provider) {
+    try {
+        const files = poolDropLib.poolDropFiles({ provider: resolveProviderKey(provider), tierMapFile });
+        if (files.error) return null;
+        const m = poolDropLib.readMarker(files.markerFile);
+        if (!m) return null;
+        return {
+            deadModel: m.deadModel || '',
+            fallback: m.fallback || '',
+            droppedAt: m.droppedAt || null,
+        };
+    } catch (e) { return null; }
+}
+
+function poolDropTiers(provider, deadModel, fallback) {
+    // Префикс ('ar') приходит от keepalive, имя ('agentrouter') — из вкладки «Маршруты».
+    // Принимаем оба, см. resolveProviderKey.
+    provider = resolveProviderKey(provider);
+    const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
+    if (files.error) return { ok: false, error: files.error };
+
+    // Идемпотентность: маркер — источник истины. Уже опущено → ничего не трогаем.
+    // Иначе повторный 402 (keepalive ретраит, кнопку нажали дважды) переписал бы бэкап
+    // уже переключённым файлом, и «вернуть как было» вернуло бы фолбэк.
+    const prev = poolDropLib.readMarker(files.markerFile);
+    if (prev) {
+        logLine(`pool-drop ${provider}: маркер уже есть (с ${prev.droppedAt}), ничего не меняю`);
+        return {
+            ok: true, already: true, provider,
+            deadModel: prev.deadModel, fallback: prev.fallback,
+            tiers: poolDropLib.readTiers(files.mapFile),
+            routesTiers: poolDropLib.readTiers(files.routesFile),
+            backupFiles: Array.isArray(prev.backupFiles) ? prev.backupFiles : [],
+        };
+    }
+
+    // Пустой фолбэк = фича выключена. Проверяем ДО любых записей: иначе пустой тир
+    // означал бы «стереть модель у владельца» (см. `poolDrop` в lib).
+    const fb = String(fallback == null ? '' : fallback).trim();
+    if (!fb) return { ok: false, error: 'фолбэк не задан (poolFallbackModel)' };
+    if (!deadModel) return { ok: false, error: 'не названа мёртвая модель (model)' };
+
+    // Отсутствующий файл карты — не ошибка, а «тут переключать нечего». У провайдера
+    // может не быть routes-карты (она заводится лениво, при первой правке вкладки).
+    const targets = [];
+    for (const [file, bak, key] of [
+        [files.mapFile, files.bakFile, 'tiers'],
+        [files.routesFile, files.routesBakFile, 'routesTiers'],
+    ]) {
+        if (fs.existsSync(file)) targets.push({ file, bak, key });
+    }
+    if (!targets.length) return { ok: false, error: `у провайдера '${provider}' нет файлов тир-карты` };
+
+    const out = { ok: true, provider, deadModel, fallback: fb, tiers: {}, routesTiers: {}, backupFiles: [] };
+    const errors = [];
+    for (const t of targets) {
+        // `mark: false` — маркер пишем сами и ОДИН раз, после обеих карт: с двумя
+        // файлами `poolDrop` увидел бы свой же маркер на втором вызове и решил бы,
+        // что работа уже сделана.
+        const r = poolDropLib.poolDrop(t.file, files.markerFile, {
+            provider, deadModel, fallback: fb, bakFile: t.bak, mark: false, writeTierMap,
+        });
+        if (!r.ok) { errors.push(`${path.basename(t.file)}: ${r.error}`); continue; }
+        out[t.key] = r.tiers;
+        out.backupFiles.push(...(r.backupFiles || []));
+    }
+
+    // Маркер пишем даже при частичном провале: бэкапы уже лежат, и «вернуть» должно
+    // работать. Без маркера вернуть было бы нечем — а карта уже изменена.
+    if (out.backupFiles.length) {
+        try {
+            poolDropLib.writeMarker(files.markerFile, {
+                provider, deadModel, fallback: fb,
+                droppedAt: new Date().toISOString(),
+                backupFiles: out.backupFiles,
+            });
+        } catch (e) { errors.push(`маркер не записан: ${e.message}`); }
+    }
+    // ── Часы обязаны узнать о фолбэке сами ──────────────────────────────────
+    // Заявка владельца 15.09: «надо чтобы тут показывало, что квота кончилась при
+    // фоллбэке». До этого состояние знала только ручная проба, и часы продолжали
+    // светить «квота есть», пока пул уже пуст. Пишем ту же запись, что пишет проба,
+    // отличая источник: `source: 'drop'` против `'probe'`.
+    const qPool = arQuotaPoolForModel(deadModel);
+    if (qPool) {
+        let qKey = '';
+        try { qKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключа нет — хвост будет пустым */ }
+        arQuotaPut(qPool, { ...buildArQuotaCache({ state: 'exhausted' }, qKey, Date.now()), source: 'drop' });
+        logLine(`квота ${qPool}: помечена исчерпанной при фолбэке (${deadModel})`);
+    }
+    const changed = out.backupFiles.length;
+    logLine(`pool-drop ${provider}: ${deadModel} → ${fb}, карт ${changed}, тиров ${Object.keys(out.tiers).length}+${Object.keys(out.routesTiers).length}`);
+    if (errors.length) return { ok: false, provider, error: errors.join('; ') };
+    return out;
+}
+
+// Возврат тир-карт из бэкапов. Функция ОДНА на оба входа: ручку
+// `POST /__switch/api/routes/pool-restore` и автоматический возврат в
+// `handleArQuotaCheck`, когда проба показала «пул налит».
+//
+// 🪤 Возврат идёт ТОЛЬКО при живом маркере. Без него восстанавливать нечего и, что
+// важнее, НЕЛЬЗЯ: бэкап мог остаться от прошлого дропа, а карта с тех пор правилась
+// владельцем руками — затирание её старым бэкапом было бы потерей работы.
+function poolRestoreTiers(provider) {
+    provider = resolveProviderKey(provider);
+    const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
+    if (files.error) return { ok: false, error: files.error };
+
+    const marker = poolDropLib.readMarker(files.markerFile);
+    if (!marker) return { ok: false, error: `провайдер '${provider}' не в пул-дропе: маркера нет` };
+
+    const baks = Array.isArray(marker.backupFiles) ? marker.backupFiles : [];
+
+    // ── Правку владельца возврат не перетирает ──────────────────────────────
+    // 🪤 После дропа карта опущена, и вкладка «Маршруты» показывает фолбэк. Владелец
+    // может поправить тир руками, и тогда возврат из бэкапа молча стёр бы его работу:
+    // бэкап-то снят ДО дропа. Признак правки — mtime новее дропа: любая запись его
+    // двигает, а дроп и маркер пишутся одной секундой (карты раньше, маркер позже).
+    const droppedMs = Date.parse(marker.droppedAt) || 0;
+    const touched = [];
+    for (const f of [files.mapFile, files.routesFile]) {
+        try { if (fs.statSync(f).mtimeMs > droppedMs + 1000) touched.push(path.basename(f)); } catch { /* файла нет */ }
+    }
+    if (touched.length) {
+        logLine(`pool-restore ${provider}: карту правили после дропа (${touched.join(', ')}) — не возвращаю`);
+        return { ok: false, provider, restored: false,
+                 error: `карту правили после дропа: ${touched.join(', ')} — возврат отменён, бэкап не перетёр работу` };
+    }
+    // Имя бэкапа берём из маркера, а не из соглашения: маркер — это запись о том, что
+    // реально было сделано. Соглашение — фолбэк для маркера без списка.
+    const bakFor = (target) => baks.find(b => path.basename(b) === path.basename(target)) || target;
+
+    const out = { ok: true, provider, restored: false, tiers: {}, routesTiers: {} };
+    let restored = 0;
+    const lost = [];   // бэкапы, о которых знает маркер, но которых нет на диске
+    for (const [file, bak, key] of [
+        [files.mapFile, files.bakFile, 'tiers'],
+        [files.routesFile, files.routesBakFile, 'routesTiers'],
+    ]) {
+        const src = bakFor(bak);
+        // Карты могло не быть на момент дропа — тогда и бэкапа нет, и возвращать нечего.
+        if (!fs.existsSync(src)) {
+            if (baks.some(b => path.basename(b) === path.basename(bak))) lost.push(path.basename(bak));
+            continue;
+        }
+        const r = poolDropLib.poolRestore(file, src);
+        if (!r.ok) { logLine(`pool-restore ${provider}: ${path.basename(file)} — ${r.error}`); return { ok: false, provider, error: r.error }; }
+        out[key] = r.tiers;
+        restored++;
+    }
+    // 🪤 Потерянный бэкап нельзя проглотить молча. Карт две, и если вернулась только
+    // одна, то снятый маркер унёс бы с собой единственную запись о том, что вторая
+    // вообще опущена: бэкапа нет, маркера нет — карта осталась бы на фолбэке навсегда,
+    // и никакая ручка её уже не вернула бы. Поэтому маркер в этом случае остаётся,
+    // а ответ становится ошибкой: файл можно положить на место и позвать возврат снова.
+    if (lost.length) {
+        logLine(`pool-restore ${provider}: нет бэкапа ${lost.join(', ')} — маркер оставлен, вернулось карт ${restored}`);
+        return {
+            ok: false, provider, restored: restored > 0,
+            tiers: out.tiers, routesTiers: out.routesTiers,
+            error: `бэкап не найден: ${lost.join(', ')} — маркер оставлен, возврат можно повторить`,
+        };
+    }
+    if (!restored) return { ok: false, provider, error: 'бэкапы пул-дропа не найдены' };
+
+    poolDropLib.clearMarker(files.markerFile);
+    out.restored = true;
+    out.droppedAt = marker.droppedAt || null;
+    out.fallback = marker.fallback || null;
+    logLine(`pool-restore ${provider}: карт возвращено ${restored} (бэкап от ${marker.droppedAt || '?'})`);
+    return out;
+}
+
 // Каталог моделей одного провайдера ДЛЯ вкладки «Маршруты».
 //
 // Вкладка провайдера берёт каталог из своего `state.<p>Models`, который наполняется
@@ -1060,6 +1329,9 @@ function handleRoutes(res) {
             tiers: routeTierMap(name, true),
             gatewayTiers: routeTierMap(name),
             activeModel: routeActiveModel(name),
+            // Факт «карта опущена на фолбэк» — для вкладки «Маршруты» и для панели
+            // keepalive. `null` = не в пул-дропе, и это нормальное состояние.
+            pooldrop: poolDropState(name),
         };
     });
     providers.sort((a, b) => a.name.localeCompare(b.name));
@@ -1425,7 +1697,14 @@ function makeKeepaliveHandlers(port) {
         req.on('end', async () => {
             try {
                 const patch = JSON.parse(b || '{}');
-                const KNOBS = ['hedgeMs', 'maxHedges', 'maxAttempts', 'preCommitMs'];
+                // Белый список ручек, которые можно гнать в keepalive. Поле, которого
+                // тут нет, панель дашборда получит `400` — поэтому новые настройки
+                // добавляются СЮДА, а не только в `DEFAULT_CFG` прокси.
+                //   `poolFallbackModel` — фолбэк при пустом пуле наливки
+                //     (`402 Budget pool quota has been exhausted`), `''` выключает фичу;
+                //   `poolDeadMs` — TTL памяти процесса о мёртвой модели.
+                const KNOBS = ['hedgeMs', 'maxHedges', 'maxAttempts', 'preCommitMs',
+                               'poolFallbackModel', 'poolDeadMs'];
                 if (!KNOBS.some(k => k in patch))
                     return jsonRes(res, 400, { error: 'ожидался { ' + KNOBS.join('?, ') + '? }' });
                 const r = await keepaliveFetch('POST', '/__config', patch, port);
@@ -1487,6 +1766,9 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveOd = makeKeepaliveHandlers(Number(process.env.OD_KEEPALIVE_PORT || 20170));
+const keepaliveBai = makeKeepaliveHandlers(Number(process.env.BAI_KEEPALIVE_PORT || 20169));
+const keepaliveUk = makeKeepaliveHandlers(Number(process.env.UK_KEEPALIVE_PORT || 20168));
 const keepaliveAp = makeKeepaliveHandlers(Number(process.env.AP_KEEPALIVE_PORT || 20163));
 const keepaliveHn = makeKeepaliveHandlers(Number(process.env.HN_KEEPALIVE_PORT || 20162));
 const keepaliveAk = makeKeepaliveHandlers(Number(process.env.AK_KEEPALIVE_PORT || 20165));
@@ -4448,6 +4730,9 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Odyssey',  port: Number(process.env.OD_KEEPALIVE_PORT || 20170), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive B.AI',  port: Number(process.env.BAI_KEEPALIVE_PORT || 20169), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive UniKey',  port: Number(process.env.UK_KEEPALIVE_PORT || 20168), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive HCNsec',   port: Number(process.env.HN_KEEPALIVE_PORT || 20162), path: '/__keepalive/api/status', keepalive: true },
         // 🪤 AIPM :20163 сидит ВНУТРИ диапазона кастомов 20150–20250, и без этой строки
         // промах по таблице уводил его в ветку «осиротевших конвертеров» ниже — шлюз,
@@ -8025,6 +8310,15 @@ const AR_DEFAULT_GRANT = 175;
 // мог утечь расход — точное равенство здесь недостижимо.
 const AR_CHECKIN_FILE = path.join(__dirname, 'ar-checkin.json');
 const AR_CHECKIN_MIN_USD = 20;
+// Дольше этого «цифра не обновлялась» — рост выдачи нельзя привязать к одному моменту
+// (см. блок детекта чек-ина в newapiApplyBalance). Сутки = одно окно подарка.
+const AR_CHECKIN_OBSERVE_MAX_MS = 24 * 3600_000;
+// Виды отказа, которые что-то ГОВОРЯТ О ВХОДЕ, — и потому снимаются только свежим ответом
+// шлюза. Остальные (`no_proof`, `deferred`, `waf`, `rate_limited`, `transport`, `no_uid`, …)
+// означают «ответа не было» и к состоянию входа отношения не имеют — это и в модуле сказано:
+// `login_dead` там «единственный случай, доказывающий разлогин», а `no_proof` — «про логин
+// не знаем НИЧЕГО». Смешивать эти два рода нельзя: первый — утверждение, второй — молчание.
+const AR_LOGIN_KINDS = ['login_dead', 'login_expired'];
 // Сколько браузеров чек-ина разрешено держать открытыми одновременно (см. предохранитель
 // в handleArSessionOpen): залп по всему пулу ловит рейт-лимит шлюза.
 const AR_CHECKIN_MAX_BROWSERS = 3;
@@ -8293,6 +8587,9 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'odysseyapi.tech':      path.join(__dirname, '..', 'odyssey', 'profiles'),
+    'chat.b.ai':      path.join(__dirname, '..', 'bai', 'profiles'),
+    'www.getunikey.ai':      path.join(__dirname, '..', 'getunikey', 'profiles'),
     'emtf.aipm9527.online': path.join(__dirname, '..', 'aipm', 'profiles'),
     // HCNsec: ключ — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn`. GitHub-входа у шлюза нет,
     // но профиль и куки нужны: точный остаток даёт /api/user/self куками профиля.
@@ -8439,7 +8736,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -8599,8 +8896,17 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             selfCheckedAt: target.selfCheckedAt,
         };
     }
-    const profileDir = prof.dir;
+    let profileDir = prof.dir;
     let selfError = null;
+    // Вид отказа рядом с текстом: текст читает человек и он же попадает в тесты, а интерфейсу
+    // нужно различить «разлогинен» и «про логин не знаем» — 13.09 в таблице они выглядели
+    // одинаково. Считается из того же текста функцией модуля, чтобы ветки не разъезжались.
+    let selfFailureKind = null;
+    const noteSelfFailure = (text) => {
+        selfError = text;
+        selfFailureKind = lib && lib.classifySelfFailure ? lib.classifySelfFailure({ error: text }) : 'other';
+        return selfFailureKind;
+    };
 
     // Browser snapshots are intentionally ignored. The ordinary cookie/raw-auth path below
     // is the sole source of truth after relogin.
@@ -8633,8 +8939,8 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         : `${Math.round(cachedAgeMs / 60_000)} мин назад`;
     const cachedStale = lkBusy || cachedAgeMs > SELF_EXACT_MAX_AGE_MS;
     if (!self && lkBusy) {
-        selfError = 'браузер этого аккаунта ОТКРЫТ — Chromium запер куки, а нашу копию сессии он уже прокрутил.'
-            + ' Закрой окно ЛК и повтори чек — цифра станет точной';
+        noteSelfFailure('браузер этого аккаунта ОТКРЫТ — Chromium запер куки, а нашу копию сессии он уже прокрутил.'
+            + ' Закрой окно ЛК и повтори чек — цифра станет точной');
         logLine(`баланс ${host}: профиль ${prof.label} открыт в браузере — точный чек пропущен, чтобы не жечь сессию`);
     } else if (!self && lib && (profileDir || target.accessToken)) {
         // Ключи профилей — ДО первого сетевого запроса self. Здесь блокировка событийного
@@ -8644,7 +8950,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         // Со снимком из браузера сюда не заходим вообще — расшифровывать нечего.
         newapiWarmProfileKeys('чек баланса');
         try {
-            const me = await lib.accountSelf({
+            const me0 = await lib.accountSelf({
                 host,
                 profileDir,
                 accessToken: target.accessToken || null,
@@ -8658,6 +8964,44 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 // тики (force=false) паузу соблюдают — они её и вызывают.
                 force,
             });
+            // ── Метка профиля может указывать на МЁРТВЫЙ остаток ──
+            //
+            // 🔴 `newapiProfileDir` берёт каталог по метке, если он СУЩЕСТВУЕТ, — не проверяя,
+            // что там живая сессия. У трёх записей пула метка была `git_N` (остаток старого
+            // заселения), а рабочая папка, которую создаёт кнопка 🌐, называется `acct_<id>`.
+            // Существуют обе, резолв возвращает первую — мёртвую.
+            //
+            // Замер 16.09 на живых аккаунтах: из мёртвой папки приходил HTTP 401 и вердикт
+            // «разлогинен», свежая цифра не появлялась никогда (`selfCheckedAt` замер на 12.09),
+            // а в пуле висело $0.64 там, где на счету $26.20 — соседняя папка отвечала живой
+            // сессией. То есть «три доказанных разлогина» были артефактом чужого каталога.
+            //
+            // 🎯 Проверяем РЕЗУЛЬТАТОМ, а не именем: метка живая — второй попытки нет вовсе,
+            // поведение не меняется. Вторая попытка стоит одного запроса и только там, где
+            // детерминированный каталог реально существует и метка дала 401/403.
+            let me = me0;
+            if (!me0.ok && me0.stale && !prof.viaId && target.id) {
+                const detLabel = 'acct_' + target.id;
+                const detDir = detLabel === prof.label ? null : newapiProfileDir(host, detLabel);
+                if (detDir && detDir !== profileDir) {
+                    const alt = await lib.accountSelf({
+                        host,
+                        profileDir: detDir,
+                        accessToken: target.accessToken || null,
+                        userId: target.newApiUserId || null,
+                        accountId: target.id || null,
+                        force,
+                    });
+                    if (alt.ok && alt.balance != null) {
+                        logLine(`баланс ${host}: профиль «${prof.label}» отдал 401, а «${detLabel}» живой — работаю по нему`);
+                        me = alt;
+                        // Метка уезжает в запись через `profileUsed` ниже — вторая попытка
+                        // становится постоянной, а не повторяется на каждом чеке.
+                        prof.label = detLabel;
+                        profileDir = detDir;
+                    }
+                }
+            }
             if (me.ok && me.balance != null) {
                 // Точный чек мог ротировать одноразовую refresh-куку. Сразу отдаём новое
                 // значение профилю, пока браузер закрыт, — чтобы следующее открытие ЛК
@@ -8674,12 +9018,15 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 };
             } else {
                 selfError = me.error || 'self не ответил';
+                // Вид берём у модуля: он уже разложил ответ на `failureKind`. Если поле не пришло
+                // (старый путь), считаем из текста — терять разметку хуже, чем посчитать дважды.
+                selfFailureKind = me.failureKind || noteSelfFailure(selfError);
             }
-        } catch (e) { selfError = e.message; }
+        } catch (e) { noteSelfFailure(e.message); }
     } else if (!self && lib && !profileDir) {
-        selfError = target.profile
+        noteSelfFailure(target.profile
             ? 'профиль не найден на диске'
-            : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным';
+            : 'профиля аккаунта нет — открой ЛК кнопкой 🌐 и войди, тогда баланс станет точным');
     }
 
     // ── 3. anchor: вписанная руками цифра как РЕЗЕРВ, когда точной нет ──
@@ -8825,6 +9172,9 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             selfError: cachedStale
                 ? `${selfError ? `${selfError}; ` : ''}показана цифра, снятая ${ageTxt}`
                 : selfError,
+            // Вид едет рядом с текстом. Дописанный возраст (выше) разбору не мешает: он
+            // приклеен ПОСЛЕ причины, а причина опознаётся по началу строки.
+            selfFailureKind,
             self: cached,
         };
     }
@@ -8881,6 +9231,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
                 selfCheckedAt: target.selfCheckedAt,   // НЕ обновляем: TTL не должен перезапуститься
                 selfError: `${selfError || 'свежую цифру взять не удалось'}; показана последняя, что называл шлюз`
                     + ` (снята ${cachedAgeTxt}${drawnSince ? `, минус расход $${drawnSince.toFixed(2)}` : ''})`,
+                selfFailureKind,
                 self: (anchorResult && anchorResult.self) || null,
             };
         }
@@ -8894,7 +9245,7 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
         logLine(`баланс ${host}: цифры сайта нет (${selfError || 'без причины'}) —`
             + ` показываю вписанное вручную $${anchorResult.balance.toFixed(2)}`
             + (anchorResult.anchorTopUp > 0 ? ` (в том числе +$${anchorResult.anchorTopUp.toFixed(2)} налито после вписывания)` : ''));
-        return { ...anchorResult, selfError };
+        return { ...anchorResult, selfError, selfFailureKind };
     }
 
     // ── 5. guess: старое угадывание, последний резерв ──
@@ -9030,6 +9381,29 @@ function newapiApplyBalance(target, bal, opts) {
     // в гейдже пула. Просто помечаем статус и уходим, штамп проверки не ставим.
     if (bal.status === 'no_key') { target.status = 'no_key'; delete target.balanceError; return bal; }
     target.status = bal.status;
+    // ── Отметка «когда ходили проверять» ──
+    //
+    // 🪤 15.09 здесь побывала правка, которая делала `balanceCheckedAt` датой ЦИФРЫ
+    // (`selfCheckedAt`), и она была НЕВЕРНОЙ — откачена. Урок оставлен, потому что
+    // соблазн повторится: два этих поля отвечают на РАЗНЫЕ вопросы, и «старая цифра»
+    // выглядит как «протухшая отметка» только на первый взгляд.
+    //
+    //   balanceCheckedAt — когда мы последний раз измеряли (наш ход);
+    //   selfCheckedAt    — когда шлюз последний раз называл цифру (его ответ).
+    //
+    // Замер, который это доказал: у 22 записей пула из 33 отметка проверки СТАРШЕ даты
+    // цифры, и разрыв растёт ровно там, где цифра старее (`exhaustedar`: проверка 4.7 ч,
+    // цифра 73.8 ч). Обратных случаев — ноль. То есть поле ведёт себя ровно так, как
+    // задумано: чек ходил и не смог переспросить.
+    //
+    // 🪤 Почему датой цифры его делать нельзя. Ветвь `reused` отдаёт цифру, ПОДТВЕРЖДЁННУЮ
+    // прямым замером расхода секунду назад, но `selfCheckedAt` в ней остаётся прежним (это
+    // и есть смысл переиспользования). С датой цифры такая запись выглядела бы как
+    // непроверенная — то есть правка ломала бы ровно тот случай, который работает.
+    //
+    // Свежесть ЦИФРЫ показывают другие поверхности, и им нужен `selfCheckedAt`:
+    // маркер `⟳`/`~` в строке аккаунта (`balanceFreshMark`). Туда и смотреть при жалобе
+    // «цифра старая», а не сюда.
     target.balanceCheckedAt = new Date().toISOString();
     // Чек-ин +$25 виден по РОСТУ выдачи: granted = остаток + расход, и он растёт
     // только когда шлюз налил денег (сам чек-ин поднимает quota, не двигая
@@ -9058,10 +9432,28 @@ function newapiApplyBalance(target, bal, opts) {
             target.grantedSelf != null ? target.grantedSelf
                 : (target.balanceSource === 'self' ? target.granted : NaN),
         );
-        if (isFinite(prevGranted) && isFinite(nextGranted) && nextGranted - prevGranted >= AR_CHECKIN_MIN_USD) {
+        // 🪤 `checkinAt` — это «когда мы УВИДЕЛИ рост», а НЕ «когда подарок пришёл».
+        //
+        // Пока цифра идёт регулярно, разница мала и незаметна. У аккаунта с простоем (WAF,
+        // мёртвый профиль, пауза по частоте) она измеряется сутками: подарки копятся, весь
+        // накопленный рост виден за ОДИН чек — и таймер уезжает на сутки вперёд, блокируя
+        // настоящий подарок. Замер 16.09: у четырёх записей цифра не обновлялась 64–86 ч,
+        // и после починки профиля штамп лёг на «сейчас» (жалоба владельца: «вчерашние
+        // подарки, которые уже получены, мешают сегодняшним»).
+        //
+        // Решение владельца: наблюдение опоздало → таймер НЕ трогаем ВООБЩЕ. Базу
+        // (`grantedSelf`) при этом переставляем — следующий рост считается уже от неё.
+        const gapMs = target.selfCheckedAt ? Date.now() - Date.parse(target.selfCheckedAt) : Infinity;
+        const lateObservation = !(gapMs <= AR_CHECKIN_OBSERVE_MAX_MS);
+        const grew = isFinite(prevGranted) && isFinite(nextGranted)
+            && nextGranted - prevGranted >= AR_CHECKIN_MIN_USD;
+        if (grew && !lateObservation) {
             target.checkinAt = new Date().toISOString();
             target.checkinFrom = 'self';
             logLine(`agentrouter чек-ин: ***${String(target.api_key || '').slice(-6)} выдача $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)}`);
+        } else if (grew) {
+            logLine(`agentrouter чек-ин: выдача выросла $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)},`
+                + ` но цифра не обновлялась ${Math.round(gapMs / 3600_000)} ч — таймер не двигаю: к одному моменту рост не привязать`);
         }
         if (isFinite(nextGranted)) target.grantedSelf = nextGranted;
     }
@@ -9123,6 +9515,101 @@ function newapiApplyBalance(target, bal, opts) {
         // выжить: цифра точная, но не переспрошенная, и владелец должен знать почему.
         if (seen && !bal.selfCached) delete target.selfError;
         else if (bal.selfError) target.selfError = bal.selfError;
+        // Вид отказа — рядом с текстом и по тем же правилам снятия. Храним на записи, а не
+        // только в ответе чека: вердикт «разлогинен» обязан пережить F5, иначе он живёт ровно
+        // до первой перезагрузки страницы, а решение «жать ⚡ или нет» принимается глазами.
+        // 🔴 Провалившаяся ПОПЫТКА не должна перетирать вердикт удачной ПРОВЕРКИ.
+        //
+        // Было `if (seen && !bal.selfCached) delete ...` — то есть вердикт снимался только
+        // свежим ответом. Но цифру переиспользуют (`selfCached`) куда чаще, чем переспрашивают:
+        // WAF и пауза по частоте делают свежий чек редкостью. Получалось, что аккаунт, у
+        // которого шлюз минуту назад назвал цифру, ловил ⚠️ «логин не проверен» от следующей,
+        // отбитой попытки. Замер 16.09: **21 запись из 33 с плашкой, и у ВСЕХ `selfCached`** —
+        // включая активный `_0` с $1238, который прямо сейчас работает в Claude Code.
+        //
+        // Жалоба владельца: «всё равно пишет, что логин не проверен, на аккаунтах, которые уже
+        // проверены». Так и было — плашка описывала ПОСЛЕДНЮЮ ПОПЫТКУ, а не состояние аккаунта.
+        //
+        // Правило: переиспользованная цифра ещё свежа (`!selfStale`) → мы проверяли недавно,
+        // вердикт снимаем. Держим предупреждение только там, где цифра действительно стара
+        // (ветвь 4б всегда ставит `selfStale: true`) — там сомнение честное.
+        const reusedFresh = !!bal.selfCached && !bal.selfStale;
+        // Смотрим и на то, что УЖЕ стоит в записи: вердикт живёт в пуле и переживает прогоны,
+        // в которых ответ его не принёс. Стирать доказанный разлогин по простому отсутствию
+        // поля в ответе нельзя — это утверждение об аккаунте, а не отчёт о попытке.
+        const aboutLogin = AR_LOGIN_KINDS.includes(target.selfFailureKind)
+            || AR_LOGIN_KINDS.includes(bal.selfFailureKind);
+        const keepVerdict = !!bal.selfCached && (!!bal.selfStale || aboutLogin);
+        if (seen && !keepVerdict) delete target.selfFailureKind;
+        else if (bal.selfFailureKind) target.selfFailureKind = bal.selfFailureKind;
+
+        // ── Свежий браузерный вход перебивает вердикт чека ──
+        //
+        // 🔴 Заявка владельца 15.09: «пишет, что акк разлогинен, хотя по факту вход выполнен,
+        // статус не меняется». Плашка гасла ТОЛЬКО успешным чеком, а его не было ни у одного
+        // аккаунта пула — среди 29 вошедших сегодня цифра обновилась у одного.
+        //
+        // Почему чек не может быть судьёй. Он идёт по кукам ПРОФИЛЯ, а браузер держит
+        // актуальную копию в памяти и на диск её не сбрасывает. Ветвь `lkBusy` этот класс
+        // ложного 401 знает и закрывает — но опирается на карту pid'ов в памяти процесса,
+        // которую рестарт обнуляет, и на файловый замок БД куки, который держится только
+        // пока окно открыто. Замер 15.09: окно `acct_ar_1786714708320_2` закрылось в
+        // 11:55:39, чек упал в 11:55:45 — шесть секунд спустя, ровно в зазоре.
+        //
+        // Итог: после входа оставалась старая ошибка «сессия профиля недействительна», хотя
+        // вход только что состоялся. Это неверно ПО СУТИ — браузерный вход доказывает вход
+        // сильнее, чем HTTP-чек на протухшей копии куки.
+        //
+        // 🪤 Осторожная форма, а не «доверяем браузеру». Различить «аккаунт правда разлогинен»
+        // и «кука на диске отстала» по текущим данным НЕЛЬЗЯ, поэтому мы не объявляем вход
+        // живым — мы перестаём объявлять его мёртвым. Вердикт заменяется на «вход был после
+        // последней цифры, чек не переспрошен»: и правда, и следующий чек его перепроверит.
+        // Ошибка в эту сторону безопасна: если вход мёртв, первый же удачный чек вернёт вид.
+        //
+        // 🪤 Признаков входа ДВА, и одного мало. Первая редакция правки опиралась только на
+        // `newapiLkOpenedAt` — отметку визита в ЛК, — и по живому замеру смягчила 2 записи из 27.
+        // Причина: `newapiLkVisited()` зовут ручные пути (🌐, клик по цифре), а залп чек-инов
+        // идёт мимо неё, хотя входит в тот же аккаунт тем же браузером.
+        //
+        // Второй признак — `checkinAt` с `checkinFrom: 'auto'` (`arAutoCheckinFinish`): он
+        // ставится по РОСТУ выдачи после браузерного релогина, то есть означает ровно «браузер
+        // выполнил вход». Проставленный чек-ином снимок в 15.09 подтверждает: `numbsweatshop`
+        // вошёл в 07:28 (checkinAt), а цифра осталась от 13.09 07:45 — вход был, чек не прошёл.
+        // 🪤 Подпись профиля берём из СВОЕГО источника — `target.profile`. Здесь её нельзя
+        // спросить у `newapiResolveProfile()`, как это делает newapiBalance: у этой функции
+        // нет `host`, а резолв строится по нему. Поле `target.profile` та же функция и
+        // поддерживает (см. запись `profileUsed` ниже), так что источник тот же.
+        const lkAt = Math.max(
+            newapiLkOpenedAt(target.profile),
+            target.checkinAt ? Date.parse(target.checkinAt) : 0,
+        );
+        // 🪤 Сравнивать надо с датой ЦИФРЫ (`selfCheckedAt`), а НЕ с `balanceCheckedAt`.
+        // Вторая редакция правки брала `balanceCheckedAt` — и смягчила 3 записи вместо 24.
+        // Причина: `balanceCheckedAt` обновляется на каждом прогоне, а прогоны идут постоянно;
+        // вход почти всегда старше последнего прогона, и условие не срабатывало. Вопрос ведь
+        // ставится «входили ли ПОСЛЕ того, как показанную цифру называли» — это и есть
+        // `selfCheckedAt`. С ним условие честно тавтологично: цифра старая ⟺ вход её новее.
+        const figureMs = target.selfCheckedAt ? Date.parse(target.selfCheckedAt) : 0;
+        // `relogin_unverified` в списке — чтобы смягчённая запись не залипала навсегда: при
+        // каждом следующем прогоне вердикт пересчитывается заново, а не остаётся смягчённым
+        // от одного старого входа. Исчезнет он ровно так же, как появился, — по дате.
+        const reloginAfterCheck = lkAt > 0 && lkAt > figureMs
+            && (target.selfFailureKind === 'login_dead' || target.selfFailureKind === 'login_expired'
+                || target.selfFailureKind === 'no_proof' || target.selfFailureKind === 'relogin_unverified');
+        if (reloginAfterCheck) {
+            // Прежний вердикт снимаем ДО подмены: в логе нужно назвать то, что смягчили.
+            // 🪤 Брать его из `bal.selfFailureKind` нельзя — вердикт живёт в ЗАПИСИ пула и
+            // переживает прогоны, в которых ответ его не принёс; тогда в лог уходило
+            // «вердикт «undefined» смягчён». Условие выше гарантирует, что здесь он есть.
+            const wasKind = target.selfFailureKind;
+            target.selfReloginAt = new Date(lkAt).toISOString();
+            target.selfFailureKind = 'relogin_unverified';
+            target.selfError = 'вход выполнялся после этой цифры (браузер), а переспросить шлюз не удалось: '
+                + 'чек идёт по кукам профиля, а браузер держит свежую копию в памяти. '
+                + 'Состояние входа не подтверждено, но и не опровергнуто';
+            logLine(`баланс ${target.profile || target.id || 'аккаунт'}: после чека был вход в ЛК (${new Date(lkAt).toISOString()}) — `
+                + `вердикт «${wasKind}» смягчён до «не переспрошен»`);
+        }
         if (bal.selfCached) target.selfCached = true; else delete target.selfCached;
         delete target.balanceError;
         // Пишем историю только когда цифры реально сдвинулись. Первый чек аккаунта
@@ -11381,12 +11868,44 @@ async function handleFinanceHistory(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ── Состояние квоты на диске, по полосам ────────────────────────────────────
+// Читается и пишется ТОЛЬКО здесь и в `poolDropTiers` — второе место разбора
+// формата разъехалось бы с первым.
+function arQuotaDoc() {
+    try { return arQuotaReadPools(fs.readFileSync(AR_QUOTA_STATE_FILE, 'utf8')); } catch { return {}; }
+}
+function arQuotaPut(pool, entry) {
+    const doc = arQuotaDoc();
+    if (entry) doc[pool] = entry; else delete doc[pool];
+    try {
+        fs.mkdirSync(path.dirname(AR_QUOTA_STATE_FILE), { recursive: true });
+        fs.writeFileSync(AR_QUOTA_STATE_FILE, JSON.stringify(doc, null, 2) + '\n');
+    } catch (e) { logLine(`ar-quota-state: запись не удалась: ${e.message}`); }
+    return doc;
+}
+
 async function handleArQuotaCheck(req, res) {
+    // Полоса: `?pool=` в URL или `{pool}` в теле, по умолчанию opus. Неизвестная —
+    // отказ, а не молчаливый opus: иначе кнопка GPT показывала бы состояние Opus.
+    const url = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+    let pool = String(url.searchParams.get('pool') || '').trim().toLowerCase();
+    if (!pool) {
+        pool = await new Promise((resolve) => {
+            let b = '';
+            req.on('data', (c) => { b += c; });
+            req.on('end', () => { try { resolve(String(JSON.parse(b || '{}').pool || '')); } catch { resolve(''); } });
+        });
+    }
+    pool = String(pool || '').trim().toLowerCase() || AR_QUOTA_DEFAULT_POOL;
+    if (!AR_QUOTA_POOLS[pool]) {
+        return jsonRes(res, 400, { ok: false, state: 'error', error: `неизвестная полоса квоты: ${pool}` });
+    }
+
     let key = '';
     try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
     if (!key.startsWith('sk-')) return jsonRes(res, 400, { state: 'error', error: 'нет активного ключа AgentRouter' });
 
-    const payload = JSON.stringify(AR_QUOTA_BODY);
+    const payload = JSON.stringify(arQuotaBodyFor(pool));
     const target = new URL(agentRouterBase());
     const result = await new Promise((resolve) => {
         const probe = https.request({
@@ -11415,32 +11934,57 @@ async function handleArQuotaCheck(req, res) {
         probe.on('error', e => resolve({ state: 'error', error: e.message }));
         probe.end(payload);
     });
-    logLine(`agentrouter quota-check claude-opus-5 -> ${result.state}`);
+    logLine(`agentrouter quota-check ${pool} (${AR_QUOTA_POOLS[pool]}) -> ${result.state}`);
+    // Пул налили — возвращаем тир-карту, если она лежала опущенной (`poolDropTiers`).
+    // Отдельного фонового опроса пула нет намеренно (канон 11.09: «автотиков и фоновых
+    // проб нет») — возврат висит ровно на этой существующей проверке.
+    //
+    // 🪤 Флап возможен и принят владельцем осознанно: проба 15.09 в 03:08 дала
+    // `available`, а в 04:52 пул был сух. Цена ошибки — один лишний 402 и мгновенный
+    // возврат в фолбэк в памяти процесса, клиент этого не видит.
+    let poolReturn = null;
+    if (result.state === 'available') {
+        const pr = poolRestoreTiers('ar');
+        if (pr.ok && pr.restored) {
+            poolReturn = pr;
+            logLine('пул AgentRouter налит - тир-карта возвращена');
+        }
+    }
     // Кешируем только доказанное состояние квоты: `error` — факт про сеть в тот
     // момент, а не про квоту, и завтра он бессмыслен. Ошибка записи некритична:
     // проверка уже состоялась, кеш — удобство, а не результат.
     const cached = buildArQuotaCache(result, key, Date.now());
-    if (cached) {
-        try {
-            fs.mkdirSync(path.dirname(AR_QUOTA_STATE_FILE), { recursive: true });
-            fs.writeFileSync(AR_QUOTA_STATE_FILE, JSON.stringify(cached, null, 2) + '\n');
-        } catch (e) { logLine(`agentrouter quota-check cache write failed: ${e.message}`); }
-    }
-    return jsonRes(res, 200, { ...result, ...(cached || {}), model: AR_QUOTA_BODY.model,
-                               checkedAt: (cached && cached.checkedAt) || new Date().toISOString() });
+    // `source` — кто поставил состояние. Панель подписывает разницу словами:
+    // «по проверке» против «при фолбэке», и это разные факты.
+    const pools = arQuotaPut(pool, cached ? { ...cached, source: 'probe' } : null);
+    return jsonRes(res, 200, { ...result, ...(cached || {}), pool, model: AR_QUOTA_POOLS[pool], pools,
+                               checkedAt: (cached && cached.checkedAt) || new Date().toISOString(),
+                               // Возврат карты — факт этой же проверки, а не отдельного
+                               // события: клиенту нужно знать, что тиры снова боевые.
+                               ...(poolReturn ? {
+                                   restored: true,
+                                   restoredTiers: poolReturn.tiers,
+                                   restoredRoutesTiers: poolReturn.routesTiers,
+                                   restoredDroppedAt: poolReturn.droppedAt,
+                               } : {}) });
 }
 
-// GET /__switch/api/ar/quota-state → последняя проверка, если она ещё относится к
-// текущей партии. Устаревшую отдаём как `state: null`, а не молча свежей: иначе
-// после налива дашборд красил бы часы вчерашним «квота закончилась».
+// GET /__switch/api/ar/quota-state → состояние ОБЕИХ полос на текущую партию.
+// Устаревшую отдаём как `state: null`, а не молча свежей: иначе после налива
+// дашборд красил бы часы вчерашним «квота закончилась». Полосы стареют порознь —
+// их конец может наступить в разные минуты.
 function handleArQuotaState(req, res) {
-    let entry = null;
-    try { entry = JSON.parse(fs.readFileSync(AR_QUOTA_STATE_FILE, 'utf8')); } catch {}
     let keyTail = '';
     try { keyTail = arQuotaKeyTail(fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim()); } catch {}
-    const fresh = isArQuotaCacheFresh(entry, Date.now(), keyTail);
-    return jsonRes(res, 200, fresh ? { ...entry, stale: false }
-                                   : { state: null, stale: true, keyTail });
+    const doc = arQuotaDoc();
+    const pools = {};
+    for (const p of Object.keys(AR_QUOTA_POOLS)) {
+        const e = doc[p];
+        pools[p] = (e && isArQuotaCacheFresh(e, Date.now(), keyTail))
+            ? { ...e, stale: false }
+            : { state: null, stale: true };
+    }
+    return jsonRes(res, 200, { pools, keyTail });
 }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
@@ -12186,6 +12730,13 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
                 t2.checkinFrom = 'auto';
                 arSaveMerge(t2);
             }
+            // 🪤 Отметку визита здесь приходится ставить явно: она означает «браузер ВОШЁЛ
+            // в этот аккаунт», а по ней `newapiApplyBalance` смягчает вердикт про логин,
+                // если чек не смог переспросить цифру. Своим ходом `newapiLkVisited` тут не
+            // срабатывает: он живёт в памяти и на диск попадает только через явный вызов.
+            // Замер 15.09: `exhaustedar` вошёл в 07:29, а отметки визита на диске нет — и
+            // смягчение срабатывало только по запасному признаку `checkinAt`.
+            newapiLkVisited(label);
         }
         st.state = 'done';
         st.checkedIn = checkedIn;
@@ -14008,8 +14559,100 @@ const KK_MODELMAP_FILE = path.join(__dirname, 'kktoken-modelmap.json');
 const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+const OD_SESSIONS_FILE = path.join(__dirname, 'odyssey-sessions.json');
+const OD_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'odyssey-active-key.txt');
+const OD_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'odyssey-active-model.txt');
+const OD_BASE_URL = 'https://odysseyapi.tech/v1';
+// SSE keepalive proxy для odyssey (как у tabi :20155): форвардит напрямую в
+// odysseyapi.tech и держит SSE-паузы thinking-моделей.
+// 🪤 Кромки Cloudflare с пустым 403 у odyssey НЕТ — это свойство соседей (kktoken,
+// getunikey, bai). Ретраи через keepalive здесь страховка от штатных 429/5xx
+// площадки; лимит у неё свой и жёсткий — 30 запросов в минуту на ключ, пока не
+// куплено $10 (замер 16.09, заголовок `x-ratelimit-limit-requests`).
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const OD_UPSTREAM = 'https://odysseyapi.tech';
+const OD_KEEPALIVE_PORT = 20170;
+const OD_KEEPALIVE_URL = `http://localhost:${OD_KEEPALIVE_PORT}`;
+const OD_MODELMAP_FILE = path.join(__dirname, 'odyssey-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У odyssey грант ЕСТЬ и известен:
+// **$5 кредита при регистрации, без карты** (докладная площадки, замер 16.09).
+// Поэтому резерв не «на глаз», а по факту: ступень 5 = эти $5. Точную цифру
+// ключом не достать вовсе — `GET /api/status` отдаёт HTML, `/api/user/*` нет,
+// остаток живёт в кабинете за Clerk. Поэтому у вкладки баланс РУЧНОЙ (✏️), как у bai,
+// а `~` светится до первого браузерного чтения.
+const OD_GRANT_STEP = 5;
+const OD_DEFAULT_GRANT = 5;
+const OD_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const BAI_SESSIONS_FILE = path.join(__dirname, 'bai-sessions.json');
+const BAI_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'bai-active-key.txt');
+const BAI_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'bai-active-model.txt');
+const BAI_BASE_URL = 'https://chat.b.ai/v1';
+// SSE keepalive proxy для bai (как у tabi :20155): форвардит напрямую в
+// chat.b.ai, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у bai КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const BAI_UPSTREAM = 'https://chat.b.ai';
+const BAI_KEEPALIVE_PORT = 20169;
+const BAI_KEEPALIVE_URL = `http://localhost:${BAI_KEEPALIVE_PORT}`;
+const BAI_MODELMAP_FILE = path.join(__dirname, 'bai-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У bai гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const BAI_GRANT_STEP = 5;
+const BAI_DEFAULT_GRANT = 5;
+const BAI_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const KK_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const OD_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const BAI_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+
+// ── UniKey (getunikey) — New API поверх www.getunikey.ai, SSE keepalive :20168 ──
+const UK_SESSIONS_FILE = path.join(__dirname, 'getunikey-sessions.json');
+const UK_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'getunikey-active-key.txt');
+const UK_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'getunikey-active-model.txt');
+const UK_BASE_URL = 'https://www.getunikey.ai/v1';
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню.
+const UK_UPSTREAM = 'https://www.getunikey.ai';
+// Порт — НОВАЯ форма с env-override (грабля #27): хендлер §1.2 читает env всегда,
+// и если константа его не читает, спавн/Health/«перезапустить» разъезжаются с URL.
+const UK_KEEPALIVE_PORT = Number(process.env.UK_KEEPALIVE_PORT || 20168);
+const UK_KEEPALIVE_URL = `http://localhost:${UK_KEEPALIVE_PORT}`;
+const UK_MODELMAP_FILE = path.join(__dirname, 'getunikey-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У getunikey грант ЕСТЬ — подарок
+// при регистрации: 4 742 кредита (≈$0.47 при $1 = 10 000), обычных кредитов 0.
+// Точная цифра приходит из /api/user/self куками профиля; резерв — на случай,
+// когда залогиненного профиля ещё нет.
+const UK_GRANT_STEP = 5;
+const UK_DEFAULT_GRANT = 5;
+const UK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const UK_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
     'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
@@ -14078,15 +14721,89 @@ function kkLoad() {
         return arr;
     } catch { return []; }
 }
+function odLoad() {
+    try {
+        const raw = fs.readFileSync(OD_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Odyssey');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'od_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { odSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function baiLoad() {
+    try {
+        const raw = fs.readFileSync(BAI_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'B.AI');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'bai_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { baiSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
+}
+function odSave(arr) {
+    durableWriteJson(OD_SESSIONS_FILE, arr);
+}
+function baiSave(arr) {
+    durableWriteJson(BAI_SESSIONS_FILE, arr);
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
+function odReadActiveModel() {
+    try { return fs.readFileSync(OD_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function baiReadActiveModel() {
+    try { return fs.readFileSync(BAI_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function odReadActiveKey() {
+    try { return fs.readFileSync(OD_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function baiReadActiveKey() {
+    try { return fs.readFileSync(BAI_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 
@@ -14122,6 +14839,64 @@ async function kkKeepaliveSpawn() {
         return { ok: false, error: e.message };
     }
 }
+async function odKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(OD_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(OD_KEEPALIVE_PORT),
+                UPSTREAM: OD_UPSTREAM,
+                KEY_FILE: OD_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: OD_MODELMAP_FILE,
+                ...(process.env.OD_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.OD_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Odyssey', OD_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`odyssey keepalive proxy spawn: :${OD_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`odyssey keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function baiKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(BAI_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(BAI_KEEPALIVE_PORT),
+                UPSTREAM: BAI_UPSTREAM,
+                KEY_FILE: BAI_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: BAI_MODELMAP_FILE,
+                ...(process.env.BAI_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.BAI_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive B.AI', BAI_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`bai keepalive proxy spawn: :${BAI_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`bai keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
 
 // Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
 // ✅ Проверено 31.08: пустой 403 kktoken на ЭТОТ путь не приходит — 16/16 отдали 200,
@@ -14132,6 +14907,32 @@ async function kkProbe(apiKey) {
         const r = await fetch(`${KK_BASE_URL}/models`, {
             method: 'GET',
             headers: { ...KK_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function odProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${OD_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...OD_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function baiProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${BAI_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...BAI_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
             signal: AbortSignal.timeout(15000),
         });
         if (r.status === 200) return 'live';
@@ -14156,8 +14957,32 @@ async function kkBalance(target, opts = {}) {
         force: !!opts.force,
     });
 }
+async function odBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'odysseyapi.tech',
+        ccHeaders: OD_CC_HEADERS,
+        usageUrl: 'https://odysseyapi.tech/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(OD_DEFAULT_GRANT, Math.ceil(spent / OD_GRANT_STEP) * OD_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function baiBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'chat.b.ai',
+        ccHeaders: BAI_CC_HEADERS,
+        usageUrl: 'https://chat.b.ai/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(BAI_DEFAULT_GRANT, Math.ceil(spent / BAI_GRANT_STEP) * BAI_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function odApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'odyssey' }); }
+function baiApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'bai' }); }
 
 // ── AIPM util functions ──
 function apLoad() {
@@ -14186,6 +15011,143 @@ function apLoad() {
         return arr;
     } catch { return []; }
 }
+
+// ── UniKey: утилиты пула, ключа, баланса (§1.3-1.6, клон kktoken) ──
+function ukLoad() {
+    try {
+        const raw = fs.readFileSync(UK_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'UniKey');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'uk_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { ukSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function ukSave(arr) {
+    durableWriteJson(UK_SESSIONS_FILE, arr);
+}
+function ukReadActiveModel() {
+    try { return fs.readFileSync(UK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function ukReadActiveKey() {
+    try { return fs.readFileSync(UK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+
+// SSE keepalive proxy для getunikey: второй экземпляр keepalive-proxy.js на :20168.
+// KEY_FILE/MODELMAP_FILE параметризованы env'ом, чтобы не пересекаться с agentrouter
+// :20133 и tabi :20155. UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages.
+async function ukKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(UK_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(UK_KEEPALIVE_PORT),
+                UPSTREAM: UK_UPSTREAM,
+                KEY_FILE: UK_ACTIVE_KEY_FILE,
+                MODELMAP_FILE: UK_MODELMAP_FILE,
+                ...(process.env.UK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.UK_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive UniKey', UK_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`getunikey keepalive proxy spawn: :${UK_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`getunikey keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Пинг ключа: GET /v1/models с CC-заголовками → 200 = LIVE, 401/403 = DEAD.
+// ✅ Проверено 31.08: пустой 403 getunikey на ЭТОТ путь не приходит — 16/16 отдали 200,
+// а битый ключ 8/8 отдал честный 401. То есть живой ключ мёртвым здесь не пометим.
+async function ukProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${UK_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...UK_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+
+// Баланс: usage endpoint у getunikey живёт ПОД /v1 (проверено 31.08:
+// `GET /v1/dashboard/billing/usage` → `{"total_usage": 181.0114}`, центы), в отличие
+// от gorouter, где он на корне. Это только РАСХОД — остатка ключом не отдают вовсе
+// (`/api/user/self` с Bearer от sk → 401, `/v1/credits` → 404). Точная цифра — из
+// /api/user/self куками профиля; резервы (анкер, угадывание) см. newapiBalance.
+async function ukBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'www.getunikey.ai',
+        ccHeaders: UK_CC_HEADERS,
+        usageUrl: 'https://www.getunikey.ai/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(UK_DEFAULT_GRANT, Math.ceil(spent / UK_GRANT_STEP) * UK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+
+function ukApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'getunikey' }); }
+
+// ── AIPM util functions ──
+function apLoad() {
+    try {
+        const raw = fs.readFileSync(AP_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'AIPM');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'uk_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { apSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+
 function apSave(arr) {
     durableWriteJson(AP_SESSIONS_FILE, arr);
 }
@@ -14330,6 +15292,52 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleOdSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = odLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await odProbe(s.api_key); }));
+            }
+            odSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => odApplyBalance(s, await odBalance(s))));
+            }
+            odSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: odReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleBaiSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = baiLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await baiProbe(s.api_key); }));
+            }
+            baiSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => baiApplyBalance(s, await baiBalance(s))));
+            }
+            baiSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: baiReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 
 async function handleKkPing(req, res) {
     try {
@@ -14340,6 +15348,30 @@ async function handleKkPing(req, res) {
         const sessions = kkLoad();
         const target = sessions.find(s => s.api_key === api_key);
         if (target) { target.status = status; kkSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleOdPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await odProbe(api_key);
+        const sessions = odLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; odSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await baiProbe(api_key);
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; baiSave(sessions); }
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14366,13 +15398,73 @@ async function handleKkBalance(req, res) {
         jsonRes(res, 200, await recalc(true));
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = odLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await odBalance(target || { api_key }, { force });
+            if (target) { odApplyBalance(target, bal); odSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('od:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = baiLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await baiBalance(target || { api_key }, { force });
+            if (target) { baiApplyBalance(target, bal); baiSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('bai:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleOdSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'odyssey', load: odLoad, save: odSave, balanceFn: odBalance, applyFn: odApplyBalance });
+}
+function handleBaiSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'bai', load: baiLoad, save: baiSave, balanceFn: baiBalance, applyFn: baiApplyBalance });
+}
 
 const kkLkPids = new Map();
+const odLkPids = new Map();
+const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function odPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function baiPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -14427,6 +15519,112 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleOdSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = odLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = odLkPids.get(label);
+        if (odPidAlive(prevPid)) {
+            logLine(`odyssey session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'odyssey', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('odysseyapi.tech', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`odyssey session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`odyssey session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`odyssey session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            odLkPids.delete(label);
+            logLine(`odyssey session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('od', id);
+        });
+        proc.unref();
+        odLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            odLkPids.delete(label);
+            logLine(`odyssey session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`odyssey session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = baiLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = baiLkPids.get(label);
+        if (baiPidAlive(prevPid)) {
+            logLine(`bai session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'bai', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('chat.b.ai', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`bai session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`bai session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`bai session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            baiLkPids.delete(label);
+            logLine(`bai session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('bai', id);
+        });
+        proc.unref();
+        baiLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            baiLkPids.delete(label);
+            logLine(`bai session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`bai session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14500,6 +15698,108 @@ async function handleKkShare(req, res) {
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = odLkPids.get(label);
+        if (odPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(OD_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [OD_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`odyssey share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'odyssey',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = odB64UrlEncode(JSON.stringify(payload));
+        logLine(`odyssey share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = baiLkPids.get(label);
+        if (baiPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(BAI_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [BAI_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`bai share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'bai',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = baiB64UrlEncode(JSON.stringify(payload));
+        logLine(`bai share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 // POST /__switch/api/kk/import { share } → разобрать строку и добавить аккаунт.
 async function handleKkImport(req, res) {
@@ -14561,6 +15861,124 @@ async function handleKkImport(req, res) {
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(odB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'odyssey' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не odyssey-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = odLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'od_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        odSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(OD_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(OD_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`odyssey import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`odyssey import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(baiB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'bai' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не bai-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = baiLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'bai_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        baiSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(BAI_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(BAI_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`bai import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`bai import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 async function handleKkAdd(req, res) {
     try {
@@ -14592,6 +16010,66 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = odLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'od_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        odSave(sessions);
+        logLine(`odyssey add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = baiLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'bai_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        baiSave(sessions);
+        logLine(`bai add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 // Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
 // в консоли kktoken). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
@@ -14616,6 +16094,54 @@ async function handleKkSetKey(req, res) {
         }
         kkSave(sessions);
         logLine(`kktoken set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleOdSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(OD_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        odSave(sessions);
+        logLine(`odyssey set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(BAI_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        baiSave(sessions);
+        logLine(`bai set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14645,6 +16171,52 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        odSave(sessions);
+        logLine(`odyssey rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        baiSave(sessions);
+        logLine(`bai rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 async function handleKkDelete(req, res) {
     try {
@@ -14659,6 +16231,38 @@ async function handleKkDelete(req, res) {
             try { fs.rmSync(KK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
         }
         logLine(`kktoken delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleOdDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.id === idKey);
+        odSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === odReadActiveKey()) {
+            try { fs.rmSync(OD_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(OD_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`odyssey delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.id === idKey);
+        baiSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === baiReadActiveKey()) {
+            try { fs.rmSync(BAI_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(BAI_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`bai delete: ${target ? target.email : '?'}`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -14719,6 +16323,112 @@ async function handleKkActivate(req, res) {
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в odyssey-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = odLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(OD_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        odSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-od');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = OD_KEEPALIVE_URL;   // keepalive :20170 → odysseyapi.tech напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — odyssey-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const odCurModel = odReadActiveModel() || '';
+            if (odCurModel) settings.model = odCurModel;
+            else { delete settings.model; logLine('odyssey activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из odyssey-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`odyssey activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20170, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const odKa = await keepaliveBring(OD_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!odKa.ok) logLine(`odyssey activate: keepalive :${OD_KEEPALIVE_PORT} НЕ поднялся — ${odKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`odyssey activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${OD_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: odKa.ok, port: OD_KEEPALIVE_PORT, error: odKa.ok ? null : (odKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в bai-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = baiLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(BAI_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        baiSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-bai');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = BAI_KEEPALIVE_URL;   // keepalive :20169 → chat.b.ai напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — bai-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const baiCurModel = baiReadActiveModel() || '';
+            if (baiCurModel) settings.model = baiCurModel;
+            else { delete settings.model; logLine('bai activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из bai-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`bai activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20169, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const baiKa = await keepaliveBring(BAI_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!baiKa.ok) logLine(`bai activate: keepalive :${BAI_KEEPALIVE_PORT} НЕ поднялся — ${baiKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`bai activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${BAI_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: baiKa.ok, port: BAI_KEEPALIVE_PORT, error: baiKa.ok ? null : (baiKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 // Модели: кэш 5 минут, к любому живому ключу.
 async function handleKkModels(req, res) {
@@ -14752,6 +16462,74 @@ async function handleKkModels(req, res) {
         jsonRes(res, 200, { ok: true, models, cached: false });
     } catch (e) {
         if (KK_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: KK_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleOdModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (OD_MODELS_CACHE.data && Date.now() - OD_MODELS_CACHE.ts < OD_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: OD_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${OD_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...OD_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        OD_MODELS_CACHE.data = models;
+        OD_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (OD_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: OD_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleBaiModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (BAI_MODELS_CACHE.data && Date.now() - BAI_MODELS_CACHE.ts < BAI_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: BAI_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${BAI_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...BAI_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        BAI_MODELS_CACHE.data = models;
+        BAI_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (BAI_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: BAI_MODELS_CACHE.data, cached: true, note: e.message });
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
@@ -14789,6 +16567,70 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(OD_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-od-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = OD_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`odyssey set-model: settings.json FAILED: ${e.message}`);
+        }
+        const odKaM = await keepaliveBring(OD_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!odKaM.ok) logLine(`odyssey set-model: keepalive :${OD_KEEPALIVE_PORT} НЕ поднялся — ${odKaM.error || '?'}`);
+        logLine(`odyssey set-model: ${m} (base ${OD_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: OD_ACTIVE_MODEL_FILE, base: OD_KEEPALIVE_URL, needRestart: true, keepalive: { up: odKaM.ok, port: OD_KEEPALIVE_PORT, error: odKaM.ok ? null : (odKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(BAI_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-bai-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = BAI_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`bai set-model: settings.json FAILED: ${e.message}`);
+        }
+        const baiKaM = await keepaliveBring(BAI_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!baiKaM.ok) logLine(`bai set-model: keepalive :${BAI_KEEPALIVE_PORT} НЕ поднялся — ${baiKaM.error || '?'}`);
+        logLine(`bai set-model: ${m} (base ${BAI_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: BAI_ACTIVE_MODEL_FILE, base: BAI_KEEPALIVE_URL, needRestart: true, keepalive: { up: baiKaM.ok, port: BAI_KEEPALIVE_PORT, error: baiKaM.ok ? null : (baiKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 // Настраиваемый маппинг claude-тиров → kktoken-модели (как в Custom). Живёт в сессиях.
 // 🪤 Единственный писатель тир-карты — эта ручка. Файл руками не править.
@@ -14804,6 +16646,30 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleOdModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(OD_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`odyssey modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBaiModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(BAI_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`bai modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 
 function kkReadModelMap() {
     try {
@@ -14811,6 +16677,525 @@ function kkReadModelMap() {
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
+function odReadModelMap() {
+    try {
+        const raw = fs.readFileSync(OD_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function baiReadModelMap() {
+    try {
+        const raw = fs.readFileSync(BAI_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
+// ── UniKey: хендлеры вкладки (§1.7, клон kktoken) ──
+async function handleUkSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = ukLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await ukProbe(s.api_key); }));
+            }
+            ukSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => ukApplyBalance(s, await ukBalance(s))));
+            }
+            ukSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: ukReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+
+async function handleUkPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await ukProbe(api_key);
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; ukSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleUkBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = ukLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await ukBalance(target || { api_key }, { force });
+            if (target) { ukApplyBalance(target, bal); ukSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('uk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleUkSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'getunikey', load: ukLoad, save: ukSave, balanceFn: ukBalance, applyFn: ukApplyBalance });
+}
+
+const ukLkPids = new Map();
+function ukPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function handleUkSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ukLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = ukLkPids.get(label);
+        if (ukPidAlive(prevPid)) {
+            logLine(`getunikey session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'getunikey', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('www.getunikey.ai', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`getunikey session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`getunikey session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`getunikey session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            ukLkPids.delete(label);
+            logLine(`getunikey session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('uk', id);
+        });
+        proc.unref();
+        ukLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            ukLkPids.delete(label);
+            logLine(`getunikey session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`getunikey session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── UniKey: share/import (передать аккаунт другу и принять чужой) ────────
+// Формат: base64url(JSON { v:1, provider:'getunikey', email, name, api_key,
+// meta:{grant,bonus,spent,balance,status,…}, session:{cookies,origins} }).
+// «Живая» часть (GitHub + getunikey) — storageState
+// из getunikey/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
+
+const UK_SHARE_SCRIPT = path.join(__dirname, '..', 'getunikey', 'share-session.js');
+const UK_SESSIONS_DIR = path.join(__dirname, '..', 'getunikey', 'sessions');
+
+function ukB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function ukB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+// POST /__switch/api/uk/share { id } → снять storageState профиля и собрать строку.
+async function handleUkShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = ukLkPids.get(label);
+        if (ukPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(UK_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [UK_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`getunikey share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'getunikey',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = ukB64UrlEncode(JSON.stringify(payload));
+        logLine(`getunikey share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/uk/import { share } → разобрать строку и добавить аккаунт.
+async function handleUkImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(ukB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'getunikey' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не getunikey-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = ukLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'uk_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        ukSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(UK_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(UK_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`getunikey import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`getunikey import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleUkAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = ukLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'uk_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        ukSave(sessions);
+        logLine(`getunikey add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Сменить/вписать API-ключ у существующего аккаунта (после того, как ключ взят
+// в консоли getunikey). Аккаунт остаётся тем же — id и браузерный профиль не трогаем.
+async function handleUkSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(UK_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        ukSave(sessions);
+        logLine(`getunikey set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Переименовать аккаунт (подпись) — меняем name и/или email. id и профиль браузера
+// не трогаем, поэтому привязка профиля/сессии сохраняется.
+async function handleUkRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        ukSave(sessions);
+        logLine(`getunikey rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+async function handleUkDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.id === idKey);
+        ukSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === ukReadActiveKey()) {
+            try { fs.rmSync(UK_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(UK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`getunikey delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Активация ЧЕРЕЗ keepalive :20168, а не прямым baseUrl: шлюз Anthropic-совместим
+// нативно, но каждый четвёртый его ответ — пустой 403, и без ретраев keepalive это
+// доехало бы до Claude Code как отказ. `/v1` дописывает сам keepalive.
+async function handleUkActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в getunikey-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = ukLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(UK_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        ukSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-uk');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = UK_KEEPALIVE_URL;   // keepalive :20168 → www.getunikey.ai напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — getunikey-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const ukCurModel = ukReadActiveModel() || '';
+            if (ukCurModel) settings.model = ukCurModel;
+            else { delete settings.model; logLine('getunikey activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из getunikey-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`getunikey activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20168, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const ukKa = await keepaliveBring(UK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!ukKa.ok) logLine(`getunikey activate: keepalive :${UK_KEEPALIVE_PORT} НЕ поднялся — ${ukKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`getunikey activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${UK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: ukKa.ok, port: UK_KEEPALIVE_PORT, error: ukKa.ok ? null : (ukKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Модели: кэш 5 минут, к любому живому ключу.
+async function handleUkModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (UK_MODELS_CACHE.data && Date.now() - UK_MODELS_CACHE.ts < UK_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: UK_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${UK_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...UK_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        UK_MODELS_CACHE.data = models;
+        UK_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (UK_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: UK_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+
+// Сменить активную модель: пишет getunikey-active-model.txt + settings.model (+ env модели).
+async function handleUkSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(UK_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-uk-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = UK_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`getunikey set-model: settings.json FAILED: ${e.message}`);
+        }
+        const ukKaM = await keepaliveBring(UK_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!ukKaM.ok) logLine(`getunikey set-model: keepalive :${UK_KEEPALIVE_PORT} НЕ поднялся — ${ukKaM.error || '?'}`);
+        logLine(`getunikey set-model: ${m} (base ${UK_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: UK_ACTIVE_MODEL_FILE, base: UK_KEEPALIVE_URL, needRestart: true, keepalive: { up: ukKaM.ok, port: UK_KEEPALIVE_PORT, error: ukKaM.ok ? null : (ukKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Настраиваемый маппинг claude-тиров → getunikey-модели (как в Custom). Живёт в сессиях.
+// 🪤 Единственный писатель тир-карты — эта ручка. Файл руками не править.
+async function handleUkModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(UK_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`getunikey modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function ukReadModelMap() {
+    try {
+        const raw = fs.readFileSync(UK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+
 
 // ═══════════════════════════════════ AIPM HANDLERS ═══════════════════════════════════
 async function handleApSessions(req, res) {
@@ -16440,8 +18825,104 @@ function handleAkProxyPool(_req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
+// ─────────────── вкладка «Свои прокси» ───────────────
+//
+// Логика операций живёт в `lib/proxy-admin.js`, здесь только HTTP. Такое разделение -
+// не вкусовщина: ручки нужны и дашборду, и регрессу, а регресс не должен поднимать
+// `:8200`, чтобы проверить, что сохранение списка не потеряло пароли.
+//
+// 🔴 Модуль грузим ЛЕНИВО и терпим его отсутствие. Файл правят параллельно, и требование
+// к этой правке прямое: недописанный соседний модуль не имеет права уронить дашборд,
+// который обслуживает весь флот. Нет модуля - ручки честно отвечают 503, остальное
+// работает как работало.
+function proxyAdminLib() {
+    try { return require('./lib/proxy-admin'); }
+    catch (e) { logLine(`proxy-admin недоступен: ${e.message}`); return null; }
+}
 
-// Состояние поиска прокси. Поиск идёт минуты, поэтому он НЕ держит HTTP-ответ: запуск
+function proxyAdminUnavailable(res, what) {
+    return jsonRes(res, 503, { error: `вкладка «Свои прокси» недоступна (${what}): lib/proxy-admin.js не загрузился` });
+}
+
+// GET /__switch/api/proxies/state — ярусы, раскладка по аккаунтам, осиротевшие.
+//
+// 🪤 Ответ НЕ содержит кредов: у прокси владельца есть логин и пароль, и наружу уходит
+// только `label`/`id`, которые их не несут. Поле `raw` из пула сюда не попадает никогда.
+function handleProxiesState(_req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'state');
+    try { jsonRes(res, 200, lib.state()); }
+    catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/proxies/own { text } → сохранить свой список.
+function handleProxiesOwn(req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'own');
+    readJsonBody(req, 256 * 1024).then(body => {
+        // 🪤 `readJsonBody` отдаёт УЖЕ РАЗОБРАННЫЙ объект (см. её `resolve(JSON.parse(body))`),
+        // а не строку, как можно решить по имени. Лишний `JSON.parse` здесь давал
+        // `JSON.parse("[object Object]")` → 400 «тело не JSON», и это убивало ВСЕ четыре
+        // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
+        // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
+        const doc = body || {};
+        const out = lib.saveOwn(doc.text);
+        jsonRes(res, out.ok ? 200 : 400, out);
+    }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
+}
+
+// POST /__switch/api/proxies/check { host? } → preflight по своим прокси.
+// Прогон сетевой и с паузами, поэтому отвечает не мгновенно: прокси проверяются
+// пачками по четыре, и пачка своих адресов укладывается в считанные секунды.
+function handleProxiesCheck(req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'check');
+    readJsonBody(req, 64 * 1024).then(async body => {
+        // 🪤 `readJsonBody` отдаёт УЖЕ РАЗОБРАННЫЙ объект (см. её `resolve(JSON.parse(body))`),
+        // а не строку, как можно решить по имени. Лишний `JSON.parse` здесь давал
+        // `JSON.parse("[object Object]")` → 400 «тело не JSON», и это убивало ВСЕ четыре
+        // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
+        // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
+        const doc = body || {};
+        jsonRes(res, 200, await lib.checkOwn({ host: doc.host || null }));
+    }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
+}
+
+// POST /__switch/api/proxies/rebalance { dryRun?, host? }
+//
+// 🪤 Без `dryRun: false` работает как ПРЕДПРОСМОТР. Ребаланс двигает привязки живых
+// аккаунтов, а смена IP у аккаунта с сессией заметнее антифроду панели, чем пропущенный
+// чек. Поэтому применение - только по явному флагу, а не «по умолчанию сделаем».
+function handleProxiesRebalance(req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'rebalance');
+    readJsonBody(req, 64 * 1024).then(body => {
+        // 🪤 `readJsonBody` отдаёт УЖЕ РАЗОБРАННЫЙ объект (см. её `resolve(JSON.parse(body))`),
+        // а не строку, как можно решить по имени. Лишний `JSON.parse` здесь давал
+        // `JSON.parse("[object Object]")` → 400 «тело не JSON», и это убивало ВСЕ четыре
+        // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
+        // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
+        const doc = body || {};
+        const out = lib.rebalance({ dryRun: doc.dryRun !== false, host: doc.host || null });
+        jsonRes(res, out.ok ? 200 : 500, out);
+    }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
+}
+
+// POST /__switch/api/proxies/assign { key, proxyId?, release? }
+function handleProxiesAssign(req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'assign');
+    readJsonBody(req, 64 * 1024).then(body => {
+        // 🪤 `readJsonBody` отдаёт УЖЕ РАЗОБРАННЫЙ объект (см. её `resolve(JSON.parse(body))`),
+        // а не строку, как можно решить по имени. Лишний `JSON.parse` здесь давал
+        // `JSON.parse("[object Object]")` → 400 «тело не JSON», и это убивало ВСЕ четыре
+        // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
+        // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
+        const doc = body || {};
+        const out = doc.release ? lib.unassign({ key: doc.key }) : lib.assign({ key: doc.key, proxyId: doc.proxyId || null });
+        jsonRes(res, out.ok ? 200 : 400, out);
+    }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
+}
 // возвращает управление сразу, а прогресс фронт забирает опросом. Иначе кнопка «ищу…»
 // висела бы всё время поиска без единой цифры — и прервать его было бы нечем.
 const akFindProxy = {
@@ -20714,6 +23195,9 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [OD_KEEPALIVE_PORT]: { name: 'Odyssey', spawn: odKeepaliveSpawn },
+        [BAI_KEEPALIVE_PORT]: { name: 'B.AI', spawn: baiKeepaliveSpawn },
+        [UK_KEEPALIVE_PORT]: { name: 'UniKey', spawn: ukKeepaliveSpawn },
         [AP_KEEPALIVE_PORT]: { name: 'AIPM', spawn: apKeepaliveSpawn },
         [HN_KEEPALIVE_PORT]: { name: 'HCNsec', spawn: hnKeepaliveSpawn },
         [AK_KEEPALIVE_PORT]: { name: 'AIKeysAPI', spawn: akKeepaliveSpawn },
@@ -22121,6 +24605,9 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    od: { tag: 'odyssey',     label: 'Odyssey',     host: 'odysseyapi.tech',     keyFile: OD_ACTIVE_KEY_FILE, load: odLoad, save: odSave, balanceFn: odBalance, applyFn: odApplyBalance },
+    bai: { tag: 'bai',     label: 'B.AI',     host: 'chat.b.ai',     keyFile: BAI_ACTIVE_KEY_FILE, load: baiLoad, save: baiSave, balanceFn: baiBalance, applyFn: baiApplyBalance },
+    uk: { tag: 'getunikey',     label: 'UniKey',     host: 'www.getunikey.ai',     keyFile: UK_ACTIVE_KEY_FILE, load: ukLoad, save: ukSave, balanceFn: ukBalance, applyFn: ukApplyBalance },
     ap: { tag: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online', keyFile: AP_ACTIVE_KEY_FILE, load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance, minBal: 0.10 },
     // 🪤 У hcnsec host — ХОСТ ПАНЕЛИ целиком, `api.hcnsec.cn` (поддомен обязателен).
     // Эту же строку keepalive-proxy ищет в GW_BY_HOST по Host апстрима — байт в байт.
@@ -22801,6 +25288,41 @@ const server = http.createServer((req, res) => {
             try {
                 const j = JSON.parse(body || '{}');
                 const r = routeWriteTier(String(j.provider || ''), String(j.tier || ''), j.value);
+                jsonRes(res, r.ok ? 200 : 400, r);
+            } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
+        });
+        return;
+    }
+
+    // POST /__switch/api/routes/pool-drop {provider, model, fallback} — опустить тир-карту
+    // провайдера на фолбэк: пул наливки пуст, Claude/GPT отдают
+    // `402 Budget pool quota has been exhausted`. Дёргает keepalive, когда сам поймал 402
+    // (best-effort — не ответил дашборд, фича продолжает работать в памяти процесса).
+    // Имя модели для человека и в теле, и в ответе — `model`/`deadModel`.
+    if (req.method === 'POST' && req.url === '/__switch/api/routes/pool-drop') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const j = JSON.parse(body || '{}');
+                const r = poolDropTiers(String(j.provider || ''), String(j.model || j.deadModel || ''), j.fallback);
+                jsonRes(res, r.ok ? 200 : 400, r);
+            } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
+        });
+        return;
+    }
+
+    // POST /__switch/api/routes/pool-restore {provider} — вернуть тир-карты из бэкапов.
+    // Отдельной кнопки в UI нет намеренно: штатный путь возврата — «Проверить квоту»
+    // (см. `handleArQuotaCheck`), она делает ровно это, когда проба показала «пул налит».
+    // Ручка нужна для возврата руками, если дашборд лежал в момент наливки.
+    if (req.method === 'POST' && req.url === '/__switch/api/routes/pool-restore') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const j = JSON.parse(body || '{}');
+                const r = poolRestoreTiers(String(j.provider || ''));
                 jsonRes(res, r.ok ? 200 : 400, r);
             } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
         });
@@ -23624,8 +26146,13 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/sessions')) return handleArSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/ping'))     return handleArPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ar/balance'))  return handleArBalance(req, res);
-    if (req.method === 'POST' && req.url === '/__switch/api/ar/quota-check') return handleArQuotaCheck(req, res);
-    if (req.method === 'GET'  && req.url === '/__switch/api/ar/quota-state') return handleArQuotaState(req, res);
+    // 🪤 Сравнение по URL БЕЗ строки запроса: ручка документирует полосу как `?pool=` в
+    // URL, а `req.url === '/путь'` такой запрос не матчит — выходил 404 «роут не найден»
+    // на форме, которую сам же код и обещает. Фронт полосу присылает телом, поэтому
+    // ошибка не всплывала, пока кто-то не дёрнул ручку вручную.
+    const arPath = req.url.split('?')[0];
+    if (req.method === 'POST' && arPath === '/__switch/api/ar/quota-check') return handleArQuotaCheck(req, res);
+    if (req.method === 'GET'  && arPath === '/__switch/api/ar/quota-state') return handleArQuotaState(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);
@@ -23694,8 +26221,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/od/keepalive/state')  return keepaliveOd.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/bai/keepalive/state')  return keepaliveBai.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/keepalive/config') return keepaliveOd.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/keepalive/config') return keepaliveBai.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/keepalive/config') return keepaliveUk.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ap/keepalive/config') return keepaliveAp.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/hn/keepalive/state')  return keepaliveHn.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/hn/keepalive/config') return keepaliveHn.config(req, res);
@@ -23716,6 +26249,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/keepalive/latency')) return keepaliveOd.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/keepalive/latency')) return keepaliveBai.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/keepalive/latency')) return keepaliveUk.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/keepalive/latency')) return keepaliveAp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/hn/keepalive/latency')) return keepaliveHn.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/keepalive/latency')) return keepaliveAk.latency(req, res);
@@ -23762,23 +26298,71 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/sessions')) return handleOdSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/ping'))     return handleOdPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/balance'))  return handleOdBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/models'))   return handleOdModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/od/active-model') return jsonRes(res, 200, { model: odReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/od/modelmap') return jsonRes(res, 200, { ok: true, modelMap: odReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/add')       return handleOdAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/key')       return handleOdSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/rename')    return handleOdRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/delete')    return handleOdDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/activate')  return handleOdActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/set-model') return handleOdSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/set-balance') return handleOdSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/session/open') return handleOdSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/share')    return handleOdShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/od/import')   return handleOdImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bai/import')   return handleBaiImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uk/import')   return handleUkImport(req, res);
     // ── AIPM (десятая вкладка) — те же 22 роута, что у kk ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/sessions')) return handleApSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ap/ping'))     return handleApPing(req, res);
@@ -23840,6 +26424,13 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/refill') return handleAkRefillState(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-lines') return handleAkProxyPoolLines(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-pool') return handleAkProxyPool(req, res);
+    // Вкладка «Свои прокси». Путь общий, без префикса панели: свой пул обслуживает все
+    // шлюзы сразу, в отличие от ak/rm-ручек, которые показывают пул глазами одной панели.
+    if (req.method === 'GET'  && req.url === '/__switch/api/proxies/state')     return handleProxiesState(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/proxies/own')       return handleProxiesOwn(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/proxies/check')     return handleProxiesCheck(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/proxies/rebalance') return handleProxiesRebalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/proxies/assign')    return handleProxiesAssign(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/ping'))     return handleAkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/balance'))  return handleAkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ak/models'))   return handleAkModels(req, res);
@@ -24683,13 +27274,22 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
             }
             const file = path.join(__dirname, 'vendor', ...parts.map(p => path.basename(p)));
             const body = fs.readFileSync(file);
-            // Файлы вкладки «Модели» правятся прямо сейчас, а `immutable` на год браузер
-            // чтит и при Ctrl+Shift+R — правка не была бы видна вообще, никакой перезагрузкой.
-            const fresh = parts[parts.length - 1].startsWith('models-tab');
+            // Файлы вкладок, которые правятся ПРЯМО СЕЙЧАС, отдаём без долгого кеша:
+            // `immutable` на год браузер чтит и при Ctrl+Shift+R — правка не была бы видна
+            // вообще, никакой перезагрузкой.
+            //
+            // 🪤 Список ведётся вручную, и забыть в нём файл - тихий дефект: правки уезжают
+            // на диск, сервер их отдаёт, а в браузере остаётся старая копия. Так вышло с
+            // вкладкой «Свои прокси»: её `proxies-tab.js` и `.css` попали в исключение не
+            // сразу, и сделанное в них было не проверить перезагрузкой. Дописывая вкладку
+            // с внешними файлами - дописывай сюда её префикс.
+            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab'];
+            const name = parts[parts.length - 1];
+            const fresh = FRESH_PREFIXES.some(p => name.startsWith(p));
             res.writeHead(200, {
                 'Content-Type': VENDOR_MIME[ext],
-                // Файлы версионированы именем и меняются только руками — кешируем надолго,
-                // иначе смысл локальной копии теряется на каждом Ctrl+Shift+R.
+                // Остальное версионировано именем и меняется только руками — кешируем
+                // надолго, иначе смысл локальной копии теряется на каждом Ctrl+Shift+R.
                 'Cache-Control': fresh ? 'no-cache, must-revalidate' : 'public, max-age=31536000, immutable',
             });
             return res.end(body);

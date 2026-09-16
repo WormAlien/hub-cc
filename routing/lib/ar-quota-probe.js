@@ -1,10 +1,65 @@
 'use strict';
 
+// Тело пробы. `max_tokens` НЕ равен 1 намеренно: gpt-6-astra отвергает крошечный потолок
+// вывода («Could not finish the message because max_tokens or model output limit was
+// reached») и отвечает 400 — а классификатор читает это как `error`, и кнопка «Проверить
+// GPT» падала вместо ответа. Ровно та же грабля, что чинилась полом 16 в конвертере
+// (`agentrouter-proxy.js`), но здесь пол конвертера не работает: проба идёт СВОИМ
+// запросом прямо на agentrouter.org, минуя конвертер.
+//
+// 16 выбрано не «на глаз»: это минимальное значение, которое Astra принимает (проверено
+// пробой 15.09). Потолок на ответ не влияет — пробе важен только код состояния, а не текст.
+//
+// Для claude-* пол безвреден: там max_tokens=1 работал, но 16 работает так же.
 const AR_QUOTA_BODY = Object.freeze({
     model: 'claude-opus-5',
-    max_tokens: 1,
+    max_tokens: 16,
     messages: [{ role: 'user', content: '1' }],
 });
+
+// ── Полос две, и они РАЗНЫЕ ──────────────────────────────────────────────────
+// agentrouter наливает Claude и GPT одновременно (партии одни и те же), но
+// кончаются они по отдельности: 15.09 в 04:52 пул Opus был пуст, а GPT ещё
+// отдавался. Поэтому состояние ведётся на полосу, а не на аккаунт.
+// Имя модели НЕ угадывается: у AgentRouter это ровно то, что перечислено в
+// /v1/models; для gpt это `gpt-6-astra`.
+const AR_QUOTA_POOLS = Object.freeze({
+    opus: 'claude-opus-5',
+    gpt: 'gpt-6-astra',
+});
+const AR_QUOTA_DEFAULT_POOL = 'opus';
+
+// Полоса по имени модели. `null` = модель беспуловая (deepseek-*, glm-*): она
+// пулу не подчинена, и записывать ей состояние квоты нечего.
+function arQuotaPoolForModel(id) {
+    const s = String(id || '');
+    if (/^claude[-_]/i.test(s)) return 'opus';
+    if (/^gpt[-_]/i.test(s)) return 'gpt';
+    return null;
+}
+
+// Тело пробы для полосы. Одна и та же проба на обеих полосах проверяла бы Opus
+// дважды и врала про GPT — поэтому модель берётся из таблицы, а не из константы.
+function arQuotaBodyFor(pool) {
+    const model = AR_QUOTA_POOLS[pool];
+    return model ? { ...AR_QUOTA_BODY, model } : { ...AR_QUOTA_BODY };
+}
+
+// Файл состояния — плоский словарь по полосам: `{"opus":{…},"gpt":{…}}`.
+// 🪤 Формат v1 (одна запись без ключей полос) обязан читаться как запись opus:
+// он лежит на диске у всех, кто обновляется, и «после апдейта квота пропала»
+// выглядело бы поломкой.
+function arQuotaReadPools(raw) {
+    let doc = null;
+    try { doc = JSON.parse(raw); } catch { return {}; }
+    if (!doc || typeof doc !== 'object') return {};
+    const out = {};
+    for (const p of Object.keys(AR_QUOTA_POOLS)) {
+        if (doc[p] && typeof doc[p] === 'object') out[p] = doc[p];
+    }
+    if (!out.opus && doc.state) out.opus = doc;   // v1 = запись opus
+    return out;
+}
 
 // ── Сетка партий: та же, что у циферблата (03/11/19 МСК = 16:00 UTC + 8 ч) ──
 // Дублировать её здесь, а не импортировать из HTML, приходится потому, что часы —
@@ -84,6 +139,11 @@ function classifyArQuotaProbe(status, rawBody) {
 
 module.exports = {
     AR_QUOTA_BODY,
+    AR_QUOTA_POOLS,
+    AR_QUOTA_DEFAULT_POOL,
+    arQuotaPoolForModel,
+    arQuotaBodyFor,
+    arQuotaReadPools,
     AR_QUOTA_CYCLE_MS,
     AR_QUOTA_ANCHOR_MS,
     classifyArQuotaProbe,

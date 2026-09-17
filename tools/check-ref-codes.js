@@ -38,7 +38,23 @@ let rc = null;
 try { rc = require(path.join(ROOT, 'routing', 'lib', 'ref-codes.js')); } catch (e) { /* ниже */ }
 chk(!!rc, 'модуль загружается', rc ? '' : 'require упал');
 if (rc) {
-    chk(rc.PROVIDERS.length === 11, 'провайдеров одиннадцать', 'нашлось ' + rc.PROVIDERS.length);
+    // 🪤 Здесь стояли магические числа («одиннадцать», «восемь») — и сгнили: набор рос с
+    // каждым новым шлюзом (getunikey, bai, nova…), проверка краснела на ровном месте и уже
+    // не отличала «список разъехался» от «список вырос». Держим СПИСОК имён, а не счётчик:
+    // добавление шлюза видно как «нет в списке у теста», а расхождение печатается по именам.
+    const LIVE = ['agentrouter', 'gorouter', 'hcnsec', 'justwoker', 'kktoken', 'nova', 'bai',
+        'getunikey', 'aikeysapi', 'aipm', 'wisdomsatan', 'tabi', 'tuzi'];
+    const LEGACY = ['seekai', 'truesota', 'xpeach'];
+    const diff = (got, want) => 'лишние: ' + got.filter((p) => !want.includes(p)).join(', ')
+        + ' | пропали: ' + want.filter((p) => !got.includes(p)).join(', ');
+    const live = [...(rc.ACTIVE_PROVIDERS || [])].sort();
+    const liveWant = [...LIVE].sort();
+    chk(JSON.stringify(live) === JSON.stringify(liveWant),
+        `живой набор — ровно ${liveWant.length} шлюзов (${LIVE.join('/')})`, diff(live, liveWant));
+    const all = [...(rc.PROVIDERS || [])].sort();
+    const allWant = [...LIVE, ...LEGACY].sort();
+    chk(JSON.stringify(all) === JSON.stringify(allWant),
+        `провайдеров ${allWant.length} — живые плюс легаси (${LEGACY.join('/')})`, diff(all, allWant));
     for (const p of Object.keys(WAS)) {
         chk(rc.PROVIDERS.includes(p), 'провайдер ' + p + ' в списке');
         chk(rc.url(p) === WAS[p], 'url(' + p + ') совпадает с прежним хардкодом', rc.url(p));
@@ -56,8 +72,6 @@ if (rc) {
         'SeekAi НЕ в живом наборе — легаси с 24.08');
     chk(rc.ACTIVE_PROVIDERS && !rc.ACTIVE_PROVIDERS.includes('truesota'),
         'TrueSOTA НЕ в живом наборе — легаси с 05.09 (шлюз рабочий, но узкий: opus-only)');
-    chk(rc.ACTIVE_PROVIDERS && rc.ACTIVE_PROVIDERS.length === 8,
-        'живых провайдеров восемь (ar/go/jw/tb/kktoken/hcnsec/aipm/wisdomsatan)', 'нашлось ' + (rc.ACTIVE_PROVIDERS || []).length);
     // TrueSOTA заведён 2026-08-25 БЕЗ дефолтного кода: аккаунта на шлюзе ещё не было.
     // Поэтому url() обязан отдавать корень, а не ссылку с пустым `aff=` — иначе панель
     // примет битый параметр за код, и реф-кредит потеряется вообще (см. ref-codes.js § url).

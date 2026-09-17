@@ -4,14 +4,14 @@
     "Токены подстановки: %p% short (kk) · %P% UPPER (KK) · %x% Kk (для handleKk) · %full% (kktoken)",
     "%NAME% (KKtoken) · %HOST% · %PORT% · %FOLDER% · %ICON% · %COLOR% · %REF%",
     "",
-    "kind:",
-    "  must      — строка обязана присутствовать",
-    "  must-not  — строки быть НЕ должно (ловит клоны-дубли, грабли #19)",
-    "  absent    — ослабление: точки нет намеренно (например GitHub-пул у шлюза без GitHub-входа)",
-    "  file      — файл обязан существовать",
+    "kind (исполняются кодом; набор сверяет check-add-gateway.js с исходником):",
+    "  must           — строка обязана присутствовать",
+    "  must-any       — достаточно ЛЮБОГО из вариантов any (константа порта живёт в двух формах)",
+    "  must-not-count — счётчик: max (дубли, грабля 19) и expectMin (ровно одна такая строка)",
+    "  file           — файл обязан существовать",
     "",
     "when — условие применимости по флагам конфига шлюза (github / ref / flatRate / anthropic).",
-    "Точка с when, чьё условие ложно, становится absent и в отчёт попадает как ожидаемое ослабление.",
+    "Ослабление — не kind, а РЕЗУЛЬТАТ when: точка с ложным флагом уходит в «ослабления» отчёта.",
     "",
     "Файлы, которых нет в files, проверяются относительно корня проекта."
   ],
@@ -141,7 +141,13 @@
     { "id": "4.4",    "title": "Тик автоперечитки вкладки", "file": "frontend", "kind": "must", "expect": "case '%full%':" },
     { "id": "4.5",    "title": "COLORS вкладки", "file": "frontend", "kind": "must", "expect": "%full%: 'text-%COLOR% bg-%COLOR%',", "within": "const COLORS = {" },
     { "id": "4.6",    "title": "NEWAPI_RERENDER вкладки", "file": "frontend", "kind": "must", "expect": "%p%: () => render%x%(),", "within": "const NEWAPI_RERENDER = {" },
-    { "id": "4.7",    "title": "check-hub: ожидаемый список вкладок", "file": "tools/check-hub.js", "kind": "must", "expect": "'%full%',", "within": "const want = [" }
+    { "id": "4.7",    "title": "check-hub: ожидаемый список вкладок", "file": "tools/check-hub.js", "kind": "must", "expect": "'%full%',", "within": "const want = [" },
+
+    { "id": "1.8k",   "title": "Реестр ghLkPidsByTag (карты pid по тегу)", "file": "backend", "kind": "must", "expect": "%p%: %p%LkPids", "within": "function ghLkPidsByTag", "when": ["github"] },
+    { "id": "2.15",   "title": "Фронт: NEWAPI_SEED_PROV (модалка GitHub)", "file": "frontend", "kind": "must", "expect": "%p%: { label: '%NAME%',", "when": ["github"] },
+    { "id": "2.16",   "title": "Фронт: ghAddPick (выбор GitHub в форме)", "file": "frontend", "kind": "must", "expect": "%p%: null", "within": "const ghAddPick", "when": ["github"] },
+    { "id": "2.17",   "title": "Фронт: карта тег → полное имя (GitHub-usage)", "file": "frontend", "kind": "must", "expect": "%p%: '%full%'", "when": ["github"] },
+    { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" }
   ],
 
   "_source": "kktoken",
@@ -247,6 +253,12 @@
     "4.4":   {},
     "4.5":   { "mode": "inline", "find": "%full%: 'text-%COLOR% bg-%COLOR%',", "add": " %full%: 'text-%COLOR% bg-%COLOR%'," },
     "4.6":   { "mode": "inline", "find": "%p%: () => render%x%(),", "add": " %p%: () => render%x%()," },
-    "4.7":   { "mode": "inline", "find": "'%full%',", "add": " '%full%'," }
+    "4.7":   { "mode": "inline", "find": "'%full%',", "add": " '%full%'," },
+
+    "1.8k":  { "mode": "inline", "find": "%p%: %p%LkPids", "add": ", %p%: %p%LkPids" },
+    "2.15":  {},
+    "2.16":  { "mode": "inline", "find": "%p%: null", "add": ", %p%: null" },
+    "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },
+    "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" }
   }
 }

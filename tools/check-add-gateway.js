@@ -10,7 +10,7 @@
  * ломается незакрытый токен `%p:` в спеке: строка не подставится никогда, точка навсегда
  * «пропущена», и дефект выглядит как недоделанный шлюз.
  *
- * Чекер вкладок умеет ошибаться пятью способами, и на каждый здесь свой блок:
+ * Чекер вкладок умеет ошибаться восемью способами, и на каждый здесь свой блок:
  *   1. спека невалидна (опечатка в id / kind / file) — точка молча не проверяется НИКОГДА;
  *   2. токен написан неверно или неизвестен инструменту — строка не подставляется, и точка
  *      всегда «пропущена»; пустой токен (`%ICON%` у шлюза без иконки) даёт обратный эффект —
@@ -18,11 +18,19 @@
  *   3. эталон (kktoken) перестал давать 100% — сломана спека ИЛИ инструмент;
  *   4. файл из спеки не существует — инструмент пишет «нет файла», хотя виноват не шлюз;
  *   5. `when`-флаг, которого нет в конфиге шлюза, читается как false: точка молча уходит в
- *      «ослабления», и выглядит это как честное ослабление.
+ *      «ослабления», и выглядит это как честное ослабление;
+ *   6. `apply` умеет писать — и обязан делать это ТОЛЬКО по `--write`: сухой прогон,
+ *      тронувший файл, ломает живой дашборд молча (блок 6, проба по sha1);
+ *   7. регион эталона несёт артефакты соседа — клон размножает чужую поломку; на nova
+ *      так уехал целый блок констант Odyssey, а запись `$perPort` размножила матрёшку
+ *      (блок 7: `codeArtifacts` и `nestedEntries`, плюс реплей обоих дефектов);
+ *   8. РЕЕСТР ЕСТЬ, А ТОЧКИ ПОД НЕГО НЕТ — вкладка выходит «рабочая, но одна кнопка молчит»:
+ *      так вышло с `NEWAPI_SEED_PROV` («GitHub: неизвестный шлюз nv»), а сканом нашлись ещё
+ *      четыре таких реестра (блок 8).
  *
  * 🪤 Почему здесь не только проверки спеки, но и прогон инструмента. Спека может быть
  * идеальной, а `checkPoint` — перестать сравнивать строки (рефакторинг, лишний `subst`,
- * сменившийся порядок замен). Тогда все 93 точки разом «на месте», и это самый опасный вид
+ * сменившийся порядок замен). Тогда все точки разом «на месте», и это самый опасный вид
  * зелёного. Поэтому эталон прогоняется по-настоящему, и его цифры сверяются с независимым
  * пересчётом этого файла: сколько точек обязано быть ослаблено по флагам kktoken, столько
  * инструмент и обязан назвать. Счётчики при этом разбираются из вывода, а не из кода.
@@ -37,6 +45,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const REPO = path.join(__dirname, '..');
@@ -73,6 +82,9 @@ if (!specSrc || !configSrc || !toolSrc) {
 const spec = JSON.parse(specSrc);
 const config = JSON.parse(configSrc);
 const GW_NAMES = Object.keys(config).filter((k) => !k.startsWith('_'));
+
+// Шлюз-эталон: обязана давать ПОЛНО `check`, и на его живых строках проверяются сторожа.
+const REF = 'kktoken';
 
 // ── подстановка: копия `subst` из инструмента ────────────────────────────────
 // Порядок замен сохранён (`%p%` → `%x%` → `%P%` …): инструмент заменяет именно так, и
@@ -287,7 +299,6 @@ section('прогон `add-gateway.js check` · эталон и остальны
     const expectAbsent = (gw) => (spec.points || []).filter((p) => isAbsent(p, gw)).map((p) => p.id).sort();
     const dump = (out) => console.log(out.split('\n').slice(-8).map((l) => `      ${l}`).join('\n'));
 
-    const REF = 'kktoken';
     check(!!config[REF], `шлюз-эталон «${REF}» есть в конфиге`);
     const refRun = run(REF);
     const ref = parse(refRun.out);
@@ -401,11 +412,29 @@ section('when · флаги условий');
 // ── 6. контракт самого инструмента ────────────────────────────────────────────
 section('add-gateway.js · контракт');
 {
-    // `check` обязан только читать: регресс гоняют на живой машине, рядом с дашбордом и
-    // профилями браузеров. Появится `apply` (правка) — снять это утверждение осознанно,
-    // вместе с шапкой файла, а не «закомментировать на минутку».
-    const writes = ['writeFileSync', 'appendFileSync', 'rmSync', 'unlinkSync', 'mkdirSync', 'rmdirSync'].filter((f) => toolSrc.includes(f));
-    check(writes.length === 0, `check работает только на чтение${writes.length ? ' — найден вызов на запись: ' + writes.join(', ') : ''}`);
+    // 🪤 До 17.09 здесь стояло «check работает только на чтение», и это утверждение было из
+    // версии ДО `apply`: инструмент уже умел писать по флагу `--write`, а тест падал (58/59)
+    // и ждал починки — «снять это утверждение осознанно, а не закомментировать на минутку».
+    // Замена сильнее прежней: проверяется ПОВЕДЕНИЕ, а не наличие строк в исходнике —
+    // сухой прогон на шлюзе, который реально собирается вставлять 90+ блоков, не смеет
+    // тронуть ни один файл. Проба идёт по fluxnat: вкладки у него нет, вставлять есть что,
+    // ломать нечего.
+    const hashOf = (rel) => crypto.createHash('sha1').update(fs.readFileSync(path.join(REPO, rel))).digest('hex');
+    const touched = new Set();
+    for (const p of spec.points || []) {
+        if (p.kind === 'file') continue;
+        const rel = path.relative(REPO, resolve(p.file, config[REF] || config.kktoken)).split(path.sep).join('/');
+        if (!rel.startsWith('..') && fs.existsSync(path.join(REPO, rel))) touched.add(rel);
+    }
+    const before = new Map([...touched].map((rel) => [rel, hashOf(rel)]));
+    const dry = spawnSync(process.execPath, [ADD_GATEWAY, 'apply', 'fluxnat'], { encoding: 'utf8', cwd: REPO, maxBuffer: 64 * 1024 * 1024 });
+    const dryOut = (dry.stdout || '') + (dry.stderr || '');
+    check(dry.status === 0, `сухой прогон apply отдал код 0 (получено ${dry.status})`);
+    check(/Сухой прогон/.test(dryOut), 'сухой прогон сам себя называет сухим — запись только по --write');
+    const changedFiles = [...touched].filter((rel) => hashOf(rel) !== before.get(rel));
+    check(changedFiles.length === 0,
+        `сухой прогон не тронул ни одного файла (сверено ${touched.size} по sha1)${changedFiles.length ? ' — ИЗМЕНЕНЫ: ' + changedFiles.join(', ') : ''}`);
+    check(/--write/.test(toolSrc), 'флаг --write у apply на месте (запись только осознанным действием)');
 
     check(/missing\.length\s*\?\s*1\s*:\s*0/.test(toolSrc), 'пропуски возвращают код 1 — иначе провал не виден ни глазами, ни скриптом');
     check(/process\.exit\(main\(\)\)/.test(toolSrc), 'код возврата пробрасывается из main() (process.exit(main()))');
@@ -428,6 +457,128 @@ section('add-gateway.js · контракт');
     if (undef.length) {
         warn(`list печатает ключи-документацию конфига как шлюзы — ${undef.length} стр. с undefined: «${undef[0].trim()}». Перебор конфига должен пропускать ключи на «_»`);
     }
+}
+
+// ── 7. сторожа региона: чужой код и записи-матрёшки ───────────────────────────
+section('сторожа `apply` · чужой код в регионе и записи-матрёшки');
+{
+    // Оба дефекта найдены на nova 17.09, и оба инструмент пропустил: сухой прогон печатал
+    // «0 дефектов» и «строк 40» вместо 25. Поэтому у каждого сторожа здесь ДВА утверждения:
+    // живой файл чист, а реплей дефекта (склеенные блоки / вложенная запись) — ловится.
+    const tool = require(ADD_GATEWAY);
+    check(typeof tool.codeArtifacts === 'function' && typeof tool.nestedEntries === 'function',
+        'инструмент экспортирует сторожа codeArtifacts и nestedEntries');
+
+    // Реплей №1: регион `until-blank` проглотил блок соседа — блоки склеены, пустой строки нет.
+    const backend = read(path.join(REPO, 'routing/transparent-proxy.js')) || '';
+    const bl = backend.split('\n');
+    const blankAfter = (from) => { let i = from + 1; while (i < bl.length && bl[i].trim() !== '') i += 1; return i - 1; };
+    const kkStart = bl.findIndex((l) => l.includes('const KK_SESSIONS_FILE'));
+    const nvStart = bl.findIndex((l) => l.includes('const NV_SESSIONS_FILE'));
+    const kkRegion = kkStart >= 0 ? bl.slice(kkStart, blankAfter(kkStart) + 1).join('\n') : '';
+    const nvRegion = nvStart >= 0 ? bl.slice(nvStart, blankAfter(nvStart) + 1).join('\n') : '';
+    check(kkStart >= 0 && nvStart > kkStart, 'блоки констант KKtoken и Nova найдены в бэкенде');
+    const kkHits = tool.codeArtifacts(kkRegion, REF, config);
+    check(kkHits.length === 0,
+        `живой регион констант KKtoken чист от чужого кода${kkHits.length ? ' — ' + kkHits.join(', ') : ''}`);
+    const gluedHits = tool.codeArtifacts(kkRegion + '\n' + nvRegion, REF, config);
+    check(gluedHits.some((h) => h.startsWith('nova')),
+        `реплей: склеенные константы KK и Nova сторож видит${gluedHits.length ? ' (' + gluedHits.join(', ') + ')' : ' — НЕ ВИДИТ'}`);
+
+    // Реплей №2: запись `$perPort` несёт вложенную копию записи соседа (так было в HEAD).
+    const ps1Rel = 'routing/keepalive-restart.ps1';
+    const ps1 = read(path.join(REPO, ps1Rel)) || '';
+    const ENTRY = /^  (\d{5}) = @\{/;
+    const liveNested = tool.nestedEntries(ps1, ENTRY);
+    check(liveNested.length === 0,
+        `в $perPort нет записей-матрёшек${liveNested.length ? ' — ' + liveNested.map((n) => n.key + ' внутри ' + n.inside).join(', ') : ''}`);
+
+    const entryText = (text, key) => {
+        const ls = String(text).split('\n');
+        const start = ls.findIndex((l) => new RegExp('^  ' + key + ' = @\\{').test(l));
+        if (start < 0) return '';
+        let depth = 0;
+        for (let i = start; i < ls.length; i += 1) {
+            for (const ch of ls[i]) { if (ch === '{') depth += 1; else if (ch === '}') depth -= 1; }
+            if (depth === 0) return ls.slice(start, i + 1).join('\n');
+        }
+        return '';
+    };
+    // Корпус: испорченная копия из HEAD, если она там ещё лежит (записи выпрямлены 17.09,
+    // и после коммита этой правки HEAD станет чистым). Нет — собираем ту же порчу сами.
+    const headPs1 = (spawnSync('git', ['show', 'HEAD:' + ps1Rel], { cwd: REPO, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).stdout) || '';
+    let corpus = '';
+    let from = '';
+    if (tool.nestedEntries(headPs1, ENTRY).length) { corpus = headPs1; from = 'HEAD'; }
+    else {
+        const lines = ps1.split('\n');
+        const at = lines.findIndex((l) => /^  20161 = @\{/.test(l));
+        corpus = [
+            ...lines.slice(0, at + 1),
+            `  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\\.claude\\getunikey-active-key.txt";`,
+            `             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }`,
+            ...lines.slice(at + 1),
+        ].join('\n');
+        from = 'собранная копия';
+    }
+    const nested = tool.nestedEntries(corpus, ENTRY);
+    check(nested.length > 0,
+        `испорченная копия $perPort (${from}): записей-матрёшек ${nested.length}${nested.length ? ' — ' + nested.map((n) => n.key + ' внутри ' + n.inside).join(', ') : 'НЕ НАЙДЕНО'}`);
+    const entry = entryText(corpus, '20161');
+    const entryHits = tool.codeArtifacts(entry, REF, config);
+    check(entryHits.some((h) => h.startsWith('getunikey')),
+        `...и внутри записи 20161 сторож видит чужой код${entryHits.length ? ' (' + entryHits.join(', ') + ')' : ' — НЕ ВИДИТ'}`);
+
+    // Реплей №3: запись реестра внутри записи того же реестра (JS-вариант, класс BACKENDS).
+    const backends = backend.slice(backend.indexOf('const BACKENDS = {'), backend.indexOf('const BACKENDS_REGISTRY_FILE'));
+    const jsNested = tool.nestedEntries(backends, /^    ([a-z_0-9]+): \{/);
+    check(jsNested.length === 0,
+        `в реестре BACKENDS нет записей-матрёшек${jsNested.length ? ' — ' + jsNested.map((n) => n.key + ' внутри ' + n.inside).join(', ') : ''}`);
+
+    // 🪤 Инвариант, из-за которого всё и случилось: блок констант эталона кончается ПУСТОЙ
+    // строкой — на ней и стоит регион `until-blank`. Нет пустой — регион проглатывает блок
+    // соседа (так в клон Nova уехали константы Odyssey). Проверяем ровно это и ровно для
+    // эталона: у остальных шлюзов блоки кончаются чем угодно, но клонируют-то с эталона.
+    // Граница самого региона проверяется выше — `codeArtifacts` на нём обязан молчать.
+    check(String(bl[blankAfter(kkStart) + 1] || '').trim() === '',
+        'после региона констант эталона стоит пустая строка — регион `until-blank` кончается на ней');
+}
+
+// ── 8. полнота спеки: реестр с ключом эталона, под который нет точки ───────────
+section('полнота спеки · реестры с ключом эталона');
+{
+    // Правило простое: если эталон ВОШЁЛ в реестр (его ключ там есть), то и у цели он обязан
+    // быть — значит под этот реестр нужна точка спеки. Иначе вкладка выходит «рабочая, но
+    // одна кнопка молчит»: 17.09 так и вышло, и всплыло живьём тостом «GitHub: неизвестный
+    // шлюз nv» — реестра NEWAPI_SEED_PROV в спеке не было вовсе. Сканом нашлись ещё три:
+    // ghAddPick, карта тег→полное имя и карты pid в ghLkPidsByTag.
+    const gw = config[REF];
+    // Строку считаем реестром, если ключ эталона стоит в ней КЛЮЧОМ: `kk: …` или `kktoken: …`.
+    const lineKey = new RegExp('(^|[ ,{])(' + gw.p + '|' + gw.full + '): ');
+    // Точка закрывает реестр, если её ожидание само называет шлюз ключом (`kk: 'kktoken'`)
+    // или именованным полем (`id: 'kktoken'`, `tab: 'kktoken'`). Голое `'kktoken'` (так
+    // выглядит ожидание точки MONEY_PROVIDERS) закрывающим не считается — иначе оно
+    // «покрывало» бы любую строку с именем шлюза, включая непокрытые реестры.
+    const nameKey = new RegExp('(^|[ ,{])(' + gw.p + '|' + gw.full + '):');
+    const nameField = new RegExp('(\\w+):\\s*\'?' + gw.full);
+    const isKeyNeedle = (s) => nameKey.test(s) || nameField.test(s);
+    const uncovered = [];
+    for (const [alias, rel] of Object.entries(spec.files || {})) {
+        const text = read(path.join(REPO, rel));
+        if (!text) continue;
+        const anchors = (spec.points || []).filter((p) => p.file === alias)
+            .flatMap((p) => [...(Array.isArray(p.expect) ? p.expect : [p.expect]), ...(p.any || [])])
+            .filter((x) => typeof x === 'string')
+            .map((x) => subst(x, gw))
+            .filter(isKeyNeedle);
+        text.split('\n').forEach((line, i) => {
+            if (/^\s*(\/\/|\*|<!--)/.test(line)) return;      // комментарий с упоминанием — не реестр
+            if (!lineKey.test(line)) return;
+            if (!anchors.some((a) => line.includes(a))) uncovered.push(`${rel}:${i + 1} → ${line.trim().slice(0, 70)}`);
+        });
+    }
+    check(uncovered.length === 0,
+        `каждый реестр с ключом «${gw.p}:» / «${gw.full}:» покрыт точкой спеки${uncovered.length ? ' — нет: ' + uncovered.slice(0, 4).join(' | ') : ''}`);
 }
 
 // ── итог ──────────────────────────────────────────────────────────────────────

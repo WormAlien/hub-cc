@@ -121,6 +121,21 @@ const CASES = [
     ['контроль: соседний шлюз не тронут',
         `    aipm: 'aipm', hn: 'hcnsec', kk: 'kktoken',`,
         `    aipm: 'aipm', hn: 'hcnsec', fn: 'fluxnat',`],
+
+    // Поймано на nova 17.09: пара `KK_` была, а голого `KK` не было — короткая подпись
+    // в UI оставалась чужой (`short: 'KK'` у вкладки Nova, видно в GH_USE_META).
+    ['фронт: GH_USE_META целиком, включая голый KK в short',
+        `  kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },`,
+        `  fn: { icon: '🌀', short: 'FN', label: 'FluxRouter',     badge: 'bg-fuchsia/15 text-fuchsia border-fuchsia/40' },`],
+
+    // Реестры, которых в спеке не было вовсе (найдены 17.09 сканом «где ключ kk, а точки нет»).
+    ['фронт: NEWAPI_SEED_PROV (модалка GitHub)',
+        `  kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },`,
+        `  fn: { label: 'FluxRouter',     host: 'llm.fluxnat.dev',        color: 'fuchsia', reload: () => loadFnSessions(), list: () => state.fluxnat,  render: () => renderFn(), setKey: id => fnSetKey(id), open: id => fnOpenLk(id) },`],
+
+    ['бэк: ghLkPidsByTag (карты pid по тегу)',
+        `    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids };`,
+        `    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, fn: fnLkPids };`],
 ];
 
 let bad = 0;

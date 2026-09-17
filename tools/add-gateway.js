@@ -14,9 +14,15 @@
  * Поэтому спека лежит отдельным JSON (gateways.spec.json), где каждая точка задана
  * ЯКОРЕМ-СТРОКОЙ, а не номером строки: строка переживает правки файла, номер — нет.
  *
- * Что делает сейчас: `check` — отчёт о пропусках, `plan` — та же спека, но
- * инструкцией к действию (якорь + номер строки + готовая строка). Обе только читают.
- * Чего пока не делает: `apply` (правка файлов).
+ * Что делает: `check` — отчёт о пропусках, `plan` — та же спека, но инструкцией к
+ * действию (якорь + живой номер строки + готовая строка), `apply` — вставки по живому
+ * коду эталона (по умолчанию СУХОЙ прогон, запись — только явным `--write`), `list` —
+ * известные шлюзы. Сети нет, дашборд не нужен, без `--write` файлы не трогаются.
+ *
+ * Сторожа при `apply`: регион эталона не должен нести артефактов ЧУЖОГО шлюза -
+ * ни в разметке (`foreignMarkers`), ни в коде (`codeArtifacts`: чужие константы,
+ * функции, файлы, хосты, порты). Найдено на nova 17.09: регион констант проглотил
+ * блок Odyssey, а запись `$perPort` несла вложенную копию записи getunikey.
  *
  * Отличие `plan` от `check`. `check` отвечает «полно ли», `plan` — «что и куда
  * писать». Номер строки берётся ЖИВЫМ поиском по файлу на момент запуска (в спеке
@@ -27,12 +33,12 @@
  * он снят на дату написания прозы и после первой же правки выше по файлу уехал.
  *
  * Запуск:
- *   node tools/add-gateway.js check kktoken      # эталон, обязан быть 100%
+ *   node tools/add-gateway.js check kktoken      # эталон, обязан быть ПОЛНО
  *   node tools/add-gateway.js check hcnsec       # копия минус GitHub
  *   node tools/add-gateway.js plan  kktoken      # то же, но «что писать и где»
+ *   node tools/add-gateway.js apply fluxnat      # сухой прогон вставок
+ *   node tools/add-gateway.js apply fluxnat --write   # вставить (бэкап + node --check)
  *   node tools/add-gateway.js list
- *
- * Сети нет, дашборд не нужен, `:8200` не задет, файлы только читаются.
  */
 'use strict';
 
@@ -94,6 +100,11 @@ const REQUIRED_IN_CONFIG = ['p', 'P', 'full', 'NAME', 'HOST', 'PORT'];
  * 🪤 Порядок замен — от длинного к короткому, иначе `kk` съест начало `kktoken`
  * и на выходе получится `fluxtoken`. Поэтому пары сортируются по длине левой части.
  *
+ * 🪤 Пара `[P, P]` без подчёркивания заведена 17.09 отдельно: до неё `KK_` заменялось,
+ * а ГОЛЫЙ `KK` — нет, и в короткой подписи UI (`short: 'KK'` в `GH_USE_META`) у нового
+ * шлюза оставалась чужая подпись. Симптом тихий: значок свой, буквы чужие, ни одна
+ * проверка `check` этого не видит (точка 2.9 проверяет только `%p%: { icon: '%ICON%'`).
+ *
  * 🪤 Пустые значения отбрасываются: `''` совпадает со всем и строка превратилась бы
  * в кашу. У fluxnat пуст `REF` — это нормально, реф-точки ослаблены флагом.
  */
@@ -106,6 +117,7 @@ function tokenPairs(src, dst) {
         [xForm(src.p), xForm(dst.p)],
         [src.full, dst.full],
         [src.p, dst.p],
+        [src.P, dst.P],
         [String(src.PORT), String(dst.PORT)],
         [src.ICON, dst.ICON],
         [src.COLOR, dst.COLOR],
@@ -612,6 +624,88 @@ function foreignMarkers(text, srcName, config) {
 }
 
 /**
+ * Артефакты чужого шлюза в КОДЕ копируемого региона — то, чего не видит `foreignMarkers`
+ * (тот смотрит разметку) и не видит `node --check` (дубли объявлений он ловит ПОСЛЕ записи,
+ * а вложенную запись реестра — вообще нет: PowerShell и JS разбирают её молча).
+ *
+ * Найдено на nova 17.09, дважды за один прогон:
+ *   • регион констант `until-blank` проглотил блок Odyssey (между блоками не было пустой
+ *     строки) — в клон уехали `OD_SESSIONS_FILE`, `OD_BASE_URL` и весь блок целиком;
+ *   • регион записи `20161` в `keepalive-restart.ps1` содержал ВЛОЖЕННУЮ копию записи
+ *     getunikey — клон её размножил, и у UniKey пропал ключ верхнего уровня `20168`.
+ *
+ * Оба раза сухой прогон печатал «строк 40» вместо 25 и «0 дефектов». Сторож ловит оба
+ * ДО записи: копировать регион с чужим кодом нельзя — это размножение чужой поломки.
+ *
+ * 🪤 Комментарии снимаются построчно, поэтому законное упоминание соседа в комментарии
+ * («у odyssey такого нет, это свойство kktoken») дефектом не считается. Порт соседа
+ * ищется в коде, а не в тексте, — иначе строка «как у tabi :20155» красила бы регион.
+ */
+function codeArtifacts(text, srcName, config) {
+    const out = [];
+    const others = Object.values(config || {}).filter(v => v && v.full && v.full !== srcName);
+    const body = String(text).split('\n').filter((l) => {
+        const t = l.trim();
+        return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('#') || t.startsWith('<!--'));
+    }).join('\n');
+    for (const g of others) {
+        const x = xForm(g.p);
+        const probes = [
+            [new RegExp(`\\b${g.P}_[A-Z0-9_]+`), `${g.P}_ (константа)`],
+            [new RegExp(`\\bhandle${x}[A-Z]`), `handle${x}* (хендлер)`],
+            [new RegExp(`\\b${g.p}(Load|Save|Probe|Balance|ApplyBalance|ReadActiveModel|ReadActiveKey|ReadModelMap|KeepaliveSpawn|LkPids|PidAlive|PoolStats|SetKey|OpenLk)\\b`), `${g.p}* (функция)`],
+            [new RegExp(`'${g.full}-[a-z-]+\\.(json|txt)'`), `${g.full}-… (файл шлюза)`],
+            [new RegExp(`'${g.HOST}'`), `хост ${g.HOST}`],
+            // 🪤 Порт ищем ТОЛЬКО в форме кода: `20168 = @{` (запись $perPort), `|| 20170`
+            // (env-фолбэк константы), `port: 20170` (реестры). Голое число не годится —
+            // в тексте подсказок вкладки живёт «как у tabi :20155», и это не артефакт.
+            // Так же и ключ: проба «`%p%: `» ловила поле `fn:` в NAV_COUNT_JOBS, где
+            // `fn` — обычное имя поля, а не префикс FluxRouter.
+            [new RegExp(`(^|\\s)${g.PORT}\\s*=\\s*@\\{`), `запись ${g.PORT} = @{`],
+            [new RegExp(`\\|\\|\\s*${g.PORT}\\b`), `фолбэк порта ${g.PORT}`],
+            [new RegExp(`port\\s*:\\s*${g.PORT}\\b`), `port: ${g.PORT}`],
+        ];
+        const hit = probes.find(([re]) => re.test(body));
+        if (hit) out.push(`${g.full} (${hit[1]})`);
+    }
+    return out;
+}
+
+/**
+ * Записи-«матрёшки»: начало записи реестра, оказавшееся ВНУТРИ другой такой же.
+ *
+ * Так выглядит дефект «вставка разрубила запись соседа»: первая строка новой записи
+ * садится сразу после первой строки предыдущей, хвост — после её хвоста. JS и PowerShell
+ * разбирают такую вложенность молча, поэтому симптом не «упало», а «пропало»: у UniKey
+ * ключ `20168` уехал внутрь четырёх чужих записей, и `-Port 20168` отвечал «Unknown port».
+ *
+ * `entryRe` — шаблон начала записи с ключом в первой группе, например:
+ *   /^  (\d{5}) = @\{/        для `$perPort` в keepalive-restart.ps1
+ *   /^    ([a-z_0-9]+): \{/   для объекта JavaScript
+ * Скобки считаются по всем строкам подряд, включая строковые литералы: в этих реестрах
+ * фигурных скобок внутри строк нет, а свои скобки есть только у самой записи.
+ */
+function nestedEntries(text, entryRe) {
+    const out = [];
+    const lines = String(text).split('\n');
+    let depth = 0;
+    let open = null;
+    for (let i = 0; i < lines.length; i += 1) {
+        const m = entryRe.exec(lines[i]);
+        if (m && !/^\s*(\/\/|\*|#)/.test(lines[i])) {
+            if (open) out.push({ line: i + 1, key: m[1], inside: open.key, text: lines[i].trim().slice(0, 70) });
+            if (lines[i].includes('{')) open = { key: m[1], depth: depth + 1 };
+        }
+        for (const ch of lines[i]) {
+            if (ch === '{') depth += 1;
+            else if (ch === '}') depth -= 1;
+        }
+        if (open && depth < open.depth) open = null;
+    }
+    return out;
+}
+
+/**
  * Структурная проверка разметки дашборда — то, что node --check в HTML не видит.
  * Обе поломки 15.09 ловились бы здесь: дубль id (nav-count-getunikey дважды от клона мусора)
  * и кнопка навигации, не закрытая до следующей (обрыв, из-за которого поехали пункты меню).
@@ -717,10 +811,22 @@ function applyPoint(point, rule, src, dst, pairs, files) {
     // 🪤 Регион эталона может быть уже испорчен предыдущей вставкой (эталон и цель — один файл).
     // Копия такого региона размножает чужую поломку, поэтому это дефект, а не копирование.
     {
-        const foreign = foreignMarkers(lines.slice(start, region.end + 1).join('\n'), src.full, loadConfig());
+        const regionText = lines.slice(start, region.end + 1).join('\n');
+        const cfg = loadConfig();
+        const foreign = foreignMarkers(regionText, src.full, cfg);
         if (foreign.length) {
             p.status = 'bad';
             p.note = 'в регионе эталона артефакты чужого шлюза: ' + foreign.join(', ');
+            return p;
+        }
+        // 🪤 Второй сторож по тому же региону, но про КОД, а не разметку: чужие константы,
+        // функции, файлы, ключи и порты. Ловит «регион проглотил блок соседа» (nova/odyssey
+        // 17.09) и «регион несёт вложенную запись соседа» (там же, keepalive-restart.ps1).
+        const artifacts = codeArtifacts(regionText, src.full, cfg);
+        if (artifacts.length) {
+            p.status = 'bad';
+            p.note = `в регионе эталона код чужого шлюза: ${artifacts.join(', ')} — граница региона не там `
+                + '(частая причина: между блоками эталона и соседа нет пустой строки при span until-blank)';
             return p;
         }
     }
@@ -736,6 +842,19 @@ function applyPoint(point, rule, src, dst, pairs, files) {
         // Отступ новой записи берём от эталона — он уже выровнен по файлу.
         .map(l => (l === '' ? l : l));
     p.note = `${span}, строк ${region.end - start + 1}`;
+
+    // 🪤 `until-blank` — единственный регион, чья граница держится на ПУСТОЙ СТРОКЕ,
+    // и копия обязана эту границу сохранить. 17.09 на nova вышло иначе: блок Nova встал
+    // вплотную к блоку KKtoken (пустая строка уехала под копию), и следующий шлюз получил
+    // регион из ДВУХ блоков — сухой прогон показал «строк 40» вместо 25, а клон унёс бы
+    // в себе весь блок предыдущего шлюза. Поэтому копия садится ПОСЛЕ разделяющей пустой
+    // строки и заканчивается своей — тогда инвариант «блок, пустая строка, блок» держится
+    // сам, без ручной правки файла перед каждым следующим заведением.
+    if (span === 'until-blank') {
+        p.at = region.end + 2;
+        p.lines = [...p.lines, ''];
+        p.note += ', с пустой строкой после';
+    }
     return p;
 }
 
@@ -878,9 +997,10 @@ function main() {
     const config = loadConfig();
 
     if (cmd === 'list' || !cmd) {
+        const gates = Object.entries(config).filter(([k]) => !k.startsWith('_'));   // `_readme` — документация, не шлюз
         console.log(`${C.b}Спека:${C.off} ${spec.points.length} точек в ${Object.keys(spec.files || {}).length} файлах`);
-        console.log(`${C.b}Шлюзы:${C.off}`);
-        for (const [k, v] of Object.entries(config)) {
+        console.log(`${C.b}Шлюзы:${C.off} ${gates.length}`);
+        for (const [k, v] of gates) {
             console.log(`  ${k.padEnd(12)} ${String(v.NAME).padEnd(12)} порт ${String(v.PORT).padEnd(6)} ${v.HOST}`);
         }
         console.log(`\n${C.dim}node tools/add-gateway.js check <шлюз>   — что уже на месте${C.off}`);
@@ -906,4 +1026,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, checkHtmlStructure };
+module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure };

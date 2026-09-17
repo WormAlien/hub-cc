@@ -36,6 +36,12 @@ const { writeJsonSync: durableWriteJson, assertNotZeroed } = require('./lib/dura
 const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForModel,
         arQuotaBodyFor, arQuotaReadPools,
         classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
+        // 🪤 `arQuotaDropAt` в этом списке пропустили 16.09, когда заводили автопроверку по
+        // таймингу наливки, - и `arQuotaAutoTickNow` падал `ReferenceError` на КАЖДОМ тике
+        // (739 записей `uncaughtException` в логе за одни сутки 17.09). Молча: обработчик
+        // uncaughtException пишет в лог и живёт дальше, поэтому фича «карта возвращается сама
+        // после налива» не работала ни разу, а выглядело это как «пул ещё не налили».
+        arQuotaDropAt,
         arQuotaKeyTail } = require('./lib/ar-quota-probe');
 // Пул-дроп: тир-карта на фолбэк при `402 Budget pool quota has been exhausted` и
 // возврат из бэкапа, когда пул нальют. Чистая логика над путями живёт в lib (регресс

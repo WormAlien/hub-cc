@@ -662,6 +662,10 @@ function randomThemeId() {
            title="Квота AgentRouter льётся тремя партиями: 03:00, 11:00 и 19:00 МСК (00/08/16 Пекина)">
         <span class="arq-host shrink-0 leading-none"></span>
         <span class="arq-txt text-dim truncate"></span>
+        <!-- 🔔 звука на наливку партии. Стоит рядом с часами намеренно: оба про одно
+             событие, и вопрос «а услышу ли я его» возникает ровно здесь. -->
+        <button id="arq-snd" type="button" class="arq-snd ml-auto shrink-0"
+                aria-pressed="true" onclick="arqSndToggle()">🔔</button>
       </div>
     </div>
 
@@ -37084,6 +37088,14 @@ function sideOpenCurrentTab(ev) {
 .arq-glass.mini::after  { display: none; }
 .arq-glass.mini::before { inset: -10%; filter: blur(6px); }
 @media (prefers-reduced-motion: reduce) { .arq-hand, .arq-arc { transition: none !important; } }
+/* 🔔 звука на наливку: живёт в одной строке с мини-часами, поэтому цвет берёт
+   переменную той же строки (.arq даёт --arq-cc) - кнопка краснеет вместе с
+   циферблатом, когда пул сух, и зеленеет после налива. Своей палитры нет. */
+.arq-snd        { background: none; border: 0; padding: 0 2px; line-height: 1;
+                  font-size: 11px; cursor: pointer; color: var(--color-faint); }
+.arq-snd:hover  { color: var(--arq-cc); }
+.arq-snd[aria-pressed="true"]  { color: var(--arq-cc); }
+.arq-snd[aria-pressed="false"] { color: var(--color-faint); opacity: .6; }
 </style>
 <script>
 (() => {
@@ -37502,6 +37514,9 @@ async function stSync() {
   Object.keys(POOLS).forEach(p => {
     const best = stFresher(stLoad()[p], remote[p]);
     if (best && best !== stLoad()[p]) { stSave(p, best); stPaint(p); }
+    // Звук на наливку - здесь, а не в ручной проверке: сюда приезжает и автопроба
+    // сервера (та, что ходит на +2 и +20 минут), и только она работает при свёрнутом окне.
+    arqSndCheck(p, stLoad()[p]);
   });
 }
 
@@ -37521,10 +37536,18 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
     });
     const data = await res.json();
     if (data.state === 'available' || data.state === 'exhausted') {
-      stSave(pool, { state: data.state, source: 'probe',
-                     checkedAt: data.checkedAt || new Date().toISOString(),
-                     dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() });
+      const rec = { state: data.state, source: 'probe',
+                    checkedAt: data.checkedAt || new Date().toISOString(),
+                    dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() };
+      stSave(pool, rec);
       stPaint(pool);
+      // Проверил руками и увидел ответ - звенит нечего, владелец и так смотрит на него.
+      // Но партию помечаем просмотренной, иначе автопроба звякнет задним числом.
+      // 🪤 Метим ТОЛЬКО совпавшее состояние: клик за минуту до партии вернёт `exhausted`,
+      // и если пометить им и налив, следующий налив пройдёт молча. То же зеркально.
+      // Ключ конца - с полосой, как и в arqSndCheck: у полос разные судьбы.
+      if (data.state === 'available') arqSndMark(rec.dropAt, KEY_SND_DROP);
+      else arqSndMark(rec.dropAt, KEY_SND_DRY + ':' + pool);
       // Возврат тир-карты из бэкапа — факт этой же проверки: пул налили, и тиры
       // снова боевые. Молчать об этом нельзя, иначе владелец не поймёт, почему
       // трафик уехал обратно на пуловую модель.
@@ -37539,6 +37562,194 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
   } finally {
     btn.disabled = false;
   }
+};
+
+/* ── Звук на наливку партии ───────────────────────────────────────────────
+   Наливка AgentRouter - это ПАРТИЯ в пул шлюза, а не деньги аккаунта: `granted`
+   в записи ключа от неё не растёт, поэтому сторож наливки, пускающий купюру на
+   вкладке «Финансы», здесь молчит по устройству. Сигнал, который действительно
+   есть, - ответ серверной пробы квоты: сервер сам пробует пул через 2 и через
+   20 минут после каждой партии (03/11/19 МСК) и кладёт ответ в `ar-quota-state`.
+   Звеним по нему, а не по часам: «available с новой партией» и есть «налили»,
+   а расписание у этого шлюза уже дважды менялось (10.09 партий стало три), и
+   зашитые часы соврали бы молча.
+
+   🎯 Почему звук доходит там, где купюра не летит: ручку `quota-state` опрашивает
+   `setInterval(stSync, 30000)` без оглядки на `document.hidden`. В фоне браузер
+   душит его до раза в минуту, но тик идёт, - а сторож наливки и все рендеры в фоне
+   спят. Звук обязан работать ровно тогда, когда на дашборд НЕ смотрят.
+
+   🪤 Автоплей-политика: AudioContext, созданный до жеста человека, стартует в
+   состоянии `suspended` и молчит без единой ошибки в консоли. Контекст будим первым
+   же кликом или клавишей, а 🔔 до этого честно пишет в подсказке, что звук ещё не
+   разрешён, вместо вида, что он есть. */
+const KEY_SND = 'ar-quota-sound';            // '0' - приглушено; ключа нет - звук ВКЛ
+// Две метки, а не одна: налив и его конец - РАЗНЫЕ события одной партии, и каждое
+// звенит своим голосом по разу. Общая метка съела бы второе событие.
+const KEY_SND_DROP = 'ar-quota-sound-drop';  // партия, о наливе которой уже звенели
+const KEY_SND_DRY = 'ar-quota-sound-dry';    // партия, о конце которой уже звенели
+const ARQ_OPENED_AT = Date.now();            // загрузка страницы: граница «звенит / молчит»
+let ARQ_AC = null;
+
+function arqSndMute() {
+  try { return localStorage.getItem(KEY_SND) === '0'; } catch (e) { return false; }
+}
+function arqSndSeen(key) {
+  try { const v = Number(localStorage.getItem(key || KEY_SND_DROP)); return Number.isFinite(v) ? v : 0; }
+  catch (e) { return 0; }
+}
+/* Пометить партию просмотренной, ничего не играя. Зовут трое: ручная «Проверить
+   квоту» (владелец смотрит на ответ сам), сам звук, уже прозвеневший, и звук о конце. */
+function arqSndMark(dropAt, key) {
+  const ms = typeof dropAt === 'number' ? dropAt : Date.parse(dropAt);
+  if (!Number.isFinite(ms)) return;
+  try { localStorage.setItem(key || KEY_SND_DROP, String(ms)); } catch (e) { /* окно без хранилища */ }
+}
+
+/* Чистое решение «звенеть или нет». `want` - о каком состоянии речь: 'available' это
+   налив, 'exhausted' - пул выпит. Тело одно на оба: правила дедупа у них общие, а
+   разные голоса выбирает вызывающий.
+   Отдельной функцией ради регресса: F5 посреди партии, повторная проба на +20 минут
+   и партия, пришедшая до открытия страницы - ровно те случаи, где ошибку не видно на
+   глаз, а слышно её ночью. */
+function arqSndDecide(rec, fresh, openedAt, seenDrop, want) {
+  if (!rec || !fresh || rec.state !== (want || 'available')) return false;
+  const drop = Date.parse(rec.dropAt);
+  if (seenDrop > 0 && drop === seenDrop) return false;              // об этой партии уже звенели
+  const checked = Date.parse(rec.checkedAt);
+  // Запись старше этой загрузки страницы: событие случилось, пока дашборд был закрыт.
+  // Молчим намеренно - страница, которая звенит на F5, хуже страницы без звука, а сам
+  // факт виден: циферблат зелёный (или янтарный) и строка под ним называет время.
+  if (!Number.isFinite(checked) || checked <= openedAt) return false;
+  return true;
+}
+
+function arqSndArm() {
+  if (ARQ_AC && ARQ_AC.state === 'running') return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  try {
+    if (!ARQ_AC) ARQ_AC = new AC();
+    if (ARQ_AC.state === 'suspended') ARQ_AC.resume().then(arqSndBtn, () => {});
+    else arqSndBtn();
+  } catch (e) { ARQ_AC = null; }
+}
+addEventListener('pointerdown', arqSndArm, { passive: true });
+addEventListener('keydown', arqSndArm, { passive: true });
+
+/* Голос: ЧАША - низкий гонг с долгим хвостом. Выбор владельца 17.09 из шести вариантов
+   (`_sandbox/topup-sound-drafts/`). Три низкие синусоиды (фа-диез, до, фа) через lowpass
+   дают тело и «дорогой» тембр, удар FM-колокола сверху - атаку. Синтез, без файлов:
+   ничего не уезжает в публичный репозиторий хаба, а звук правится числами здесь.
+
+   🎯 Хвост в 1.8 с висит поверх музыки, и это осознанная цена: событие крупное и
+   случается трижды в сутки, а не каждый час - в мастерской, где звук и есть работа,
+   короткий «пик» как раз и потерялся бы.
+   ⚠️ Громкость здесь - «сырые» амплитуды черновика, а в черновике поверх них стоял
+   мастер 25 %, то есть в дашборде звучит громче прослушивания. Если окажется много -
+   дело в одном числе `gain` у трёх строк ниже. */
+function arqSndTone(a, t, out, o) {
+  const osc = a.createOscillator();
+  osc.type = o.type || 'sine';
+  osc.frequency.setValueAtTime(o.f, t);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.gain, t + o.attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  osc.connect(g); g.connect(out);
+  osc.start(t); osc.stop(t + o.dur + 0.03);
+}
+function arqSndBell(a, t, out, o) {
+  const car = a.createOscillator(); car.type = 'sine'; car.frequency.value = o.f;
+  const mod = a.createOscillator(); mod.type = 'sine'; mod.frequency.value = o.f * o.ratio;
+  const idx = a.createGain();
+  idx.gain.setValueAtTime(o.idx, t);
+  idx.gain.exponentialRampToValueAtTime(0.001, t + o.idur);
+  mod.connect(idx); idx.connect(car.frequency);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.gain, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  car.connect(g); g.connect(out);
+  mod.start(t); mod.stop(t + o.dur); car.start(t); car.stop(t + o.dur);
+}
+function arqSndVoice(a, t, out) {
+  // Один lowpass на всю чашу, а не на голос: он и делает «гонг», срезая звонкость,
+  // которую иначе дают три синуса вместе.
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 2600;
+  lp.connect(out);
+  [[174.61, 0.05], [261.63, 0.032], [349.23, 0.022]].forEach(([f, gain]) => {
+    arqSndTone(a, t, lp, { f, dur: 1.8, gain, attack: 0.02 });
+  });
+  arqSndBell(a, t, lp, { f: 523.25, ratio: 1.4, idx: 300, idur: 0.3, dur: 1.2, gain: 0.022 });
+}
+/* Голос «кончилось»: две ноты ВНИЗ, ниже и глуше налива - обломок, а не событие.
+   Вниз, потому что вверх у нас налив, и различать их надо не вслушиваясь: если за
+   работой слышишь направление - уже понял, что случилось. Короче чаши намеренно:
+   это неприятная новость, ей незачем висеть поверх музыки 1.8 с.
+   ⚠️ Заготовка до выбора владельца - варианты в `_sandbox/topup-sound-drafts/`. */
+function arqSndVoiceDry(a, t, out) {
+  const lp = a.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 1200;
+  lp.connect(out);
+  arqSndTone(a, t, lp,       { f: 233.08, dur: 0.55, gain: 0.06,  attack: 0.012 });
+  arqSndTone(a, t + 0.26, lp, { f: 155.56, dur: 1.0,  gain: 0.055, attack: 0.012 });
+  arqSndBell(a, t, lp, { f: 155.56, ratio: 1.0, idx: 220, idur: 0.12, dur: 0.32, gain: 0.018 });
+}
+function arqSndPlay(kind) {
+  if (arqSndMute()) return;
+  arqSndArm();
+  const a = ARQ_AC;
+  if (!a || a.state !== 'running') return;   // не разбужен - играть нечем
+  (kind === 'dry' ? arqSndVoiceDry : arqSndVoice)(a, a.currentTime + 0.02, a.destination);
+}
+/* Звенит, если событие новое: налив ('available') или пул выпит ('exhausted').
+   Пул досуха - тот же путь, что и налив: серверная проба пишет state, бросок на 402
+   помечает запись `source: 'drop'`, а сюда и то и другое приезжает одним `stSync`.
+
+   🎯 Дедуп у двух звуков РАЗНЫЙ, и это про предмет, а не про код. Полосы opus и gpt
+   наливают ВМЕСТЕ (одна партия, один залп) и кончаются ПОРОЗНЬ - канон
+   [[Квоты AgentRouter — две полосы]]. Значит налив - одно событие на партию: пометив
+   его партией, получаем один звонок на два залпа. А конец - событие каждой полосы:
+   помечать его партией значило бы, что смерть opus глушит смерть gpt, и вторая смерть
+   проходит молча. Поэтому метка налива - партия, метка конца - полоса и партия.
+   Возвращает, прозвенело ли, - регрессу это нужнее, чем человеку. */
+function arqSndCheck(pool, rec) {
+  const fresh = stFresh(rec, Date.now());
+  if (arqSndDecide(rec, fresh, ARQ_OPENED_AT, arqSndSeen(KEY_SND_DROP), 'available')) {
+    arqSndMark(rec.dropAt, KEY_SND_DROP);
+    arqSndPlay('in');
+    return true;
+  }
+  const dryKey = KEY_SND_DRY + ':' + pool;
+  if (arqSndDecide(rec, fresh, ARQ_OPENED_AT, arqSndSeen(dryKey), 'exhausted')) {
+    arqSndMark(rec.dropAt, dryKey);
+    arqSndPlay('dry');
+    return true;
+  }
+  return false;
+}
+function arqSndBtn() {
+  const b = document.getElementById('arq-snd');
+  if (!b) return;
+  const mute = arqSndMute();
+  const armed = !!(ARQ_AC && ARQ_AC.state === 'running');
+  b.textContent = mute ? '🔕' : '🔔';
+  b.setAttribute('aria-pressed', String(!mute));
+  b.title = mute
+    ? 'звук выключен - нажми, чтобы включить'
+    : armed
+      ? 'звенит дважды на партию: вверх - когда налили (03:00, 11:00, 19:00 МСК), вниз - когда пул выпит'
+      : 'звук включён, но браузер ещё не разрешил звучать: оживёт после первого клика по странице';
+}
+window.arqSndToggle = function arqSndToggle() {
+  const wasMute = arqSndMute();
+  try { localStorage.setItem(KEY_SND, wasMute ? '1' : '0'); } catch (e) { /* окно без хранилища */ }
+  // Включили - и сразу слышно, что включили: клик по 🔔 сам и есть жест, которым
+  // браузер разрешает звук, ждать следующей партии для проверки не нужно.
+  if (wasMute) { arqSndArm(); arqSndPlay(); }
+  arqSndBtn();
 };
 
 function init() {
@@ -37561,6 +37772,7 @@ function init() {
   /* После build(): stPaint красит уже существующие узлы, а build() их пересобирает. */
   stSync();
   arqView(VIEW);
+  arqSndBtn();      // 🔔 рисуем сразу: до первого жеста он честно говорит, что молчит
   /* Опрос обеих полос: фолбэк случается посреди дня, и часы обязаны покраснеть сами,
      без F5 и без клика. 30 с — вкладка открыта сутками, а ручка читает локальный файл,
      так что частить незачем. Возврат на вкладку опрашиваем сразу: пока её не было,

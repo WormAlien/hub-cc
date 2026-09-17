@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Звук на наливку AgentRouter - выбор варианта</title>
+<style>
+  :root{
+    --bg:#0e1116; --card:#161b22; --card2:#1c2230; --line:#2a3240;
+    --ink:#e6edf3; --dim:#93a1b1; --faint:#5d6b7d;
+    --azure:#58a6ff; --emerald:#3fb950; --amber:#d29922;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif;
+       padding:32px 20px 80px}
+  .wrap{max-width:760px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px}
+  .sub{color:var(--dim);font-size:13.5px;margin:0 0 22px}
+  .sub b{color:var(--ink);font-weight:600}
+  .bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+       background:var(--card);border:1px solid var(--line);border-radius:10px;
+       padding:12px 14px;margin-bottom:18px}
+  .bar label{font-size:13px;color:var(--dim);display:flex;align-items:center;gap:8px}
+  input[type=range]{width:160px;accent-color:var(--azure)}
+  .vol{font-variant-numeric:tabular-nums;color:var(--ink);font-size:12.5px;min-width:26px}
+  button{font:inherit;color:var(--ink);background:var(--card2);
+         border:1px solid var(--line);border-radius:8px;padding:7px 13px;cursor:pointer}
+  button:hover{border-color:var(--azure);color:var(--azure)}
+  button.primary{background:var(--azure);border-color:var(--azure);color:#08121f;font-weight:600}
+  button.primary:hover{color:#08121f;opacity:.9}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+        padding:14px 16px;margin-bottom:10px;display:flex;gap:14px;align-items:flex-start;
+        transition:border-color .15s}
+  .card.picked{border-color:var(--emerald)}
+  .num{font-variant-numeric:tabular-nums;color:var(--faint);font-size:13px;
+       min-width:18px;padding-top:6px}
+  .body{flex:1;min-width:0}
+  .name{font-weight:600;margin-bottom:2px}
+  .name .tag{font-weight:400;font-size:11.5px;color:var(--amber);
+             border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:8px}
+  .desc{color:var(--dim);font-size:13px}
+  .len{color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums;margin-top:3px}
+  .grp{font-size:15px;margin:26px 0 10px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  .grp .done{color:var(--emerald);font-size:12.5px;font-weight:400}
+  .grp .todo{color:var(--amber);font-size:12.5px;font-weight:400}
+  .acts{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:104px}
+  .picked .pick{border-color:var(--emerald);color:var(--emerald)}
+  .foot{margin-top:26px;padding:14px 16px;border:1px solid var(--line);
+        border-radius:10px;background:var(--card);color:var(--dim);font-size:13px}
+  .foot b{color:var(--ink)}
+  .chosen{margin-top:12px;font-size:13.5px;color:var(--emerald);min-height:20px}
+  code{background:#0b0f14;border:1px solid var(--line);border-radius:5px;
+       padding:1px 5px;font-size:12.5px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Звук на наливку AgentRouter</h1>
+  <p class="sub">Партии 03:00, 11:00 и 19:00 МСК. <b>Налив</b> - когда серверная проба квоты
+    сказала «квота есть»; <b>конец</b> - когда пул выпит досуха («用完即止»). Каждое событие
+    звенит своим голосом по разу: налив один на партию, конец - на каждую полосу (opus и gpt
+    кончаются порознь). Слушай и скажи мне номера.</p>
+
+  <div class="bar">
+    <button class="primary" id="all">▶ проиграть все подряд</button>
+    <label>громкость <input type="range" id="vol" min="5" max="100" value="25">
+      <span class="vol" id="volnum">25</span></label>
+    <button id="stop">■ стоп</button>
+  </div>
+
+  <h2 class="grp">Налив - <span class="done">выбрано: «Чаша»</span></h2>
+  <div id="list"></div>
+
+  <h2 class="grp">Конец - <span class="todo">выбери, сейчас в дашборде стоит №0</span></h2>
+  <div id="list-dry"></div>
+
+  <div class="foot">
+    <b>Как это будет в дашборде.</b> Вариант зазвучит сам, когда партию налили, - <code>🔔</code>
+    рядом с мини-часами в сайдбаре, включён по умолчанию, глушится одним кликом.
+    <div class="chosen" id="chosen"></div>
+    <div style="margin-top:10px;color:var(--faint)">
+      🪤 Браузер не даёт странице звучать, пока по ней не кликнули: первый клик по дашборду
+      будит звук, до него 🔔 честно говорит, что ещё молчит. Здесь та же механика - кнопка
+      «играть» и есть тот самый клик.
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Общий тракт ────────────────────────────────────────────────────────────
+   Один AudioContext и один master-gain: громкость крутится в одном месте, а
+   голоса ниже только рисуют свою огибающую. Контекст создаётся по клику -
+   до жеста он у браузера всё равно `suspended`. */
+let ac = null, master = null;
+function audio() {
+  if (!ac) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ac = new AC();
+    master = ac.createGain();
+    master.gain.value = 0.25;
+    master.connect(ac.destination);
+  }
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
+}
+document.getElementById('vol').addEventListener('input', e => {
+  const v = Number(e.target.value) / 100;
+  document.getElementById('volnum').textContent = e.target.value;
+  if (master) master.gain.value = v;
+});
+
+/* Тон с огибающей. `f2` - куда уехать по частоте (экспонентой, поэтому только вверх
+   от нуля); `attack` короткий: щелчок атаки и делает звук «уведомлением», а не гудком. */
+function tone(ac, t, dest, o) {
+  const osc = ac.createOscillator(), g = ac.createGain();
+  osc.type = o.type || 'sine';
+  osc.frequency.setValueAtTime(o.f, t);
+  if (o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t + (o.dur * (o.bend || 0.4)));
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.gain, t + (o.attack || 0.005));
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  osc.connect(g); g.connect(dest);
+  osc.start(t); osc.stop(t + o.dur + 0.03);
+  return osc;
+}
+
+/* Щелчок: короткий шум через полосовой фильтр. Без него «касса» звучит как
+   пищание синтезатора, с ним - как железо. */
+function tick(ac, t, dest, o) {
+  const dur = o.dur || 0.03, n = Math.max(1, Math.ceil(ac.sampleRate * dur));
+  const buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const src = ac.createBufferSource(); src.buffer = buf;
+  const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+  bp.frequency.value = o.f || 4000; bp.Q.value = o.q == null ? 1.1 : o.q;
+  const g = ac.createGain(); g.gain.value = o.gain || 0.5;
+  src.connect(bp); bp.connect(g); g.connect(dest);
+  src.start(t); src.stop(t + dur);
+}
+
+/* FM-колокол: несущая плюс модулятор с быстро гаснущим индексом. Так звенит
+   настоящий колокольчик, а не «бип». */
+function bell(ac, t, dest, o) {
+  const c = ac.createOscillator(); c.type = 'sine'; c.frequency.value = o.f;
+  const m = ac.createOscillator(); m.type = 'sine'; m.frequency.value = o.f * (o.ratio || 2.76);
+  const mg = ac.createGain();
+  mg.gain.setValueAtTime(o.index || 900, t);
+  mg.gain.exponentialRampToValueAtTime(0.001, t + (o.idur || 0.3));
+  m.connect(mg); mg.connect(c.frequency);
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(o.gain, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+  c.connect(g); g.connect(dest);
+  m.start(t); m.stop(t + o.dur); c.start(t); c.stop(t + o.dur);
+}
+
+/* ── Варианты ───────────────────────────────────────────────────────────────
+   Каждый - функция(ac, t, dest), рисующая себя от момента t. Длительность
+   объявлена рядом: она и есть «сколько звучит» в подписи карточки. */
+const VARIANTS = [  {
+    name: 'Дзынь',
+    tag: 'так звенит чат Лиги',
+    desc: 'Тот же сигнал, что играет на входящее сообщение в чате. Ровно поэтому и в списке: '
+        + 'взять его для наливки - значит путать «пришли деньги» с «написали в чат».',
+    len: 0.22,
+    play: (ac, t, out) => {
+      tone(ac, t, out, { f: 760, f2: 1240, dur: 0.2, gain: 0.07, attack: 0.014 });
+    },
+  },
+  {
+    name: 'Касса',
+    tag: '',
+    desc: 'Два железных щелчка и высокий звон сверху. Самый «кассовый» из всех: '
+        + 'звучит как деньги, а не как интерфейс.',
+    len: 0.42,
+    play: (ac, t, out) => {
+      tick(ac, t, out, { f: 4200, dur: 0.028, gain: 0.55 });
+      tone(ac, t, out, { f: 2450, type: 'triangle', dur: 0.09, gain: 0.05, attack: 0.002 });
+      tick(ac, t + 0.085, out, { f: 3400, dur: 0.03, gain: 0.45 });
+      tone(ac, t + 0.085, out, { f: 1980, type: 'triangle', dur: 0.12, gain: 0.045, attack: 0.002 });
+      tone(ac, t + 0.16, out, { f: 2960, dur: 0.24, gain: 0.05, attack: 0.003, f2: 3100, bend: 0.2 });
+    },
+  },
+  {
+    name: 'Колокольчик',
+    tag: '',
+    desc: 'Один удар FM-колокола: звонкий, но не резкий. Слышно из-за музыки, '
+        + 'и при этом не режет ухо, если сидишь в наушниках.',
+    len: 1.0,
+    play: (ac, t, out) => {
+      bell(ac, t, out, { f: 660, ratio: 2.76, index: 950, dur: 1.0, gain: 0.075 });
+      bell(ac, t + 0.012, out, { f: 990, ratio: 2.0, index: 400, dur: 0.6, gain: 0.028 });
+    },
+  },
+  {
+    name: 'Арпеджио',
+    tag: '',
+    desc: 'Три ноты вверх - монеты падают в кассу. Заметно длиннее щелчка, '
+        + 'поэтому его не спутаешь с ошибкой или чужим звуком системы.',
+    len: 0.6,
+    play: (ac, t, out) => {
+      [[880, 0], [1108.73, 0.07], [1318.51, 0.14]].forEach(([f, d]) => {
+        tone(ac, t + d, out, { f, dur: 0.42, gain: 0.055, attack: 0.004, type: 'triangle' });
+      });
+    },
+  },
+  {
+    name: 'Пятая вверх',
+    tag: '',
+    desc: 'Две мягкие ноты: «та-даа». Спокойный, почти вежливый сигнал - '
+        + 'подходит, если дашборд стоит на втором мониторе и звук слышен весь день.',
+    len: 0.65,
+    play: (ac, t, out) => {
+      tone(ac, t, out, { f: 587.33, dur: 0.34, gain: 0.06, attack: 0.006 });
+      tone(ac, t + 0.13, out, { f: 880, dur: 0.5, gain: 0.07, attack: 0.006 });
+      tone(ac, t + 0.13, out, { f: 1760, dur: 0.3, gain: 0.014, attack: 0.01 });
+    },
+  },
+  {
+    name: 'Чаша',
+    tag: '',
+    desc: 'Низкий гонг с долгим хвостом: событие крупное и случилось. Самый '
+        + '«дорогой» на слух, но и самый длинный - 1,8 с он будет висеть поверх музыки.',
+    len: 1.8,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 2600;
+      lp.connect(out);
+      [[174.61, 0.05], [261.63, 0.032], [349.23, 0.022]].forEach(([f, g]) => {
+        tone(ac, t, lp, { f, dur: 1.8, gain: g, attack: 0.02 });
+      });
+      bell(ac, t, lp, { f: 523.25, ratio: 1.4, index: 300, dur: 1.2, gain: 0.022 });
+    },
+  },
+];
+
+/* ── Варианты «пул выпит» ───────────────────────────────────────────────────
+   Правило отбора: этот звук обязан отличаться от налива НАПРАВЛЕНИЕМ, а не громкостью.
+   Налив идёт вверх и длинно, конец - вниз и коротко; если за работой слышишь сторону,
+   ты уже понял, что случилось, и не надо вслушиваться. */
+const DRY = [
+  {
+    name: 'Облом',
+    tag: 'стоит в дашборде сейчас',
+    desc: 'Две ноты вниз (си-бемоль → ре-диез малой октавы), глухо, без звона. '
+        + 'Короткий и нейтральный: не пугает, но и не даёт спутать с наливом.',
+    len: 1.0,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 1200;
+      lp.connect(out);
+      tone(ac, t, lp, { f: 233.08, dur: 0.55, gain: 0.06, attack: 0.012 });
+      tone(ac, t + 0.26, lp, { f: 155.56, dur: 1.0, gain: 0.055, attack: 0.012 });
+      bell(ac, t, lp, { f: 155.56, ratio: 1.0, index: 220, idur: 0.12, dur: 0.32, gain: 0.018 });
+    },
+  },
+  {
+    name: 'Провал',
+    tag: '',
+    desc: 'Одна нота, съезжающая вниз по высоте (300 → 90 Гц). Звучит как «уехало»: '
+        + 'слышно, что что-то кончилось, а не что пришло.',
+    len: 1.2,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 1600;
+      lp.connect(out);
+      tone(ac, t, lp, { f: 300, f2: 90, bend: 0.8, dur: 1.2, gain: 0.07, attack: 0.02, type: 'triangle' });
+    },
+  },
+  {
+    name: 'Три вниз',
+    tag: '',
+    desc: 'Три ноты по нисходящей (си-бемоль → фа → ре). Длиннее и музыкальнее: '
+        + 'скорее «аккорд закрылся», чем «авария».',
+    len: 1.0,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 1800;
+      lp.connect(out);
+      [[233.08, 0], [174.61, 0.12], [146.83, 0.24]].forEach(([f, d]) => {
+        tone(ac, t + d, lp, { f, dur: 0.7, gain: 0.05, attack: 0.008, type: 'triangle' });
+      });
+    },
+  },
+  {
+    name: 'Стук',
+    tag: '',
+    desc: 'Два глухих удара на одной низкой ноте (110 Гц) - как выключили рубильник. '
+        + 'Самый незаметный из всех: не отвлекает от работы, но и не потеряется.',
+    len: 0.7,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 700;
+      lp.connect(out);
+      [0, 0.28].forEach(d => {
+        tone(ac, t + d, lp, { f: 110, dur: 0.3, gain: 0.075, attack: 0.006 });
+        tick(ac, t + d, lp, { f: 900, dur: 0.02, gain: 0.22 });
+      });
+    },
+  },
+  {
+    name: 'Обратная чаша',
+    tag: '',
+    desc: 'Тот же гонг, что на наливе, но на полтона ниже и тише. Один тембр на оба '
+        + 'события: если хочется, чтобы они читались как «одно и то же, но хуже».',
+    len: 1.8,
+    play: (ac, t, out) => {
+      const lp = ac.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 1800;
+      lp.connect(out);
+      [[155.56, 0.045], [233.08, 0.028], [311.13, 0.018]].forEach(([f, g]) => {
+        tone(ac, t, lp, { f, dur: 1.8, gain: g, attack: 0.02 });
+      });
+    },
+  },
+];
+
+/* ── Разметка и запуск ──────────────────────────────────────────────────── */
+// Два списка рисует одна и та же функция: разъехавшись в подписях, они сравнивались бы
+// не как звуки, а как вёрстка.
+function mount(listEl, variants, group) {
+  const pickLabel = group === 'dry' ? 'конец' : 'налив';
+  variants.forEach((v, i) => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<div class="num">${i + 1}</div>
+      <div class="body">
+        <div class="name">${v.name}${v.tag ? `<span class="tag">${v.tag}</span>` : ''}</div>
+        <div class="desc">${v.desc}</div>
+        <div class="len">звучит ${v.len.toFixed(2)} с</div>
+      </div>
+      <div class="acts">
+        <button class="go">▶ играть</button>
+        <button class="pick">выбрать</button>
+      </div>`;
+    card.querySelector('.go').addEventListener('click', () => play(variants[i]));
+    card.querySelector('.pick').addEventListener('click', () => {
+      [...listEl.children].forEach(c => { c.classList.remove('picked'); c.querySelector('.pick').textContent = 'выбрать'; });
+      card.classList.add('picked');
+      card.querySelector('.pick').textContent = '✓ выбран';
+      chosen[group] = `${i + 1} - «${v.name}» (${pickLabel})`;
+      document.getElementById('chosen').textContent = 'Выбрано: ' + Object.values(chosen).join(' · ');
+    });
+    listEl.appendChild(card);
+  });
+}
+const list = document.getElementById('list');
+const listDry = document.getElementById('list-dry');
+const chosen = { fill: '', dry: '' };
+mount(list, VARIANTS, 'fill');
+mount(listDry, DRY, 'dry');
+
+let bus = null;
+function newBus(a) { const g = a.createGain(); g.gain.value = 1; g.connect(master); return g; }
+function play(v) {
+  const a = audio();
+  stopAll();
+  bus = newBus(a);
+  v.play(a, a.currentTime + 0.02, bus);
+}
+
+let allTimers = [];
+// «Все подряд» играет КОНЦЫ: налив уже выбран, а выбирать надо из них. Оба списка
+// вместе заняли бы полминуты и слушались бы вразнобой.
+document.getElementById('all').addEventListener('click', () => {
+  const a = audio();
+  stopAll();
+  bus = newBus(a);
+  const gap = 2.2, b = bus;
+  DRY.forEach((v, i) => {
+    allTimers.push(setTimeout(() => v.play(a, a.currentTime + 0.02, b), i * gap * 1000));
+  });
+});
+document.getElementById('stop').addEventListener('click', stopAll);
+function stopAll() {
+  allTimers.forEach(clearTimeout);
+  allTimers = [];
+  if (!bus) return;
+  try { bus.disconnect(); } catch (e) { /* уже отключена */ }
+  bus = null;
+}
+</script>
+</body>
+</html>

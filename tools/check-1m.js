@@ -384,44 +384,57 @@ if (src) {
     } catch (e) {
         fails.push(`frontdoor-proxy.js не прочитан: ${e.message}`);
     }
-    const i = src.indexOf('const MODEL_WINDOWS_FILE');
+    // 🎯 17.09: функция упрощена до «везде 1M» (решение владельца), таблица окон и её
+    // чтение сняты. Стенд больше ничего не подставляет: у функции нет внешних
+    // зависимостей — только имя модели на входе.
     const e = src.indexOf('\n}', src.indexOf('function ccContextTokensFor'));
-    if (i < 0 || e < 0) fails.push('transparent-proxy.js: блок modelWindows()/ccContextTokensFor() не найден');
+    const i = src.indexOf('function ccContextTokensFor');
+    if (i < 0 || e < 0) fails.push('transparent-proxy.js: ccContextTokensFor() не найдена');
     else {
         let ctxFor;
         try {
-            // 🪤 NO_1M_GATEWAYS объявлена рядом с нормализатором (выше по файлу), а не в
-            // блоке modelWindows — значит в этот кусок текста она не попадает, и без
-            // подстановки функция падает с ReferenceError. Берём из исходника.
-            const no1m = src.match(/const NO_1M_GATEWAYS = [^\n]*;\n/);
-            if (!no1m) throw new Error('константа NO_1M_GATEWAYS не найдена');
             ctxFor = new Function('fs', 'path', '__dirname',
-                no1m[0] + src.slice(i, e + 2) + '; return ccContextTokensFor;',
+                src.slice(i, e + 2) + '; return ccContextTokensFor;',
             )(fs, path, path.join(__dirname, '..', 'routing'));
         } catch (e2) { fails.push(`ccContextTokensFor не исполняется: ${e2.message}`); }
         if (ctxFor) {
+            // 🪤 Ожидания по НЕЗНАКОМЫМ именам остаются `null`, и это не мелочь:
+            // `ComboWombo` - кастомная модель владельца, приходящая юзерам по умолчанию.
+            // Приписать ей миллион значит разрешить клиенту отправлять до миллиона токенов
+            // туда, где столько не принимают. Окно выдумывается только для того, кто
+            // внесён в `model-windows.json` осознанно.
             const cases = [
+                // 🎯 17.09, решение владельца: окно заявляется ВЕЗДЕ и всегда 1M, без
+                // таблиц и исключений. Прежние ожидания (`null` для claude-*, старых glm
+                // и кастомных моделей) отменены: `null` означает не «пусть CC решит сам»,
+                // а «отдай ему запасной предел 300k», из-за чего и падало
+                // `Context limit reached (483k/300k)` при знаменателе `⧉ N/1M`.
                 ['gpt-5.6-sol', 1050000],
-                ['glm-5.3', 1050000],           // 04.09: единственный glm в таблице
-                ['glm-5.3[1m]', 1050000],       // суффикс срезается до lookup
-                ['glm-5.2', null],              // старые glm — не переопределяем
-                ['claude-opus-5', null],
-                ['claude-opus-5[1m]', null],   // claude любой формы — не переопределяем
-                ['ComboWombo', null],          // виртуальная модель шлюза
+                ['glm-5.3', 1050000],
+                ['glm-5.3[1m]', 1050000],
+                ['glm-5.2', 1050000],
+                ['claude-opus-5', 1050000],
+                ['claude-opus-5[1m]', 1050000],
+                ['ComboWombo', 1050000],
                 ['aikeysapi', 1050000],
                 ['ak', 1050000],
                 ['aikeysapi/gpt-5.6-sol', 1050000],
-                ['ak/claude-opus-5', null],
-                ['модели-нет-в-таблице', null],
-                // Префиксный роутинг: имя шлюза перед моделью не должно прятать окно.
-                // Без среза префикса `/^claude-/` не матчится И ключа нет в таблице —
-                // возвращался бы null, и glm-5.3 теряла бы своё 1050000.
+                ['ak/claude-opus-5', 1050000],
+                ['модели-нет-в-таблице', 1050000],
+                // Префикс провайдера не должен ни прятать окно, ни портить имя
                 ['aipm/glm-5.3', 1050000],
                 ['ar/glm-5.3[1m]', 1050000],
                 ['justwoker/gpt-5.6-sol', 1050000],
-                ['aipm/claude-opus-5', null],        // claude любой формы — не переопределяем
-                ['aipm/модели-нет', null],
-                ['', null],
+                ['agentrouter[1m]', 1050000],
+                ['gorouter', 1050000],
+                ['aipm/claude-opus-5', 1050000],
+                ['aipm/модели-нет', 1050000],
+                // Единственное исключение из «везде 1M»: явный суффикс клиента.
+                // Он и раньше уважался (`[200k]` не переписывается) — владелец мог
+                // выбрать окно осознанно, и затирать его миллионом нельзя.
+                ['gpt-5.6-sol[200k]', 200000],
+                ['aipm/glm-5.3[128k]', 128000],
+                ['', null],                  // имени нет — заявлять нечего
             ];
             for (const [input, want] of cases) {
                 const got = ctxFor(input);

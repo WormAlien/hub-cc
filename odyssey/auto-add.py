@@ -67,9 +67,9 @@ except Exception as _e:   # noqa: BLE001
 
 from od_common import (  # noqa: E402
     API_KEYS_URL, CONSOLE_URL, DIR, LAST_PROXY, POOL_HOST, POOL_PREFLIGHT_PATH,
-    BILLING_URL, SIGNUP_URL, acquire_fresh_proxy, acquire_proxy, asn_for_ip,
+    BILLING_URL, SIGNUP_URL, MailClient, acquire_fresh_proxy, acquire_proxy, asn_for_ip,
     click_button_by_text, fetch_22do_code, flat, goto_retry, load_used_networks, open_log,
-    own_ip, pick_22do_gmail, short_url,
+    OPEN_MAILERS, own_ip, pick_22do_gmail, short_url,
 )
 
 REC_DIR = DIR / "recordings"
@@ -106,8 +106,21 @@ def gen_password():
 OPEN_CMS = []
 
 
-async def close_open():
-    """Закрывает все поднятые окна. Ошибка закрытия не должна подменять код возврата."""
+async def close_open(mailer=None):
+    """Закрывает все поднятые окна и клиента почты. Ошибка закрытия не подменяет код возврата."""
+    if mailer is not None:
+        try:
+            await mailer.stop()
+        except Exception:
+            pass
+    # Клиенты почты, поднятые без передачи сюда (ранние выходы) - тоже гасим: процесс с
+    # браузером иначе остаётся жить после провального прогона.
+    while OPEN_MAILERS:
+        cm = OPEN_MAILERS.pop()
+        try:
+            await cm.stop()
+        except Exception:
+            pass
     while OPEN_CMS:
         cm = OPEN_CMS.pop()
         try:
@@ -495,6 +508,10 @@ async def main():
     tier = "own"
     pin = None
     exclude = []
+    # Какая почта: `22do` (по умолчанию), `emailnator` или `boomlify`. Ручка, а не замена:
+    # у 22.do кончаются свободные gmail-адреса, у emailnator письмо от Clerk раньше не
+    # доходило, boomlify обещает доставляемость выше - решает замер, а не догадка.
+    mail_kind = "22do"
     for i, a in enumerate(argv):
         if a.startswith("--tier"):
             tier = (a.split("=", 1)[1] if "=" in a
@@ -508,10 +525,22 @@ async def main():
             exclude = (a.split("=", 1)[1] if "=" in a
                        else (argv[i + 1] if i + 1 < len(argv) else "")).split(",")
             exclude = [x.strip() for x in exclude if x.strip()]
+        elif a.startswith("--mail"):
+            mail_kind = (a.split("=", 1)[1] if "=" in a
+                         else (argv[i + 1] if i + 1 < len(argv) else "22do")).lower()
         elif a.startswith("--proxy"):
             pin = a.split("=", 1)[1] if "=" in a else (argv[i + 1] if i + 1 < len(argv) else None)
     if tier not in ("own", "scraper", "none"):
         tier = "own"
+    # 🪤 Другие источники почты ОТКЛЮЧЕНЫ, и это замер 17.09: tmailor и весь класс сервисов со
+    # своим доменом Clerk отвергает прямым текстом («Temporary email services are not
+    # supported»), а emailnator и boomlify пропускает, но письма до них не доходят - три минуты
+    # пустого ящика при принятой заявке. Мосты остались в репозитории как след разведки.
+    if mail_kind != "22do":
+        log("ПОЧТА", f"источник «{mail_kind}» отключён (не проходит у Clerk) - беру 22.do")
+        mail_kind = "22do"
+    if mail_kind not in ("22do",):
+        mail_kind = "22do"
 
     REC_DIR.mkdir(parents=True, exist_ok=True)
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
@@ -698,47 +727,72 @@ async def main():
         await close_open()
         return 4
 
-    # ── 3. ящик на 22.do ─────────────────────────────────────────────────────
+    # ── 3. ящик: 22.do или emailnator ────────────────────────────────────────
     stage("mail")
     mail_cm, mail_ctx, mail = None, None, None
-    if "--mail-via-proxy" in argv:
-        # Старое поведение - ящик в том же окне и через тот же прокси. Оставлено
-        # переключателем, а не удалено: если однажды понадобится ящик "из той же сети",
-        # это уже проверенный путь.
-        mail = site
-        log("ПОЧТА", "ящик беру в общем окне, через прокси (--mail-via-proxy)")
-    else:
-        # 🔴 Ящик берём ОТДЕЛЬНЫМ окном и БЕЗ прокси. Замер 16.09 15:45: адрес AS198068
-        # открывал площадку за 2 с, а 22.do через него не открылся вовсе
-        # (`NS_ERROR_CONNECTION_REFUSED`) - прогон умер на шаге почты с кодом 6, хотя с
-        # регистрацией всё было в порядке. Почтовому сервису безразлично, с какого IP создан
-        # ящик: адрес всё равно gmail, а правила Odyssey к 22.do не относятся. Зато
-        # надёжность шага почты перестаёт зависеть от выбранного адреса регистрации, и целый
-        # класс провалов исчезает. Проверено живьём: напрямую gmail выпадает (10-е нажатие).
+    mailer = None
+    if mail_kind != "22do":
+        # 🔴 Выбор почты - ручка, а не замена. У 22.do кончаются свободные gmail-адреса (сервис
+        # крутит по одному набору локальных частей, и прогоны получают уже занятые ящики), а
+        # emailnator выдаёт адрес сразу. Клиент у него уже написан и используется соседними
+        # шлюзами (`freemodel/lib/camoufox_emailnator.py`) - берём его как есть, чтобы не
+        # заводить вторую реализацию тех же шагов.
+        mailer = MailClient(log, headless=True, kind=mail_kind)
         try:
-            mail_cm = AsyncCamoufox(headless=True, os="windows", humanize=True,
-                                    persistent_context=True,
-                                    user_data_dir=str(DIR / "profiles" / "_mail"),
-                                    main_world_eval=True, i_know_what_im_doing=True)
-            mail_ctx = await mail_cm.__aenter__()
-            OPEN_CMS.append(mail_cm)
-            mail = mail_ctx.pages[0] if mail_ctx.pages else await mail_ctx.new_page()
-            log("ПОЧТА", "ящик беру отдельным окном, напрямую (без прокси)")
+            await mailer.start()
+            email = await mailer.create()
         except Exception as e:
-            log("ПОЧТА", f"окно почты не поднялось ({flat(str(e).splitlines()[0], 70)}) - беру в общем окне")
+            log("ПОЧТА", f"❌ {mail_kind} не дал адрес: {flat(str(e), 90)}")
+            print("OD_AUTOADD_RESULT " + json.dumps(
+                {"ok": False, "error": f"ящик на {mail_kind} не взят", "retryable": True,
+                 "proxy": LAST_PROXY.get("label"), "label": label}, ensure_ascii=False), flush=True)
+            await close_open()
+            return 6
+        state["email"] = email
+        save_meta(f"адрес {mail_kind} получен, регистрация ещё не начата")
+    else:
+        if "--mail-via-proxy" in argv:
+            # Старое поведение - ящик в том же окне и через тот же прокси. Оставлено
+            # переключателем: если однажды понадобится ящик «из той же сети», это проверенный путь.
             mail = site
-    email = await pick_22do_gmail(mail, log, allow_plus=("--allow-plus" in argv))
-    if not email:
-        # Ящик не взялся - и это тоже повод сменить адрес: 22.do отказывает по сети/сессии,
-        # а не «навсегда» (замер 16.09: на одном прокси перебор адресов упёрся в отказ
-        # соединения, на другом всё прошло с первой попытки).
-        print("OD_AUTOADD_RESULT " + json.dumps(
-            {"ok": False, "error": "ящик на 22.do не взят", "retryable": True,
-             "proxy": LAST_PROXY.get("label"), "label": label}, ensure_ascii=False), flush=True)
-        await close_open()
-        return 6
-    state["email"] = email
-    save_meta("адрес получен, регистрация ещё не начата")
+            log("ПОЧТА", "ящик беру в общем окне, через прокси (--mail-via-proxy)")
+        else:
+            # 🔴 Ящик берём ОТДЕЛЬНЫМ окном и БЕЗ прокси. Замер 16.09 15:45: адрес AS198068
+            # открывал площадку за 2 с, а 22.do через него не открылся вовсе
+            # (`NS_ERROR_CONNECTION_REFUSED`) - прогон умер на шаге почты с кодом 6, хотя с
+            # регистрацией всё было в порядке. Почтовому сервису безразлично, с какого IP создан
+            # ящик: адрес всё равно gmail, а правила Odyssey к 22.do не относятся. Зато
+            # надёжность шага почты перестаёт зависеть от выбранного адреса регистрации.
+            try:
+                mail_cm = AsyncCamoufox(headless=True, os="windows", humanize=True,
+                                        persistent_context=True,
+                                        user_data_dir=str(DIR / "profiles" / "_mail"),
+                                        main_world_eval=True, i_know_what_im_doing=True)
+                mail_ctx = await mail_cm.__aenter__()
+                OPEN_CMS.append(mail_cm)
+                mail = mail_ctx.pages[0] if mail_ctx.pages else await mail_ctx.new_page()
+                log("ПОЧТА", "ящик беру отдельным окном, напрямую (без прокси)")
+            except Exception as e:
+                log("ПОЧТА", f"окно почты не поднялось ({flat(str(e).splitlines()[0], 70)}) - беру в общем окне")
+                mail = site
+        # 🔴 Плюс-алиасы принимаем ПО УМОЛЧАНИЮ, и это замер, а не догадка. Владелец 17.09:
+        # «оказывается с плюсами почту хавает» - и живой прогон это подтвердил: адрес
+        # `careenalo.ng.criern85+jopzut@gmail.com` прошёл целиком (заявка принята, код из
+        # письма, статус complete). Плюс-алиас для площадки - ОТДЕЛЬНЫЙ ящик, а приходит
+        # всё в тот же ящик 22.do, поэтому адреса перестают кончаться: 55 из 70 виденных
+        # ящиков были именно с плюсом, и мы их сами выбрасывали.
+        email = await pick_22do_gmail(mail, log, allow_plus=("--no-plus" not in argv))
+        if not email:
+            # Ящик не взялся - и это тоже повод сменить адрес: 22.do отказывает по сети/сессии,
+            # а не «навсегда» (замер 16.09: на одном прокси перебор адресов упёрся в отказ
+            # соединения, на другом всё прошло с первой попытки).
+            print("OD_AUTOADD_RESULT " + json.dumps(
+                {"ok": False, "error": "ящик на 22.do не взят", "retryable": True,
+                 "proxy": LAST_PROXY.get("label"), "label": label}, ensure_ascii=False), flush=True)
+            await close_open()
+            return 6
+        state["email"] = email
+        save_meta("адрес получен, регистрация ещё не начата")
 
     # ── 4. форма Clerk + ALTCHA ──────────────────────────────────────────────
     stage("form")
@@ -934,7 +988,12 @@ async def main():
     # ты долго ждал письмо, 23 секунды, когда оно уже лежало»): письмо приходит раньше, чем
     # на странице появляется поле для кода, а прежний порядок сначала ждал поле (до 60 с) и
     # только потом шёл в ящик - и всё это время готовое письмо лежало непрочитанным.
-    code_task = asyncio.create_task(fetch_22do_code(mail, log, timeout_s=OTP_WAIT_S))
+    # Источник кода зависит от выбранной почты. У emailnator письмо забирает его же клиент
+    # (свой процесс со своим окном), у 22.do - страница ящика в нашем окне.
+    if mailer is not None:
+        code_task = asyncio.create_task(mailer.wait_otp(timeout=OTP_WAIT_S))
+    else:
+        code_task = asyncio.create_task(fetch_22do_code(mail, log, timeout_s=OTP_WAIT_S))
     try:
         await site.wait_for_selector("div.cl-otpCodeField input, input[name='otp-code']", timeout=30000)
     except Exception:
@@ -979,7 +1038,7 @@ async def main():
             break
         if otp_round == 1:
             log("КОД", "подтверждения нет - беру свежий код из ящика")
-            fresh = await fetch_22do_code(mail, log, timeout_s=90)
+            fresh = (await mailer.wait_otp(timeout=90)) if mailer is not None                 else (await fetch_22do_code(mail, log, timeout_s=90))
             if not fresh or fresh == code:
                 break
             code = fresh
@@ -1034,7 +1093,7 @@ async def main():
     # если что-то пошло не так уже после создания ключа. Закрываем ОБА окна (почта тоже):
     # незакрытое окно Camoufox остаётся жить после прогона и ест память.
     await asyncio.sleep(5)
-    await close_open()
+    await close_open(mailer)
     return 0
 
 

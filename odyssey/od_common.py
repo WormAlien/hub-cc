@@ -17,8 +17,11 @@ odyssey/od_common.py
 
 import asyncio
 import json
+import os
 import re
+import shutil
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -375,7 +378,182 @@ async def read_22do_address(page):
     return ""
 
 
+# Живые клиенты почты: закрываются на выходе драйвера, иначе процесс с браузером остаётся
+# висеть после провального прогона. Список модульный, потому что заводит клиента драйвер,
+# а закрывает общий `close_open()` в нём же.
+OPEN_MAILERS = []
+
+
+class MailClient:
+    """Почта на emailnator.com: отдельный процесс со своим окном, общение JSON-строками.
+
+    🔴 Почему не свой код в драйвере. У emailnator свой UI с тумблерами и своя ручка списка
+    писем (`POST /message-list` с XSRF-кукой), и клиент для него УЖЕ есть -
+    `freemodel/lib/camoufox_emailnator.py`, им пользуются соседние шлюзы. Вторая реализация
+    тех же шагов разъехалась бы с первой (в этом репозитории так уже было с ожиданием кода
+    почты, где правка в либе не касалась чужого дубля). Здесь только обвязка: запустить
+    процесс и говорить с ним строками JSON.
+
+    🔴 Зачем вообще вторая почта. Замер 16.09: у 22.do кончаются свободные gmail-адреса -
+    сервис крутит по одному набору локальных частей, и прогоны подряд получают уже занятые
+    ящики (занятых адресов стало 26). Плюс ящик на 22.do приходится `Random`-ить по 10-30
+    нажатий. emailnator выдаёт адрес сразу, но у него своя беда - он отдаёт либо свои
+    одноразовые домены (их Clerk отвергает: `block_disposable_email_domains`), либо
+    gmail-алиас, который у Odyssey раньше писем не получал. Поэтому выбор провайдера должен
+    быть ручкой, а не заменой: какой сработает - тот и берём.
+    """
+
+    # Два сервиса, один протокол (JSON-строки): `emailnator` - мост к проверенной либе
+    # руменга, `boomlify` - свой мост к их «Gmail Temp Mail». Питоновский
+    # `camoufox_emailnator.py` не берём: он ходит по старым селекторам и отдаёт
+    # `googlemail.com` (замер 17.09).
+    # Имя → (скрипт, чем запускать). `tmailor` - питоновский клиент, на нём крутится авторега
+    # freemodel и письма доходят; он у нас третий вариант, потому что у Clerk домены
+    # одноразовых сервисов обычно в блоклисте, и это надо проверить замером, а не верить.
+    SCRIPTS = {
+        "emailnator": (DIR / "mail-emailnator.js", "node"),
+        "boomlify": (DIR / "mail-boomlify.js", "node"),
+        "tmailor": (DIR.parent / "freemodel" / "lib" / "camoufox_tmailor.py", "python"),
+    }
+
+    def __init__(self, log, headless=True, kind="emailnator"):
+        self.log = log
+        self.headless = headless
+        self.kind = kind
+        pair = self.SCRIPTS.get(kind) or self.SCRIPTS["emailnator"]
+        self.SCRIPT, self.runner = pair
+        self.proc = None
+        self.email = ""
+        self._buf = b""
+
+    async def start(self):
+        if not self.SCRIPT.exists():
+            raise RuntimeError(f"клиента emailnator нет: {self.SCRIPT}")
+        exe = (shutil.which("node") or "node") if self.runner == "node" else sys.executable
+        args = [exe, str(self.SCRIPT)] if self.runner == "node" else [exe, "-u", str(self.SCRIPT)]
+        self.proc = await asyncio.create_subprocess_exec(
+            *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE, cwd=str(self.SCRIPT.parent),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        asyncio.create_task(self._pump_stderr())
+        OPEN_MAILERS.append(self)
+        self.log("ПОЧТА", f"{self.kind}: клиент запущен отдельным процессом")
+        return True
+
+    async def _pump_stderr(self):
+        """Строки клиента - в наш лог: без них провал почты нечем разбирать."""
+        try:
+            while True:
+                line = await self.proc.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", "replace").rstrip()
+                if text:
+                    self.log(self.kind, flat(text, 160))
+        except Exception:
+            pass
+
+    async def _cmd(self, obj, timeout=240):
+        if not self.proc:
+            raise RuntimeError("клиент emailnator не запущен")
+        self.proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        await self.proc.stdin.drain()
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            line = await asyncio.wait_for(self.proc.stdout.readline(), timeout=timeout)
+            if not line:
+                raise RuntimeError("клиент emailnator закрылся")
+            text = line.decode("utf-8", "replace").strip()
+            # 🪤 Ищем `{` в строке, а не требуем её с него: чужой вывод (точки прогресса
+            # библиотеки) может приклеиться к ответу спереди - строку из-за этого терять нельзя.
+            brace = text.find("{")
+            if brace < 0:
+                continue
+            try:
+                return json.loads(text[brace:])
+            except Exception:
+                continue
+        raise RuntimeError("клиент emailnator не ответил")
+
+    async def create(self):
+        ans = await self._cmd({"cmd": "create"}, timeout=180)
+        if not ans.get("ok"):
+            raise RuntimeError(f"адрес не выдан: {ans.get('error')}")
+        self.email = str(ans.get("email") or "")
+        if not self.email:
+            raise RuntimeError(f"{self.kind} вернул пустой адрес")
+        self.log("ПОЧТА", f"✅ адрес {self.kind} готов: {self.email}")
+        return self.email
+
+    async def wait_otp(self, timeout=180, from_hint=""):
+        # 🪤 У клиентов РАЗНЫЕ единицы срока: JS-мосты (emailnator, boomlify) считают минуты,
+        # питоновский tmailor - секунды, как и драйвер. Перевод - на этой границе, чтобы
+        # наружу (в драйвер) всегда были секунды.
+        if self.runner == "node":
+            minutes = max(1, round(timeout / 60))
+            ans = await self._cmd({"cmd": "code", "timeout_min": minutes,
+                                   "from_hint": from_hint}, timeout=minutes * 60 + 90)
+        else:
+            ans = await self._cmd({"cmd": "wait_otp", "timeout": int(timeout), "poll": 4,
+                                   "from_hint": from_hint}, timeout=timeout + 90)
+        if ans.get("ok") and ans.get("code"):
+            self.log("ПОЧТА", f"код из письма ({self.kind}): {ans['code']}")
+            return str(ans["code"])
+        self.log("ПОЧТА", f"код на {self.kind} не пришёл ({ans.get('error') or 'пусто'})")
+        return ""
+
+    async def stop(self):
+        try:
+            if self.proc and self.proc.returncode is None:
+                self.proc.stdin.write(b'{"cmd":"stop"}\n')
+                await self.proc.stdin.drain()
+                await asyncio.wait_for(self.proc.wait(), timeout=20)
+        except Exception:
+            pass
+        try:
+            if self.proc and self.proc.returncode is None:
+                self.proc.kill()
+        except Exception:
+            pass
+
+
+# Домены, которые 22.do выдаёт и которые площадка ПРИНИМАЕТ. Это реальные ящики (Gmail,
+# Hotmail, Outlook), а не одноразовые домены: Clerk отвергает последние прямым текстом
+# («Temporary email services are not supported» - замер 17.09 на `taxibmt.net` от tmailor).
+# 🔴 Hotmail и Outlook добавлены 17.09 со слов знакомого владельца, который так и
+# регистрировал: до этого `clean_22do_address` пропускал ТОЛЬКО gmail.com и молча выбрасывал
+# годные адреса - отсюда и «у 22.do кончаются почты».
+MAIL_DOMAINS = ("gmail.com", "hotmail.com", "outlook.com")
+
+
+def _key(addr, raw=False):
+    """Ключ для сверки занятости: с `raw` берём адрес как есть (плюс-алиасы раздельны)."""
+    a = str(addr or "").strip().lower()
+    return a if raw else mail_key(a)
+
+
+def mail_key(addr):
+    """Ключ сравнения адресов для проверки «этот ящик уже занят».
+
+    🔴 Точки не значат ничего ТОЛЬКО у Gmail: у Hotmail и Outlook `a.b@` и `ab@` - разные
+    ящики, и склеивать их нельзя. Плюс-часть отбрасываем у всех: Clerk её запрещает
+    (`block_email_subaddresses`), а для сравнения она всё равно не отдельный адрес.
+    """
+    if not addr or "@" not in addr:
+        return ""
+    local, _, domain = addr.strip().lower().rpartition("@")
+    local = local.split("+")[0]
+    if domain == "gmail.com":
+        local = local.replace(".", "")
+    return f"{local}@{domain}"
+
+
 def gmail_key(addr):
+    """Прежнее имя `mail_key` - оставлено, потому что им пользуются прогоны и пробы."""
+    return mail_key(addr)
+
+
+def _gmail_key_old(addr):
     """Ключ сравнения gmail-адресов: у Gmail точки в локальной части не значат НИЧЕГО,
     а `+что-угодно` - тот же ящик.
 
@@ -392,7 +570,7 @@ def gmail_key(addr):
     return f"{local.split('+')[0].replace('.', '')}@{domain}"
 
 
-def used_addresses():
+def used_addresses(raw=False):
     """Адреса, на которые аккаунты уже заведены: пул дашборда плюс мета-файлы прогонов.
 
     Читаем оба источника, потому что прогон мог создать аккаунт и упасть до записи в пул
@@ -404,7 +582,7 @@ def used_addresses():
         doc = json.loads((DIR.parent / "routing" / "odyssey-sessions.json").read_text(encoding="utf-8"))
         accounts = doc if isinstance(doc, list) else (doc.get("accounts") or doc.get("items") or [])
         for a in accounts:
-            k = gmail_key(str(a.get("email") or ""))
+            k = _key(str(a.get("email") or ""), raw)
             if k:
                 keys.add(k)
     except Exception:
@@ -412,7 +590,7 @@ def used_addresses():
     for meta in (DIR / "sessions" / "_meta").glob("*.json"):
         try:
             doc = json.loads(meta.read_text(encoding="utf-8"))
-            k = gmail_key(str(doc.get("email") or ""))
+            k = _key(str(doc.get("email") or ""), raw)
             if k:
                 keys.add(k)
         except Exception:
@@ -438,7 +616,7 @@ def clean_22do_address(addr, allow_plus=False):
     if not addr or "@" not in addr:
         return False
     local, _, domain = addr.rpartition("@")
-    if domain.lower() != "gmail.com":
+    if domain.lower() not in MAIL_DOMAINS:
         return False
     return allow_plus or "+" not in local
 
@@ -470,7 +648,11 @@ async def reset_22do_session(page, log):
 
 
 async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=10, allow_plus=False):
-    """Крутит «Random» до домена gmail.com, жмёт «Open» и отдаёт ГОДНЫЙ адрес.
+    """Крутит «Random» до ПЕРВОГО домена из допущенных, жмёт «Open» и отдаёт годный адрес.
+
+    🔴 Берём первый же годный, а не «продолжаем до gmail»: допущены gmail, hotmail и outlook
+    (замер 17.09 - знакомый владельца регистрировал на hotmail и outlook, оба проходят), и
+    крутить дальше значило бы выбрасывать рабочие адреса ради красоты домена.
 
     🔴 Разведка 16.09: кнопка «Random» (`button#mail-random`) крутит **ДОМЕН**, а не
     локальную часть. В выпадающем списке (Choices.js) gmail НЕТ - он приходит только
@@ -482,7 +664,10 @@ async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=10, allow_pl
     генерирует и локальную часть, и домен заново.
     """
     # Занятые ящики считаем ОДИН раз до перебора: это чтение двух файлов, а не запрос в сеть.
-    used = used_addresses()
+    # 🪤 С `allow_plus` сравниваем ПОЛНЫЙ адрес: плюс-алиас - это отдельный ящик для площадки
+    # (владелец 17.09: «с плюсами почту хавает»), и склеивать его с базовым именем нельзя,
+    # иначе второй плюс-алиас того же ящика будет считаться занятым.
+    used = used_addresses(raw=allow_plus)
     if used:
         log("ПОЧТА", f"занятых адресов в пуле и мета-файлах: {len(used)} - выданный сверяю с ними")
     for rnd in range(1, rounds + 1):
@@ -504,8 +689,8 @@ async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=10, allow_pl
         for i in range(1, tries + 1):
             dom = await read_22do_domain(page)
             seen.append(dom)
-            if dom == "gmail.com":
-                log("ПОЧТА", f"gmail.com выпал на {i}-м нажатии «Random» (раунд {rnd})")
+            if dom in MAIL_DOMAINS:
+                log("ПОЧТА", f"{dom} выпал на {i}-м нажатии «Random» (раунд {rnd})")
                 break
             ok, how = await robust_click(page, "button#mail-random", log, "Random",
                                          timeout=25000, prefer_js=True)
@@ -514,7 +699,7 @@ async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=10, allow_pl
                 return ""
             await page.wait_for_timeout(900)
         else:
-            log("ПОЧТА", f"❌ gmail.com не выпал за {tries} нажатий "
+            log("ПОЧТА", f"❌ ни одного из допущенных доменов за {tries} нажатий "
                          f"(видели: {', '.join(sorted(set(seen))[:8])})")
             return ""
 

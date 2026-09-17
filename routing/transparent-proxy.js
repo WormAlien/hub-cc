@@ -21141,7 +21141,9 @@ async function handleOdAutoregStart(req, res) {
         // Какая почта для аккаунта: 22do (по умолчанию) или emailnator. Ручка на вкладке -
         // у 22.do кончаются свободные gmail-адреса, а у emailnator свои грабли, и какой
         // сработает - решает замер, а не догадка.
-        const mail = ['22do', 'emailnator'].includes(String(body.mail)) ? String(body.mail) : '22do';
+        // Почта одна: 22.do. emailnator, boomlify и tmailor проверены живьём 17.09 и не годятся -
+        // первые два Clerk пропускает, но письма до них не доходят, третий он отвергает по домену.
+        const mail = '22do';
         const label = String(body.label || '').trim().replace(/[^\w-]/g, '_')
             || ('od_' + Date.now());
         // Ярус - переключатель, а не приговор: при пустом или мёртвом пуле владелец

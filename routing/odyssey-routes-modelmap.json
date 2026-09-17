@@ -1,6 +1,6 @@
 {
-  "default": "openai/gpt-5.6-terra",
-  "opus": "openai/gpt-5.6-terra",
+  "default": "openai/gpt-5.6-sol",
+  "opus": "openai/gpt-5.6-sol",
   "sonnet": "openai/gpt-5.6-terra",
-  "haiku": "openai/gpt-5.6-terra"
+  "haiku": "deepseek/deepseek-v4-flash"
 }

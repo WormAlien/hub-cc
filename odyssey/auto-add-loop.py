@@ -63,7 +63,7 @@ CANDIDATES_TTL_S = 20 * 60
 def parse(argv):
     positional = [a for a in argv if not a.startswith("--")]
     label = positional[0] if positional else f"acct_{int(datetime.now().timestamp())}"
-    tier, attempts, count = "own", None, 1
+    tier, attempts, count, mail = "own", None, 1, "22do"
     for i, a in enumerate(argv):
         if a.startswith("--tier"):
             tier = (a.split("=", 1)[1] if "=" in a
@@ -73,6 +73,11 @@ def parse(argv):
                 attempts = max(1, int(a.split("=", 1)[1] if "=" in a else argv[i + 1]))
             except Exception:
                 attempts = None
+        elif a.startswith("--mail"):
+            # Какая почта: 22do (по умолчанию) или emailnator. Пробрасываем как есть -
+            # проверяет значение драйвер, у него же и значения по умолчанию.
+            mail = (a.split("=", 1)[1] if "=" in a
+                    else (argv[i + 1] if i + 1 < len(argv) else "22do")).lower()
         elif a.startswith("--count"):
             # Сколько аккаунтов завести за ОДИН запуск (ручка на вкладке). Раньше прогон
             # останавливался на первом успехе, и «завести три» означало три нажатия кнопки.
@@ -84,7 +89,7 @@ def parse(argv):
     # регистрацию - поэтому попыток даём с запасом, но не меньше четырёх.
     if attempts is None:
         attempts = max(MAX_ATTEMPTS_DEFAULT, count + 2)
-    return label, tier, attempts, count
+    return label, tier, attempts, count, mail
 
 
 def read_candidates(log):
@@ -185,7 +190,7 @@ async def run_attempt(args, log):
 
 async def main():
     argv = sys.argv[1:]
-    label, tier, attempts, count = parse(argv)
+    label, tier, attempts, count, mail = parse(argv)
     tried = []
     made = 0
 
@@ -213,7 +218,7 @@ async def main():
         # Окно ожидания капчи: молчаливый путь на годном адресе уходит за 20-45 с, поэтому 75
         # даёт запас и оставляет место решателю (он зовётся только после 50-й секунды).
         args = [sys.executable, "-u", str(DRIVER), attempt_label, "--tier", tier,
-                "--captcha-wait", "75"]
+                "--captcha-wait", "75", "--mail", mail]
 
         pin = None
         while candidates:

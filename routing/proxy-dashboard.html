@@ -7416,11 +7416,13 @@ window.finNavCount = async () => {
               <input id="od-autoreg-count" type="number" min="1" max="9" value="1"
                      class="w-14 text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60"
                      title="Сколько аккаунтов завести за один запуск. На каждый нужен свой адрес и своя сеть, поэтому прогон возьмёт столько адресов, сколько попросили (и столько попыток, сколько понадобится)">
-              <label class="text-[10px] text-faint font-mono" for="od-autoreg-mail">почта</label>
-              <select id="od-autoreg-mail" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60" title="22.do — gmail-ящики, но свободные кончаются (сервис крутит по одному набору локальных частей). emailnator — адрес выдаёт сразу, но свои грабли: одноразовые домены Clerk отвергает">
-                <option value="22do" selected>22.do</option>
-                <option value="emailnator">emailnator</option>
-              </select>
+              <!-- 🪤 Селекта почты тут больше НЕТ, и это замер, а не упрощение. Три сервиса
+                   проверены живьём 17.09 и все три не годятся: tmailor и его класс Clerk
+                   отвергает прямым текстом («Temporary email services are not supported»),
+                   а emailnator и boomlify он пропускает, но письма Clerk до них не доходят
+                   (три минуты пустого ящика). Работает ровно один - 22.do со своими ящиками
+                   gmail/hotmail/outlook, и адресов у него не кончается, потому что площадка
+                   принимает и плюс-алиасы. -->
               <button id="od-autoreg-start" onclick="odAutoregStart()" class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium" title="Скрипт заведёт аккаунт целиком; если Clerk потребует капчу — подойди к окну и прожми её">🤖 Завести аккаунт</button>
               <button id="od-autoreg-stop" onclick="odAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
               <span id="od-autoreg-status" class="text-[10px] font-mono text-faint"></span>
@@ -21324,7 +21326,6 @@ async function odAutoregStatus({ quiet = false } = {}) {
     $('od-autoreg-stop').classList.toggle('hidden', !running);
     $('od-autoreg-tier').disabled = running;
     $('od-autoreg-count').disabled = running;
-    $('od-autoreg-mail').disabled = running;
 
     const stageName = d.stage && d.stage.stage ? d.stage.stage : null;
     const stageNote = d.stage && d.stage.note ? (' · ' + d.stage.note) : '';
@@ -21361,11 +21362,10 @@ async function odAutoregStatus({ quiet = false } = {}) {
 async function odAutoregStart() {
   const tier = $('od-autoreg-tier').value;
   const count = Math.max(1, Math.min(9, parseInt($('od-autoreg-count').value, 10) || 1));
-  const mail = $('od-autoreg-mail').value;
   try {
     const r = await fetch('/__switch/api/od/autoreg/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier, count, mail }),
+      body: JSON.stringify({ tier, count }),
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
@@ -21373,7 +21373,7 @@ async function odAutoregStart() {
     $('od-autoreg-log-err').textContent = '';
     $('od-autoreg-log-err').classList.add('hidden');
     $('od-autoreg-log-wrap').classList.remove('hidden');
-    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier}, аккаунтов ${count}, почта ${mail})`, 'success');
+    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier}, аккаунтов ${count}, почта 22.do)`, 'success');
     await odAutoregStatus({ quiet: true });
     if (state.odAutoregTimer) clearInterval(state.odAutoregTimer);
     state.odAutoregTimer = setInterval(async () => {

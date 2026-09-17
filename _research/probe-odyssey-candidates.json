@@ -8,7 +8,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20040
+    "ms": 20015
    }
   }
  },
@@ -21,7 +21,7 @@
   "res": {
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 4143
+    "ms": 4116
    }
   }
  },
@@ -33,9 +33,15 @@
   "country": "Bangladesh",
   "res": {
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20010
+    "status": 200,
+    "ms": 10803,
+    "len": 49873
    }
+  },
+  "burst": {
+   "ok": 3,
+   "total": 8,
+   "ms": 20002
   }
  },
  {
@@ -47,7 +53,7 @@
   "res": {
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 2792
+    "ms": 2493
    }
   }
  },
@@ -60,7 +66,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20009
+    "ms": 20001
    }
   }
  },
@@ -73,7 +79,7 @@
   "res": {
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 4380
+    "ms": 2657
    }
   }
  },
@@ -86,7 +92,7 @@
   "res": {
    "/sign-up": {
     "err": "Received invalid Socks5 initial handshake (no accepted authe",
-    "ms": 1570
+    "ms": 480
    }
   }
  },
@@ -99,7 +105,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20007
+    "ms": 20000
    }
   }
  },
@@ -112,7 +118,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20007
+    "ms": 20000
    }
   }
  },
@@ -124,8 +130,8 @@
   "country": "Cambodia",
   "res": {
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20006
+    "err": "таймаут 15000 мс через прокси socks5://43.230.192.242:1080",
+    "ms": 16368
    }
   }
  },
@@ -138,14 +144,14 @@
   "res": {
    "/sign-up": {
     "status": 200,
-    "ms": 3563,
+    "ms": 1571,
     "len": 49506
    }
   },
   "burst": {
-   "ok": 6,
+   "ok": 8,
    "total": 8,
-   "ms": 5559
+   "ms": 1383
   }
  },
  {
@@ -157,7 +163,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20006
+    "ms": 20000
    }
   }
  },
@@ -170,7 +176,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20016
+    "ms": 20001
    }
   }
  },
@@ -182,15 +188,9 @@
   "country": "Russia",
   "res": {
    "/sign-up": {
-    "status": 200,
-    "ms": 8512,
-    "len": 49873
+    "err": "Proxy connection timed out",
+    "ms": 20001
    }
-  },
-  "burst": {
-   "ok": 4,
-   "total": 8,
-   "ms": 20006
   }
  },
  {
@@ -202,7 +202,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20015
+    "ms": 20001
    }
   }
  },
@@ -214,8 +214,8 @@
   "country": "Ukraine",
   "res": {
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20015
+    "err": "таймаут 15000 мс через прокси socks5://178.150.77.204:10801",
+    "ms": 15002
    }
   }
  },
@@ -228,7 +228,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20015
+    "ms": 20001
    }
   }
  },
@@ -240,8 +240,8 @@
   "country": "Russia",
   "res": {
    "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks5://188.235.21.247:2080",
-    "ms": 15005
+    "err": "Proxy connection timed out",
+    "ms": 20000
    }
   }
  },
@@ -253,8 +253,8 @@
   "country": "Russia",
   "res": {
    "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks5://85.175.219.236:1080",
-    "ms": 15008
+    "err": "Proxy connection timed out",
+    "ms": 20001
    }
   }
  },
@@ -266,27 +266,8 @@
   "country": "The Netherlands",
   "res": {
    "/sign-up": {
-    "status": 200,
-    "ms": 3188,
-    "len": 49506
-   }
-  },
-  "burst": {
-   "ok": 2,
-   "total": 8,
-   "ms": 27908
-  }
- },
- {
-  "label": "socks5://108.174.152.80:1080",
-  "ip": "108.174.152.80",
-  "tier": "scraped",
-  "as": "AS31898 Oracle Corporation",
-  "country": "Mexico",
-  "res": {
-   "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20002
+    "err": "таймаут 15000 мс через прокси socks4://144.31.30.222:1080",
+    "ms": 42776
    }
   }
  },
@@ -299,14 +280,14 @@
   "res": {
    "/sign-up": {
     "status": 200,
-    "ms": 5156,
+    "ms": 1623,
     "len": 49506
    }
   },
   "burst": {
-   "ok": 7,
+   "ok": 8,
    "total": 8,
-   "ms": 12010
+   "ms": 1379
   }
  },
  {
@@ -318,7 +299,7 @@
   "res": {
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 5598
+    "ms": 5517
    }
   }
  },
@@ -330,8 +311,8 @@
   "country": "Russia",
   "res": {
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20012
+    "err": "таймаут 15000 мс через прокси socks5://81.177.175.251:1080",
+    "ms": 15001
    }
   }
  },
@@ -344,27 +325,8 @@
   "res": {
    "/sign-up": {
     "err": "Socks5 proxy rejected connection - NotAllowed",
-    "ms": 896
+    "ms": 837
    }
-  }
- },
- {
-  "label": "socks5://144.24.111.128:1088",
-  "ip": "144.24.111.128",
-  "tier": "scraped",
-  "as": "AS31898 Oracle Corporation",
-  "country": "India",
-  "res": {
-   "/sign-up": {
-    "status": 200,
-    "ms": 7080,
-    "len": 49873
-   }
-  },
-  "burst": {
-   "ok": 8,
-   "total": 8,
-   "ms": 7143
   }
  },
  {
@@ -376,7 +338,7 @@
   "res": {
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20002
+    "ms": 20001
    }
   }
  },
@@ -389,14 +351,14 @@
   "res": {
    "/sign-up": {
     "status": 200,
-    "ms": 9400,
+    "ms": 4800,
     "len": 49506
    }
   },
   "burst": {
-   "ok": 6,
+   "ok": 7,
    "total": 8,
-   "ms": 14125
+   "ms": 53449
   }
  }
 ]

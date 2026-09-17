@@ -56,16 +56,16 @@ $perPort = @{
   # /v1 suffix for model listing only - putting it here would send /v1/v1/messages and
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
-  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
-             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
-  20170 = @{ UPSTREAM = 'https://odysseyapi.tech'; KEY_FILE = "$profileDir\.claude\odyssey-active-key.txt";
+  # Nova (2026-09-17): panel Orbelis, New API. Bare root here too - keepalive appends
+  # /v1/messages itself; nova.vcrauo.com/v1 would send /v1/v1/messages and answer 404.
+  20172 = @{ UPSTREAM = 'https://nova.vcrauo.com'; KEY_FILE = "$profileDir\.claude\nova-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'nova-modelmap.json') }
   20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
+  20170 = @{ UPSTREAM = 'https://odysseyapi.tech'; KEY_FILE = "$profileDir\.claude\odyssey-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'odyssey-modelmap.json') }
   20169 = @{ UPSTREAM = 'https://chat.b.ai'; KEY_FILE = "$profileDir\.claude\bai-active-key.txt";
-  20168 = @{ UPSTREAM = 'https://www.getunikey.ai'; KEY_FILE = "$profileDir\.claude\getunikey-active-key.txt";
-             MODELMAP_FILE = (Join-Path $dir 'getunikey-modelmap.json') }
              MODELMAP_FILE = (Join-Path $dir 'bai-modelmap.json') }
   # HCNsec (New API): bare root here too - keepalive appends /v1/messages itself. The
   # /v1 base URL (HN_BASE_URL in transparent-proxy.js) is for model listing only;
@@ -83,7 +83,7 @@ $perPort = @{
              MODELMAP_FILE = (Join-Path $dir 'aikeysapi-modelmap.json') }
 }
 if (-not $perPort.ContainsKey($Port)) {
-  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163 / 20164 / 20165)"; exit 1
+  Write-Error "Unknown port $Port (known: 20133 / 20155 / 20156 / 20157 / 20158 / 20159 / 20160 / 20161 / 20162 / 20163 / 20164 / 20165 / 20168 / 20169 / 20170 / 20172)"; exit 1
 }
 
 # Kill the current listener

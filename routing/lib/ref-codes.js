@@ -32,6 +32,7 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    nova:     { host: 'nova.vcrauo.com',        path: '/sign-up?aff=',  label: 'Nova' },
     bai:     { host: 'chat.b.ai',        path: '/chat?invite_code=', label: 'B.AI' },   // форма СВОЯ: приглашение в чат, не /sign-up
     // getunikey (2026-09-15) — New API, форма `/sign-up?aff=`. Реф-программа у площадки
     // ЕСТЬ (админ-настройки QuotaForInviter/QuotaForInvitee, живая карточка «Referral

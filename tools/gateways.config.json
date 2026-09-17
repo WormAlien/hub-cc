@@ -51,5 +51,12 @@
     "HOST": "odysseyapi.tech", "PORT": 20170, "FOLDER": "odyssey",
     "ICON": "🧭", "COLOR": "lime", "REF": "",
     "github": false, "ref": false, "flatRate": false, "anthropic": false
+  },
+
+  "nova": {
+    "p": "nv", "P": "NV", "full": "nova", "NAME": "Nova",
+    "HOST": "nova.vcrauo.com", "PORT": 20172, "FOLDER": "nova",
+    "ICON": "🛰️", "COLOR": "cyan", "REF": "ITSp",
+    "github": true, "ref": true, "flatRate": false, "anthropic": true
   }
 }

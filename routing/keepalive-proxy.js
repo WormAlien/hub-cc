@@ -66,6 +66,15 @@ const LOG_FILE = process.env.KEEPALIVE_LOG_FILE
 // у lifecycle.rotateLog — переименовать в `.1`, глубина истории один файл.
 const LOG_MAX = Number(process.env.LOG_MAX || 5 * 1024 * 1024);
 const RETRY_DELAY_MS = Number(process.env.RETRY_DELAY_MS || 1500);
+// ── Быстрый 5xx — отказ канала, а не перегрузка (замер 17.09) ────────────────
+// Шлюз Odyssey на мёртвой модели ответил за 0.49с телом
+// `502 {"type":"error","error":{"type":"api_error","message":"error code: 502"}}`.
+// Структурных полей в теле нет → isTransientBody считал это транзиентным, прокси
+// отработал 6 повторов и 55 секунд, клиент сдался на `Unable to validate model:
+// socket closed`. Перегрузка приходит МЕДЛЕННО (очередь, таймаут nginx), а «канала
+// под эту модель нет» — мгновенно, ещё на входе. Порог и разделяет эти два случая:
+// быстрее порога 5xx без структурного вердикта повтором не лечится (см. isFastFail5xx).
+const RETRY_FAST_FAIL_MS = Number(process.env.RETRY_FAST_FAIL_MS || 2000);
 // ── Удержание запроса при обрыве пути (2026-09-03) ───────────────────────────
 // Сколько раз максимум переспросить шлюз за окно cfg.holdMs и с какими отступами.
 // Потолок нужен ровно из-за плоского тарифа: kktoken игнорирует `max_tokens` и
@@ -1236,6 +1245,29 @@ function isTransientBody(status, buf) {
   return status >= 500 || status === 429 || status === 401 || status === 403;
 }
 
+// Быстрый 5xx = у шлюза нет канала под модель, повтор его не создаст (см. RETRY_FAST_FAIL_MS).
+// Отдельной функцией, а не строкой в isTransientBody: решает не тело, а ВРЕМЯ ответа, и
+// вызывающему (колбэк ответа) оно известно только там. Структурный вердикт сервера
+// (`retryable`/`retry_after`) остаётся сильнее догадки по времени: если шлюз сам назвал
+// ошибку повторяемой, повторяем, даже когда ответил мгновенно (404 на перегруженном
+// Cloudflare-пуле так и выглядит — 522 с `retry_after: 120`).
+function isFastFail5xx(status, buf, elapsedMs) {
+  if (status < 500) return false;
+  if (elapsedMs >= RETRY_FAST_FAIL_MS) return false;
+  const s = buf.toString('utf8');
+  // 🪤 Пустое тело — это сбой прослойки (nginx/Cloudflare отдал голый 502 без байт),
+  // и он лечится повтором чаще, чем не лечится: правило по времени про такие ответы
+  // ничего не знает. Оставляем им прежнее поведение (`isTransientBody` считает пустое
+  // тело транзиентным).
+  if (!s.trim()) return false;
+  // 🪤 Проза, которую наши словари уже считают транзиентной (`service unavailable`,
+  // `upstream`, `overloaded`), сильнее догадки по времени: мгновенный 503 с таким
+  // текстом — это «канал есть, но занят», повтор осмыслен. Меренный случай 17.09 в
+  // словари не попадал вовсе — ровно поэтому и понадобилось правило по времени.
+  if (RETRY_OK.test(s)) return false;
+  return structuredRetry(s) === null && retryAfterSec(s) === null;
+}
+
 // ── Отказ по деньгам и мёртвый ключ: причина сменить аккаунт, а не умереть ────
 // Один и тот же смысл шлюз говорит ТРЕМЯ способами, и до авторотации все ветки
 // вели в тупик (замеры 22.08 по keepalive-proxy.log):
@@ -1308,6 +1340,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'nova.vcrauo.com': 'nv',
   'odysseyapi.tech': 'od',
   'chat.b.ai': 'bai',
   'www.getunikey.ai': 'uk',
@@ -2406,6 +2439,10 @@ const server = http.createServer((req, res) => {
     // Заполняется traceConn сразу после создания запроса (событие `socket` Node отдаёт
     // через nextTick, поэтому успеваем подписаться). Нужен внутри колбэка ответа.
     let ctrace = null;
+    // Начало попытки: по нему колбэк отличает мгновенный отказ канала от медленной
+    // перегрузки (см. isFastFail5xx). Момент старта — здесь, а не в колбэке ответа:
+    // в цену попытки входит и установка соединения.
+    const attemptT0 = Date.now();
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -2510,7 +2547,18 @@ const server = http.createServer((req, res) => {
             });
             return;
           }
-          if (isTransientBody(status, buf)) {
+          // Быстрый 5xx без структурного вердикта — это «канала под модель нет», а не
+          // перегрузка: повтор не поможет, только сожжёт время клиента (17.09: 6 повторов
+          // и 55с на 0.49-секундный 502, клиент умер на «socket closed»). Уходит в ту же
+          // ветку постоянных ошибок, что и тела с RETRY_NO.
+          const fastFailMs = Date.now() - attemptT0;
+          const fastFail = isFastFail5xx(status, buf, fastFailMs);
+          if (fastFail) {
+            log(`${req.method} ${reqPath} -> быстрый отказ ${status} за ${fastFailMs}мс: `
+              + `похоже, канала под модель нет — повтор не поможет, отдаю ошибку клиенту `
+              + `(${buf.toString('utf8').slice(0, 100)})`);
+          }
+          if (!fastFail && isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
             // clientModel — модель из тела КЛИЕНТА (до ремапа); остальное — разбор
@@ -2947,6 +2995,37 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(structuredRetry('null'), null, 'JSON null → решают словари');
   assert.strictEqual(retryAfterSec(cf522), 120, 'retry_after читается');
   assert.strictEqual(retryAfterSec('не json'), null, 'retry_after из мусора — null');
+
+  // ── быстрый 5xx: повтор не поможет (замер 17.09, Odyssey) ────────────────────
+  // Тело живого случая: 502 с «error code: 502» ушло за 0.49с, а прокси честно
+  // отработал 6 повторов и 55с. Такое тело транзиентно ПО СТАТУСУ, но не по смыслу.
+  const FAST_502 = '{"type":"error","error":{"type":"api_error","message":"error code: 502"}}';
+  assert.strictEqual(isFastFail5xx(502, Buffer.from(FAST_502), 490), true,
+    'мгновенный 502 без структурных полей = постоянная ошибка');
+  assert.strictEqual(isTransientBody(502, Buffer.from(FAST_502)), true,
+    'при этом сам классификатор по телу её транзиентной и считает — потому решение и вынесено отдельно');
+  assert.strictEqual(isFastFail5xx(502, Buffer.from(FAST_502), 2500), false,
+    'тот же 502 через 2.5с — уже медленный, ретраим как раньше');
+  assert.strictEqual(isFastFail5xx(502, Buffer.from(FAST_502), RETRY_FAST_FAIL_MS), false,
+    'граница порога включительна в сторону ретрая: ровно 2000мс ещё ретраим');
+  assert.strictEqual(isFastFail5xx(503, Buffer.from('{"retryable":true,"error":{"message":"overloaded"}}'), 300), false,
+    'слово сервера сильнее времени: retryable:true ретраим даже на мгновенном ответе');
+  assert.strictEqual(isFastFail5xx(522, Buffer.from('{"retry_after":120}'), 300), false,
+    'retry_after — тоже структурный вердикт, его не перебиваем');
+  assert.strictEqual(isFastFail5xx(500, Buffer.from('{"error_category":"origin"}'), 300), false,
+    'error_category=origin транзиентна всегда — это нехватка стороны ЗА шлюзом');
+  assert.strictEqual(isFastFail5xx(429, Buffer.from(''), 300), false,
+    '429 ведёт себя как раньше: это троттлинг, а не отказ канала');
+  assert.strictEqual(isFastFail5xx(401, Buffer.from('nope'), 300), false,
+    '401 мимо нового правила — у него своя судьба (ротация ключа)');
+  assert.strictEqual(isFastFail5xx(200, Buffer.from('{}'), 100), false,
+    'успешный ответ правило не трогает вовсе');
+  // Границы правила: два случая, где по времени судить нельзя, и они НЕ переходят
+  // в постоянные — иначе сужение вышло бы за пределы замеренного случая.
+  assert.strictEqual(isFastFail5xx(502, Buffer.from(''), 400), false,
+    'пустое тело мгновенного 502 — сбой прослойки, а не отказ канала: ретраим как раньше');
+  assert.strictEqual(isFastFail5xx(503, Buffer.from('service unavailable'), 400), false,
+    'мгновенный 503 со словом из RETRY_OK — «канал занят», повтор осмыслен');
 
   // ── авторотация: отказ по деньгам ловится в ОБЕИХ формулировках ──────────────
   // Это те самые два текста, которые до ротации вели в разные тупики: китайский

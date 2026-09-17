@@ -1,33 +1,43 @@
-// kktoken/open-session.js
+// nova/open-session.js
 //
 // Открывает видимый Chromium с ПЕРСОНАЛЬНЫМ ПРОФИЛЕМ аккаунта (полный профиль
-// на диск: история, куки, localStorage, сессии GitHub + kktoken).
+// на диск: история, куки, localStorage, сессии GitHub + nova).
 //
 // Панель — тот же New API, что у GoRouter/SeekAi/JustWoker, поэтому весь механизм
 // (реф-код в localStorage, GitHub-OAuth, кука ЛК, ошибки сайта) взят у gorouter
 // без изменений. Отличаются только адреса и реф-код.
 //
-// Чем kktoken отличается (замер `/api/status`):
-//   • вход через GitHub-OAuth есть (`github_oauth: true`) — путь тот же;
+// Чем nova отличается (живой `GET /api/status`, замер 2026-09-17):
+//   • панель зовётся **Orbelis** (`system_name`), `quota_per_unit: 500000`;
+//   • вход через GitHub-OAuth есть (`github_oauth: true`), плюс LinuxDO
+//     (`linuxdo_oauth: true`) — путь тот же;
 //   • 🪤 на регистрации включён `turnstile_check` — капча Cloudflare на форме.
 //     Именно поэтому авто-заведения (⚡, как у JustWoker) у вкладки НЕТ: сценарий
 //     без человека тут не гарантирован. Этот скрипт открывает окно и ждёт, пока
-//     человек пройдёт капчу и GitHub-вход руками, — он ничего не регистрирует сам.
+//     человек пройдёт капчу и GitHub-вход руками, — он ничего не регистрирует сам;
+//   • `password_register_enabled: true` — почтой аккаунт завести можно, но
+//     `email_verification: true`: почту придётся подтверждать;
+//   • `checkin_enabled: true` — ежедневный чек-ин, то есть пополнение без денег
+//     (как у hcnsec). Колонки чек-ина на вкладке пока НЕТ: она клонирована от
+//     kktoken, где чек-ина нет; завести его — отдельная задача.
 //
 // Сценарий:
 //   1. В дашборде добавляешь аккаунт (email, ключ можно оставить пустым), жмёшь
 //      🌐 «Открыть браузер».
-//   2. Открывается Chromium с профилем kktoken/profiles/<label>/ (на аккаунт).
+//   2. Открывается Chromium с профилем nova/profiles/<label>/ (на аккаунт).
 //   3. Ключа у аккаунта ещё нет → открывается РЕГИСТРАЦИЯ по рефке владельца.
 //      Ключ уже вписан → открывается страница баланса (wallet).
-//   4. В консоли KKtoken возьми API-ключ и вставь его в аккаунт кнопкой 🔑
+//   4. В консоли Nova возьми API-ключ и вставь его в аккаунт кнопкой 🔑
 //      на дашборде (или впиши сразу при добавлении).
 //   5. Профиль сохраняется автоматически — при следующих открытиях GitHub и
-//      KKtoken уже залогинены.
+//      Nova уже залогинены.
+//
+// 🪤 Путь страницы баланса (`/wallet`) у nova живьём НЕ проверен: он унаследован от
+// kktoken, а у New API-панелей встречается и `/console`. Подтвердить при первом входе.
 //
 // Использование:
-//   node kktoken/open-session.js <label> [register|console|auto]
-//     label — имя профиля (папка kktoken/profiles/<label>/)
+//   node nova/open-session.js <label> [register|console|auto]
+//     label — имя профиля (папка nova/profiles/<label>/)
 //     режим — register: регистрация по рефке (у аккаунта ещё нет sk-ключа),
 //             console:  страница баланса (ключ уже есть),
 //             auto (по умолчанию): чистый профиль = register, иначе console.
@@ -44,11 +54,11 @@ const path = require('path');
 // дефолтом в routing/ref-codes.default.json, пользователь вписывает свой через 💩 в
 // «Настройках» дашборда (routing/ref-codes.json, он в .gitignore). Одна точка на весь
 // репозиторий: раньше код был в десяти местах, и забытое = потерянный реф-кредит.
-const REGISTER_URL = require("../routing/lib/ref-codes.js").url("kktoken");
+const REGISTER_URL = require("../routing/lib/ref-codes.js").url("nova");
 // Ключ уже вписан → сразу баланс, а не логин.
-const CONSOLE_URL = 'https://kktoken.cc/wallet';
+const CONSOLE_URL = 'https://nova.vcrauo.com/wallet';
 // Корень нужен для прогрева перед регистрацией (см. openRegisterViaRef).
-const ROOT_URL = 'https://kktoken.cc/';
+const ROOT_URL = 'https://nova.vcrauo.com/';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 
@@ -62,15 +72,15 @@ const profileDir = path.join(PROFILES_DIR, label);
 const ghCapture = require('../routing/lib/gh-live-capture.js').makeCapture({
   label,
   moduleDir: __dirname,
-  poolFile: path.join(__dirname, '..', 'routing', 'kktoken-sessions.json'),
+  poolFile: path.join(__dirname, '..', 'routing', 'nova-sessions.json'),
 });
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
 
 // Если рядом лежит <label>.json — применяем его как storageState: cookies + localStorage.
 // Два разных источника такого файла, и различать их обязательно:
-//   share-код друга      → аккаунт kktoken уже создан, GitHub/kktoken сразу залогинены;
-//   seed:'github'        → только GitHub-куки, аккаунта kktoken ещё НЕТ (см. seededGithub).
+//   share-код друга      → аккаунт nova уже создан, GitHub/nova сразу залогинены;
+//   seed:'github'        → только GitHub-куки, аккаунта nova ещё НЕТ (см. seededGithub).
 function loadImportedSession() {
   try {
     const p = path.join(SESSIONS_DIR, label + '.json');
@@ -146,7 +156,7 @@ function hasSessionCookie(cookies) {
 // Chromium кеширует и 404-ответы. Если на `/assets/index-<hash>.js` однажды прилетел
 // 404 (деплой сайта / затык WAF), он оседает в кеше профиля — и SPA больше не
 // поднимается НИКОГДА: на каждом открытии белый экран, хотя куки и логин живые
-// (поймано на ar-аккаунтах 2026-08-17, у gorouter/tabi/kktoken тот же NewAPI-фронт).
+// (поймано на ar-аккаунтах 2026-08-17, у gorouter/tabi/nova тот же NewAPI-фронт).
 // Кеш профиля чистить вслепую нельзя, поэтому ходим мимо HTTP-кеша: сессия и
 // localStorage остаются на месте. Вешаем и на новые вкладки — GitHub-OAuth
 // умеет открываться попапом.
@@ -173,7 +183,7 @@ async function reportRender(page) {
     : '⚠️  белый экран: SPA не поднялась — жми F5, в DevTools ищи 404 на /assets/*.js');
 }
 
-// Ответы kktoken (NewAPI) на неудачный GitHub-вход. Раньше скрипт знал только
+// Ответы nova (NewAPI) на неудачный GitHub-вход. Раньше скрипт знал только
 // «failed to get user information» и на всё остальное молча ждал логин 10 минут —
 // пользователь видел «дроч» вместо ответа сайта (2026-08-17).
 const SITE_ERRORS = [
@@ -182,7 +192,7 @@ const SITE_ERRORS = [
     terminal: true,           // ждать дальше бессмысленно — аккаунт не создать
     // `\w` в JS — только ASCII, поэтому русские варианты классом [а-яё], а не \w.
     re: /new (user )?registration (is )?(disabled|closed)|registration (is )?disabled by (the )?admin|(clos|disabl)\w* new (user )?registration|管理员关闭了新用户注册|регистрац[а-яё]* (нов[а-яё]* [а-яё]* )?(закрыт|отключен)|закрыл[а-яё]* регистрацию/i,
-    msg: '❌ kktoken закрыл регистрацию новых аккаунтов (ответ сайта) — этот аккаунт создать нельзя.',
+    msg: '❌ nova закрыл регистрацию новых аккаунтов (ответ сайта) — этот аккаунт создать нельзя.',
   },
   {
     code: 'git_token',
@@ -281,7 +291,7 @@ async function settleAfterLogin(page) {
 }
 
 // Ждём, пока URL уйдёт со страниц входа/регистрации И появится кука — это значит
-// GitHub-вход прошёл и мы внутри kktoken (консоль/дашборд). Тогда профиль уже
+// GitHub-вход прошёл и мы внутри nova (консоль/дашборд). Тогда профиль уже
 // сохранён Chromium'ом. /sign-up тоже в списке: на нём куки (csrf и прочее) есть
 // сразу, иначе «вход выполнен» печаталось бы через полторы секунды после старта.
 // Попутно читаем ответ сайта: «регистрация закрыта» — выходим сразу, а не висим
@@ -349,7 +359,7 @@ async function main() {
     if (appliedSession && !seededGithub) {
       await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' });
       await reportRender(page);
-      console.log('✅ Импортированная сессия применена (GitHub/kktoken уже залогинены).');
+      console.log('✅ Импортированная сессия применена (GitHub/nova уже залогинены).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await ghCapture.holdOpen(context); // держим открытым, закрытие — вручную
       return;
@@ -361,12 +371,12 @@ async function main() {
     if (wantRegister) {
       await openRegisterViaRef(page);
       console.log('⚠️  Регистрация по рефке. Зарегайся через GitHub на открывшейся странице,');
-      console.log('   затем возьми ключ в консоли KKtoken и вставь его кнопкой 🔑 в дашборде.');
+      console.log('   затем возьми ключ в консоли Nova и вставь его кнопкой 🔑 в дашборде.');
 
       const res = await waitForLogin(page, context);
       if (!res.ok) {
         if (res.err && res.err.code === 'no_register') {
-          console.error('❌ Регистрация на kktoken закрыта администратором — новый аккаунт не создать.');
+          console.error('❌ Регистрация на nova закрыта администратором — новый аккаунт не создать.');
           console.error('   Браузер оставляю открытым: ответ сайта видно на странице.');
           await ghCapture.holdOpen(context);
           return;
@@ -413,14 +423,14 @@ async function main() {
 
     if (!fresh) {
       await reportRender(page);
-      console.log('✅ Профиль восстановлен (GitHub/kktoken уже залогинены, если заходил раньше).');
+      console.log('✅ Профиль восстановлен (GitHub/nova уже залогинены, если заходил раньше).');
       console.log('   Браузер открыт — закрой когда закончишь (Ctrl+C).');
       await ghCapture.holdOpen(context); // держим открытым, закрытие — вручную
       return;
     }
 
     if (!loggedInEarly) console.log('⚠️  Первый вход. Залогинься в GitHub (кнопка «Продолжить с GitHub»),');
-    if (!loggedInEarly) console.log('   затем возьми ключ в консоли KKtoken и вставь его кнопкой 🔑 в дашборде.');
+    if (!loggedInEarly) console.log('   затем возьми ключ в консоли Nova и вставь его кнопкой 🔑 в дашборде.');
 
     const res = await waitForLogin(page, context);
     if (!res.ok) {

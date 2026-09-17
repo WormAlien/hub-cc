@@ -756,6 +756,11 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="nova" title="New API (панель Orbelis) на nova.vcrauo.com. Каталог 7 моделей: opus 4-6/4-7/4-8/5, sonnet 4-6/5, haiku 4-5. Под именем claude-opus-5 два канала — на одном thinking вырезан (метки kiro_credits в usage), пропорция плавает от запроса к запросу">
+        <span class="w-5 text-center text-[14px]">🛰️</span>
+        <span class="flex-1">Nova</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-nova">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="odyssey" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">🧭</span>
         <span class="flex-1">Odyssey</span>
@@ -7213,6 +7218,168 @@ window.finNavCount = async () => {
       </div>
     </div>
 
+    <div data-tab-content="nova">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-cyan">🛰️</span> <a href="https://nova.vcrauo.com/sign-up?aff=ITSp" data-ref-link="nova" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-cyan">Nova</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-cyan text-xs">nova.vcrauo.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-cyan text-xs">:20172</code>) · GitHub-вход в консоль · каталог 7 моделей (opus 4-6…opus-5, sonnet 4-6/sonnet-5, haiku 4-5) · 🪤 под именем <code class="font-mono text-xs">claude-opus-5</code> два канала: на одном thinking вырезан · капча на регистрации, ежедневный чек-ин включён</p>
+          </div>
+        </header>
+
+        <div id="nv-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). Каталог nova — 7 моделей, поэтому тиры
+             маппятся по-настоящему: opus → claude-opus-5, sonnet → claude-sonnet-5,
+             haiku → claude-haiku-4-5. Точные id подтвердить по каталогу на карточке Models
+             (там живой /v1/models): в замере 13.09 id записаны словами, а не строками. -->
+        <div id="nv-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог 7 моделей</h2>
+            <button onclick="loadNvModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="nv-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20172).
+             🪤 Отказов кромки Cloudflare (пустой 403, как у kktoken) у nova не видели:
+             замер 13.09 прошёл 5/5 без отказов, латентность 2,5-3 с. Ретраи оставлены
+             страховкой на штатные 429/5xx площадки, а не как лечение известного симптома. -->
+        <div id="nv-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20172 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="nvLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="nv-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="nv-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="nv-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="nv-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="nv-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="nvApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="nvResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="nv-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="nv-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="nv-lat-chart" class="w-full"></div>
+              <div id="nv-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="nv-lat-windows"></div>
+          </div>
+          <div id="nv-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="nv-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="nv-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="nv-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="nv-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="nv-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="nv-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="nv-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="nv-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadNvModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="nv-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadNvSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadNvSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="nvCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="nvMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="nvShowAdd()" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">➕ Добавить</button>
+          <button onclick="nvShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет, хотя чек-ин у nova ВКЛЮЧЁН (`checkin_enabled: true`, замер 17.09):
+               вкладка клонирована от kktoken, где чек-ина нет, и колонки тут не появилось.
+               Ежедневный чек-ин стоит завести отдельной задачей — у hcnsec он даёт пополнение
+               без денег. -->
+          <input id="nv-filter" oninput="newapiFilterChange('nv')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-cyan/60">
+          <select id="nv-sort" onchange="newapiSortChange('nv')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-cyan/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="nv-add-form" class="hidden rounded-xl bg-surface border border-cyan/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="nv-add-email" oninput="newapiAddGhHint('nv')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-cyan/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="nv-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-cyan/60">
+            </label>
+            <button onclick="nvAdd()" class="text-xs px-4 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('nv')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">🐙 из менеджера</button>
+            <button onclick="nvShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="nv-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="nv-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="nvShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/nova уже залогинены).</p>
+          <textarea id="nv-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="nv-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="nvImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="nvShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="nv-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20172</code> keepalive → <code class="text-ink">nova.vcrauo.com</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://nova.vcrauo.com/sign-up?aff=ITSp" data-ref-link="nova" target="_blank" class="text-cyan hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
     <div data-tab-content="odyssey">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
@@ -7249,6 +7416,11 @@ window.finNavCount = async () => {
               <input id="od-autoreg-count" type="number" min="1" max="9" value="1"
                      class="w-14 text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60"
                      title="Сколько аккаунтов завести за один запуск. На каждый нужен свой адрес и своя сеть, поэтому прогон возьмёт столько адресов, сколько попросили (и столько попыток, сколько понадобится)">
+              <label class="text-[10px] text-faint font-mono" for="od-autoreg-mail">почта</label>
+              <select id="od-autoreg-mail" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60" title="22.do — gmail-ящики, но свободные кончаются (сервис крутит по одному набору локальных частей). emailnator — адрес выдаёт сразу, но свои грабли: одноразовые домены Clerk отвергает">
+                <option value="22do" selected>22.do</option>
+                <option value="emailnator">emailnator</option>
+              </select>
               <button id="od-autoreg-start" onclick="odAutoregStart()" class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium" title="Скрипт заведёт аккаунт целиком; если Clerk потребует капчу — подойди к окну и прожми её">🤖 Завести аккаунт</button>
               <button id="od-autoreg-stop" onclick="odAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
               <span id="od-autoreg-status" class="text-[10px] font-mono text-faint"></span>
@@ -9446,7 +9618,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -9479,7 +9651,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], odyssey: [], bai: [],
+  kktoken: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -9688,6 +9860,7 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'nova') { if (!state.loaded.nova) { state.loaded.nova = true; loadNvSessions(false); } nvLoadKeepalive(); }
   if (name === 'odyssey') { if (!state.loaded.odyssey) { state.loaded.odyssey = true; loadOdSessions(false); } odLoadKeepalive(); }
   if (name === 'bai') { if (!state.loaded.bai) { state.loaded.bai = true; loadBaiSessions(false); } baiLoadKeepalive(); }
   if (name === 'getunikey') { if (!state.loaded.getunikey) { state.loaded.getunikey = true; loadUkSessions(false); } ukLoadKeepalive(); }
@@ -9766,9 +9939,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -13842,6 +14015,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  nv: '/__switch/api/nv/keepalive',
   od: '/__switch/api/od/keepalive',
   bai: '/__switch/api/bai/keepalive',
   uk: '/__switch/api/uk/keepalive',
@@ -14211,6 +14385,7 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const nvLoadKeepalive   = () => loadKeepaliveCard('nv', KEEPALIVE_API.nv);
 const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
@@ -14260,6 +14435,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  nova: ['nv', '/__switch/api/nv/keepalive'],
   odyssey: ['od', '/__switch/api/od/keepalive'],
   bai: ['bai', '/__switch/api/bai/keepalive'],
   getunikey: ['uk', '/__switch/api/uk/keepalive'],
@@ -14394,7 +14570,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -14448,7 +14624,12 @@ function newapiCreatedCell(s) {
   const d = new Date(ts);
   const p2 = (n) => String(n).padStart(2, '0');
   const sameYear = d.getFullYear() === new Date().getFullYear();
-  const short = `${p2(d.getDate())}.${p2(d.getMonth() + 1)}` + (sameYear ? '' : `.${String(d.getFullYear()).slice(2)}`);
+  // 🔴 Время показываем в самой колонке, а не только в подсказке: владелец 17.09 сказал
+  // «и сюда время добавления добавить» - по одному `17.09` не видно, что добавлено час назад
+  // или вчера вечером, а на вкладке аккаунты идут потоком.
+  const short = `${p2(d.getDate())}.${p2(d.getMonth() + 1)}`
+    + (sameYear ? '' : `.${String(d.getFullYear()).slice(2)}`)
+    + ` ${p2(d.getHours())}:${p2(d.getMinutes())}`;
   const tip = `Добавлен ${d.toLocaleString('ru-RU')} · ${agoShort(ts)} назад`;
   return `<span class="font-mono text-[11px] text-muted whitespace-nowrap" title="${esc(tip)}">${short}</span>`;
 }
@@ -14557,7 +14738,7 @@ function renderAr() {
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: '🎁 $25', align: 'center', w: 'w-24', sort: 'gift' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -15367,7 +15548,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, nv: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -15678,6 +15859,7 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
+  nv: { label: 'Nova',     host: 'nova.vcrauo.com',        color: 'cyan', reload: () => loadNvSessions(), list: () => state.nova,  render: () => renderNv(), setKey: id => nvSetKey(id), open: id => nvOpenLk(id) },
   tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb(), setKey: id => tbSetKey(id), open: id => tbOpenLk(id) },
   xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions(), list: () => state.xpeach,      render: () => renderXp(), setKey: id => xpSetKey(id), open: id => xpOpenLk(id) },
   ap: { label: 'AIPM',         host: 'emtf.aipm9527.online', color: 'indigo', reload: () => loadApSessions(), list: () => state.aipm,        render: () => renderAp(), setKey: id => apSetKey(id), open: id => apOpenLk(id) },
@@ -16356,7 +16538,7 @@ function renderGo() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -16895,7 +17077,7 @@ function renderKk() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -17221,6 +17403,526 @@ async function kkSaveModelMap() {
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
+function nvPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (NV_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderNvGauge() {
+  moneyAutoFetch('nova').then(() => moneyRotateToHistory('nova')).catch(() => {});
+  const st = nvPoolStats(state.nova);
+  renderEnergyGauge($('nv-energy'), {
+    title: 'Nova · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-cyan">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-cyan">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20172 → nova.vcrauo.com (напрямую). Отказов кромки Cloudflare (пустой 403, как у kktoken) в замере 13.09 не было: 5/5 подряд, 2,5-3 с.',
+  });
+}
+
+async function loadNvSessions(probe) {
+  if (probe) $('nv-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/nv/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.nova = data.sessions || [];
+    if ($('nav-count-nova')) $('nav-count-nova').textContent = state.nova.length;
+    await newapiEnsureGhNames(state.nova);
+    renderNv();
+    renderNvGauge();
+    loadNvModels();
+    loadNvModelMap();
+    if (probe) toast('✓ Nova: статусы обновлены', 'success');
+  } catch (e) {
+    $('nv-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadNvSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/nv/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.nova = data.sessions || [];
+    if ($('nav-count-nova')) $('nav-count-nova').textContent = state.nova.length;
+    renderNv();
+    renderNvGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadNvModels(force) {
+  const keys = state.nova
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('nv-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('nv-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/nv/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderNvModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('nv-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderNvModels(models) {
+  if (models) state.nvModels = models;
+  const list = state.nvModels || [];
+  let active = state.nvActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/nv/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.nvActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('nv-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — cyan, а cyan же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-cyan/15 border border-cyan/50 text-cyan' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='nvSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + nova-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "nova")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderNvModelMap();
+}
+async function nvSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/nv/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.nvModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.nvActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderNvModels(state.nvModels);
+  } catch (e) { toast('nvSelectModel: ' + e.message, 'error'); }
+}
+
+function renderNv() {
+  const { list: all, total, q } = newapiRows(state.nova, 'nv');
+  if (!all.length) {
+    $('nv-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-cyan text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-cyan/5' : '';
+    const activeTag = active ? '<span class="text-cyan mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = nvBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderNvModels.
+    const keyCell = noKey ? noKeyCell(`nvSetKey(${idJ})`) : `<button onclick='nvActivate(${kJ})' title="Сделать активным (keepalive :20172 → nova.vcrauo.com)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-cyan/10 border-cyan/50 text-cyan' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'nv')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`nvCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`nvShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`nvSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`nvRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`nvActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`nvPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'nv', idJ)}
+        ${actBtn(`nvOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс nova)', '🌐', 'violet')}
+        ${actBtn(`nvDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('nv-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'nv', q),
+    { sortProv: 'nv', accent: 'cyan' }
+  );
+}
+
+function nvBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'nv'); }
+
+function nvShowAdd(show = true) {
+  $('nv-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('nv');
+  if (show) { $('nv-add-email').value = ''; $('nv-add-key').value = ''; $('nv-add-email').focus(); }
+}
+async function nvAdd() {
+  const email = $('nv-add-email').value.trim();
+  const api_key = $('nv-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/nv/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.nv }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      nvShowAdd(false);
+      loadNvSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) nvOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function nvDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/nv/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadNvSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function nvShare(id) {
+  const cur = state.nova.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/nv/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Nova',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function nvShowImport(show = true) {
+  $('nv-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('nv-import-text').value = '';
+    $('nv-import-preview').innerHTML = '';
+    $('nv-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function nvImport() {
+  const share = $('nv-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('nv-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/nv/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('nv-import-preview').innerHTML = '';
+    nvShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadNvSessions(false);
+  } catch (e) {
+    $('nv-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли nova).
+async function nvSetKey(id) {
+  const cur = state.nova.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли nova после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/nv/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadNvSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (nvSetKey).
+async function nvRename(id) {
+  const cur = state.nova.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/nv/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadNvSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function nvActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/nv/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'nova';
+      state.urls.nova = 'http://localhost:20172';
+      paintStatus();
+      loadNvSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function nvPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/nv/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.nova.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.nova[idx].status = data.status;
+    renderNv();
+    renderNvGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function nvCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/nv/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.nova.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderNv();
+    renderNvGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function nvCheckAllBalances() {
+  $('nv-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/nv/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.nova = data.sessions || [];
+    renderNv();
+    renderNvGauge();
+    balanceBatchToast(state.nova);
+  } catch (e) {
+    $('nv-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function nvSetBalance(api_key) {
+  return newapiSetBalanceUI('nv', api_key, () => state.nova, () => { renderNv(); renderNvGauge(); });
+}
+
+function nvMapProfiles() {
+  return newapiMapProfilesUI('nv', () => loadNvSessions(false));
+}
+
+async function nvOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/nv/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function nvCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → nova-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadNvModelMap() {
+  try {
+    const res = await fetch('/__switch/api/nv/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.nvModelMap = data.modelMap || {};
+    renderNvModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderNvModelMap() {
+  const mm = state.nvModelMap || {};
+  const models = (state.nvModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /nv/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя nova-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="nv-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('nv-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='nvSaveModelMap()' class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function nvSaveModelMap() {
+  const mm = {
+    opus: $('nv-mm-opus')?.value || '',
+    sonnet: $('nv-mm-sonnet')?.value || '',
+    haiku: $('nv-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/nv/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.nvModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
 function odPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
@@ -17421,7 +18123,7 @@ function renderOd() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -17970,7 +18672,7 @@ function renderBai() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -18493,7 +19195,7 @@ function renderUk() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -19030,7 +19732,7 @@ function renderAp() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -19741,7 +20443,7 @@ function renderHn() {
       { label: 'API Key' },
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -20215,7 +20917,7 @@ function renderAk() {
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${akBalanceCell(s, keyJ)}</td><td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">${noKey ? '' : actBtn(`akCopyKey(${keyJ})`, 'Скопировать API-ключ', '📋', 'cyan')}${noKey ? '' : actBtn(`akShare(${idJ})`, 'Поделиться аккаунтом (base64 для другой машины владельца)', '🔗', 'violet')}${actBtn(`akSetKey(${idJ})`, 'Вставить/сменить API-ключ', '🔑', 'cyan')}${actBtn(`akRename(${idJ})`, 'Редактировать email и подпись', '✏️', 'sky')}${noKey ? '' : actBtn(`akActivate(${keyJ})`, 'Сделать активным', '🤝', 'amber')}${actBtn(`akOpenLk(${idJ})`, 'Открыть сессию аккаунта', '🌐', 'teal')}${actBtn(`akDelete(${idJ})`, 'Удалить запись', '🗑', 'crimson')}</td></tr>`;
   }).join('');
-  $('ak-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'ak', q), { sortProv: 'ak', accent: 'teal' });
+  $('ak-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'ak', q), { sortProv: 'ak', accent: 'teal' });
 }
 
 function akAutoregProxyToggle() {
@@ -20622,6 +21324,7 @@ async function odAutoregStatus({ quiet = false } = {}) {
     $('od-autoreg-stop').classList.toggle('hidden', !running);
     $('od-autoreg-tier').disabled = running;
     $('od-autoreg-count').disabled = running;
+    $('od-autoreg-mail').disabled = running;
 
     const stageName = d.stage && d.stage.stage ? d.stage.stage : null;
     const stageNote = d.stage && d.stage.note ? (' · ' + d.stage.note) : '';
@@ -20658,10 +21361,11 @@ async function odAutoregStatus({ quiet = false } = {}) {
 async function odAutoregStart() {
   const tier = $('od-autoreg-tier').value;
   const count = Math.max(1, Math.min(9, parseInt($('od-autoreg-count').value, 10) || 1));
+  const mail = $('od-autoreg-mail').value;
   try {
     const r = await fetch('/__switch/api/od/autoreg/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier, count }),
+      body: JSON.stringify({ tier, count, mail }),
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
@@ -20669,7 +21373,7 @@ async function odAutoregStart() {
     $('od-autoreg-log-err').textContent = '';
     $('od-autoreg-log-err').classList.add('hidden');
     $('od-autoreg-log-wrap').classList.remove('hidden');
-    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier}, аккаунтов ${count})`, 'success');
+    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier}, аккаунтов ${count}, почта ${mail})`, 'success');
     await odAutoregStatus({ quiet: true });
     if (state.odAutoregTimer) clearInterval(state.odAutoregTimer);
     state.odAutoregTimer = setInterval(async () => {
@@ -20980,7 +21684,7 @@ function renderRm() {
       <td class="px-3 py-2.5 text-center whitespace-nowrap">${rmBalanceCell(s, keyJ)}</td><td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">${noKey ? '' : actBtn(`rmCopyKey(${keyJ})`, 'Скопировать API-ключ', '📋', 'azure')}${noKey ? '' : actBtn(`rmShare(${idJ})`, 'Поделиться аккаунтом (base64 для другой машины владельца)', '🔗', 'violet')}${actBtn(`rmSetKey(${idJ})`, 'Вставить/сменить API-ключ', '🔑', 'azure')}${actBtn(`rmRename(${idJ})`, 'Редактировать email и подпись', '✏️', 'azure')}${noKey ? '' : actBtn(`rmActivate(${keyJ})`, 'Сделать активным', '🤝', 'amber')}${actBtn(`rmOpenLk(${idJ})`, 'Открыть сессию аккаунта (JWT в localStorage, не кука)', '🌐', 'violet')}${actBtn(`rmDelete(${idJ})`, 'Удалить запись', '🗑', 'crimson')}</td></tr>`;
   }).join('');
-  $('rm-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'rm', q, rmIsRealKey), { sortProv: 'rm', accent: 'violet' });
+  $('rm-list').innerHTML = table([{ label: 'Email', sort: 'email' }, { label: 'API Key' }, { label: 'Status', align: 'center', w: 'w-16', sort: 'status' }, { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' }, { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' }, { label: 'Actions', align: 'right' }], rows, newapiFooter(list, total, 'rm', q, rmIsRealKey), { sortProv: 'rm', accent: 'violet' });
 }
 
 function rmAutoregProxyToggle() {
@@ -21692,7 +22396,7 @@ function renderJw() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -22233,7 +22937,7 @@ function renderSk() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -22798,7 +23502,7 @@ function renderTs() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -23384,7 +24088,7 @@ function renderTb() {
       { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
       { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
       { label: 'GitHub', align: 'center', w: 'w-28' },
-      { label: 'Добавлен', align: 'center', w: 'w-20', sort: 'date-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
       { label: 'Actions', align: 'right' },
     ],
     rows,
@@ -24740,6 +25444,7 @@ const GH_USE_META = {
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
   jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },
+  nv: { icon: '🛰️', short: 'NV', label: 'Nova',     badge: 'bg-cyan/15 text-cyan border-cyan/40' },
   ap: { icon: '🔷', short: 'AP', label: 'AIPM', badge: 'bg-indigo/15 text-indigo border-indigo/40' },
   tb: { icon: '🎫', short: 'TB', label: 'Tabi Token',  badge: 'bg-amber/15  text-amber  border-amber/40' },
   xp: { icon: '🍑', short: 'XP', label: 'XPeach',      badge: 'bg-rose/15   text-rose   border-rose/40' },
@@ -24791,7 +25496,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', nv: 'nova' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -27186,6 +27891,7 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  nova:     { id: 'nova',     p: 'nv', stateKey: 'nova',     base: 5,   sym: '$',  label: 'Nova',     icon: '🛰️', color: 'cyan', reload: () => loadNvSessionsLight() },
   odyssey:     { id: 'odyssey',     p: 'od', stateKey: 'odyssey',     base: 5,   sym: '$',  label: 'Odyssey',     icon: '🧭', color: 'lime', reload: () => loadOdSessionsLight() },
   bai:     { id: 'bai',     p: 'bai', stateKey: 'bai',     base: 5,   sym: '$',  label: 'B.AI',     icon: '🅱️', color: 'amber', reload: () => loadBaiSessionsLight() },
   getunikey:     { id: 'getunikey',     p: 'uk', stateKey: 'getunikey',     base: 5,   sym: '$',  label: 'UniKey',     icon: '🔑', color: 'sky', reload: () => loadUkSessionsLight() },
@@ -30734,7 +31440,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -31055,6 +31761,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'nova':       loadNvSessionsLight(); break;
       case 'odyssey':       loadOdSessionsLight(); break;
       case 'bai':       loadBaiSessionsLight(); break;
       case 'getunikey':     loadUkSessionsLight(); break;
@@ -31130,6 +31837,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'nova',     fn: () => loadNvSessionsLight() },
   { tab: 'odyssey',     fn: () => loadOdSessionsLight() },
   { tab: 'bai',     fn: () => loadBaiSessionsLight() },
   { tab: 'getunikey',     fn: () => loadUkSessionsLight() },

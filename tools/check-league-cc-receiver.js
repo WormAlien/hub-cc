@@ -46,7 +46,7 @@ function cut(fromMarker, toMarker, name) {
 let ccApi = null, ccErr = '';
 try {
     ccApi = new Function(`${cut('// ── CC-STATS-BEGIN', '// ── CC-STATS-END', 'cc-stats')}
-        return { ccClean, ccGuard, legacyHold, CC_REASONS, CC_DAYS_MAX, CC_HOURS_MAX, LEGACY_HOLD_MAX_MS };`)();
+        return { ccClean, ccGuard, legacyHold, CC_REASONS, CC_DAYS_MAX, CC_HOURS_MAX, CC_SOURCES_MAX, LEGACY_HOLD_MAX_MS };`)();
 } catch (e) { ccErr = e.message; }
 // Белый список и очистка среза: константы, помощники и сама `sliceClean`.
 const sliceSrc = cut('const WINDOWS = ', '// ── Состояние одного журнала', 'sliceClean');
@@ -217,6 +217,35 @@ if (ccApi) {
         assert.ok(out && out.next.tot.tokA === 90_000_000, 'после потолка новые числа принимаются');
         assert.ok(out.rebasedLegacy, 'и это видно как ребейз legacy');
         assert.ok(!out.next.legacyHeld, 'удержание снимается');
+    });
+
+    ok('состав источников доезжает до соседей, но по белому списку', () => {
+        const out = ccApi.ccClean(envelope({
+            otherTokens: 402_000,
+            journal: { reason: null, lines: 51_133, truncated: false, first: '2026-08-25', last: '2026-09-17' },
+            sources: [
+                { h: 'claude-code', tokens: 59_000_000_000, coverage: 'full', evil: 'x' },
+                { h: 'opencode', tokens: 402_000, coverage: 'journal' },
+                { h: '<img src=x>', tokens: 1, coverage: 'journal' },
+                { h: 'ghost', tokens: 5, coverage: 'придумано' },
+            ],
+        }));
+        assert.strictEqual(out.otherTokens, 402_000);
+        assert.strictEqual(out.sources.length, 4, 'список источников сохранён');
+        assert.strictEqual(out.sources[0].h, 'claude-code');
+        assert.strictEqual(out.sources[0].coverage, 'full');
+        assert.ok(!JSON.stringify(out.sources[0]).includes('evil'), 'чужое поле в источнике не прошло');
+        assert.ok(!/[<>]/.test(out.sources[2].h), 'имя харнесса очищено: ' + out.sources[2].h);
+        assert.strictEqual(out.sources[3].coverage, null, 'неизвестный охват не выдумывается');
+        assert.strictEqual(out.journal.lines, 51_133);
+        assert.strictEqual(out.journal.first, '2026-08-25');
+    });
+
+    ok('слишком длинный список источников обрезается, итог не трогается', () => {
+        const many = Array.from({ length: 40 }, (_, i) => ({ h: 'h' + i, tokens: i + 1, coverage: 'journal' }));
+        const out = ccApi.ccClean(envelope({ lifetime: 777, sources: many }));
+        assert.ok(out.sources.length <= ccApi.CC_SOURCES_MAX, 'список ограничен: ' + out.sources.length);
+        assert.strictEqual(out.lifetime, 777, 'итог отдельный и не пострадал');
     });
 }
 

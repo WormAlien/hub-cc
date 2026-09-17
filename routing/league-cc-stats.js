@@ -51,6 +51,66 @@ function resolveRoot(rootArg) {
     return path.join(os.homedir(), '.claude');
 }
 
+// ── Прочие харнессы из журнала front-door ────────────────────────────────────────
+// Claude Code считается из своих данных (кеш и транскрипты). Всё остальное, что шло через
+// front-door - opencode, curl, разовые скрипты, - видно только в журнале хаба, и харнесс
+// там помечен по user-agent. Правило строгое: записи `claude-code` из журнала в счёт НЕ
+// идут, иначе тот же трафик посчитается дважды (он есть и в транскриптах, и в журнале).
+//
+// Охват журнала честно неполный: он ротируется целыми сутками (потолок 32 МиБ), поэтому
+// «всё время» по прочим харнессам - это то, что уцелело в файле, и так это и подписано.
+const JOURNAL_CAP_BYTES = 32 * 1024 * 1024;
+const DEFAULT_JOURNAL = path.join(__dirname, 'token-usage.jsonl');
+const OTHER_HARNESS_MAX = 8;
+// Имя харнесса приходит из user-agent, то есть снаружи. Оставляем только буквы, цифры и
+// три знака, остальное выбрасываем: имя уезжает в чужой срез и рисуется в разметке.
+// 🪤 Никаких escape-последовательностей: в исходнике не должно быть ни сырых управляющих
+// байтов, ни хитрых классов - фильтруем по одному символу.
+const HARNESS_OK = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-';
+const harnessName = v => {
+    let out = '';
+    for (const ch of String(v == null ? '' : v)) {
+        if (HARNESS_OK.indexOf(ch) >= 0 && out.length < 24) out += ch;
+    }
+    return out || 'unknown';
+};
+
+function readJournal(deps, journalPath, cap) {
+    const f = (deps && deps.fs) || fsDefault;
+    const out = {
+        byHarness: new Map(), days: Object.create(null), hours: Object.create(null),
+        lines: 0, skipped: 0, firstMs: null, lastMs: null, truncated: false, reason: null,
+    };
+    let r;
+    try { r = readTail({ fs: f }, journalPath, cap || JOURNAL_CAP_BYTES); }
+    catch (e) { out.reason = 'no-journal'; return out; }
+    out.truncated = !!r.truncated;
+    for (const raw of r.text.split('\n')) {
+        const s = raw.trim();
+        if (!s) continue;
+        let e;
+        try { e = JSON.parse(s); } catch (x) { continue; }        // обрыв хвоста записи
+        const ms = Date.parse(e && e.t);
+        if (!Number.isFinite(ms)) { out.skipped++; continue; }
+        const h = harnessName(e.h);
+        if (h === 'claude-code') continue;                         // двойного счёта не делаем
+        const tok = asNum(e.in) + asNum(e.out);
+        if (!tok) continue;
+        out.lines++;
+        if (out.firstMs === null || ms < out.firstMs) out.firstMs = ms;
+        if (out.lastMs === null || ms > out.lastMs) out.lastMs = ms;
+        const dk = dayKey(ms), hk = hourKey(ms);
+        out.days[dk] = (out.days[dk] || 0) + tok;
+        out.hours[hk] = (out.hours[hk] || 0) + tok;
+        const rec = out.byHarness.get(h) || { h, tokens: 0, days: Object.create(null) };
+        rec.tokens += tok;
+        rec.days[dk] = (rec.days[dk] || 0) + tok;
+        out.byHarness.set(h, rec);
+    }
+    if (out.lastMs === null) out.reason = 'empty-journal';
+    return out;
+}
+
 // Хвост файла: ровно то, что видит сам Claude Code (`_Me` в его сборке - последние 100 МиБ,
 // с выравниванием по переводу строки). Последний аргумент - лимит для тестов.
 function readTail(deps, file, cap) {
@@ -289,11 +349,45 @@ function snapshotFrom(agg, meta) {
         tailCache[dk] = { read: agg.daily.cacheRead[dk] || 0, write: agg.daily.cacheWrite[dk] || 0 };
     }
 
+    // Прочие харнессы из журнала front-door. Дни и часы ВЛИВАЕМ в общий ряд, а не держим
+    // отдельной кривой: цифра и график обязаны говорить одно и то же. Записи `claude-code`
+    // сюда не доходят (см. readJournal) - Claude Code уже посчитан по транскриптам.
+    const jr = meta.journal || null;
+    const otherDays = (jr && jr.days) || {};
+    const otherD7 = Object.keys(otherDays)
+        .filter(dk => dayStart(dk) >= dayStart(today) - 6 * DAY_MS).reduce((s, dk) => s + otherDays[dk], 0);
+    const otherD30 = Object.keys(otherDays)
+        .filter(dk => dayStart(dk) >= dayStart(today) - 29 * DAY_MS).reduce((s, dk) => s + otherDays[dk], 0);
+    for (const dk of Object.keys(otherDays)) {
+        if (known[dk] === undefined) { known[dk] = otherDays[dk]; basis[dk] = 'journal'; }
+        else known[dk] += otherDays[dk];
+    }
+    const hourTok = Object.assign({}, agg.hourTok);
+    for (const hk of Object.keys((jr && jr.hours) || {})) hourTok[hk] = (hourTok[hk] || 0) + jr.hours[hk];
+    const otherTokens = Object.keys(otherDays).reduce((s, dk) => s + otherDays[dk], 0);
+
     const sumOver = fromMs => Object.keys(known)
         .filter(dk => dayStart(dk) >= fromMs)
         .reduce((s, dk) => s + known[dk], 0);
     const lifetimeCache = Object.keys(inSum).reduce(
         (s, m) => s + inSum[m] + outSum[m] + crSum[m] + cwSum[m], 0);
+
+    // Состав итога. Claude Code идёт первым и с пометкой охвата: у него он полный (кеш плюс
+    // транскрипты), а у журнальных харнессов - только то, что уцелело в журнале.
+    const sources = [{
+        h: 'claude-code',
+        tokens: doc ? lifetimeCache + tailGross : null,
+        lowerBound: doc ? null : tailGross,
+        coverage: doc ? 'full' : 'lower-bound',
+    }];
+    if (jr) {
+        const list = [...jr.byHarness.values()].sort((a, b) => b.tokens - a.tokens);
+        for (const rec of list.slice(0, OTHER_HARNESS_MAX)) {
+            sources.push({ h: rec.h, tokens: rec.tokens, coverage: 'journal' });
+        }
+        const rest = list.slice(OTHER_HARNESS_MAX).reduce((s, r) => s + r.tokens, 0);
+        if (rest) sources.push({ h: 'other', tokens: rest, coverage: 'journal' });
+    }
 
     return {
         accountingVersion: ACCOUNTING_VERSION,
@@ -301,12 +395,20 @@ function snapshotFrom(agg, meta) {
         // Причина остаётся и при живых данных: она объясняет, почему total неизвестен.
         reason: doc ? null : (cacheExists ? reason : 'no-cache'),
         lifetimeCC: doc ? lifetimeCache + tailGross : null,
-        // Без кеша общий итог неизвестен, а сумма по сохранившимся транскриптам - нижняя
-        // граница: истории старше первой уцелевшей сессии в ней нет по построению.
-        lifetimeLowerBound: doc ? null : tailGross,
+        // Итог для человека: Claude Code плюс всё, что видел журнал по прочим харнессам.
+        lifetime: doc ? lifetimeCache + tailGross + otherTokens : null,
+        // Без кеша общий итог неизвестен, а сумма по сохранившимся транскриптам плюс журнал -
+        // нижняя граница: истории старше первой уцелевшей сессии в ней нет по построению.
+        lifetimeLowerBound: doc ? null : tailGross + otherTokens,
         // Хвост, посчитанный транскриптами, полон по определению: там есть все четыре
         // категории. Неполон только итог без кеша - он и помечен как нижняя граница.
         completeLifetime: !!doc,
+        otherTokens, otherD7, otherD30, otherDays, sources,
+        journal: jr ? {
+            reason: jr.reason, lines: jr.lines, truncated: !!jr.truncated,
+            first: jr.firstMs === null ? null : dayKey(jr.firstMs),
+            last: jr.lastMs === null ? null : dayKey(jr.lastMs),
+        } : { reason: 'no-journal', lines: 0, truncated: false, first: null, last: null },
         lifetimeBreakdown: {
             cache: doc ? lifetimeCache : null,
             tail: doc ? tailGross : null,
@@ -346,15 +448,16 @@ function snapshotFrom(agg, meta) {
             cacheBytes: cacheRaw === undefined ? null : cacheRaw,
         },
         coverage: { unknownDays, truncatedFiles: agg.truncatedFiles, sidechainSessions: agg.sidechainSessions },
-        // Скользящее окно суток по часовым корзинам. Часы без записей отсутствуют, а не стоят
-        // нулями: ноль означал бы «в этот час работали и потратили ровно ноль».
+        // Скользящее окно суток по часовым корзинам (Claude Code плюс журнал). Часы без
+        // записей отсутствуют, а не стоят нулями: ноль означал бы «в этот час работали и
+        // потратили ровно ноль».
         hourly: (() => {
-            const keys = Object.keys(agg.hourTok).sort();
+            const keys = Object.keys(hourTok).sort();
             const h24 = {};
             const from = hourStart(hourKey(now)) - 23 * HOUR_MS;
             for (const hk of keys) {
                 const ms = hourStart(hk);
-                if (ms >= from && ms <= now) h24[hk] = agg.hourTok[hk];
+                if (ms >= from && ms <= now) h24[hk] = hourTok[hk];
             }
             return { keys, h24, from: new Date(from).toISOString(), to: new Date(hourStart(hourKey(now))).toISOString() };
         })(),
@@ -387,9 +490,10 @@ function computeCcStats(deps) {
         catch (e) { return null; }         // файл исчез между листингом и чтением - не повод падать
     });
     const cache = readCache(f, root + '/stats-cache.json');
+    const journal = readJournal(d, d.journalPath || DEFAULT_JOURNAL, d.journalCap);
     return foldStats(contribs, {
         doc: cache.doc, reason: cache.reason, cacheExists: cache.exists,
-        now, today: dayKey(now), cacheRaw: cache.bytes,
+        now, today: dayKey(now), cacheRaw: cache.bytes, journal,
     });
 }
 
@@ -404,6 +508,7 @@ function createStatsCache(deps) {
     const nowOf = typeof d.now === 'function' ? d.now : () => (Number.isFinite(d.now) ? d.now : Date.now());
     const cachePath = root + '/stats-cache.json';
     const projectsDir = root + '/projects';
+    const journalPath = d.journalPath || DEFAULT_JOURNAL;
 
     const entries = new Map();     // путь -> { key, contribution }
     let published = null;
@@ -441,9 +546,14 @@ function createStatsCache(deps) {
         st.filesRead = read;
         st.filesReused = reused;
         st.lastMs = Date.now() - t0;
+        // Журнал front-door перечитываем каждый проход: он растёт с каждым запросом, кеш по
+        // mtime тут не работает. Хвост в 14-32 МиБ читается десятки миллисекунд.
+        let journal;
+        try { journal = readJournal(d, journalPath, d.journalCap); }
+        catch (e) { journal = null; }
         return foldStats(contribs, {
             doc: cache.doc, reason: cache.reason, cacheExists: cache.exists,
-            now: nowOf(), today: dayKey(nowOf()), cacheRaw: cache.bytes,
+            now: nowOf(), today: dayKey(nowOf()), cacheRaw: cache.bytes, journal,
         });
     }
 
@@ -497,7 +607,9 @@ function envelopeFrom(snap, at) {
         v: snap.accountingVersion,
         available: !!snap.available,
         reason: snap.reason || null,
-        lifetime: snap.lifetimeCC,
+        // Итог для человека - общий (Claude Code плюс журнальные харнессы). `lifetimeCC`
+        // остаётся отдельным полем: он нужен для сверки с `/stats`, где виден только Claude Code.
+        lifetime: snap.lifetime === undefined ? snap.lifetimeCC : snap.lifetime,
         lifetimeLower: snap.lifetimeLowerBound,
         complete: !!snap.completeLifetime,
         stale: !!snap.stale,
@@ -507,6 +619,13 @@ function envelopeFrom(snap, at) {
             d7: snap.totals.d7,
             d30: snap.totals.d30,
         },
+        // Состав итога: кто именно его набрал. Без этого «59,7 млрд» невозможно проверить,
+        // а расхождение с `/stats` невозможно объяснить.
+        sources: (snap.sources || []).map(x => ({
+            h: x.h, tokens: x.tokens, lowerBound: x.lowerBound, coverage: x.coverage,
+        })),
+        otherTokens: snap.otherTokens,
+        journal: snap.journal,
         days: { keys: dayKeys.slice(-SERIES_WIRE_MAX), values: dayKeys.slice(-SERIES_WIRE_MAX).map(k => snap.daily.known[k]) },
         hours: { keys: hourKeys, values: hourKeys.map(k => snap.hourly.h24[k]) },
         breakdown: snap.lifetimeBreakdown ? {

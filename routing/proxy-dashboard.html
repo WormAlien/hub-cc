@@ -33718,6 +33718,21 @@ function lgCcTotal(p, r) {
   if (r === 'all') return lgCcNum(cc.lifetime);
   return lgCcNum((cc.totals || {})[r]);
 }
+// Строка состава: кто именно набрал итог. Без неё «59,7 млрд» не проверить, а расхождение
+// с `/stats` не объяснить: у Claude Code своя сверка, у журнальных харнессов - своя. Один
+// источник объяснять нечем, поэтому тогда строки нет. Текст возвращаем сырым - экранирует
+// тот, кто вставляет в разметку.
+function lgComposition(p) {
+  const cc = lgCc(p);
+  if (!cc || !Array.isArray(cc.sources)) return '';
+  const parts = cc.sources
+    .filter(s => s && Number.isFinite(Number(s.tokens)))
+    .map(s => `${s.h === 'claude-code' ? 'Claude Code' : String(s.h)} ${lgTok(Number(s.tokens))}`);
+  if (parts.length < 2) return '';
+  const tail = cc.journal && cc.journal.truncated
+    ? ' · журнал обрезан, прочих могло быть больше' : '';
+  return parts.join(' · ') + tail;
+}
 // Стрик: у канонического счётчика он считается по активности Claude Code (сообщения), а у
 // прежней метрики - по промптам из history.jsonl. Это разные числа, и подменять одно
 // другим нельзя: «50» и «63» - не одна и та же величина.
@@ -34606,6 +34621,13 @@ function lgRender() {
        до всего времени.`
     : `Гонка во времени, а не в моменте: тройка лидеров линиями, все участники —
        списком ниже. Окно переключается от суток по часам до всего времени.`;
+  // Состав итога отдельной строкой: «59,7 млрд» без этого не проверить, а расхождение с
+  // `/stats` не объяснить. Показываем только когда источников больше одного.
+  if (LG.metric === 'cc') {
+    const cmp = lgComposition(me);
+    if (cmp) document.getElementById('lg-lede').innerHTML +=
+      `<div class="lgcap" style="margin-top:4px">состав: ${lgEsc(cmp)}</div>`;
+  }
   const pr = LG_M[LG.metric].pair ? LG_M[LG.metric] : null;
   const pairOn = !!pr && lgPairOn();
   document.getElementById('lg-legend').innerHTML = top.map((p, k) =>

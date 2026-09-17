@@ -395,6 +395,86 @@ if (fs.existsSync(MOD)) {
         assert.strictEqual(e.complete, false, 'участник с неполным итогом не идёт в общий рейтинг');
     });
 
+    // ── Прочие харнессы из журнала front-door ─────────────────────────────────────
+    // Правило: Claude Code считается из своих данных, а журнал идёт в счёт ТОЛЬКО тем, что
+    // не он. Иначе один и тот же трафик посчитается дважды - он виден и в транскриптах, и
+    // в журнале.
+    const jline = o => JSON.stringify(Object.assign({ t: '2026-09-16T09:00:00.000Z', in: 0, out: 0, cr: 0, cw: 0, m: 'x', st: 1 }, o));
+    const journalFs = (journal, cacheOpts) => makeFs({
+        [ROOT + '/stats-cache.json']: cacheDoc(cacheOpts),
+        '/hub/routing/token-usage.jsonl': journal,
+    });
+
+    ok('прочие харнессы берутся из журнала, а Claude Code из журнала не берётся', () => {
+        const journal = [
+            jline({ h: 'claude-code', in: 1_000_000, out: 5_000 }),
+            jline({ h: 'opencode', in: 400_000, out: 2_000 }),
+            jline({ h: 'opencode', in: 100_000, out: 1_000 }),
+            jline({ h: 'curl', in: 7, out: 0 }),
+        ].join('\n') + '\n';
+        const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
+        const fromJournal = s.sources.filter(x => x.coverage === 'journal').map(x => x.h).sort();
+        assert.deepStrictEqual(fromJournal, ['curl', 'opencode'], 'в журнальный счёт попали только прочие: ' + fromJournal.join(','));
+        const oc = s.sources.find(x => x.h === 'opencode');
+        assert.strictEqual(oc.tokens, 503_000, 'вход+выход двух записей');
+        assert.strictEqual(s.otherTokens, 503_007, 'сумма прочих');
+        assert.strictEqual(s.lifetimeCC, 1000, 'счётчик Claude Code не тронут');
+        assert.strictEqual(s.lifetime, 1000 + 503_007, 'итог = Claude Code + прочие');
+    });
+
+    ok('записи журнала раскладываются по UTC-дням и окнам', () => {
+        const journal = [
+            jline({ h: 'opencode', in: 10, out: 0, t: '2026-09-15T23:30:00.000Z' }),
+            jline({ h: 'opencode', in: 20, out: 0, t: '2026-09-16T00:30:00.000Z' }),
+        ].join('\n') + '\n';
+        const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
+        assert.strictEqual(s.otherDays['2026-09-15'], 10, 'вечер UTC на своей дате');
+        assert.strictEqual(s.otherDays['2026-09-16'], 20, 'ночь UTC в следующих сутках');
+        assert.strictEqual(s.otherD7, 30, 'окно недели включает оба дня');
+    });
+
+    ok('журнала нет - это пропуск в источниках, а не ошибка', () => {
+        const s = A.computeCcStats({ fs: build({}), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
+        assert.strictEqual(s.lifetimeCC, 1000, 'счётчик Claude Code считается как обычно');
+        assert.strictEqual(s.otherTokens, 0);
+        assert.deepStrictEqual(s.sources.map(x => x.h), ['claude-code'], 'источник только один');
+        assert.strictEqual(s.journal.reason, 'no-journal');
+    });
+
+    ok('огромный журнал читается хвостом и помечает усечение', () => {
+        const long = jline({ h: 'opencode', in: 5, out: 0 }) + '\n';
+        const s = A.computeCcStats({
+            fs: journalFs(long.repeat(400)), root: ROOT, now: NOON,
+            journalPath: '/hub/routing/token-usage.jsonl', journalCap: 2000,
+        });
+        assert.strictEqual(s.journal.truncated, true, 'файл больше потолка - охват обрезан');
+        assert.ok(s.journal.lines > 0, 'строки прочитались');
+        assert.strictEqual(s.sources.find(x => x.h === 'opencode') !== undefined, true, 'харнесс опознан');
+    });
+
+    ok('имя харнесса из user-agent обрезается и не тащит разметку', () => {
+        const journal = jline({ h: '<img src=x onerror=alert(1)>оченьдлинноеимяхарнесса', in: 1, out: 0 }) + '\n';
+        const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
+        const h = s.sources.find(x => x.h !== 'claude-code').h;
+        assert.ok(h.length <= 24, 'имя ограничено по длине: ' + h);
+        assert.ok(!/[<>]/.test(h), 'угловые скобки не проходят: ' + h);
+    });
+
+    ok('в срез уезжает состав источников, а не только сумма', () => {
+        const journal = jline({ h: 'opencode', in: 400_000, out: 2_000 }) + '\n';
+        const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
+        const e = A.envelopeFrom(s);
+        assert.strictEqual(e.lifetime, 1000 + 402_000, 'итог с прочими');
+        assert.strictEqual(e.sources.length, 2, 'два источника в срезе');
+        const cc = e.sources.find(x => x.h === 'claude-code');
+        const oc = e.sources.find(x => x.h === 'opencode');
+        assert.strictEqual(cc.tokens, 1000);
+        assert.strictEqual(cc.coverage, 'full');
+        assert.strictEqual(oc.tokens, 402_000);
+        assert.strictEqual(oc.coverage, 'journal', 'охват журнала помечен как неполный');
+        assert.ok(JSON.stringify(e).length < 9000, 'срез не раздувается: ' + JSON.stringify(e).length);
+    });
+
     ok('в снимке нет путей, имён файлов и текстов', () => {
         const files = { [ROOT + '/projects/p1/s1.jsonl']: main({ ts: '2026-09-16T09:00:00.000Z', u: usage(3, 1, 0, 0) }) };
         const s = A.computeCcStats({ fs: build(files), root: ROOT, now: NOON });

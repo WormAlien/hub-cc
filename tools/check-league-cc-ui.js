@@ -47,7 +47,7 @@ if (A < 0 || B <= A) {
 }
 const src = HTML.slice(A, B);
 const build = new Function('LG', 'LG_M', 'LG_TOT', 'LG_R', 'LG_RW', 'lgTok', 'lgSum', 'lgInt', 'lgCumOn',
-    `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap };`);
+    `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap, lgComposition };`);
 
 const LG_M = {
     cc: { lb: 'токены Claude Code', fmt: v => String(v), source: 'cc' },
@@ -144,6 +144,34 @@ ok('пустой счётчик даёт прочерки, а не падени�
     assert.strictEqual(a.lgTotal(row, 'all'), null);
     assert.strictEqual(a.lgShow(row, 'all'), '—');
     assert.deepStrictEqual(a.lgKeys(row, 'all'), []);
+});
+
+ok('состав итога называется словами: кто его набрал', () => {
+    const a = api('cc', 'd7', {});
+    const both = me({ ccStats: envelope({
+        sources: [
+            { h: 'claude-code', tokens: 59_000_000_000, coverage: 'full' },
+            { h: 'opencode', tokens: 402_000, coverage: 'journal' },
+        ],
+    }) });
+    const line = a.lgComposition(both);
+    assert.ok(line.includes('Claude Code'), 'Claude Code назван: ' + line);
+    assert.ok(line.includes('opencode'), 'и второй харнесс тоже: ' + line);
+    assert.strictEqual(a.lgComposition(me({ ccStats: envelope({ sources: [{ h: 'claude-code', tokens: 1, coverage: 'full' }] }) })), '',
+        'один источник объяснять нечем - строки нет');
+    assert.strictEqual(a.lgComposition(stranger()), '', 'без счётчика и строки нет');
+});
+
+ok('обрезанный журнал помечается в составе, а не молчит', () => {
+    const a = api('cc', 'd7', {});
+    const row = me({ ccStats: envelope({
+        sources: [
+            { h: 'claude-code', tokens: 59_000_000_000, coverage: 'full' },
+            { h: 'opencode', tokens: 402_000, coverage: 'journal' },
+        ],
+        journal: { truncated: true, lines: 100, first: '2026-09-01', last: '2026-09-16' },
+    }) });
+    assert.ok(/обрезан/.test(a.lgComposition(row)), 'усечение журнала названо: ' + a.lgComposition(row));
 });
 
 finish();

@@ -1440,6 +1440,18 @@ const CC_DROP_SHARE = 0.5;          // итог не может просесть
 const CC_GROWTH_PER_HOUR = 3e9;     // физически возможный рост: ~3 млрд токенов в час
 const CC_GROWTH_FLOOR = 2e9;        // поблажка на короткий интервал между срезами
 const CC_REASONS = new Set(['no-cache', 'bad-cache', 'unsupported-cache-version', 'no-sources', 'no-snapshot']);
+const CC_SOURCES_MAX = 12;             // харнессов больше не бывает; список едет соседям целиком
+const CC_COVERAGE = new Set(['full', 'journal', 'lower-bound']);
+// Имя харнесса приходит снаружи и уезжает в чужую разметку: оставляем буквы, цифры и три
+// знака. 🪤 Никаких escape-последовательностей в классе - только перебор по символу.
+const CC_HARNESS_OK = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-';
+const ccHarness = v => {
+    let out = '';
+    for (const ch of String(v == null ? '' : v)) {
+        if (CC_HARNESS_OK.indexOf(ch) >= 0 && out.length < 24) out += ch;
+    }
+    return out || 'unknown';
+};
 const LEGACY_HOLD_MAX_MS = 7 * 864e5;   // сколько можно держать старые legacy-числа
 
 // Число из среза: только конечное и неотрицательное. Пустое остаётся null, а не нулём.
@@ -1511,6 +1523,28 @@ function ccClean(v) {
         dailyVersion: ccNum(s.dailyVersion),
         watermark: ccDayKey(s.watermark),
         truncatedFiles: ccNum(s.truncatedFiles) ?? 0,
+    };
+    // Состав итога: кто именно его набрал. Итог от этого списка не зависит (он отдельным
+    // числом), поэтому обрезка длинного списка ничего не искажает.
+    if (Array.isArray(v.sources)) {
+        out.sources = v.sources.slice(0, CC_SOURCES_MAX).map(x => {
+            const rec = x && typeof x === 'object' ? x : {};
+            return {
+                h: ccHarness(rec.h),
+                tokens: ccNum(rec.tokens),
+                lowerBound: ccNum(rec.lowerBound),
+                coverage: CC_COVERAGE.has(rec.coverage) ? rec.coverage : null,
+            };
+        });
+    }
+    out.otherTokens = ccNum(v.otherTokens) ?? 0;
+    const j = v.journal && typeof v.journal === 'object' ? v.journal : null;
+    if (j) out.journal = {
+        reason: CC_REASONS.has(j.reason) ? j.reason : (typeof j.reason === 'string' ? null : null),
+        lines: ccNum(j.lines) ?? 0,
+        truncated: !!j.truncated,
+        first: ccDayKey(j.first),
+        last: ccDayKey(j.last),
     };
     return out;
 }

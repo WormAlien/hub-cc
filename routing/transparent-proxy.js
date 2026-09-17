@@ -25090,7 +25090,15 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
-    od: { tag: 'odyssey',     label: 'Odyssey',     host: 'odysseyapi.tech',     keyFile: OD_ACTIVE_KEY_FILE, load: odLoad, save: odSave, balanceFn: odBalance, applyFn: odApplyBalance },
+    // 🪤 `noProbe` у Odyssey - не оптимизация, а условие работоспособности ротации. Баланс
+    // этой площадки ключом не читается вовсе (нет billing-ручек, `odBalance` поднимает
+    // браузерный профиль, ~15 с на аккаунт), а просьба о ротации ждёт 20 с
+    // (keepalive-proxy.js, askRotate): живой чек трёх кандидатов не укладывается и в минуту,
+    // прокси успевает сдаться и отдаёт 402 клиенту ПРИ живых деньгах в пуле - ровно тот
+    // симптом, из-за которого владелец 17.09 и просил авторотацию. Кеш тут честнее, чем у
+    // New-API-соседей: баланс неактивного аккаунта Odyssey не меняется сам - тратится только
+    // активный, а его цифра обновляется чеком и обнуляется при уходе с него.
+    od: { tag: 'odyssey',     label: 'Odyssey',     host: 'odysseyapi.tech',     keyFile: OD_ACTIVE_KEY_FILE, load: odLoad, save: odSave, balanceFn: odBalance, applyFn: odApplyBalance, noProbe: true },
     bai: { tag: 'bai',     label: 'B.AI',     host: 'chat.b.ai',     keyFile: BAI_ACTIVE_KEY_FILE, load: baiLoad, save: baiSave, balanceFn: baiBalance, applyFn: baiApplyBalance },
     uk: { tag: 'getunikey',     label: 'UniKey',     host: 'www.getunikey.ai',     keyFile: UK_ACTIVE_KEY_FILE, load: ukLoad, save: ukSave, balanceFn: ukBalance, applyFn: ukApplyBalance },
     ap: { tag: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online', keyFile: AP_ACTIVE_KEY_FILE, load: apLoad, save: apSave, balanceFn: apBalance, applyFn: apApplyBalance, minBal: 0.10 },
@@ -25253,10 +25261,15 @@ async function moneyRotate(p, opts = {}) {
             return { ok: false, error: 'pool-dry' };
         }
         let probes = 0;
+        // Живой чек кандидата стоит по-разному: у New-API это запрос ключом за 1.5 с, у
+        // Odyssey - подъём браузерного профиля за 15 с, который в бюджет ответа не влезает
+        // (см. `noProbe` в MONEY_GW). Там, где он не влезает, решает кеш, а врущий кеш
+        // поправит следующий отказ: ушедший аккаунт метится нулём и в кандидаты не вернётся.
+        const liveProbe = !gw.noProbe;
         for (const cand of queue) {
             // Кеш баланса бывает двухдневным (обновляется только активный ключ),
             // поэтому выбранного кандидата подтверждаем живой цифрой. Как fmAuto.
-            if (probes < MONEY_MAX_PROBES) {
+            if (liveProbe && probes < MONEY_MAX_PROBES) {
                 probes++;
                 try {
                     const bal = await gw.balanceFn(cand, { force: true });
@@ -27201,8 +27214,15 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // ---- Авторотация денежных шлюзов (ar/go/tb/xp/jw/sk): один набор роутов на все шесть ----
     // /rotate зовёт keepalive-прокси, поймавший отказ шлюза по деньгам; /auto/* — тумблер
     // в карточке ACTIVE. Разбор — блок «Авторотация денежных шлюзов» выше.
+    // 🪤 Список здесь — ВТОРАЯ карта поверх `MONEY_GW`, и разъезжается она молча:
+    // шлюз, заведённый в реестр и включённый тумблером, но забытый в этой строке, ротации
+    // не получает вовсе — прокси звонит и получает 404, а снаружи это выглядит как
+    // «авторотация не сработала на пустом пуле». Именно так жил Odyssey до 17.09
+    // (в `MONEY_GW` он есть с 16.09, а здесь его не было). Добавляя шлюз, править оба места.
+    // У bai и uk пулов на диске нет вовсе (нет `bai-sessions.json`/`getunikey-sessions.json`),
+    // поэтому их отсутствие здесь сегодня ветка мёртвая, а не такой же пропуск.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn|ak|rm)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn|ak|rm|od)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

@@ -98,6 +98,14 @@ const parts = [
     cutConst(src, 'moneyAuto'),
     cutConst(src, 'moneyAutoShared'),
     cutFn(src, 'function moneyState('),
+    // 🪤 `moneyUsable` зовёт `moneyKeyUsable`, и без неё в песочнице весь прогон падал
+    // одной строкой `moneyKeyUsable is not defined` — то есть регресс молчал ЦЕЛИКОМ,
+    // пока в исходнике не появилась эта прослойка (поймано 17.09 при правке ротации
+    // Odyssey). Вырезаем и её: она нужна ровно затем, чтобы у `ak`/`rm` был свой
+    // валидатор ключа, а провайдер песочницы — `go`.
+    cutFn(src, 'function moneyKeyUsable('),
+    // `moneyRank`/`moneyRotate` зовут `moneyMinBal` (планка годности, у каждого шлюза своя).
+    cutFn(src, 'function moneyMinBal('),
     cutFn(src, 'function moneyUsable('),
     cutFn(src, 'function moneyRank('),
     cutFn(src, 'function moneySwitchKey('),
@@ -135,6 +143,11 @@ function makeWorld(opts = {}) {
                 tag: 'gorouter', label: 'GoRouter', host: 'gorouter.app', keyFile: 'go.txt',
                 load: () => world.pool,
                 save: () => { world.saves += 1; },
+                // `noProbe` (Odyssey, 17.09): живой чек кандидата стоит 15 с подъёма
+                // браузерного профиля и в 20-секундный бюджет ротации не влезает —
+                // такой шлюз берёт кандидата по кешу. Пробрасываем флагом, чтобы
+                // песочница умела проверять обе ветки одним и тем же кодом.
+                noProbe: !!opts.noProbe,
                 balanceFn: async (target) => {
                     world.probes.push(target.email);
                     const live = (opts.live || {})[target.email];
@@ -701,6 +714,49 @@ async function main() {
             arSaveMerge({ email: 'a', api_key: 'sk-a', balance: 5 });
             check(!('balanceError' in world.disk[0]), 'успешный чек по-прежнему снимает balanceError');
         }
+    }
+
+    // 18. Odyssey (17.09): 402 «Your credit balance is empty» обязан ротировать аккаунт.
+    //     Две поломки были тихими, и обе - про невидимость, а не про отсутствие логики:
+    //     (а) текста площадки не было в `OUT_OF_BALANCE_RE`, поэтому 402 уезжал клиенту
+    //         как есть - у владельца на этом умерла живая сессия при живых аккаунтах в пуле;
+    //     (б) в списке ручек `/__switch/api/<p>/rotate` не было `od`: просьба о подмене
+    //         уходила в 404, то есть авторотация «обходила шлюз стороной».
+    //     Отдельно проверяем `noProbe`: баланс Odyssey читается только браузером (~15 с),
+    //     а просьба о ротации ждёт 20 с - живой чек трёх кандидатов не влезает, и кандидат
+    //     берётся по кешу (у New-API-соседей чек стоит 1.5 с и остаётся).
+    {
+        const OD402 = '{"type":"error","error":{"type":"billing_error","message":"Your credit balance is empty. Add credit or start an Odyssey subscription to keep making requests."}}';
+        const rotate = new Function('deps', `
+            ${cutConst(kaSrc, 'OUT_OF_BALANCE_RE')}
+            ${cutConst(kaSrc, 'DEAD_KEY_RE')}
+            ${cutFn(kaSrc, 'function rotateReason(')}
+            return rotateReason;
+        `)({});
+        check(rotate(402, Buffer.from(OD402)) === 'out-of-balance',
+            'текст Odyssey на 402 распознан как «кончились деньги» — а не как чужая ошибка запроса');
+        check(rotate(402, Buffer.from('{"error":{"message":"Budget pool quota has been exhausted"}}')) === null,
+            'пул наливки agentrouter по-прежнему НЕ считается кончиной аккаунта (подменой ключа не лечится)');
+
+        // Ручек ротации две карты: реестр MONEY_GW и список в роуте. Разъехались они молча.
+        const i = src.indexOf('/__switch\\/api\\/(ar|go');
+        const routeList = i < 0 ? '' : (src.slice(i).match(/\(([a-z|]+)\)/) || [])[1] || '';
+        check(routeList.split('|').includes('od'),
+            `od есть в списке ручек /__switch/api/<p>/rotate (в списке: ${routeList || 'строка не найдена'})`);
+        check(/od: \{[^}]*noProbe: true/.test(src), 'у Odyssey в MONEY_GW стоит `noProbe: true` (баланс берётся из кеша)');
+
+        // Поведение: шлюз с noProbe меняет ключ по кешу и НЕ поднимает браузер.
+        const w = makeWorld({
+            noProbe: true,
+            pool: [
+                { name: 'active', balance: 0, active: true },
+                { name: 'spare', balance: 5 },
+            ],
+        });
+        w.api.moneyState('go').enabled = true;
+        const r = await w.api.moneyRotate('go', { reason: 'out-of-balance', fromKey: 'sk-active' });
+        check(r.ok && nameByKey(w, activeKeyOf(w)) === 'spare' && w.probes.length === 0,
+            `noProbe: подмена по кешу без единого живого чека (получили ${r.email}, проб ${w.probes.length})`);
     }
 
     // Итог

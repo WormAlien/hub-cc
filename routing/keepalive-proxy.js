@@ -1251,7 +1251,14 @@ function isTransientBody(status, buf) {
 //     ошибка» и `403` в лицо. Доллар в этой формулировке ПОЛНОШИРИННЫЙ `＄` (U+FF04),
 //     поэтому суммы не читались и планка кандидата не поднималась до нужной — см. moneyNum.
 // Поэтому проверка стоит ВЫШЕ isTransientBody и решает раньше него.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|pre[- ]?consumed?\s+quota\s+failed|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
+// 🔴 Odyssey (свой шлюз, не New-API) отказал по деньгам СВОЕЙ формулировкой и статусом 402,
+// снято живьём 17.09 с боевого `:20170`:
+//   {"type":"error","error":{"type":"billing_error","message":"Your credit balance is empty.
+//    Add credit or start an Odyssey subscription to keep making requests."}}
+// Ни одно слово из списка ниже её не ловило, поэтому 402 уезжал клиенту как есть, хотя в пуле
+// лежали живые аккаунты. 🪤 `type` в этой ошибке НЕ константа (у той же площадки в логе стоит
+// `invalid_request_error`) - матчим по тексту сообщения, а не по типу.
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -2544,6 +2551,30 @@ const server = http.createServer((req, res) => {
           const buf = Buffer.concat(chunks, size);
           const text = buf.toString('utf8');
           log(`${req.method} ${reqPath} 402 (тело целиком): ${text.slice(0, 4000)}`);
+          // ── Ротация аккаунта по 402 ─────────────────────────────────────────
+          // 402 бывает ДВУХ разных смыслов, и путать их нельзя: у agentrouter это
+          // «пул наливки пуст» (разбирается ниже, подменой модели на беспуловую), а
+          // у Odyssey - «на ЭТОМ аккаунте кончились деньги»: площадка своя, пула
+          // наливки у неё нет вовсе, зато есть пул аккаунтов с подарком $5.
+          //
+          // Поэтому текст разбирает ТОТ ЖЕ `rotateReason`, что и в ветке выше, а
+          // зовём мы его ОТСЮДА, а не через `shouldRetryStatus`: 402 там нет и быть
+          // не должно (канон 15.09 у POOL_QUOTA_RE - повтор той же моделью ничего не
+          // лечит). До 17.09 эта ветка ротации не существовала, и требование владельца
+          // «прокси должно отлавливать ошибку и переключать на следующий ключ, а
+          // текущий должно переключить» выполнялось только для 401/403.
+          const rotReason = ROTATE_ON ? rotateReason(status, buf) : null;
+          if (rotReason) {
+            // Ротация уже идёт (её начал параллельный мульти-дубль) - эта попытка
+            // просто уходит, как и в ветке выше: запрос доведёт та, что стартует
+            // после подмены.
+            if (rotating) { activeSet.delete(upReq); return; }
+            if (rotations < MAX_ROTATIONS) {
+              tryRotate(upReq, rotReason, buf, status, sentKey, () => forwardBuffered(buf, headers));
+              return;
+            }
+            log(`${req.method} ${reqPath} 402 «${rotReason}»: лимит ротаций ${MAX_ROTATIONS} на запрос исчерпан — отдаю ошибку клиенту`);
+          }
           // Пока пул пуст, каждый 402 из карты идёт в ошибку клиенту. Тело читается
           // глазами и по факту дописывается в POOL_QUOTA_RE, а не угадывается заранее.
           const wasModel = modelInBody(body);
@@ -2925,6 +2956,15 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(rotateReason(403, Buffer.from(ZH_OOB)), 'out-of-balance', 'zh предоплата не прошла = нет баланса');
   assert.strictEqual(rotateReason(403, Buffer.from(EN_OOB)), 'out-of-balance', 'en Insufficient balance = нет баланса');
   assert.strictEqual(rotateReason(402, Buffer.from('余额不足')), 'out-of-balance', '402 + 余额不足 = нет баланса');
+  // Odyssey (17.09): свой шлюз, своя формулировка, тот же смысл «на ЭТОМ аккаунте кончились
+  // деньги». Снято живьём с боевого :20170 — до правки этот текст уезжал клиенту как есть.
+  const OD_OOB = '{"type":"error","error":{"type":"billing_error","message":"Your credit balance is empty. Add credit or start an Odyssey subscription to keep making requests."}}';
+  assert.strictEqual(rotateReason(402, Buffer.from(OD_OOB)), 'out-of-balance', 'odyssey: credit balance is empty = нет баланса');
+  assert.strictEqual(neededUsd(OD_OOB), null, 'у odyssey цифр в тексте нет — планка кандидата берётся из moneyMinBal');
+  // А тот же 402 у agentrouter значит СОВСЕМ другое — пул наливки пуст, аккаунт тут ни при
+  // чём: ротации на нём нет, этим занимается ветка ухода из пула. Формулировку не смешивать.
+  assert.strictEqual(rotateReason(402, Buffer.from('{"error":{"message":"Budget pool quota has been exhausted"}}')), null,
+    'пул наливки ≠ нет денег на аккаунте: подменой ключа это не лечится');
   // Числа из китайского текста: по ним выбирается кандидат и уточняется кеш баланса.
   assert.strictEqual(neededUsd(ZH_OOB), 0.8, 'нужно $0.80 распарсилось');
   assert.strictEqual(leftUsd(ZH_OOB), 0.309854, 'осталось $0.31 распарсилось');
@@ -3285,6 +3325,16 @@ if (process.argv[2] === 'selftest') {
   assert.ok(/ev\.note\('pooldrop'\);/.test(holdSrc), 'событие уходит в историю — видно на шкале /__state');
   assert.ok(/402 \(тело целиком\)/.test(holdSrc),
     'тело 402 логируется целиком: иначе китайская формулировка опять была бы невидимой');
+  // 🪤 Исходный дефект 17.09 был не в отсутствии логики, а в её НЕДОСТИЖИМОСТИ: ротация
+  // «по деньгам» жила только в ветке `shouldRetryStatus`, куда 402 не входит по канону
+  // 15.09. Фича выглядела написанной и не срабатывала ни разу - поэтому здесь проверяется
+  // именно достижимость: 402-ветка обязана сама звать rotateReason и tryRotate.
+  assert.ok(/const rotReason = ROTATE_ON \? rotateReason\(status, buf\) : null;/.test(holdSrc),
+    'ветка 402 сама разбирает текст отказа — иначе ротация на Odyssey недостижима');
+  assert.ok(/if \(rotReason\) \{[\s\S]{0,400}?tryRotate\(upReq, rotReason, buf, status, sentKey/.test(holdSrc),
+    'ветка 402 сама зовёт подмену аккаунта, а не только логирует отказ');
+  assert.ok(!/return status === 400 \|\| status === 401 \|\| status === 402/.test(holdSrc),
+    '402 в shouldRetryStatus не добавлен: он не транзиентный, повтор той же моделью ничего не лечит');
   // Возвращаем всё, что трогали руками: дальше по прогону эти состояния ещё нужны.
   cfg.poolFallbackModel = cfgFbSaved;
   cfg.poolDeadMs = cfgDeadSaved;

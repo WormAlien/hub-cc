@@ -174,4 +174,27 @@ ok('обрезанный журнал помечается в составе, а
     assert.ok(/обрезан/.test(a.lgComposition(row)), 'усечение журнала названо: ' + a.lgComposition(row));
 });
 
+// Список метрик витрины: метрика токенов должна быть ОДНА. Прежняя (журнал front-door с
+// другим определением) не показывается отдельной кнопкой - числа об одном и том же не
+// должны стоять рядом и спорить друг с другом.
+const M_A = HTML.indexOf('const LG_M = {');
+const M_B = HTML.indexOf('const LG_SER = [');
+const LG_META = (() => {
+    if (M_A < 0 || M_B <= M_A) return null;
+    try {
+        return new Function('lgTok', 'lgInt', 'lgSum',
+            `${HTML.slice(M_A, M_B)}\nreturn { LG_M, LG_TOT };`)(v => String(v), v => String(Math.round(v)), a => a.length);
+    } catch (e) { return { err: e.message }; }
+})();
+
+ok('метрика токенов в интерфейсе одна, прежней кнопки нет', () => {
+    assert.ok(LG_META && LG_META.LG_M, 'список метрик не вырезался: ' + (LG_META && LG_META.err));
+    const tokenMetrics = Object.entries(LG_META.LG_M).filter(([, m]) => m.unit === null && m.source === 'cc');
+    assert.deepStrictEqual(tokenMetrics.map(([k]) => k), ['cc'], 'каноническая метрика токенов одна');
+    assert.strictEqual(LG_META.LG_M.tok, undefined, 'прежней кнопки токенов в списке быть не должно');
+    assert.strictEqual((LG_META.LG_TOT || {}).tok, undefined, 'и её итогов в таблице тоже');
+    assert.ok(Object.keys(LG_META.LG_M).includes('acc'), 'остальные оси не тронуты');
+    assert.ok(LG_META.LG_M.cc.hint.includes('front-door'), 'подсказка называет второй источник: ' + LG_META.LG_M.cc.hint);
+});
+
 finish();

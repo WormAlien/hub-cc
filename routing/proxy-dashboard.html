@@ -15386,11 +15386,18 @@ function newapiGhBadge(s, prov) {
     // hasSession === null → бэкенд не смог посмотреть: молчим и красим как раньше.
     // Источника два: общий снимок и user_session в индексированном профиле. До 12.09
     // второй игнорировался, поэтому десять реально готовых аккаунтов красились как пустые.
-    const bad = gh.hasSession === false || gh.status === 'dead';
-    const stale = !bad && !gh.profileSource && gh.snapStale === true;
-    const tone = bad ? 'crimson' : stale ? 'amber' : 'teal';
-    const mark = bad ? ' ⚠' : stale ? ' ⚠' : '';
-    const note = bad
+    //
+    // 🪤 Третье состояние - «индекс профилей ещё не видел этот профиль» (устарел или
+    // пересобирается). Это НЕ доказанное отсутствие сессии, и красным такое красить
+    // нельзя: 17.09 так покраснел аккаунт, у которого сессия лежала в профиле AgentRouter.
+    const checking = gh.hasSession !== true && gh.indexStale === true;
+    const bad = !checking && (gh.hasSession === false || gh.status === 'dead');
+    const stale = !bad && !checking && !gh.profileSource && gh.snapStale === true;
+    const tone = checking ? 'amber' : bad ? 'crimson' : stale ? 'amber' : 'teal';
+    const mark = checking ? ' ⏳' : (bad || stale) ? ' ⚠' : '';
+    const note = checking
+      ? 'индекс профилей пересобирается - сессия проверится через несколько секунд'
+      : bad
       ? (gh.status === 'dead' ? 'помечен dead в менеджере' : 'сессии нет ни в общем снимке, ни в профилях')
       : gh.sessionSource === 'profile'
         ? `сессия в профиле ${gh.profileSource}`
@@ -24962,6 +24969,12 @@ async function xpSaveModelMap() {
 
 // ───── триал-сайты (где взять бесплатные кредиты) ─────
 // ───── GitHub-аккаунты (gh) — карточки с TOTP ─────
+// Пока индекс профилей пересобирается фоном, «сессии нет» у части записей - незнание, а
+// не факт. Поэтому список делает несколько повторов с паузой и потолком: пересборка на
+// живой машине занимает секунды, а на холодную - до полуминуты.
+let _ghIndexRetries = 0;
+const GH_INDEX_RETRY_MS = 4000;
+const GH_INDEX_RETRY_MAX = 6;
 async function loadGhKeys() {
   try {
     const res = await fetch('/__switch/api/gh/keys');
@@ -24971,6 +24984,14 @@ async function loadGhKeys() {
     state.ghUsage = data.usage || {};
     if ($('nav-count-github')) $('nav-count-github').textContent = state.github.length;
     ghRenderGrid();
+    if (data.indexBuilding === true || data.indexFresh === false) {
+      if (_ghIndexRetries < GH_INDEX_RETRY_MAX) {
+        _ghIndexRetries++;
+        setTimeout(() => { loadGhKeys().catch(() => {}); }, GH_INDEX_RETRY_MS);
+      }
+    } else {
+      _ghIndexRetries = 0;   // индекс свежий - счётчик повторов свободен
+    }
   } catch (e) {
     $('gh-grid').innerHTML = `<div class="col-span-full p-6 text-crimson text-xs">${esc(e.message)}</div>`;
   }

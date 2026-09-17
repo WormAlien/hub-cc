@@ -6289,32 +6289,47 @@ function ghSanitize(acc) {
 // живость молчал, и «сессия протухла» владелец узнавал только по коду 3 после неудачного
 // автоподарка — причём без имени аккаунта. Считаем на том же роуте, что уже грузит фронт:
 // отдельный запрос ради трёх полей был бы лишним.
-function ghSnapHealth(gsl, account) {
+function ghSnapHealth(gsl, account, fresh = true) {
     if (!gsl) return {
         hasSnap: null, hasSession: null, sessionSource: null,
-        profileSource: null, snapAgeDays: null, snapStale: null,
+        profileSource: null, snapAgeDays: null, snapStale: null, indexStale: false,
     };
     const snap = gsl.readCache(account.id);
     const profile = gsl.transferableProfile([
         account.login, account.nickname, snap && snap.ghLogin,
     ]);
     const ms = snap ? gsl.cacheAgeMs(snap) : Infinity;
+    const found = !!snap || !!profile;
+    // 🪤 Найденное - факт, и устаревший индекс его не отменяет. А вот ОТСУТСТВИЕ записи
+    // на устаревшем индексе - это незнание: профиль могли создать после сборки. Красное
+    // «сессии нет» в этом случае было ложью (17.09, профиль AgentRouter).
+    const indexStale = !found && !fresh;
     return {
         hasSnap: !!snap,
-        hasSession: !!snap || !!profile,
+        hasSession: found ? true : (fresh ? false : null),
         sessionSource: snap ? 'snapshot' : profile ? 'profile' : null,
         profileSource: profile ? `${profile.tag}:${profile.label}` : null,
         snapAgeDays: snap && Number.isFinite(ms) ? +(ms / 86400000).toFixed(1) : null,
         snapStale: snap ? gsl.cacheStale(snap) : null,
+        indexStale,
     };
 }
 
 async function handleGhKeys(req, res) {
     try {
         const gsl = ghSessionLib();
+        // Свежесть считаем один раз на запрос и переиспользуем: тот же ответ едет в срез
+        // (`indexFresh`/`indexBuilding`) - фронт по нему решает, ждать ли повтор.
+        const idx = gsl ? ghIndexState(gsl) : { fresh: false, exists: false, outdated: 0, building: false };
+        if (gsl && !idx.fresh && !idx.building) {
+            ghRebuildIndex(idx.exists ? 'устарел (список GitHub)' : 'нет индекса (список GitHub)');
+        }
         jsonRes(res, 200, {
-            keys: ghLoad().map(g => ({ ...g, ...ghSnapHealth(gsl, g) })),
+            keys: ghLoad().map(g => ({ ...g, ...ghSnapHealth(gsl, g, idx.fresh) })),
             usage: ghUsageMap(),
+            indexFresh: idx.fresh,
+            indexBuilding: idx.building || !idx.fresh,
+            indexOutdated: idx.outdated,
         });
     }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -6832,6 +6847,29 @@ function ghRebuildIndex(reason) {
     } catch (e) {
         logLine(`gh-index спавн не удался: ${e.message}`);
         return { error: e.message };
+    }
+}
+
+// Свежесть индекса профилей для путей, которые его ЧИТАЮТ. Только stat по банкам кук
+// (`indexOutdatedDirs`), никакой расшифровки: DPAPI в обработчике блокирует :8200 целиком.
+//
+// Зачем это нужно. Индекс собирают отдельным процессом при старте хаба и из пикера
+// заселения, а список GitHub-аккаунтов его не проверял вовсе. Профиль, заведённый после
+// последней сборки, в индексе не значился - и бейдж писал «сессии нет ни в общем снимке,
+// ни в профилях» (красным), хотя сессия лежала в профиле AgentRouter. Ложное отсутствие
+// вместо незнания (17.09).
+function ghIndexState(gsl) {
+    try {
+        const info = gsl.indexInfo();
+        const outdated = gsl.indexOutdatedDirs().length;   // только stat, без расшифровки
+        const exists = !!info.exists;
+        return {
+            exists, count: info.count || 0, outdated,
+            fresh: exists && outdated === 0,
+            building: ghIndexBuilding(),
+        };
+    } catch (e) {
+        return { exists: false, count: 0, outdated: 0, fresh: false, building: ghIndexBuilding(), error: e.message };
     }
 }
 

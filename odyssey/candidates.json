@@ -1,4 +1,17 @@
 {
- "at": "2026-09-16T12:52:17.784Z",
- "candidates": []
+ "at": "2026-09-16T17:33:21.815Z",
+ "candidates": [
+  {
+   "label": "socks5://193.233.139.106:1080",
+   "as": "AS210644 AEZA GROUP LLC",
+   "country": "Finland",
+   "pageMs": 5156
+  },
+  {
+   "label": "socks5://144.24.111.128:1088",
+   "as": "AS31898 Oracle Corporation",
+   "country": "India",
+   "pageMs": 7080
+  }
+ ]
 }

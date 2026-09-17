@@ -21,13 +21,14 @@ const path = require('path');
 const pp = require('../routing/lib/proxy-pool.js');
 
 const BASE = 'https://odysseyapi.tech';
-const PATHS = ['/api/auth/altcha/challenge', '/sign-up'];
-// 🔴 Третий адрес - почтовый сервис, и он тут ТОЛЬКО для справки. Замер 16.09 15:50:
-// 22.do отдаёт `403` от Cloudflare на голый запрос через ЛЮБОЙ прокси (и через живой
-// `89.189.132.154`, с которого почта в прогоне работала), а живой браузер напрямую берёт
-// ящик за полминуты. То есть по коду ответа «прокси не пускает» от «Cloudflare не пускает
-// бота» не отличить, и гейтом этот столбец быть не может - шаг почты теперь идёт БЕЗ прокси.
-const MAIL_URL = 'https://22.do/';
+// 🔴 Проверяем РОВНО ДВЕ вещи: отдаёт ли адрес страницу регистрации и приезжают ли её чанки
+// пачкой. Раньше в пробе было ещё две колонки - ручка ALTCHA и 22.do, - и обе оказались
+// бесполезны: 22.do отдаёт 403 от Cloudflare через любой прокси (ящик теперь берётся напрямую,
+// см. `auto-add.py`), а ALTCHA-ручка - это слабый зонд пула, на котором «живые» адреса не
+// открывали страницу вовсе. Зато каждая из колонок стоила до 15 секунд на кандидата: проба
+// из-за них шла шесть минут, и владелец справедливо спросил, почему в панели тихо.
+const PATHS = ['/sign-up'];
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0';
 const LEDGER = path.join(__dirname, '..', 'odyssey', 'networks-used.json');
 const CONC = Number(process.argv[2] || 6);
 const WANT = Number(process.argv[3] || 3);   // хватит стольких годных - дальше не перебираем
@@ -53,20 +54,44 @@ async function asnOf(ips) {
     return out;
 }
 
+// 🔴 Замер 16.09 16:12 (HAR провального прогона): HTML `/sign-up` приходит за 4 с с кодом 200,
+// а ДВАДЦАТЬ ПЯТЬ параллельных запросов за чанками `/_next/static/chunks/*.js`, стилями и
+// Clerk висят без ответа навсегда - в HAR у них нет ответа вовсе. Приложение не гидрируется,
+// форма Clerk не рисуется, на экране остаётся заставка «Loading verification…», и прогон
+// встаёт на «формы нет». Снаружи это выглядит как «капча не прошла», хотя капча тут ни при чём.
+// Поэтому проба, которая проверяет только HTML, пропускает такие адреса: она обязана
+// попробовать ту же ПАЧКУ параллельно и убедиться, что чанки приезжают.
+async function burstCheck(p, html) {
+    const urls = [...new Set([...html.matchAll(/\/_next\/static\/(?:chunks|media)\/[^"'\\]+\.(?:js|css)/g)]
+        .map(m => m[0]))].slice(0, 8);
+    if (!urls.length) return { ok: 0, total: 0, ms: 0, note: 'ссылок на чанки в HTML не нашлось' };
+    const t0 = Date.now();
+    const got = await Promise.all(urls.map(u =>
+        pp.fetchVia(p, BASE + u, {
+            timeoutMs: 12000,
+            headers: { 'user-agent': UA, 'accept': '*/*' },
+        }).then(async r => (r.status === 200 && (await r.text()).length > 500) ? 1 : 0).catch(() => 0)));
+    const ok = got.filter(Boolean).length;
+    return { ok, total: urls.length, ms: Date.now() - t0 };
+}
+
 async function probeOne(p) {
     const row = { label: p.label, ip: p.hostname, tier: null, as: '', country: '', res: {} };
     try { row.tier = pp.tierOf(p.id); } catch { /* ярус не критичен */ }
-    for (const path_ of [...PATHS, MAIL_URL]) {
+    for (const path_ of PATHS) {
         const url = path_.startsWith('http') ? path_ : BASE + path_;
         const t0 = Date.now();
         try {
             const r = await pp.fetchVia(p, url, {
                 timeoutMs: TIMEOUT,
-                headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0',
+                headers: { 'user-agent': UA,
                            'accept': 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
             });
             const body = await r.text();
             row.res[path_] = { status: r.status, ms: Date.now() - t0, len: body.length };
+            if (path_ === PATHS[0] && r.status === 200) {
+                row.burst = await burstCheck(p, body);
+            }
         } catch (e) {
             row.res[path_] = { err: String(e.message || e).slice(0, 60), ms: Date.now() - t0 };
         }
@@ -93,17 +118,21 @@ async function probeOne(p) {
 
     const out = [];
     const good = [];
+    // «Годен» теперь значит: HTML 200 И чанки приехали пачкой. Раньше хватало HTML, и такие
+    // адреса уходили в прогон, где браузер не мог поднять приложение (см. burstCheck).
+    const usable = (r) => r.res[PATHS[0]].status === 200 && r.burst && r.burst.total > 0
+        && r.burst.ok >= Math.ceil(r.burst.total * 0.8);
     for (let i = 0; i < fresh.length; i += CONC) {
         const chunk = fresh.slice(i, i + CONC);
         const rows = await Promise.all(chunk.map(x => probeOne(x.p)));
         rows.forEach((r, j) => {
             r.as = chunk[j].key; r.country = chunk[j].country;
             out.push(r);
-            if (r.res[PATHS[1]].status === 200) good.push(r);
+            if (usable(r)) good.push(r);
             const mark = (v) => v.err ? `✗ ${v.err}` : `${v.status} ${v.len}b`;
-            console.log(`  ${r.ip.padEnd(16)} ${(r.as || 'ASN неизвестен').slice(0, 30).padEnd(30)} ` +
-                        `${r.country.padEnd(3)} altcha: ${mark(r.res[PATHS[0]]).padEnd(22)} ` +
-                        `страница: ${mark(r.res[PATHS[1]]).padEnd(22)} ящик(справка): ${mark(r.res[MAIL_URL])}`);
+            const b = r.burst ? `${r.burst.ok}/${r.burst.total} чанков за ${r.burst.ms}мс` : 'чанки не проверялись';
+            console.log(`  ${r.ip.padEnd(16)} ${(r.as || 'ASN неизвестен').slice(0, 28).padEnd(28)} ` +
+                        `${r.country.padEnd(3)} стр: ${mark(r.res[PATHS[0]]).padEnd(20)} ${b}`);
         });
         // Рано выходим: проба стоит по 2-8 с на адрес, а на 33 кандидатах это минуты.
         // Обёртке нужно 2-3 годных адреса, остальной перебор - трата времени впустую.
@@ -113,16 +142,20 @@ async function probeOne(p) {
         }
     }
 
-    const page = (r) => r.res[PATHS[1]], mail = (r) => r.res[MAIL_URL];
-    const ok = good.filter(r => page(r).status === 200);
-    const half = out.filter(r => page(r).status !== 200 && mail(r).status === 200);
-    console.log(`\n🔴 ГОДНЫХ (страница регистрации отвечает 200): ${ok.length}`);
+    const page = (r) => r.res[PATHS[0]];
+    const ok = good.filter(usable);
+    const half = out.filter(r => page(r).status === 200 && !usable(r));
+    console.log(`\n🔴 ГОДНЫХ (HTML + чанки пачкой): ${ok.length}`);
     for (const r of ok) {
-        console.log(`  --proxy '${r.label}'   # ${r.as} · ${r.country} · страница ${page(r).ms}мс · ящик ${mail(r).ms}мс`);
+        console.log(`  --proxy '${r.label}'   # ${r.as} · ${r.country} · страница ${page(r).ms}мс · ` +
+                    `чанки ${r.burst.ok}/${r.burst.total} за ${r.burst.ms}мс`);
     }
     if (half.length) {
-        console.log(`\n⚠️ страница не открылась, а 22.do отвечает (${half.length}) - для нас не годятся:`);
-        for (const r of half) console.log(`  ${r.label}   # ${r.as} · ${r.country}`);
+        console.log(`\n⚠️ HTML отдали, а чанки не приехали (${half.length}) - браузер на них не поднимет приложение:`);
+        for (const r of half) {
+            const b = r.burst ? `${r.burst.ok}/${r.burst.total}` : 'не проверялись';
+            console.log(`  ${r.label}   # ${r.as} · ${r.country} · чанки ${b}`);
+        }
     }
     // Машинный список для обёртки: годится только то, где жива САМА страница. Один адрес
     // на сеть: подарок даётся один раз на ASN, и второй адрес того же провайдера в том же
@@ -132,7 +165,7 @@ async function probeOne(p) {
     for (const r of ok.sort((a, b) => page(a).ms - page(b).ms)) {
         if (seenAs.has(r.as)) continue;
         seenAs.add(r.as);
-        cand.push({ label: r.label, as: r.as, country: r.country, pageMs: page(r).ms, mailMs: mail(r).ms });
+        cand.push({ label: r.label, as: r.as, country: r.country, pageMs: page(r).ms });
     }
     fs.writeFileSync(path.join(__dirname, '..', 'odyssey', 'candidates.json'),
                      JSON.stringify({ at: new Date().toISOString(), candidates: cand }, null, 1));

@@ -7245,6 +7245,10 @@ window.finNavCount = async () => {
                 <option value="scraper">скрапер</option>
                 <option value="none">напрямую</option>
               </select>
+              <label class="text-[10px] text-faint font-mono" for="od-autoreg-count">аккаунтов</label>
+              <input id="od-autoreg-count" type="number" min="1" max="9" value="1"
+                     class="w-14 text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60"
+                     title="Сколько аккаунтов завести за один запуск. На каждый нужен свой адрес и своя сеть, поэтому прогон возьмёт столько адресов, сколько попросили (и столько попыток, сколько понадобится)">
               <button id="od-autoreg-start" onclick="odAutoregStart()" class="text-xs px-3 py-2 bg-lime/10 border border-lime/50 text-lime rounded-lg hover:bg-lime/20 font-medium" title="Скрипт заведёт аккаунт целиком; если Clerk потребует капчу — подойди к окну и прожми её">🤖 Завести аккаунт</button>
               <button id="od-autoreg-stop" onclick="odAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
               <span id="od-autoreg-status" class="text-[10px] font-mono text-faint"></span>
@@ -20617,6 +20621,7 @@ async function odAutoregStatus({ quiet = false } = {}) {
     $('od-autoreg-start').classList.toggle('hidden', running);
     $('od-autoreg-stop').classList.toggle('hidden', !running);
     $('od-autoreg-tier').disabled = running;
+    $('od-autoreg-count').disabled = running;
 
     const stageName = d.stage && d.stage.stage ? d.stage.stage : null;
     const stageNote = d.stage && d.stage.note ? (' · ' + d.stage.note) : '';
@@ -20652,10 +20657,11 @@ async function odAutoregStatus({ quiet = false } = {}) {
 
 async function odAutoregStart() {
   const tier = $('od-autoreg-tier').value;
+  const count = Math.max(1, Math.min(9, parseInt($('od-autoreg-count').value, 10) || 1));
   try {
     const r = await fetch('/__switch/api/od/autoreg/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tier }),
+      body: JSON.stringify({ tier, count }),
     });
     const d = await r.json();
     if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
@@ -20663,7 +20669,7 @@ async function odAutoregStart() {
     $('od-autoreg-log-err').textContent = '';
     $('od-autoreg-log-err').classList.add('hidden');
     $('od-autoreg-log-wrap').classList.remove('hidden');
-    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier})`, 'success');
+    toast(`🤖 Odyssey: прогон пошёл (ярус ${tier}, аккаунтов ${count})`, 'success');
     await odAutoregStatus({ quiet: true });
     if (state.odAutoregTimer) clearInterval(state.odAutoregTimer);
     state.odAutoregTimer = setInterval(async () => {
@@ -20683,6 +20689,20 @@ async function odAutoregStop() {
     await odAutoregStatus({ quiet: true });
   } catch (e) { toast('Стоп: ' + e.message, 'error'); }
 }
+
+// 🔴 Статус спрашиваем и ПРИ ЗАГРУЗКЕ страницы, а не только при нажатии кнопки. Без этого
+// после перезагрузки панель показывала «🤖 Завести аккаунт» у УЖЕ идущего прогона, а кнопки
+// «Стоп» не было вовсе: нажатие отвечало «авторега Odyssey уже идёт», и выглядело это как
+// поломка (владелец, 16.09 18:04). Кнопка «Стоп» лежит в разметке скрытой и открывается
+// ровно этим вызовом.
+odAutoregStatus({ quiet: true }).then(running => {
+  if (running && !state.odAutoregTimer) {
+    state.odAutoregTimer = setInterval(async () => {
+      const r = await odAutoregStatus({ quiet: true });
+      if (!r) { clearInterval(state.odAutoregTimer); state.odAutoregTimer = null; }
+    }, 2500);
+  }
+});
 
 function akBalanceCell(s, keyJ) { return newapiBalanceCell(s, keyJ, 'ak', '$', akIsRealKey); }function akShowAdd(show = true) {
   $('ak-add-form').classList.toggle('hidden', !show);
@@ -32844,7 +32864,7 @@ setInterval(() => {
 // свою строку считает leagueSelf() на сервере, соседи приедут из league-peers.json,
 // когда поднимем приёмник. Пока их нет, вкладка честно говорит об этом и показывает
 // свою кривую — она и есть половина смысла, «как в Claude Code статистика».
-const LG = { data: null, metric: 'tok', range: 'd7', cum: false, plot: null, err: null, loading: false };
+const LG = { data: null, metric: 'cc', range: 'd7', cum: false, plot: null, err: null, loading: false };
 // Накопительный режим осмыслен только для потоковых метрик. У «аккаунтов» кривая — это
 // уже уровень счётчика, и суммировать его по дням значило бы складывать одно и то же
 // с собой; поэтому там режим не просто выключен, а недоступен.
@@ -32853,9 +32873,22 @@ const lgCumOn = () => LG.cum && !LG_M[LG.metric].cum;
 // владелец снял как лишний текст, но цифру всё равно надо уметь прочитать правильно.
 // Полный разбор — в вике, [[Рейтинг расхода в ABUSE HUB — аудит учёта и план]].
 const LG_M = {
-  tok: { lb: 'токены', fmt: v => lgTok(v), unit: null,
-    hint: 'вход + выход, без кеша. Сутки и неделя — журнал front-door (все харнессы), '
-        + 'раньше 26.08 — stats-cache самого Claude Code' },
+  // Канонический счётчик Claude Code. Единственная метрика токенов, которую можно
+  // сравнивать с `/stats` и между участниками: то же определение (вход + выход + чтение
+  // кеша + запись кеша), дни по UTC, отдельный общий итог. Разбор - в вики,
+  // [[Лига — горизонты метрик и «Всё время»]].
+  cc:  { lb: 'токены Claude Code', fmt: v => lgTok(v), unit: null, source: 'cc',
+    hint: 'вход + выход + чтение кеша + запись кеша - то же определение, что в /stats. '
+        + 'Итог «всё время» берётся из общего счётчика Claude Code, а не из суммы дней: '
+        + 'истории за дни может не быть, а итог при этом известен. Прочерк у соседа значит, '
+        + 'что он ещё на старой версии и числа не привёз' },
+  // Прежняя метрика: журнал front-door плюс дневной ряд кеша. Остаётся отдельной кнопкой,
+  // а не переименовывается в каноническую: её числа считаются другим определением, и
+  // подменять одно другим значило бы врать о том, что именно измерено.
+  tok: { lb: 'токены (журнал)', fmt: v => lgTok(v), unit: null,
+    hint: 'вход + выход по журналу front-door, до 26.08 - дневной ряд кеша Claude Code. '
+        + 'Другое определение, чем у «токенов Claude Code»: кеш здесь внутри дней кеша, '
+        + 'а сумма дней не равна общему итогу' },
   // Деньги — ОДНА метрика с двумя величинами, а не две кнопки. Требование владельца:
   // «сожжено и налито должно быть на одной вкладке». Переключаться, чтобы увидеть
   // деньги целиком, бессмысленно: расход без прихода читается как убыток — на неделе
@@ -32944,10 +32977,54 @@ function lgAv(nick, px, av) {
 // того, как в срез добавили налив и прирост аккаунтов: `Number(undefined) || 0` дало бы
 // честный на вид ноль вместо «этого мы пока не знаем». Для аккаунтов запас — уровень
 // счётчика (закуплено + зарегано), он верен всегда; для остальных — сумма своего ряда.
+// ── Канонический счётчик Claude Code в срезе ────────────────────────────────
+// Живёт отдельным объектом `ccStats` и только у тех, кто обновился. Отсутствие поля -
+// это «неизвестно», а не «ноль»: у участника на старой версии числа просто нет, и
+// нарисовать вместо него нуль значило бы показать его последним в рейтинге за то,
+// что он не обновил клиент.
+const lgCc = p => (p && p.ccStats && p.ccStats.available !== false) ? p.ccStats : null;
+// 🪤 `Number(null)` даёт ноль, поэтому «неизвестно» проверяется ДО приведения: иначе
+// пропущенный день превращался бы в честный на вид ноль, а это ровно тот дефект, из-за
+// которого счётчик и заводился.
+const lgCcNum = v => (v === null || v === undefined || v === '' || typeof v === 'boolean')
+  ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
+const lgCcPack = o => (o && Array.isArray(o.keys) && Array.isArray(o.values) && o.keys.length === o.values.length)
+  ? o : null;
+// Ряд для окна: у суток - часовые корзины, у остальных - хвост дневного ряда.
+function lgCcRun(p, r) {
+  const cc = lgCc(p);
+  if (!cc) return null;
+  if (r === 'h24') return lgCcPack(cc.hours);
+  const d = lgCcPack(cc.days);
+  if (!d) return null;
+  const n = r === 'd7' ? 7 : r === 'd30' ? 30 : d.keys.length;
+  return { keys: d.keys.slice(-n), values: d.values.slice(-n) };
+}
+// Итог окна. «Всё время» берётся из ОБЩЕГО счётчика, а не из суммы дней: у Claude Code
+// дневной ряд после миграции кеша пересобирается из уцелевших транскриптов, и часть
+// истории в нём отсутствует, а общий итог при этом известен. Ровно на этом Лига и
+// расходилась с `/stats` на 21 %.
+function lgCcTotal(p, r) {
+  const cc = lgCc(p);
+  if (!cc) return null;
+  if (r === 'all') return lgCcNum(cc.lifetime);
+  return lgCcNum((cc.totals || {})[r]);
+}
+// Стрик: у канонического счётчика он считается по активности Claude Code (сообщения), а у
+// прежней метрики - по промптам из history.jsonl. Это разные числа, и подменять одно
+// другим нельзя: «50» и «63» - не одна и та же величина.
+const lgStreak = p => {
+  const cc = lgCc(p);
+  const n = cc && cc.activity ? Number(cc.activity.streakCurrent) : NaN;
+  if (Number.isFinite(n) && n > 0) return n;
+  const t = Number((p && p.tot || {}).streak);
+  return Number.isFinite(t) ? t : 0;
+};
 function lgTotal(p, r) {
   const m = LG.metric;
   r = r || LG.range;
   const t = p.tot || {};
+  if ((LG_M[m] || {}).source === 'cc') return lgCcTotal(p, r);
   const k = (LG_TOT[m] || {})[r];
   if (k && t[k] !== undefined) return Number(t[k]) || 0;
   if (m === 'acc') return (Number(t.bought) || 0) + (Number(t.reg) || 0);
@@ -32959,8 +33036,17 @@ const lgAccDeltaOn = () => ((LG.data && LG.data.me && LG.data.me.tot) || {}).acc
 // Метрика, которую эта сборка сервера ещё не считает. Смотрим на ДАННЫЕ, а не на версию:
 // клиент обновляется по Ctrl+Shift+R, срез считает живой процесс. Возвращает объяснение
 // для человека или null.
-function lgMetricGap() {
-  const need = (LG_M[LG.metric] || {}).need;
+function lgMetricGap(p) {
+  const m = LG_M[LG.metric] || {};
+  const own = p || (LG.data && LG.data.me) || null;
+  // Канонического счётчика нет у того, кто не обновился. Это не «метрику не считает
+  // сервер»: сервер считает, а у участника поля в срезе просто нет.
+  if (m.source === 'cc' && !lgCc(own)) {
+    return own && own.isMe
+      ? 'канонический счётчик Claude Code ещё не посчитан — срез придёт после прогрева'
+      : 'участник на старой версии: канонического счётчика в его срезе нет';
+  }
+  const need = m.need;
   if (!need) return null;
   const ser = (LG.data && LG.data.me && LG.data.me[LG.metric]) || null;
   const has = ser && ['h24', 'd7', 'd30', 'all'].some(w => Array.isArray(ser[w]) && ser[w].length);
@@ -32984,10 +33070,18 @@ function lgPairTotal(p, r) {
   if (k && t[k] !== undefined) return Number(t[k]) || 0;
   return lgSum(((p[m.pair] || {})[r]) || []);
 }
-// Значение для показа. При отсутствующей метрике — прочерк: «$0» означал бы «наливов не
+// Значение для показа. При отсутствующей метрике - прочерк: «$0» означал бы «наливов не
 // было», то есть соврал бы ровно о том, о чём вкладка спрашивает.
-const lgShow = (p, r) => lgMetricGap() ? '—' : LG_M[LG.metric].fmt(lgTotal(p, r));
-// То же для парной величины: нет полей — прочерк, а не ноль.
+// Значение для показа. При отсутствующей метрике - прочерк: «$0» означал бы «наливов не
+// было», то есть соврал бы ровно о том, о чём вкладка спрашивает. У канонического счётчика
+// прочерк ещё и у соседа на старой версии - см. lgMetricGap.
+const lgShow = (p, r) => {
+  if (lgMetricGap(p)) return '—';
+  const v = lgTotal(p, r === undefined ? LG.range : r);
+  if (v === null) return '—';
+  return LG_M[LG.metric].fmt(v);
+};
+// То же для парной величины: нет полей - прочерк, а не ноль.
 const lgShowPair = (p, r) => lgPairOn() ? LG_M[LG.metric].fmt(lgPairTotal(p, r)) : '—';
 // Подпись величины под цифрой (плитка, колонка списка, плашка «ты»). У накопительной
 // метрики окно значит не «сколько всего», а «сколько прибавилось» — «аккаунты · сутки»
@@ -33065,7 +33159,11 @@ function lgRows() {
       if (rec && rec.rid) { rows[0].rid = rec.rid; break; }
     }
   }
-  rows.sort((a, b) => lgTotal(b) - lgTotal(a));
+  // Сортировка: у кого канонического итога нет, тот не получает места вовсе и уезжает
+  // вниз списка. Ставить его на последнее место значило бы сравнивать неизвестное с
+  // известным, то есть выдумывать результат.
+  const lgRank = p => { const v = lgTotal(p); return v === null ? -Infinity : v; };
+  rows.sort((a, b) => lgRank(b) - lgRank(a));
   lgLabels(rows);
   for (const p of rows) {
     if (!p.avatar) { const f = lgFace(p); if (f) p.avatar = f; }
@@ -33087,11 +33185,29 @@ function lgRows() {
 // чужую кривую во времени, то есть соврало бы в самом графике.
 function lgAligned(p, keys, metric) {
   const m = metric || LG.metric;
+  // Канонический ряд совмещаем по ЕГО ключам, и отсутствующий день остаётся null: ноль
+  // означал бы «в этот день не потратил ничего», а день может быть просто не измерен.
+  if ((LG_M[m] || {}).source === 'cc') {
+    const run = lgCcRun(p, LG.range);
+    if (!run) return keys.map(() => null);
+    const map = new Map();
+    run.keys.forEach((k, i) => { const v = lgCcNum(run.values[i]); if (v !== null) map.set(k, v); });
+    return keys.map(k => map.has(k) ? map.get(k) : null);
+  }
   const own = ((p.keys || {})[LG.range]) || [];
   const vals = ((p[m] || {})[LG.range]) || [];
   if (!own.length || own.length !== vals.length) return keys.map((_, i) => Number(vals[i]) || 0);
   const map = new Map(own.map((k, i) => [k, Number(vals[i]) || 0]));
   return keys.map(k => map.has(k) ? map.get(k) : 0);
+}
+// Сетка ключей для графика. У канонического счётчика она своя: его дни идут по UTC, а у
+// прежних метрик - по сетке журналов хаба.
+function lgKeys(p, r) {
+  if ((LG_M[LG.metric] || {}).source === 'cc') {
+    const run = lgCcRun(p, r);
+    return run ? run.keys : [];
+  }
+  return ((p && p.keys || {})[r]) || [];
 }
 // ── Монотонный кубический сплайн (Fritsch–Carlson) ──────────────────────────
 // Гладко, но без горбов: наклоны ограничены так, чтобы кривая не выходила за пределы
@@ -33148,13 +33264,17 @@ function lgDrawPlot(top) {
     return;
   }
   const W = Math.max(620, Math.round(host.clientWidth || 1000)), H = LG_H;
-  const keys = ((LG.data.me.keys || {})[LG.range]) || [];
+  // Сетка ключей у канонического счётчика своя (дни UTC), у прежних метрик - из журналов.
+  const keys = lgKeys(LG.data.me, LG.range);
   const n = keys.length;
   if (!n) { host.innerHTML = '<div class="lgcap" style="padding:40px 0">данных за это окно нет</div>'; return; }
   // Накопительно: нарастающий итог ВНУТРИ окна. Последняя точка при этом совпадает с
-  // итогом окна в плитках — кривая и цифры продолжают говорить одно и то же.
+  // итогом окна в плитках - кривая и цифры продолжают говорить одно и то же.
+  // 🪤 Неизвестный день (null) итог НЕ наращивает и остаётся дырой: прибавить его как ноль
+  // значило бы нарисовать ровную линию там, где данных нет.
   const cum = lgCumOn();
-  const roll = v => { if (!cum) return v; let a = 0; return v.map(x => (a += (Number(x) || 0))); };
+  const roll = v => { if (!cum) return v; let a = 0;
+    return v.map(x => (x === null || x === undefined || !Number.isFinite(Number(x))) ? null : (a += Number(x))); };
   const series = top.map(p => roll(lgAligned(p, keys)));
   // Парная величина (налив) — те же участники, тот же масштаб, но пунктиром. Если сервер
   // её ещё не считает, второй ряд просто не строится: врать нулями нельзя.
@@ -33200,10 +33320,22 @@ function lgDrawPlot(top) {
 
   // Концы линий считаем заранее и РАЗВОДИМ подписи по вертикали: у двух серий
   // последние значения могут совпасть, и подписи налезали друг на друга в кашу.
+  // Непрерывные куски ряда: неизвестные дни (null) РАЗРЫВАЮТ линию, а не соединяются через
+  // них прямой. У прежних метрик null не появляется, поэтому их кривая не меняется.
+  const runOf = (v) => {
+    const segs = []; let cur = [];
+    for (let i = 0; i < v.length; i++) {
+      const x = v[i];
+      if (x === null || x === undefined || !Number.isFinite(Number(x))) { if (cur.length) segs.push(cur); cur = []; }
+      else cur.push([xs(i), ys(x)]);
+    }
+    if (cur.length) segs.push(cur);
+    return segs;
+  };
   const ends = series.map((v, k) => {
-    const from = lgFirstReal(v), pts = [];
-    for (let i = from; i < v.length; i++) pts.push([xs(i), ys(v[i])]);
-    return { k, pts, path: pts.length > 1 ? lgSpline(pts) : '',
+    const segs = runOf(v).filter(s => s.length > 1);
+    const pts = segs.length ? segs[segs.length - 1] : [];
+    return { k, segs, pts, paths: segs.map(s => lgSpline(s)),
       x: pts.length ? pts[pts.length - 1][0] : 0, y: pts.length ? pts[pts.length - 1][1] : 0 };
   });
   const LBH = 15, order = ends.filter(e => e.pts.length > 1).sort((a, b) => a.y - b.y);
@@ -33214,13 +33346,16 @@ function lgDrawPlot(top) {
   order.forEach(e => { e.ly -= shift; });
 
   const body = ends.map(e => {
-    if (e.pts.length < 2) return '';
+    if (!e.paths.length) return '';
     const k = e.k, col = LG_SER[k % LG_SER.length];
+    // Заливка — только под последним непрерывным куском: под разрывом она рисовала бы
+    // площадь, которой в данных нет.
+    const area = `<path d="${e.paths[e.paths.length - 1]} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>`;
     return `<linearGradient id="lgG${k}" x1="0" y1="${LG_PT}" x2="0" y2="${H - LG_PB}" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="${col}" stop-opacity=".28"/>
         <stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient>
-      <path d="${e.path} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>
-      <path class="lgserie" d="${e.path}" stroke="${col}"/>
+      ${area}
+      ${e.paths.map(d => `<path class="lgserie" d="${d}" stroke="${col}"/>`).join('')}
       <circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="4.5" fill="${col}"
         stroke="var(--lg-surface)" stroke-width="2.5"/>
       ${Math.abs(e.ly - e.y) > 2 ? `<path d="M${(e.x + 5).toFixed(1)},${e.y.toFixed(1)} L${(e.x + 9).toFixed(1)},${e.ly.toFixed(1)}" stroke="${col}" stroke-width="1.2" fill="none" opacity=".55"/>` : ''}
@@ -33231,10 +33366,9 @@ function lgDrawPlot(top) {
   // Пунктирные ряды парной величины: без заливки, без точки и без подписи на конце —
   // подписи бы удвоились, а участника уже называет цвет. Начертание отвечает на «что».
   const body2 = !pair ? '' : pair.map((v, k) => {
-    const from = lgFirstReal(v), pts = [];
-    for (let i = from; i < v.length; i++) pts.push([xs(i), ys(v[i])]);
-    if (pts.length < 2) return '';
-    return `<path class="lgserie lgpair" d="${lgSpline(pts)}" stroke="${LG_SER[k % LG_SER.length]}"/>`;
+    const segs = runOf(v).filter(s => s.length > 1);
+    if (!segs.length) return '';
+    return segs.map(s => `<path class="lgserie lgpair" d="${lgSpline(s)}" stroke="${LG_SER[k % LG_SER.length]}"/>`).join('');
   }).join('');
 
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" id="lg-svg" role="img"
@@ -33280,11 +33414,15 @@ function lgHookHover() {
       // «сожжено» и «налито» отличаются только начертанием линии — в тексте это надо
       // проговорить словами, иначе две цифры рядом невозможно развести.
       const nameOf = k => lgEsc(lgNm(top[k]));
+      // Прочерк у неизвестного дня: ноль в подсказке читался бы как «в этот день не
+      // работали», хотя день может быть просто не измерен (см. lgAligned).
+      const cell = x => (x === null || x === undefined || !Number.isFinite(Number(x)))
+        ? '—' : LG_M[LG.metric].fmt(Number(x));
       tip.innerHTML = `<div class="th">${lgEsc(lgLab(keys[i] || ''))}</div>`
         + series.map((v, k) => `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
-            ${nameOf(k)}${pair ? ' · ' + lgEsc(LG_M[LG.metric].selfLb) : ''}<b>${LG_M[LG.metric].fmt(v[i] || 0)}</b></div>`
+            ${nameOf(k)}${pair ? ' · ' + lgEsc(LG_M[LG.metric].selfLb) : ''}<b>${cell(v[i])}</b></div>`
           + (pair && pair[k] ? `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]};opacity:.45"></i>
-            ${nameOf(k)} · ${lgEsc(LG_M[LG.metric].pairLb)}<b>${LG_M[LG.metric].fmt(pair[k][i] || 0)}</b></div>` : '')).join('');
+            ${nameOf(k)} · ${lgEsc(LG_M[LG.metric].pairLb)}<b>${cell(pair[k][i])}</b></div>` : '')).join('');
       tw = tip.offsetWidth; th = tip.offsetHeight;
     }
     // Позиция — трансформом по закешированным размерам: ни чтения раскладки, ни записи
@@ -33802,13 +33940,13 @@ function lgRender() {
      <span class="lgcap th">стрик</span>`;
   document.getElementById('lg-list').innerHTML = rows.map((p, i) => `
     <div class="lgrow${p.isMe ? ' me' : ''}">
-      <span class="lgrank"><b>${i + 1}</b></span>${lgAv(p.nick, 32, p.avatar)}
+      <span class="lgrank"><b>${lgTotal(p) === null ? '—' : i + 1}</b></span>${lgAv(p.nick, 32, p.avatar)}
       <span class="lgnm">${lgEsc(lgNm(p))}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}
         <i>${p.isMe ? 'срез только что' : 'срез ' + lgAgo(p.stamp)} · ${lgInt((p.tot || {}).ppd || 0)} промптов/д${p.ver ? ' · v' + lgEsc(p.ver) : ''}${p.dup && !p.isMe ? ' · ник совпал, различай по хвосту rid' : ''}</i></span>
       <span class="lgv on">${lgShow(p)}${pr ? `<i style="display:block;font-style:normal;font-size:12px;color:var(--lg-dim)">${lgShowPair(p)}</i>` : ''}</span>
       <span class="lgv" title="куплено гитхабов с кредами">${lgInt((p.tot || {}).bought || 0)}</span>
       <span class="lgv" title="ключей, заведённых через эти гитхабы">${lgInt((p.tot || {}).reg || 0)}</span>
-      <span class="lgv">🔥&nbsp;${Number.isFinite(Number((p.tot || {}).streak)) && Number((p.tot || {}).streak) > 0 ? lgInt(Number((p.tot || {}).streak)) : '—'}</span>
+      <span class="lgv">🔥&nbsp;${lgStreak(p) > 0 ? lgInt(lgStreak(p)) : '—'}</span>
     </div>`).join('') + (solo ? `
     <div class="lgrow pend"><span class="lgrank"><b>—</b></span>${lgAv('??', 32)}
       <span class="lgnm" style="font-weight:400">друзья
@@ -33819,6 +33957,8 @@ function lgRender() {
   // на её месте стоит объяснение, иначе получилось бы бодрое «+0 %» ни о чём.
   const gap = lgMetricGap() ? lgMetricGap()
     : solo ? 'соперников пока нет'
+    : lgTotal(me) === null ? 'места нет: у тебя ещё не посчитан канонический счётчик'
+    : lgTotal(rows[0]) === null ? 'место не считается: у первого нет сопоставимого счётчика'
     : mi === 0
       ? `отрыв от второго: +${Math.round((lgTotal(rows[0]) / Math.max(lgTotal(rows[1]), 1) - 1) * 100)}%`
       : `до ${mi}-го места не хватает ${m.fmt(lgTotal(rows[mi - 1]) - lgTotal(me))}`;
@@ -33855,11 +33995,15 @@ function lgMovement(rank, total) {
   const today = new Date().toLocaleDateString('sv');       // YYYY-MM-DD, местные сутки
   let prev = null;
   try { prev = JSON.parse(localStorage.getItem(LG_RANK_KEY) || 'null'); } catch (e) {}
+  // 🪤 Место сравнивается только с местом ПО ТОЙ ЖЕ ВЕРСИИ СЧЁТА: миграция канонического
+  // счётчика иначе показалась бы обгоном соседей. Версия места хранится рядом с ним.
+  const ver = (LG_M[LG.metric] || {}).source === 'cc' ? 'cc1' : 'legacy';
+  if (prev && prev.ver && prev.ver !== ver) prev = null;
   // Плюс = поднялся (номер места стал меньше).
   const mv = prev && prev.day === today ? (Number(prev.mv) || 0)
            : prev ? (Number(prev.rank) || rank) - rank : 0;
-  try { localStorage.setItem(LG_RANK_KEY, JSON.stringify({ day: today, rank, mv, total })); }
-  catch (e) { /* приватный режим — обойдёмся без стрелки */ }
+  try { localStorage.setItem(LG_RANK_KEY, JSON.stringify({ day: today, rank, mv, total, ver })); }
+  catch (e) { /* приватный режим - обойдёмся без стрелки */ }
   return mv;
 }
 // Мини-блок в сайдбаре. Метрика у него ЗАФИКСИРОВАНА — токены за 7 дней: он висит на
@@ -33869,24 +34013,29 @@ function lgPaintMini(rows, mi) {
   const box = document.getElementById('league-mini');
   if (!box || !LG.data) return;
   const me = LG.data.me, solo = rows.length < 2;
-  const val = Number((me.tot || {}).tokW) || 0;
-  // Бейдж вкладки в сайдбаре пишем ЗДЕСЬ, а не в lgRender: тот зовётся только при
-  // открытой «Лиге», и до первого клика по ней счётчик стоял прочерком. Мини-блок
-  // красится всегда, значит и место в лиге известно всегда — без своего запроса.
+  // Мини-блок отвечает про КАНОНИЧЕСКИЙ счётчик, как и вкладка: он висит на всех вкладках,
+  // и цифра обязана быть той же величины, что в шапке Лиги. Нет счётчика - прочерк, а не
+  // цифра другой метрики под той же подписью.
+  const ccRun = lgCcRun(me, 'd7');
+  const ccVal = lgCcTotal(me, 'd7');
+  const val = ccVal === null ? null : ccVal;
   const nav = document.getElementById('nav-count-league');
   if (nav) nav.textContent = solo ? '1' : `${mi + 1} / ${rows.length}`;
-  document.getElementById('league-mini-place').textContent = solo ? '1' : String(mi + 1);
-  document.getElementById('league-mini-of').textContent = solo ? 'один в лиге' : 'из ' + rows.length;
-  // Движение места — за прошлые сутки, по своей же памяти (см. lgMovement).
+  const ranked = lgTotal(me) === null;
+  document.getElementById('league-mini-place').textContent = ranked ? '—' : (solo ? '1' : String(mi + 1));
+  document.getElementById('league-mini-of').textContent = ranked ? 'нет счётчика'
+    : solo ? 'один в лиге' : 'из ' + rows.length;
+  // Движение места - за прошлые сутки, по своей же памяти (см. lgMovement).
   const mv = document.getElementById('league-mini-mv');
   const mvv = lgMovement(solo ? 1 : mi + 1, rows.length);
   mv.innerHTML = mvv > 0 ? `▲&thinsp;${mvv}` : mvv < 0 ? `▼&thinsp;${-mvv}` : '—';
   mv.style.color = mvv > 0 ? 'var(--color-emerald,#3ddc91)'
     : mvv < 0 ? 'var(--color-crimson,#ff6b6b)' : 'var(--color-faint,#6b7684)';
   mv.title = mvv ? 'изменение места с прошлых суток' : 'место не менялось с прошлых суток';
-  document.getElementById('league-mini-val').textContent = lgTok(val);
-  // Спарклайн — свой недельный ряд тем же монотонным сплайном, что на большой витрине.
-  const v = ((me.tok || {}).d7 || []).map(x => Number(x) || 0);
+  document.getElementById('league-mini-val').textContent = val === null ? '—' : lgTok(val);
+  // Спарклайн - свой недельный ряд тем же монотонным сплайном, что на большой витрине.
+  // Неизвестные дни пропускаем, а не рисуем нулями: см. lgAligned.
+  const v = (ccRun ? ccRun.values.map(lgCcNum).filter(x => x !== null) : []);
   const W = 240, H = 26, mx = Math.max(...v, 1);
   const pts = v.map((x, i) => [i * (W / Math.max(v.length - 1, 1)), H - (x / mx) * (H - 3) - 1.5]);
   const line = v.length > 1 ? lgSpline(pts) : '';

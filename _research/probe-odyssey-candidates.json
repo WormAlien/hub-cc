@@ -6,17 +6,9 @@
   "as": "AS18403 FPT Telecom Company",
   "country": "Vietnam",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20038
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20012
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20002
+    "ms": 20040
    }
   }
  },
@@ -27,17 +19,9 @@
   "as": "AS216154 CLODO CLOUD SERVICE CO. L.L.C",
   "country": "The Netherlands",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socket closed",
-    "ms": 4118
-   },
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 4159
-   },
-   "https://22.do/": {
-    "err": "Socket closed",
-    "ms": 4726
+    "ms": 4143
    }
   }
  },
@@ -48,17 +32,9 @@
   "as": "AS137961 MD. Mokhlesur Rahman",
   "country": "Bangladesh",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20006
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20012
-   },
-   "https://22.do/": {
-    "err": "таймаут 15000 мс через прокси socks5://103.118.85.144:1080",
-    "ms": 19926
+    "ms": 20010
    }
   }
  },
@@ -69,17 +45,9 @@
   "as": "AS198610 Beget LLC",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socket closed",
-    "ms": 2504
-   },
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 2499
-   },
-   "https://22.do/": {
-    "err": "Socket closed",
-    "ms": 2493
+    "ms": 2792
    }
   }
  },
@@ -90,17 +58,9 @@
   "as": "AS20473 The Constant Company, LLC",
   "country": "United States",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20006
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20011
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20001
+    "ms": 20009
    }
   }
  },
@@ -111,19 +71,9 @@
   "as": "AS57529 JSC GTNT",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 3652,
-    "len": 388
-   },
    "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks5://195.19.49.206:1080",
-    "ms": 15009
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 3456,
-    "len": 6125
+    "err": "Socket closed",
+    "ms": 4380
    }
   }
  },
@@ -134,17 +84,9 @@
   "as": "AS8732 JSC Comcor",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Received invalid Socks5 initial handshake (no accepted authe",
-    "ms": 487
-   },
    "/sign-up": {
     "err": "Received invalid Socks5 initial handshake (no accepted authe",
-    "ms": 482
-   },
-   "https://22.do/": {
-    "err": "Received invalid Socks5 initial handshake (no accepted authe",
-    "ms": 1501
+    "ms": 1570
    }
   }
  },
@@ -155,18 +97,9 @@
   "as": "AS29076 Citytelecom LLC",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 2220,
-    "len": 388
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20004
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20011
+    "ms": 20007
    }
   }
  },
@@ -177,17 +110,9 @@
   "as": "AS8193 Uzbektelekom Joint Stock Company",
   "country": "Uzbekistan",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20012
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20001
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20013
+    "ms": 20007
    }
   }
  },
@@ -198,42 +123,9 @@
   "as": "AS23673 Cogetel Online, Cambodia, ISP",
   "country": "Cambodia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 13169,
-    "len": 388
-   },
    "/sign-up": {
-    "status": 200,
-    "ms": 13019,
-    "len": 49873
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 12547,
-    "len": 6126
-   }
-  }
- },
- {
-  "label": "socks5://5.255.103.55:1080",
-  "ip": "5.255.103.55",
-  "tier": "scraped",
-  "as": "AS60404 Liteserver",
-  "country": "The Netherlands",
-  "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socks5 proxy rejected connection - HostUnreachable",
-    "ms": 989
-   },
-   "/sign-up": {
-    "status": 200,
-    "ms": 2408,
-    "len": 49506
-   },
-   "https://22.do/": {
-    "err": "Socks5 proxy rejected connection - HostUnreachable",
-    "ms": 1884
+    "err": "Proxy connection timed out",
+    "ms": 20006
    }
   }
  },
@@ -244,21 +136,16 @@
   "as": "AS198068 CLOUD.DOG OU",
   "country": "Estonia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 1483,
-    "len": 388
-   },
    "/sign-up": {
     "status": 200,
-    "ms": 1677,
+    "ms": 3563,
     "len": 49506
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 2255,
-    "len": 6129
    }
+  },
+  "burst": {
+   "ok": 6,
+   "total": 8,
+   "ms": 5559
   }
  },
  {
@@ -268,19 +155,9 @@
   "as": "AS50126 OOO \"Teleservis\"",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 4279,
-    "len": 388
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20013
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 1088,
-    "len": 6126
+    "ms": 20006
    }
   }
  },
@@ -291,17 +168,9 @@
   "as": "AS56971 AS56971 Cloud",
   "country": "United States",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20005
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20003
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20001
+    "ms": 20016
    }
   }
  },
@@ -312,18 +181,16 @@
   "as": "AS31257 Orion Telecom LLC",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20006
-   },
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20002
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20001
+    "status": 200,
+    "ms": 8512,
+    "len": 49873
    }
+  },
+  "burst": {
+   "ok": 4,
+   "total": 8,
+   "ms": 20006
   }
  },
  {
@@ -333,17 +200,9 @@
   "as": "AS39608 Lanet Network Ltd",
   "country": "Ukraine",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20006
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20003
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20000
+    "ms": 20015
    }
   }
  },
@@ -354,20 +213,9 @@
   "as": "AS13188 CONTENT DELIVERY NETWORK LTD",
   "country": "Ukraine",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 8775,
-    "len": 388
-   },
    "/sign-up": {
-    "status": 200,
-    "ms": 2183,
-    "len": 49873
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 3685,
-    "len": 6126
+    "err": "Proxy connection timed out",
+    "ms": 20015
    }
   }
  },
@@ -378,17 +226,7 @@
   "as": "AS41745 Baykov Ilya Sergeevich",
   "country": "Finland",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 4670,
-    "len": 388
-   },
    "/sign-up": {
-    "status": 200,
-    "ms": 2456,
-    "len": 49506
-   },
-   "https://22.do/": {
     "err": "Proxy connection timed out",
     "ms": 20015
    }
@@ -401,17 +239,9 @@
   "as": "AS50542 JSC ER-Telecom Holding",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20003
-   },
    "/sign-up": {
-    "err": "Proxy connection timed out",
-    "ms": 20013
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20013
+    "err": "таймаут 15000 мс через прокси socks5://188.235.21.247:2080",
+    "ms": 15005
    }
   }
  },
@@ -422,17 +252,9 @@
   "as": "AS25490 OJSC Southern Telecommunications Company",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "таймаут 15000 мс через прокси socks5://85.175.219.236:1080",
-    "ms": 15867
-   },
    "/sign-up": {
     "err": "таймаут 15000 мс через прокси socks5://85.175.219.236:1080",
-    "ms": 15830
-   },
-   "https://22.do/": {
-    "err": "Socket closed",
-    "ms": 1997
+    "ms": 15008
    }
   }
  },
@@ -443,19 +265,16 @@
   "as": "AS215439 PLAY2GO INTERNATIONAL LIMITED",
   "country": "The Netherlands",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 596,
-    "len": 388
-   },
    "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks4://144.31.30.222:1080",
-    "ms": 15009
-   },
-   "https://22.do/": {
-    "err": "таймаут 15000 мс через прокси socks4://144.31.30.222:1080",
-    "ms": 39646
+    "status": 200,
+    "ms": 3188,
+    "len": 49506
    }
+  },
+  "burst": {
+   "ok": 2,
+   "total": 8,
+   "ms": 27908
   }
  },
  {
@@ -465,17 +284,9 @@
   "as": "AS31898 Oracle Corporation",
   "country": "Mexico",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20002
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20013
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20012
+    "ms": 20002
    }
   }
  },
@@ -486,67 +297,16 @@
   "as": "AS210644 AEZA GROUP LLC",
   "country": "Finland",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socket closed",
-    "ms": 4850
-   },
    "/sign-up": {
     "status": 200,
-    "ms": 1719,
+    "ms": 5156,
     "len": 49506
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 1398,
-    "len": 6129
    }
-  }
- },
- {
-  "label": "socks5://103.75.118.84:1080",
-  "ip": "103.75.118.84",
-  "tier": "scraped",
-  "as": "AS136258 BrainStorm Network, Inc",
-  "country": "Japan",
-  "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 5846,
-    "len": 388
-   },
-   "/sign-up": {
-    "status": 200,
-    "ms": 4115,
-    "len": 49873
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 3472,
-    "len": 6125
-   }
-  }
- },
- {
-  "label": "socks5://94.233.120.194:1080",
-  "ip": "94.233.120.194",
-  "tier": "scraped",
-  "as": "AS12389 PJSC Rostelecom",
-  "country": "Russia",
-  "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 3582,
-    "len": 388
-   },
-   "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks5://94.233.120.194:1080",
-    "ms": 15009
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 4513,
-    "len": 6126
-   }
+  },
+  "burst": {
+   "ok": 7,
+   "total": 8,
+   "ms": 12010
   }
  },
  {
@@ -556,40 +316,9 @@
   "as": "AS134677 Dromatics Systems Pte Ltd",
   "country": "Singapore",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socket closed",
-    "ms": 5517
-   },
    "/sign-up": {
     "err": "Socket closed",
-    "ms": 5532
-   },
-   "https://22.do/": {
-    "err": "Socket closed",
-    "ms": 5534
-   }
-  }
- },
- {
-  "label": "socks5://85.95.167.198:1080",
-  "ip": "85.95.167.198",
-  "tier": "scraped",
-  "as": "AS12389 PJSC Rostelecom",
-  "country": "Russia",
-  "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 1136,
-    "len": 388
-   },
-   "/sign-up": {
-    "err": "Socks5 proxy rejected connection - HostUnreachable",
-    "ms": 3609
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 11074,
-    "len": 6125
+    "ms": 5598
    }
   }
  },
@@ -600,40 +329,9 @@
   "as": "AS8342 JSC RTComm.RU",
   "country": "Russia",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20015
-   },
    "/sign-up": {
-    "err": "таймаут 15000 мс через прокси socks5://81.177.175.251:1080",
-    "ms": 15004
-   },
-   "https://22.do/": {
     "err": "Proxy connection timed out",
-    "ms": 20005
-   }
-  }
- },
- {
-  "label": "socks5://5.255.113.177:1080",
-  "ip": "5.255.113.177",
-  "tier": "scraped",
-  "as": "AS60404 Liteserver",
-  "country": "The Netherlands",
-  "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 14218,
-    "len": 388
-   },
-   "/sign-up": {
-    "err": "Socks5 proxy rejected connection - NetworkUnreachable",
-    "ms": 16308
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 4436,
-    "len": 6125
+    "ms": 20012
    }
   }
  },
@@ -644,17 +342,9 @@
   "as": "AS14061 DigitalOcean, LLC",
   "country": "United Kingdom",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Socks5 proxy rejected connection - NotAllowed",
-    "ms": 836
-   },
    "/sign-up": {
     "err": "Socks5 proxy rejected connection - NotAllowed",
-    "ms": 824
-   },
-   "https://22.do/": {
-    "err": "Socks5 proxy rejected connection - NotAllowed",
-    "ms": 846
+    "ms": 896
    }
   }
  },
@@ -665,21 +355,16 @@
   "as": "AS31898 Oracle Corporation",
   "country": "India",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 2557,
-    "len": 388
-   },
    "/sign-up": {
     "status": 200,
-    "ms": 3627,
+    "ms": 7080,
     "len": 49873
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 2126,
-    "len": 6126
    }
+  },
+  "burst": {
+   "ok": 8,
+   "total": 8,
+   "ms": 7143
   }
  },
  {
@@ -689,17 +374,9 @@
   "as": "AS12586 GHOSTnet GmbH",
   "country": "Germany",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "err": "Proxy connection timed out",
-    "ms": 20017
-   },
    "/sign-up": {
     "err": "Proxy connection timed out",
-    "ms": 20004
-   },
-   "https://22.do/": {
-    "err": "Proxy connection timed out",
-    "ms": 20004
+    "ms": 20002
    }
   }
  },
@@ -710,21 +387,16 @@
   "as": "AS51765 Oy Creanova Hosting Solutions Ltd.",
   "country": "United States",
   "res": {
-   "/api/auth/altcha/challenge": {
-    "status": 200,
-    "ms": 2402,
-    "len": 388
-   },
    "/sign-up": {
     "status": 200,
-    "ms": 2892,
+    "ms": 9400,
     "len": 49506
-   },
-   "https://22.do/": {
-    "status": 403,
-    "ms": 3376,
-    "len": 6126
    }
+  },
+  "burst": {
+   "ok": 6,
+   "total": 8,
+   "ms": 14125
   }
  }
 ]

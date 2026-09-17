@@ -63,7 +63,7 @@ CANDIDATES_TTL_S = 20 * 60
 def parse(argv):
     positional = [a for a in argv if not a.startswith("--")]
     label = positional[0] if positional else f"acct_{int(datetime.now().timestamp())}"
-    tier, attempts = "own", MAX_ATTEMPTS_DEFAULT
+    tier, attempts, count = "own", None, 1
     for i, a in enumerate(argv):
         if a.startswith("--tier"):
             tier = (a.split("=", 1)[1] if "=" in a
@@ -72,40 +72,84 @@ def parse(argv):
             try:
                 attempts = max(1, int(a.split("=", 1)[1] if "=" in a else argv[i + 1]))
             except Exception:
-                attempts = MAX_ATTEMPTS_DEFAULT
-    return label, tier, attempts
+                attempts = None
+        elif a.startswith("--count"):
+            # Сколько аккаунтов завести за ОДИН запуск (ручка на вкладке). Раньше прогон
+            # останавливался на первом успехе, и «завести три» означало три нажатия кнопки.
+            try:
+                count = max(1, min(9, int(a.split("=", 1)[1] if "=" in a else argv[i + 1])))
+            except Exception:
+                count = 1
+    # На каждый аккаунт нужен свой адрес и своя сеть, а адрес может не пропустить
+    # регистрацию - поэтому попыток даём с запасом, но не меньше четырёх.
+    if attempts is None:
+        attempts = max(MAX_ATTEMPTS_DEFAULT, count + 2)
+    return label, tier, attempts, count
 
 
 def read_candidates(log):
-    """Список адресов от пробы: свежий и только из ещё не траченных сетей."""
+    """Список адресов от пробы: свежий и только из ещё не траченных сетей.
+
+    Возвращает None, если списка нет ИЛИ он протух. Протухший список опаснее отсутствующего:
+    адреса скрапера живут часами, но «какие из них сегодня открывают страницу» стареет за
+    минуты, а прогон по старому списку выглядит как обычный перебор мёртвых адресов.
+    """
     try:
         doc = json.loads(CANDIDATES.read_text(encoding="utf-8"))
     except Exception:
         return None
-    age = time.time() - datetime.fromisoformat(str(doc.get("at")).replace("Z", "+00:00")).timestamp()
+    try:
+        at = datetime.fromisoformat(str(doc.get("at")).replace("Z", "+00:00"))
+        age = time.time() - at.timestamp()
+    except Exception:
+        log("проба", "у списка кандидатов нечитаемая дата - беру новый")
+        return None
+    fresh = doc.get("candidates") or []
+    if age > CANDIDATES_TTL_S:
+        log("проба", f"список кандидатов от {doc.get('at')} протух "
+                     f"({round(age / 60)} мин > {CANDIDATES_TTL_S // 60} мин) - беру новый")
+        return None
     log("проба", f"список кандидатов от {doc.get('at')} ({round(age / 60)} мин назад), "
-                 f"адресов {len(doc.get('candidates') or [])}")
-    return doc.get("candidates") or []
+                 f"адресов {len(fresh)}")
+    return fresh
 
 
-def refresh_candidates(log):
-    """Гоняет дешёвую пробу: страница + свежесть сети, без браузера (~1 минута)."""
+async def refresh_candidates(log):
+    """Гоняет дешёвую пробу: страница + свежесть сети, без браузера (~1 минута).
+
+    🔴 Вывод пробы ПРОБРАСЫВАЕМ построчно, а не собираем в буфер. Первая версия звала её
+    через `subprocess.run(capture_output=True)` и печатала только итог - полторы минуты в
+    панели дашборда было пусто, и владелец справедливо спросил «чёт не вижу прогресс»:
+    от зависшего прогона это неотличимо. Проба печатает строку на каждого кандидата, так
+    что теперь видно, как идёт перебор.
+    """
     if not PROBE.exists():
         log("проба", f"пробы нет по пути {PROBE} - иду по пулу, как раньше")
         return None
     node = shutil.which("node") or "node"
-    log("проба", "беру свежие адреса: проверяю, какая страница открывается и чья сеть не трачена")
+    log("проба", "беру свежие адреса: проверяю, какая страница открывается и чья сеть не трачена "
+                 "(это занимает около минуты, строки пойдут по мере перебора)")
     try:
-        r = subprocess.run([node, str(PROBE), "6", "3"], cwd=str(DIR.parent),
-                           capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=600,
-                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        proc = await asyncio.create_subprocess_exec(
+            node, str(PROBE), "6", "3",
+            cwd=str(DIR.parent), stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     except Exception as e:
         log("проба", f"проба не запустилась: {e}")
         return None
-    for line in (r.stdout or "").splitlines():
-        if line.strip().startswith(("🔴", "  --proxy", "  …", "⚠️")) or "ГОДНЫХ" in line:
-            log("проба", line.strip())
+    while True:
+        line = await proc.stdout.readline()
+        if not line:
+            break
+        text = line.decode("utf-8", "replace").rstrip()
+        if text.strip():
+            log("проба", text.strip())
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=60)
+    except asyncio.TimeoutError:
+        log("проба", "проба не завершилась - иду по пулу")
+        return None
     return read_candidates(log)
 
 
@@ -141,18 +185,22 @@ async def run_attempt(args, log):
 
 async def main():
     argv = sys.argv[1:]
-    label, tier, attempts = parse(argv)
+    label, tier, attempts, count = parse(argv)
     tried = []
+    made = 0
 
     def log(kind, msg):
         print(f"loop {kind}: {msg}", flush=True)
+
+    if count > 1:
+        log("задача", f"завести аккаунтов: {count} (попыток до {attempts})")
 
     # Адреса для перебора: сначала список пробы, при пустоте - прежний путь через пул.
     candidates = None
     if "--no-candidates" not in argv:
         candidates = read_candidates(log)
         if not candidates:
-            candidates = refresh_candidates(log)
+            candidates = await refresh_candidates(log)
     if candidates:
         log("проба", f"перебираю адреса пробы: {', '.join(c['label'] for c in candidates)}")
     else:
@@ -162,10 +210,10 @@ async def main():
         # Метка профиля на каждую попытку своя: браузер поднимается заново, и общий профиль
         # на второй попытке мог бы притащить состояние неудачной (в том числе куки).
         attempt_label = label if n == 1 else f"{label}_r{n}"
-        # Окно ожидания капчи короткое: на «строгом» адресе она не нажимается ни кодом, ни
-        # человеком, поэтому ждать 10 минут бессмысленно - лучше сразу взять другой адрес.
+        # Окно ожидания капчи: молчаливый путь на годном адресе уходит за 20-45 с, поэтому 75
+        # даёт запас и оставляет место решателю (он зовётся только после 50-й секунды).
         args = [sys.executable, "-u", str(DRIVER), attempt_label, "--tier", tier,
-                "--captcha-wait", "45"]
+                "--captcha-wait", "75"]
 
         pin = None
         while candidates:
@@ -184,8 +232,15 @@ async def main():
         code, marker = await run_attempt(args, log)
 
         if code == 0 and marker and marker.get("ok"):
-            log("успех", f"аккаунт заведён с адреса {marker.get('proxy')}")
-            return 0
+            made += 1
+            log("успех", f"аккаунт {made} из {count} заведён с адреса {marker.get('proxy')}")
+            if made >= count:
+                return 0
+            # Идём за следующим аккаунтом. Список пробы к этому моменту кончился (адрес
+            # потрачен), поэтому берём новый: проба заодно отсеет сеть, которую только что
+            # записала в траченные авторега, - иначе следующий аккаунт вышел бы с нулём.
+            candidates = await refresh_candidates(log) or []
+            continue
 
         proxy = (marker or {}).get("proxy")
         retryable = bool((marker or {}).get("retryable"))
@@ -197,8 +252,12 @@ async def main():
         if not proxy:
             log("стоп", f"код {code}: адрес неизвестен, повтор ничего не изменит")
             return code or 1
-        if not retryable or n == attempts:
+        if not retryable:
             log("стоп", f"код {code}: {str((marker or {}).get('error'))[:80]}")
+            return code or 1
+        if n == attempts:
+            log("стоп", f"попытки кончились: заведено {made} из {count}, "
+                        f"последний отказ - {str((marker or {}).get('error'))[:60]}")
             return code or 1
         log("ротация", f"адрес {proxy} не пропустил регистрацию ({(marker or {}).get('error')}) - "
                        f"беру следующий")

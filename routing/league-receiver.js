@@ -978,6 +978,10 @@ function sliceClean(s, nick, recvAt) {
         if (w) out[f] = w;
     }
     out.tot = totClean(s.tot);
+    // Канонический счётчик Claude Code: отдельный объект со своей версией. Незнакомое в нём
+    // выбрасывается тем же правилом, что и в остальном срезе.
+    const cc = ccClean(s.ccStats);
+    if (cc) out.ccStats = cc;
     return out;
 }
 
@@ -1418,6 +1422,149 @@ const addrRate = new Map();
 // функции новая установка первым же срезом ставила любые конечные числа и садилась на
 // вершину рейтинга навсегда — ни одна проверка её не касалась. Возвращает
 // строку-причину или null.
+// ── CC-STATS-BEGIN ───────────────────────────────────────────────────────────
+// Канонический счётчик Claude Code (`ccStats`) - отдельный объект со своей версией
+// определения. Он проверяется НЕЗАВИСИМО от legacy `tok`/`tokA`: у legacy числа выросли
+// сами, когда Claude Code сменил содержимое своего кеша, и привязывать к ним новый счётчик
+// значило бы либо тащить чужую ошибку, либо заклинить срез на 409 навсегда. Поэтому:
+//   · первая версия определения становится новой базой, а не «ростом» относительно legacy;
+//   · сравнение идёт только с той же версией, и только если итог был полным;
+//   · `null` (неизвестно) не превращается в ноль и базой не становится.
+// Что здесь не проверяется и почему: суммы окон, число дней и стрик намеренно не сличваются
+// со шкалой `tokA` - это разные величины, и требование сходимости между ними и было тем
+// дефектом, из-за которого счётчик расходился с `/stats`.
+const CC_ACCOUNTING_MAX = 8;        // версий определения мы знаем не больше этого
+const CC_DAYS_MAX = 400;            // дней истории в срезе (хвост свежих)
+const CC_HOURS_MAX = 48;            // часов в скользящем окне суток
+const CC_DROP_SHARE = 0.5;          // итог не может просесть больше чем вдвое
+const CC_GROWTH_PER_HOUR = 3e9;     // физически возможный рост: ~3 млрд токенов в час
+const CC_GROWTH_FLOOR = 2e9;        // поблажка на короткий интервал между срезами
+const CC_REASONS = new Set(['no-cache', 'bad-cache', 'unsupported-cache-version', 'no-sources', 'no-snapshot']);
+const LEGACY_HOLD_MAX_MS = 7 * 864e5;   // сколько можно держать старые legacy-числа
+
+// Число из среза: только конечное и неотрицательное. Пустое остаётся null, а не нулём.
+const ccNum = v => {
+    // 🪤 `Number(null)` даёт 0: без этой строки «неизвестно» превращалось бы в «ноль», а это
+    // ровно тот дефект, ради которого канонический счётчик и заводился.
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+};
+const ccStr = (v, max) => typeof v === 'string'
+    ? v.replace(/[ -]/g, '').slice(0, max) : null;
+// Пара «ключи + значения» одной длины, обрезанная с хвоста. Годная пара - только с ключом
+// ожидаемого вида: негодный ключ уносит СВОЁ значение, а не весь ряд (иначе одна битая
+// точка в конце среза стирала бы всю историю). Нечисловая точка становится нулём - так же,
+// как в legacy-рядах (`numCell`): длины ключей и значений обязаны совпадать, иначе дашборд
+// совмещает ряды по индексу и кривая соседа уезжает.
+function ccSeries(keys, values, max, keyOk) {
+    if (!Array.isArray(keys) || !Array.isArray(values)) return null;
+    const n = Math.min(keys.length, values.length, max);
+    if (!n) return null;
+    const k = [], v = [];
+    for (let i = keys.length - n; i < keys.length; i++) {
+        const key = keyOk(keys[i]);
+        if (key === null) continue;
+        k.push(key);
+        v.push(ccNum(values[i]) ?? 0);
+    }
+    return k.length ? { keys: k, values: v } : null;
+}
+const ccDayKey = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+const ccHourKey = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}$/.test(v) ? v : null);
+
+function ccClean(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const out = {
+        v: ccNum(v.v),
+        available: v.available !== false,
+        reason: CC_REASONS.has(v.reason) ? v.reason : null,
+        lifetime: ccNum(v.lifetime),
+        lifetimeLower: ccNum(v.lifetimeLower),
+        complete: !!v.complete,
+        stale: !!v.stale,
+        asOf: ccStr(v.asOf, 32),
+        unknownDays: ccNum(v.unknownDays) ?? 0,
+    };
+    const t = v.totals && typeof v.totals === 'object' ? v.totals : {};
+    out.totals = { h24: ccNum(t.h24), d7: ccNum(t.d7), d30: ccNum(t.d30) };
+    const d = v.days && typeof v.days === 'object' ? v.days : {};
+    const days = ccSeries(d.keys, d.values, CC_DAYS_MAX, ccDayKey);
+    if (days) out.days = days;
+    const h = v.hours && typeof v.hours === 'object' ? v.hours : {};
+    const hours = ccSeries(h.keys, h.values, CC_HOURS_MAX, ccHourKey);
+    if (hours) out.hours = hours;
+    const b = v.breakdown && typeof v.breakdown === 'object' ? v.breakdown : null;
+    if (b) out.breakdown = { cache: ccNum(b.cache), tail: ccNum(b.tail), days: ccNum(b.days) };
+    const a = v.activity && typeof v.activity === 'object' ? v.activity : null;
+    if (a) out.activity = {
+        activeDays: ccNum(a.activeDays) ?? 0,
+        sessions: ccNum(a.sessions) ?? 0,
+        messages: ccNum(a.messages) ?? 0,
+        streakCurrent: ccNum(a.streakCurrent) ?? 0,
+        streakLongest: ccNum(a.streakLongest) ?? 0,
+        lastDate: ccDayKey(a.lastDate),
+    };
+    const s = v.source && typeof v.source === 'object' ? v.source : null;
+    if (s) out.source = {
+        cacheVersion: ccNum(s.cacheVersion),
+        dailyVersion: ccNum(s.dailyVersion),
+        watermark: ccDayKey(s.watermark),
+        truncatedFiles: ccNum(s.truncatedFiles) ?? 0,
+    };
+    return out;
+}
+
+// Независимая проверка канонического счётчика. Возвращает причину отказа или null.
+function ccGuard(prev, next, now) {
+    const cur = next && next.ccStats;
+    if (!cur || typeof cur !== 'object' || cur.available === false) return null;
+    const v = Number(cur.v);
+    if (!Number.isFinite(v) || v < 1 || v > CC_ACCOUNTING_MAX) return null;   // неизвестную версию не сравниваем
+    const was = prev && prev.ccStats;
+    if (!was || typeof was !== 'object' || Number(was.v) !== v || was.available === false) return null;
+    const wasLt = Number(was.lifetime);
+    if (!Number.isFinite(wasLt) || wasLt <= 0) return null;                   // неполный итог базой не был
+    const lt = Number(cur.lifetime);
+    if (!Number.isFinite(lt) || lt < 0) return `ccStats.lifetime не число`;
+    if (lt < wasLt * (1 - CC_DROP_SHARE)) return `ccStats.lifetime просел: ${wasLt} → ${lt}`;
+    const from = Date.parse(was.asOf || '');
+    const hours = Number.isFinite(from) ? Math.max(0, (now - from) / 3600000) : 0;
+    const cap = Math.max(CC_GROWTH_FLOOR, hours * CC_GROWTH_PER_HOUR);
+    if (lt - wasLt > cap) return `ccStats.lifetime вырос на ${Math.round(lt - wasLt)} за ${hours.toFixed(2)} ч, потолок ${Math.round(cap)}`;
+    return null;
+}
+
+// Отказ по legacy-токенам больше не рушит срез целиком: если канонический счётчик в этом же
+// срезе полный, срез принимается, а legacy-числа ОСТАЮТСЯ ПРОШЛЫМИ (их рост вызван сменой
+// содержимого кеша Claude Code, а не работой человека). Деньги и аккаунты не трогаются
+// никогда: отказ по ним удержанием не лечится.
+const LEGACY_TOK_TOT = ['tokD', 'tokW', 'tokM', 'tokA'];
+function legacyHold(prev, next, bad, now) {
+    if (!prev || !next || !bad) return null;
+    if (!/^tok(\.|$|[A-Z])/.test(String(bad))) return null;
+    const cc = next.ccStats;
+    if (!cc || typeof cc !== 'object' || cc.available === false) return null;
+    if (!Number.isFinite(Number(cc.lifetime))) return null;
+    const since = ccStr(prev.legacyHeld && prev.legacyHeld.since, 32) || new Date(now).toISOString();
+    if (now - Date.parse(since) > LEGACY_HOLD_MAX_MS) {
+        const out = Object.assign({}, next, {
+            legacyHeld: undefined,
+            legacyRebased: { at: new Date(now).toISOString(), reason: String(bad).slice(0, 160) },
+        });
+        return { next: out, rebasedLegacy: true };
+    }
+    const tokTot = {};
+    for (const k of LEGACY_TOK_TOT) if (prev.tot && prev.tot[k] !== undefined) tokTot[k] = prev.tot[k];
+    const out = Object.assign({}, next, {
+        tok: prev.tok,
+        tot: Object.assign({}, next.tot, tokTot),
+        legacyHeld: { since, reason: String(bad).slice(0, 160) },
+    });
+    return { next: out, held: out.legacyHeld };
+}
+// ── CC-STATS-END ─────────────────────────────────────────────────────────────
+
 function checkAbsolute(s) {
     const t = s.tot || {};
     const pairs = [
@@ -1592,13 +1739,42 @@ function handleSlice(req, res, raw, me) {
     // Аватарка не имеет права утопить цифры: негодная выбрасывается внутри, а срез
     // принимается. Сообщение важнее лица.
     const next = sliceClean({ ...s, installId }, nick, new Date(now).toISOString());
-    // Порядок важен: абсолютные потолки — жёсткий отказ без всяких поблажек, и в серию
+    // Канонический счётчик проверяется ОТДЕЛЬНО и раньше legacy: у него своя версия
+    // определения, и его отказ не должен зависеть от того, что legacy-числа поехали от смены
+    // содержимого кеша Claude Code. Отвергнутый конверт не выбрасывается молча - на его месте
+    // остаётся последний принятый, помеченный `stale`: иначе вкладка покажет «нет данных» там,
+    // где данные как раз есть, только старые.
+    const ccBad = ccGuard(prev, next, now);
+    if (ccBad) {
+        log(`КАНОНИЧЕСКИЙ ОТКЛОНЁН ${nick} (${installId.slice(0, 8)}): ${ccBad}`);
+        if (prev && prev.ccStats) next.ccStats = Object.assign({}, prev.ccStats, { stale: true, heldReason: ccBad });
+        else delete next.ccStats;
+    } else if (!next.ccStats && prev && prev.ccStats) {
+        // Срез без конверта (старый клиент) не обнуляет уже принятый счётчик.
+        next.ccStats = Object.assign({}, prev.ccStats, { stale: true, heldReason: 'в срезе нет' });
+    }
+    // Порядок важен: абсолютные потолки - жёсткий отказ без всяких поблажек, и в серию
     // просадок такой отказ не складывается. Поблажка есть только у ПРОСАДКИ (см.
     // DROP_ACCEPT_AFTER): резкий скачок ВВЕРХ отвергается как раньше и всегда.
     const hard = checkAbsolute(next);
     const bad = hard || checkMonotone(prev, next);
     let rebased = null;
-    if (bad) {
+    // Отказ по legacy-ТОКЕНАМ больше не рушит срез: если канонический счётчик в этом же срезе
+    // полный, срез принимается, а legacy-числа остаются прошлыми. Причина - не человек: у
+    // Claude Code пятая версия кеша держит кеш ВНУТРИ дневного ряда, и legacy-счётчик у
+    // участника растёт сам, без единого нового запроса. Деньги и аккаунты удержанием не
+    // лечатся: их отказ идёт прежним путём.
+    const legacyKept = bad ? legacyHold(prev, next, bad, now) : null;
+    if (bad && legacyKept) {
+        log(`LEGACY-ТОКЕНЫ ЗАМОРОЖЕНЫ ${nick} (${installId.slice(0, 8)}): ${bad}`
+            + (legacyKept.rebasedLegacy ? ' [ребейз после потолка удержания]' : ''));
+        next.tok = legacyKept.next.tok;
+        next.tot = legacyKept.next.tot;
+        if (legacyKept.next.legacyHeld) next.legacyHeld = legacyKept.next.legacyHeld;
+        else delete next.legacyHeld;
+        if (legacyKept.next.legacyRebased) next.legacyRebased = legacyKept.next.legacyRebased;
+    }
+    if (bad && !legacyKept) {
         const drop = !hard && / убыл: /.test(bad) ? dropProgress(installId, req, bad) : null;
         if (!drop || !drop.accept) {
             log(`ОТВЕРГНУТ ${nick} (${installId.slice(0, 8)}): ${bad}`
@@ -1666,7 +1842,7 @@ function handleSlice(req, res, raw, me) {
 // ⚠️ Ветвления «свой/чужой» внутри публичной ручки нет НАМЕРЕННО: такое ветвление и есть
 // забытый фильтр. Форму ответа выбирает РАСКЛАДКА ДАННЫХ (наследуемая или личности), а
 // не спрашивающий, и в режиме личности она одна на всех.
-const PEER_PUBLIC = ['nick', 'recvAt', 'keys', 'tok', 'sp', 'tu', 'act', 'acc', 'tot'];
+const PEER_PUBLIC = ['nick', 'recvAt', 'keys', 'tok', 'sp', 'tu', 'act', 'acc', 'tot', 'ccStats', 'legacyHeld'];
 function peerPublic(s) {
     const out = { rid: ridOf(s.installId) };
     for (const k of PEER_PUBLIC) if (s[k] !== undefined) out[k] = s[k];

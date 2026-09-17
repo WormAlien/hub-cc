@@ -114,6 +114,24 @@ def ip_of_label(label):
     return m.group(1) if m else ""
 
 
+def own_ip(timeout=10):
+    """Свой внешний адрес машины. Нужен прогонам без прокси (ярус none): сеть, с которой
+    идёт такой прогон, тоже надо учитывать в списке траченных, иначе следующий заход снова
+    создаст аккаунт без подарка."""
+    for url, field in (("http://ip-api.com/json/?fields=query", "query"),
+                       ("https://api.ipify.org/?format=json", "ip")):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "curl/8"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                doc = json.loads(r.read().decode("utf-8") or "{}")
+            ip = str(doc.get(field) or "").strip()
+            if ip:
+                return ip
+        except Exception:
+            continue
+    return ""
+
+
 # ── прокси из общего пула ─────────────────────────────────────────────────────
 
 async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGHT_PATH, pin=None,
@@ -357,6 +375,51 @@ async def read_22do_address(page):
     return ""
 
 
+def gmail_key(addr):
+    """Ключ сравнения gmail-адресов: у Gmail точки в локальной части не значат НИЧЕГО,
+    а `+что-угодно` - тот же ящик.
+
+    🔴 Замер 16.09 16:20, и это стоило четырёх прогонов подряд. Форма поднялась, ALTCHA
+    прошла («Check passed»), а Clerk ответил «This email address is already in use»: 22.do
+    выдал `a.ntonelittl.erz.br37@gmail.com`, тогда как в пуле уже лежал аккаунт
+    `od_1789553434481_6` с адресом `a.n.tonelitt.l.erzbr37@gmail.com`. По буквам это разные
+    строки, для Gmail - ОДИН И ТОТ ЖЕ ящик. Снаружи это выглядело как «адрес не пропускает
+    регистрацию», то есть списывалось на капчу и на прокси, хотя дело было в адресе.
+    """
+    if not addr or "@" not in addr:
+        return ""
+    local, _, domain = addr.strip().lower().rpartition("@")
+    return f"{local.split('+')[0].replace('.', '')}@{domain}"
+
+
+def used_addresses():
+    """Адреса, на которые аккаунты уже заведены: пул дашборда плюс мета-файлы прогонов.
+
+    Читаем оба источника, потому что прогон мог создать аккаунт и упасть до записи в пул
+    (тогда адрес остался только в `sessions/_meta/<метка>.json`) - а повторная регистрация
+    на него всё равно упрётся в «already in use».
+    """
+    keys = set()
+    try:
+        doc = json.loads((DIR.parent / "routing" / "odyssey-sessions.json").read_text(encoding="utf-8"))
+        accounts = doc if isinstance(doc, list) else (doc.get("accounts") or doc.get("items") or [])
+        for a in accounts:
+            k = gmail_key(str(a.get("email") or ""))
+            if k:
+                keys.add(k)
+    except Exception:
+        pass
+    for meta in (DIR / "sessions" / "_meta").glob("*.json"):
+        try:
+            doc = json.loads(meta.read_text(encoding="utf-8"))
+            k = gmail_key(str(doc.get("email") or ""))
+            if k:
+                keys.add(k)
+        except Exception:
+            continue
+    return keys
+
+
 def clean_22do_address(addr, allow_plus=False):
     """Годится ли адрес: ТОЛЬКО `gmail.com` (и по умолчанию без плюса).
 
@@ -406,7 +469,7 @@ async def reset_22do_session(page, log):
         return False
 
 
-async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=6, allow_plus=False):
+async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=10, allow_plus=False):
     """Крутит «Random» до домена gmail.com, жмёт «Open» и отдаёт ГОДНЫЙ адрес.
 
     🔴 Разведка 16.09: кнопка «Random» (`button#mail-random`) крутит **ДОМЕН**, а не
@@ -418,10 +481,18 @@ async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=6, allow_plu
     (`clean_22do_address`), и если не подошёл - раунд повторяется с чистого листа: сайт
     генерирует и локальную часть, и домен заново.
     """
+    # Занятые ящики считаем ОДИН раз до перебора: это чтение двух файлов, а не запрос в сеть.
+    used = used_addresses()
+    if used:
+        log("ПОЧТА", f"занятых адресов в пуле и мета-файлах: {len(used)} - выданный сверяю с ними")
     for rnd in range(1, rounds + 1):
-        if rnd > 1:
-            # Новый раунд - новая сессия: иначе сервис вернёт тот же плюс-алиас.
-            await reset_22do_session(page, log)
+        # 🔴 Сброс сессии ПЕРЕД КАЖДЫМ раундом, включая первый, и это не симметрия ради
+        # красоты. Окно почты живёт в постоянном профиле (`profiles/_mail`) и переживает
+        # прогон: с сохранённой сессией 22.do выдаёт ТОТ ЖЕ ящик. Замер 16.09 - три прогона
+        # подряд получили `a.ntonelittl.erz.br37@gmail.com`, который уже был занят, и
+        # регистрация упиралась в «This email address is already in use». Кнопка «Random»
+        # тут ни при чём: домен был gmail, а вот локальная часть приезжала из сессии.
+        await reset_22do_session(page, log)
         try:
             await page.goto(MAIL_22DO_URL, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(4000)
@@ -455,9 +526,18 @@ async def pick_22do_gmail(page, log, tries=RANDOM_MAX_TRIES, rounds=6, allow_plu
         await page.wait_for_timeout(6000)
 
         addr = await read_22do_address(page)
-        if clean_22do_address(addr, allow_plus):
+        busy = gmail_key(addr) in used
+        if clean_22do_address(addr, allow_plus) and not busy:
             log("ПОЧТА", f"✅ адрес готов: {addr}")
             return addr
+        if busy:
+            # 🔴 Тот же ящик, другая расстановка точек. Clerk на такой адрес отвечает
+            # «This email address is already in use», и снаружи это читается как отказ
+            # регистрации, а не как «ящик выдан повторно». Замер 16.09: четыре прогона
+            # подряд ушли в разбор капчи и прокси, а дело было в адресе.
+            log("ПОЧТА", f"адрес «{addr}» — тот же ящик, что уже занят (точки в gmail не "
+                         f"значат ничего) — раунд {rnd} из {rounds} заново")
+            continue
 
         # 🔴 Кнопку «Change» в ящике я пробовал и ОТКАЗАЛСЯ от неё. Она меняет ДОМЕН
         # вместе с адресом: после удачного gmail первый же «Change» уводил на `outlook.com`,

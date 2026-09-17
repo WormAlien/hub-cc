@@ -147,7 +147,8 @@
     { "id": "2.15",   "title": "Фронт: NEWAPI_SEED_PROV (модалка GitHub)", "file": "frontend", "kind": "must", "expect": "%p%: { label: '%NAME%',", "when": ["github"] },
     { "id": "2.16",   "title": "Фронт: ghAddPick (выбор GitHub в форме)", "file": "frontend", "kind": "must", "expect": "%p%: null", "within": "const ghAddPick", "when": ["github"] },
     { "id": "2.17",   "title": "Фронт: карта тег → полное имя (GitHub-usage)", "file": "frontend", "kind": "must", "expect": "%p%: '%full%'", "when": ["github"] },
-    { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" }
+    { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" },
+    { "id": "2.19",   "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)", "file": "frontend", "kind": "must", "expect": "%full%: '%p%',", "within": "const CATALOG_EP" }
   ],
 
   "_source": "kktoken",
@@ -259,6 +260,7 @@
     "2.15":  {},
     "2.16":  { "mode": "inline", "find": "%p%: null", "add": ", %p%: null" },
     "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },
-    "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" }
+    "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" },
+    "2.19":  { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," }
   }
 }

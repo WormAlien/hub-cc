@@ -31974,6 +31974,85 @@ function navCountPick(boot) {
 // не ждёт — showTab зовёт свои загрузчики напрямую, мимо очереди.
 function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 
+// ── Метка «шлюз не отдаёт каталог моделей» в сайдбаре (владелец, 17.09) ───────
+//
+// Зачем. Живой по ключам шлюз может не отдавать каталог вовсе: kktoken и родня
+// отвечают `{"data":[]}` или 403, и человек узнаёт об этом, только открыв вкладку —
+// а там селект моделей стоит коротким, и почему, непонятно. Владелец 17.09: «если
+// они не отдают модели, то в списке вкладок помечать их эмоджи креста красным».
+//
+// Как узнаём. Тем же эндпоинтом, которым грузится каталог вкладки: `/models?api_key=…`.
+// Бэкенд кеширует ответ на 5 минут, поэтому проход по всем шлюзам дешёвый; идёт он в
+// хвосте очереди счётчиков — ключи к тому моменту уже в `state` (их принесли light-загрузчики).
+// Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
+const CATALOG_EP = {
+  agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
+  kktoken: 'kk', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
+};
+const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
+
+function catalogMark(tab, note) {
+  CATALOG_BAD.set(tab, note);
+  const btn = document.querySelector(`#main-nav > button.nav-btn[data-tab="${tab}"]`);
+  if (!btn) return;
+  let el = btn.querySelector('.catalog-mark');
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'catalog-mark text-crimson text-[11px] leading-none shrink-0';
+    el.textContent = '❌';
+    btn.insertBefore(el, btn.querySelector('[id^="nav-count-"]'));   // счётчик всегда последний
+  }
+  el.title = 'каталог моделей не отдаётся: ' + note;
+}
+function catalogClear(tab) {
+  CATALOG_BAD.delete(tab);
+  const el = document.querySelector(`#main-nav > button.nav-btn[data-tab="${tab}"] .catalog-mark`);
+  if (el) el.remove();
+}
+
+// Один проход на загрузку страницы. Тихо: сетевая ошибка — не повод шуметь в консоли.
+// 🪤 Флаг «сделано» ставится ТОЛЬКО после полного прохода: свернутая вкладка прерывает
+// обход (счётчики точно так же встают на паузу), а не съедает его навсегда. Иначе человек,
+// открывший дашборд в фоне, не увидел бы меток вообще никогда — вернувшись, он застал бы
+// пустой сайдбар и решил, что фича не работает.
+// Ключ шлюза для запроса каталога. Обычно он уже в `state` (его принесли light-загрузчики
+// счётчиков), но ждать их нельзя: очередь может встать или не добежать (страница, открытая
+// в фоне), и тогда меток не будет вовсе. Поэтому при отсутствии ключа спрашиваем список
+// сессий сами — запрос локальный и дешёвый.
+async function catalogKey(tab, ep) {
+  const pick = list => ((Array.isArray(list) ? list : []).find(s => s.active && s.api_key)
+    || (Array.isArray(list) ? list : []).find(s => s.api_key) || {}).api_key;
+  const known = pick(state[tab]);
+  if (known) return known;
+  try {
+    const res = await fetch(`/__switch/api/${ep}/sessions`);
+    const d = await res.json();
+    return pick(d.sessions);
+  } catch { return undefined; }
+}
+
+let _catalogDone = false;
+async function catalogSweep() {
+  if (_catalogDone || document.hidden) return;
+  // 🪤 Запросы идут ПАРАЛЛЕЛЬНО, а не по очереди с паузой. По очереди было 26 секунд до
+  // последней метки: мёртвый каталог отвечает не сразу, а каждый такой ответ ждал своей
+  // очереди (у gorouter вообще 10-секундный таймаут). Параллельно метки проявляются по мере
+  // ответов: пустой каталог - через секунду, таймаут - к десятой. Запросы локальные, каждый
+  // идёт на СВОЙ апстрим, так что стадо тут никого не топчет.
+  await Promise.all(Object.entries(CATALOG_EP).map(async ([tab, ep]) => {
+    const key = await catalogKey(tab, ep);
+    if (!key) return;                      // нет ключей — судить не о чем, метку не ставим
+    try {
+      const res = await fetch(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`);
+      const d = await res.json();
+      if (d.ok && Array.isArray(d.models) && d.models.length) catalogClear(tab);
+      else catalogMark(tab, d.note || d.error || 'пустой каталог');
+    } catch (e) { catalogMark(tab, e.message); }
+  }));
+  if (!document.hidden) _catalogDone = true;   // свернули на полпути — доедем по visibilitychange
+}
+
 async function refreshNavCounts(boot) {
   for (const j of navCountPick(boot)) if (!_navQ.includes(j)) _navQ.push(j);
   if (_navQBusy) return;            // проход уже идёт — он и разберёт дополненную очередь
@@ -31991,6 +32070,8 @@ async function refreshNavCounts(boot) {
   } finally { _navQBusy = false; }
   // Шапка считается из того же кеша, что и счётчики, — пересчитываем сразу за ними.
   try { await renderGlobalGauge(); } catch (e) { console.warn('[counts] global gauge fail', e); }
+  // Каталоги моделей — последними: ключи уже в `state`, ответы бэкенд кеширует на 5 мин.
+  try { await catalogSweep(); } catch (e) { console.warn('[catalog] sweep fail', e); }
 }
 
 // Старт очереди — ПОСЛЕ первой отрисовки, а не в разборе скрипта: пока браузер не показал
@@ -32002,6 +32083,11 @@ function bootNavCounts() {
     if (typeof requestIdleCallback === 'function') requestIdleCallback(go, { timeout: NAV_COUNT_BOOT_IDLE_MS });
     else setTimeout(go, NAV_COUNT_BOOT_IDLE_MS);
   }));
+  // 🪤 Метки каталогов идут СВОИМ путём, а не хвостом очереди счётчиков. Очередь может
+  // встать на одном медленном шлюзе (или не добежать, если страницу открыли в фоне) —
+  // тогда хвост не выполнится никогда, и человек видит сайдбар без меток, хотя всё
+  // работает. Поэтому свой запуск, чуть позже первой отрисовки.
+  setTimeout(() => { catalogSweep().catch(() => {}); }, 2000);
 }
 bootNavCounts();
 loadHealth();   // бейдж N✓ / N↓ — пробы только по локальным портам, один раз
@@ -32050,6 +32136,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { clearTimeout(_autoRefTimer); clearTimeout(_kaTimer); return; }
   autoRefreshTick();        // сразу после возврата в браузер
   refreshNavCounts(false);  // и счётчики: пока браузер был свёрнут, тик не шёл
+  catalogSweep();           // и метки каталогов — проход мог не дойти до конца в фоне
   sideBalanceTick();        // и баланс в сайдбаре — он тоже стоял на паузе
   scheduleAutoRefresh();
   scheduleKeepalive();      // и keepalive-статы — они тоже стояли на паузе

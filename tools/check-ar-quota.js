@@ -3,16 +3,24 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+
+// Расписание на весь прогон — СВОЁ, не пользовательское. У владельца в
+// `~/.claude/ar-quota-schedule.json` лежит живое расписание, и проба, читающая его,
+// краснела бы от правки настроек в панели: «сломалось» то, что никогда не проверялось.
+// По этому пути файла нет, значит модуль работает поставкой — и её можно утверждать.
+process.env.AR_QUOTA_SCHEDULE_FILE = path.join(os.tmpdir(), `ar-quota-schedule-test-${process.pid}.json`);
 
 const DASH = path.join(__dirname, '..', 'routing', 'transparent-proxy.js');
 const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const src = fs.readFileSync(DASH, 'utf8');
 const html = fs.readFileSync(HTML, 'utf8');
-const { classifyArQuotaProbe, AR_QUOTA_BODY, AR_QUOTA_CYCLE_MS, AR_QUOTA_ANCHOR_MS,
+const { classifyArQuotaProbe, AR_QUOTA_BODY, AR_SCHEDULE_DEFAULT,
         AR_QUOTA_POOLS, arQuotaPoolForModel, arQuotaBodyFor, arQuotaReadPools,
         arQuotaDropAt, arQuotaKeyTail, buildArQuotaCache, isArQuotaCacheFresh,
-        pickFresherArQuota } = require('../routing/lib/ar-quota-probe');
+        pickFresherArQuota, arQuotaSchedule, arQuotaScheduleSave, arScheduleParseTimes,
+        arScheduleTzOk, arQuotaBatches } = require('../routing/lib/ar-quota-probe');
 
 const fails = [];
 const ok = [];
@@ -163,7 +171,7 @@ check(/\['', \.\.\.cat, want\]/.test(html),
             probeLib2.arQuotaDropAt, ql, () => '/x/ar-modelmap.json',
             { existsSync: () => markerExists },
         );
-        const BATCH = Date.UTC(2026, 8, 16, 8, 0, 0);      // 11:00 МСК
+        const BATCH = Date.UTC(2026, 8, 16, 11, 0, 0);     // 14:00 МСК, вторая партия суток
         const at = (ms) => autoTick(BATCH + ms);
         check(at(60_000).length === 0, 'за минуту до отметки проба не идёт: партия ещё не налита');
         check(at(2 * 60_000).length === 2, 'через 2 минуты после наливки проверяются обе полосы');
@@ -172,7 +180,7 @@ check(/\['', \.\.\.cat, want\]/.test(html),
         check(at(60 * 60_000).length === 0, 'через час после наливки проба не идёт: окно прошло');
         check(at(2 * 60_000).length === 0, 'следующая партия — своё окно, но не раньше её отметки');
         ticked.clear();
-        const NEXT = BATCH + 8 * 3600 * 1000;              // 19:00 МСК
+        const NEXT = BATCH + 15 * 3600 * 1000;             // следующая партия — 05:00 МСК, через 15 ч
         check(autoTick(NEXT + 2 * 60_000).length === 2, 'на новой партии автопроверка снова срабатывает');
         ticked.clear();
         // 🪤 Гейт «проверяем только при живом маркере пул-дропа» был и снят 16.09: он
@@ -192,38 +200,110 @@ check(/\['', \.\.\.cat, want\]/.test(html),
     check(/arQuotaProbeAsync\(pool\);\n\}, 60_000\)/.test(src), 'и таймер по-прежнему зовёт её же');
 }
 
-// ── Quota dial schedule: three batches a day since 2026-09-10 (MSK 03/11/19, 8h step).
-// Статика по HTML: сетку в браузере из регресса не прогонишь, но следы старой
-// двухпартийной сетки ловятся точным вхождением строк.
-check(html.includes('const CYCLE = 8 * 3600 * 1000'), 'dial cycle is 8 hours');
-check(html.includes('Date.UTC(1970, 0, 1, 16, 0, 0)'), 'dial anchor is 16:00 UTC = 19:00 MSK');
-check(!html.includes('const CYCLE = 12 * 3600 * 1000'), 'old 12h cycle is gone');
-check(!html.includes('02:00 и 14:00'), 'old two-batch wording is gone');
-check(!html.includes("[2,'02']") && !html.includes("[14,'14']"), 'old day marks 02/14 are gone');
-check(html.includes("[3,'03']") && html.includes("[11,'11']") && html.includes("[19,'19']"), 'day dial marks 03/11/19');
-check(html.includes('const n = m ? 8 : 32'), 'term dial draws 32 segments (8h × 15m), mini 8');
-check(html.includes('(toA - 120 + 360) % 360'), 'day arc is the 120° sector ending on the batch');
-check(!html.includes('(toA + 120) % 360'), 'old +120 arc (240°, wrong direction) is gone');
-check(html.includes("'вечерняя'"), 'day caption names all three batches');
-check(html.includes("x.id === 'day'"), 'default dial falls back to day');
-check(html.includes("ar-quota-dial2"), 'dial choice key bumped to gen2 — day default reaches everyone');
-check(html.includes('localStorage.removeItem(KEY_OLD)'), 'old dial choice key is cleaned up');
-check(html.includes('тремя партиями'), 'mini tooltip says three batches');
-check(html.includes('Три партии в сутки'), 'big caption says three batches');
+// ── Расписание партий: список времён в зоне шлюза (объявление 2026-09-18) ────
+// Было: сетка «8 ч от 16:00 UTC» (03/11/19 МСК). Стало: две партии, Пекин 10:00 и
+// 19:00 = 02:00 и 11:00 UTC = 05:00 и 14:00 МСК. Сеткой это не выражается —
+// промежутки 9 ч и 15 ч, — и именно поэтому расписание стало списком.
+check(AR_SCHEDULE_DEFAULT.tz === 'Asia/Shanghai', 'поставка расписания — зона шлюза, а не МСК');
+check(AR_SCHEDULE_DEFAULT.times.join(',') === '10:00,19:00', 'поставка = две партии, Пекин 10:00 и 19:00');
+check(arQuotaSchedule().source === 'default', 'без файла расписание берётся из поставки');
+check(!html.includes('const CYCLE = 8 * 3600 * 1000'), 'жёсткая сетка 8 ч ушла из часов');
+check(!html.includes('Date.UTC(1970, 0, 1, 16, 0, 0)'), 'опора сетки 16:00 UTC ушла из часов');
+check(html.includes("tz: 'Asia/Shanghai', times: ['10:00', '19:00']"),
+  'встроенный дефолт часов совпадает с поставкой сервера — иначе F5 до рестарта врёт');
+check(!html.includes("[3,'03']") && !html.includes("[11,'11']") && !html.includes("[19,'19']"),
+  'метки 03/11/19 ушли из разметки');
+check(html.includes('batchesOfDay(Date.now())'), 'метки «Суток» считаются из расписания');
+check(!html.includes('(toA - 120 + 360) % 360'), 'жёсткий сектор 120° ушёл');
+check(html.includes('span > 180 ? 1 : 0'),
+  'флаг большой дуги считается: на 15-часовом промежутке (225°) ноль выворачивает сектор');
+check(html.includes('arq-sched-times') && html.includes('arq-sched-tz'),
+  'в панели есть карточка расписания: времена и зона');
+check(html.includes("'/__switch/api/ar/quota-schedule'"), 'часы читают расписание ручкой');
+check(src.includes("'/__switch/api/ar/quota-schedule'"), 'ручка расписания зарегистрирована на сервере');
+check(/arQuotaScheduleSave\(body\)/.test(src), 'POST пишет расписание валидатором, а не сырым JSON');
+check(!html.includes('Три партии в сутки') && !html.includes('тремя партиями'),
+  'зашитое «три партии» ушло из подписей');
+
+// Разбор и валидация: молча проглоченная опечатка сдвинула бы налив на сутки.
+check(arScheduleParseTimes('10:00, 19:00').times.join(',') === '10:00,19:00', 'список читается через запятую');
+check(arScheduleParseTimes('19:00 10:00 10:00').times.join(',') === '10:00,19:00', 'порядок и дубли приводятся');
+check(arScheduleParseTimes('9, 19:30').times.join(',') === '09:00,19:30', '«9» читается как 09:00');
+check(arScheduleParseTimes('10:00, позже').ok === false, 'мусор отвергается');
+check(arScheduleParseTimes('25:00, 10:00').ok === false, 'час вне суток отвергается');
+check(arScheduleParseTimes('10:00').ok === false,
+  'одна партия отвергается: дуга «до следующей» выродилась бы в полный круг');
+check(arScheduleTzOk('Europe/Moscow') === true, 'IANA-зона принимается');
+check(arScheduleTzOk('Марс/Олимп') === false, 'выдуманная зона отвергается');
+check(arScheduleTzOk('') === false, 'пустая зона отвергается');
+
+// ── Две копии арифметики обязаны совпадать ────────────────────────────────
+// Часы несут СВОЮ копию зонной арифметики намеренно: ручки расписания до рестарта
+// `:8200` может не быть вовсе, и без копии циферблат стоял бы мёртвым. Но это ровно
+// тот случай, где расхождение МОЛЧИТ: обе копии «работают», а часы показывают не ту
+// партию, по которой сервер пробует пул. Поэтому копии сверяются между собой на
+// батарее моментов — ассерт по исходнику («в файле есть такая строка») тут бесполезен,
+// он зеленеет и на сломанной арифметике.
+{
+    const padN = n => String(n).padStart(2, '0');
+    const head = html.indexOf('const SCHED_FALLBACK');
+    const endMark = html.indexOf('\n', html.indexOf('const fmtLocal', head));
+    check(head > 0 && endMark > head, 'в часах есть свой слой расписания');
+    if (head > 0 && endMark > head) {
+        const block = html.slice(head, endMark);
+        const patched = block.replace('let SCHED = SCHED_FALLBACK;', '');
+        check(patched !== block, 'копия часов берёт расписание снаружи — иначе сверять нечего');
+        const build = sched => new Function('__sched', 'pad', `
+            const SCHED = __sched;
+            ${patched}
+            return { batches, batchesOfDay, zonedParts, zonedToUtc };`)(sched, padN);
+        const SCHEDS = [
+            AR_SCHEDULE_DEFAULT,
+            { tz: 'Europe/Moscow', times: ['05:00', '14:00'] },
+            { tz: 'UTC', times: ['00:00', '08:00', '16:00'] },
+            { tz: 'Europe/Berlin', times: ['02:30', '03:30', '14:00'] },   // дни перевода часов
+            { tz: 'Asia/Tokyo', times: ['00:00', '23:59'] },               // полночь и конец суток
+            { tz: 'America/New_York', times: ['00:30', '12:00', '23:30'] },
+        ];
+        let seen = 0;
+        const bad = [];
+        for (const s of SCHEDS) {
+            const c = build(s);
+            for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2027, 0, 1); t += 37 * 60000) {
+                const a = arQuotaBatches(t, s), b = c.batches(t);
+                seen++;
+                if (!a || !b || a.last !== b.last || a.next !== b.next) {
+                    if (bad.length < 3) {
+                        bad.push(`${s.tz} ${new Date(t).toISOString()}: сервер ${a && a.last}/${a && a.next}`
+                            + `, часы ${b && b.last}/${b && b.next}`);
+                    }
+                }
+            }
+        }
+        check(bad.length === 0,
+            `копии расписания совпадают на ${seen} моментах (6 расписаний × год, шаг 37 мин)`
+            + (bad.length ? ' — ' + bad.join(' | ') : ''));
+    }
+}
 
 // ── Кеш результата проверки (2026-09-12) ──────────────────────────────────
 // Инвалидация по ПАРТИИ, а не по TTL. Точки взяты в UTC, чтобы регресс не зависел
-// от таймзоны машины: 08:00 UTC = дневная партия 11:00 МСК.
-const DROP = Date.UTC(2026, 8, 12, 8, 0, 0);          // партия 11:00 МСК
-const NEXT_DROP = DROP + AR_QUOTA_CYCLE_MS;           // партия 19:00 МСК
-check(AR_QUOTA_CYCLE_MS === 8 * 3600 * 1000, 'cache grid cycle is 8 hours');
-check(AR_QUOTA_ANCHOR_MS === Date.UTC(1970, 0, 1, 16, 0, 0), 'cache grid anchor is 16:00 UTC');
-// Обе копии сетки обязаны совпадать: у циферблата своя в HTML (самодостаточный IIFE).
-check(html.includes('const dropAt = t => t - (((t - ANCHOR) % CYCLE + CYCLE) % CYCLE)'),
-      'browser cache reuses the dial CYCLE/ANCHOR instead of duplicating numbers');
-check(arQuotaDropAt(DROP + 3600_000) === DROP, 'dropAt snaps to the batch that already happened');
-check(arQuotaDropAt(DROP - 1) === DROP - AR_QUOTA_CYCLE_MS, 'dropAt before a batch points at the previous one');
+// от таймзоны машины: 02:00 и 11:00 UTC = партии 05:00 и 14:00 МСК.
+const SCHED0 = AR_SCHEDULE_DEFAULT;
+const DROP = Date.UTC(2026, 8, 12, 2, 0, 0);          // первая партия, 05:00 МСК
+const NEXT_DROP = Date.UTC(2026, 8, 12, 11, 0, 0);    // вторая партия, 14:00 МСК
+check(arQuotaDropAt(DROP + 3600_000, SCHED0) === DROP, 'dropAt snaps to the batch that already happened');
+check(arQuotaDropAt(DROP - 1, SCHED0) === Date.UTC(2026, 8, 11, 11, 0, 0),
+  'dropAt before a batch points at the previous one — через 15 ч, а не через 8');
+check(arQuotaDropAt(NEXT_DROP - 1, SCHED0) === DROP, 'вторая партия дня — ближайшая прошедшая');
 check(arQuotaDropAt('nope') === null, 'dropAt rejects garbage');
+check(arQuotaBatches(DROP + 3600_000, SCHED0).next === NEXT_DROP, 'next — вторая партия тех же суток');
+// 🎯 Промежутки РАЗНЫЕ, и это главная причина, по которой сетка «цикл N часов» умерла:
+// от утренней партии до вечерней 9 ч, от вечерней до следующей утренней — 15 ч.
+const afterMorning = arQuotaBatches(DROP + 3600_000, SCHED0);
+check(afterMorning.next - afterMorning.last === 9 * 3600 * 1000, 'день: 9 ч между партиями');
+const afterEvening = arQuotaBatches(NEXT_DROP + 3600_000, SCHED0);
+check(afterEvening.next - afterEvening.last === 15 * 3600 * 1000, 'ночь: 15 ч между партиями');
 
 const AVAIL = buildArQuotaCache({ state: 'available' }, 'sk-abcdef1234', DROP + 60_000);
 check(AVAIL.state === 'available' && AVAIL.keyTail === '1234', 'cache entry keeps state and key tail');
@@ -291,6 +371,36 @@ check(/source: 'probe'/.test(src), 'состояние от пробы поме�
 check(/'\/__switch\/api\/ar\/quota-state'/.test(src) && /const pools = \{\}/.test(src),
   'quota-state отдаёт обе полосы, а не одну запись');
 check(/неизвестная полоса квоты/.test(src), 'неизвестная полоса - отказ, а не молчаливый opus');
+
+// ── Расписание читается с диска, а не из кода ─────────────────────────────
+// Пишем и читаем ВРЕМЕННЫЙ файл: переменная окружения уводит туда весь модуль, живое
+// `~/.claude` не трогается. Проверяем не «файл есть», а что записанное расписание
+// реально управляет партией — иначе настройка была бы украшением.
+{
+    const TMP = path.join(os.tmpdir(), `ar-quota-schedule-check-${process.pid}.json`);
+    const prevEnv = process.env.AR_QUOTA_SCHEDULE_FILE;
+    process.env.AR_QUOTA_SCHEDULE_FILE = TMP;
+    try {
+        check(arQuotaScheduleSave({ tz: 'Europe/Moscow', times: '05:00, 14:00' }).ok === true,
+            'расписание записано на диск');
+        check(arQuotaSchedule().source === 'file' && arQuotaSchedule().tz === 'Europe/Moscow',
+            'после записи модуль читает файл, а не поставку');
+        check(arQuotaDropAt(Date.UTC(2026, 8, 18, 3, 0, 0)) === Date.UTC(2026, 8, 18, 2, 0, 0),
+            'записанное расписание управляет партией: 05:00 МСК = 02:00 UTC');
+        check(JSON.parse(fs.readFileSync(TMP, 'utf8')).times.join(',') === '05:00,14:00',
+            'на диск легли нормализованные времена');
+        check(arQuotaScheduleSave({ tz: 'Марс/Олимп', times: '10:00, 19:00' }).ok === false,
+            'невалидная зона не попадает на диск');
+        check(arQuotaScheduleSave({ tz: 'UTC', times: '10:00' }).ok === false,
+            'одна партия не попадает на диск');
+        check(JSON.parse(fs.readFileSync(TMP, 'utf8')).tz === 'Europe/Moscow',
+            'отказ валидатора не переписал живой файл');
+    } finally {
+        if (prevEnv === undefined) delete process.env.AR_QUOTA_SCHEDULE_FILE;
+        else process.env.AR_QUOTA_SCHEDULE_FILE = prevEnv;
+        try { fs.unlinkSync(TMP); } catch (e) { /* свой временный файл мог и не появиться */ }
+    }
+}
 
 for (const msg of ok) console.log('OK  ' + msg);
 for (const msg of fails) console.error('FAIL ' + msg);

@@ -32,10 +32,15 @@ const { chromium } = require('playwright');
 
 const DASH = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const URL = 'http://dashboard.test/__switch';
-// Та же сетка, что в модуле: партии 03/11/19 МСК разнесены на 8 ч от 16:00 UTC.
-const CYCLE = 8 * 3600 * 1000;
-const ANCHOR = Date.UTC(1970, 0, 1, 16, 0, 0);
-const dropAt = (t) => t - (((t - ANCHOR) % CYCLE + CYCLE) % CYCLE);
+// Партия берётся из ТОГО ЖЕ расписания, что и страница, — из модуля `ar-quota-probe`,
+// а не своей формулой. Третья копия арифметики разошлась бы с двумя боевыми МОЛЧА:
+// расхождение здесь выглядит не как ошибка, а как «звук перестал звенеть» (ровно это
+// и случилось при переходе на две партии — 10 красных сцен на ровном месте).
+const { arQuotaDropAt: dropAt, arQuotaBatches } = require('../routing/lib/ar-quota-probe');
+// ...и уводим его на несуществующий файл: живое расписание владельца тут не при чём,
+// а страница в этой пробе работает встроенным дефолтом (ручку расписания мы не отдаём).
+process.env.AR_QUOTA_SCHEDULE_FILE =
+    require('path').join(require('os').tmpdir(), `ar-quota-schedule-sound-${process.pid}.json`);
 const ISO = (t) => new Date(t).toISOString();
 
 const src = fs.readFileSync(DASH, 'utf8');
@@ -61,8 +66,10 @@ console.log('── решение arqSndDecide ──────────�
 const { arqSndDecide } = new Function(`${grab('arqSndDecide')}
     return { arqSndDecide };`)();
 
-const T = Date.parse('2026-09-17T08:00:00Z');   // страница открыта в 11:00 МСК
-const b11 = T, b03 = T - CYCLE, b19 = T + CYCLE;
+const T = Date.parse('2026-09-17T08:00:00Z');   // страница открыта утром МСК
+// Метки партий для чистых проверок: текущая, следующая и предыдущая. Значения нужны
+// различными (дедуп сверяет их между собой), а не «ровно через 8 часов».
+const b11 = arQuotaBatches(T).last, b19 = arQuotaBatches(T).next, b03 = arQuotaBatches(b11 - 1).last;
 const rec = (state, checkedAt, drop, source) =>
     ({ state, checkedAt: ISO(checkedAt), dropAt: ISO(drop), source: source || 'probe' });
 
@@ -167,7 +174,8 @@ async function main() {
 
     // ── A: обычная жизнь открытой страницы ────────────────────────────────────
     console.log('\n── A. страница открыта ──────────────────────────────────────────────');
-    const stub = { pools: { opus: rec('available', dropAt(Date.now()) - 60000, dropAt(Date.now()) - CYCLE) } };
+    const stub = { pools: { opus: rec('available', dropAt(Date.now()) - 60000,
+                                      arQuotaBatches(dropAt(Date.now()) - 1).last) } };
     const ctxA = await browser.newContext();
     const A = await mkPage(ctxA, stub);
     await A.page.waitForTimeout(600);

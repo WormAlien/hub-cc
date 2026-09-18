@@ -36,6 +36,10 @@ const { writeJsonSync: durableWriteJson, assertNotZeroed } = require('./lib/dura
 const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForModel,
         arQuotaBodyFor, arQuotaReadPools,
         classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
+        // Расписание партий: список времён в зоне шлюза, читается с диска. У шлюза это
+        // ТРЕТЬЯ схема за девять дней (03/11/19 → 05/14), поэтому константой больше не
+        // живёт — см. `lib/ar-quota-probe.js` § «Расписание партий».
+        arQuotaSchedule, arQuotaBatches, arQuotaScheduleSave,
         // 🪤 `arQuotaDropAt` в этом списке пропустили 16.09, когда заводили автопроверку по
         // таймингу наливки, - и `arQuotaAutoTickNow` падал `ReferenceError` на КАЖДОМ тике
         // (739 записей `uncaughtException` в логе за одни сутки 17.09). Молча: обработчик
@@ -12143,6 +12147,57 @@ function handleArQuotaState(req, res) {
     return jsonRes(res, 200, { pools, keyTail });
 }
 
+// ── Расписание партий AgentRouter ────────────────────────────────────────────
+// Владелец 18.09: «нам надо починить часы под вот это и добавить куда-то в настройках
+// возможность настройки custom-timezone, то есть чтобы там было 2, 3 точки наливки,
+// потому что у сервера агент-роутер постоянно время наливки меняется». Отсюда два
+// требования к формату ответа: сырьё (зона + времена), чтобы панель показала и дала
+// править, и готовые моменты, чтобы часам не считать то же самое второй раз.
+//
+// Ручка отдаёт и то и другое ОДНИМ форматом на GET и POST: клиент не разбирает две
+// формы одного и того же, а после сохранения сразу получает пересчитанное.
+function arSchedulePayload(now) {
+    const s = arQuotaSchedule();
+    const b = arQuotaBatches(now, s);
+    return {
+        ok: true,
+        tz: s.tz,
+        times: s.times,
+        note: s.note || '',
+        updated: s.updated || '',
+        source: s.source,             // 'file' — прочитано с диска, 'default' — поставка
+        error: s.error || null,       // файл битый: дефолт работает, но молчать нельзя
+        last: b ? new Date(b.last).toISOString() : null,   // партия, к которой относится проба
+        next: b ? new Date(b.next).toISOString() : null,
+    };
+}
+
+function handleArQuotaScheduleGet(req, res) {
+    return jsonRes(res, 200, arSchedulePayload(Date.now()));
+}
+
+// POST /__switch/api/ar/quota-schedule {tz, times} → записать файл и вернуть то же.
+// Пишется `~/.claude/ar-quota-schedule.json`; часы и автопроверка читают его по mtime,
+// поэтому правка вступает в силу без рестарта — рестарт `:8200` рвёт живые сессии CC,
+// и платить им за смену расписания нельзя.
+async function handleArQuotaScheduleSet(req, res) {
+    let body = {};
+    try {
+        body = await readJsonBody(req, 4096);
+    } catch (e) {
+        return jsonRes(res, e.httpStatus || 400, { ok: false, error: `тело не разобрано: ${e.message}` });
+    }
+    const r = arQuotaScheduleSave(body);
+    if (!r.ok) {
+        // Отказ пишем в лог: панель могла и не открыться, а «расписание не сменилось»
+        // иначе выглядело бы как «кнопка не работает».
+        logLine(`agentrouter расписание: отказ — ${r.error}`);
+        return jsonRes(res, 400, { ok: false, error: r.error });
+    }
+    logLine(`agentrouter расписание: ${r.schedule.tz} — ${r.schedule.times.join(', ')}`);
+    return jsonRes(res, 200, arSchedulePayload(Date.now()));
+}
+
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
 async function handleArPing(req, res) {
     try {
@@ -12240,7 +12295,7 @@ const arQuotaTicked = new Set();          // `партия:окно` — по р
 // гейт «проверяем, только если уже дропнуло» молчал ровно в том случае, ради которого
 // существует - когда никто ещё не поймал 402 и состояние просто неизвестно. Владелец
 // 16.09: «пока я вручную не кликну, хуй что мне скажет, что у нас уже дипсик».
-// Цена снятого гейта - 12 крошечных проб в сутки (2 полосы × 2 окна × 3 партии).
+// Цена снятого гейта - 8 крошечных проб в сутки (2 полосы × 2 окна × 2 партии).
 function arQuotaAutoTickNow(now) {
     if (!AR_QUOTA_AUTOTICK) return [];
     const batch = arQuotaDropAt(Number(now));
@@ -12281,8 +12336,8 @@ setInterval(() => {
 }, 60_000).unref?.();
 
 // Замер на старте: после рестарта дашборда состояние должно быть известно СРАЗУ, а не с
-// ближайшей партии - иначе часы и бар молчат до 03:00/11:00/19:00, и владелец снова
-// узнаёт о подмене последним. Задержка нужна, чтобы сервер успел начать слушать.
+// ближайшей партии - иначе часы и бар молчат до первого налива по расписанию, и владелец
+// снова узнаёт о подмене последним. Задержка нужна, чтобы сервер успел начать слушать.
 setTimeout(() => {
     if (!AR_QUOTA_AUTOTICK) return;
     for (const pool of Object.keys(AR_QUOTA_POOLS)) arQuotaProbeAsync(pool);
@@ -21181,7 +21236,7 @@ async function handleOdAutoregStart(req, res) {
         const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'own';
         // Сколько аккаунтов завести за запуск. Раньше прогон вставал на первом успехе, и
         // «завести три» означало три нажатия кнопки с ротацией адресов между ними.
-        const count = Math.max(1, Math.min(9, parseInt(body.count, 10) || 1));
+        const count = Math.max(1, Math.min(30, parseInt(body.count, 10) || 1));
         // Какая почта для аккаунта: 22do (по умолчанию) или emailnator. Ручка на вкладке -
         // у 22.do кончаются свободные gmail-адреса, а у emailnator свои грабли, и какой
         // сработает - решает замер, а не догадка.
@@ -27308,6 +27363,8 @@ const server = http.createServer((req, res) => {
     const arPath = req.url.split('?')[0];
     if (req.method === 'POST' && arPath === '/__switch/api/ar/quota-check') return handleArQuotaCheck(req, res);
     if (req.method === 'GET'  && arPath === '/__switch/api/ar/quota-state') return handleArQuotaState(req, res);
+    if (req.method === 'GET'  && arPath === '/__switch/api/ar/quota-schedule') return handleArQuotaScheduleGet(req, res);
+    if (req.method === 'POST' && arPath === '/__switch/api/ar/quota-schedule') return handleArQuotaScheduleSet(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add')       return handleArAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/delete')    return handleArDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/activate')  return handleArActivate(req, res);

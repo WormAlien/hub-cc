@@ -659,7 +659,7 @@ function randomThemeId() {
            и та же функция. Висит всегда, а не только когда активен AR: знать, когда
            у него долив, нужно как раз чтобы решить, переключаться ли на него. -->
       <div id="arq-mini" class="arq hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]"
-           title="Квота AgentRouter льётся тремя партиями: 03:00, 11:00 и 19:00 МСК (00/08/16 Пекина)">
+           title="Партии AgentRouter — расписание читается с диска">
         <span class="arq-host shrink-0 leading-none"></span>
         <span class="arq-txt text-dim truncate"></span>
         <!-- 🔔 звука на наливку партии. Стоит рядом с часами намеренно: оба про одно
@@ -6248,7 +6248,10 @@ window.finNavCount = async () => {
               <button type="button" class="arq-nav arq-next px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Следующий вид">›</button>
             </div>
           </div>
-          <p class="text-xs text-muted mb-2">Три партии в сутки: <span class="font-mono text-ink">03:00</span>, <span class="font-mono text-ink">11:00</span> и <span class="font-mono text-ink">19:00</span> МСК (00/08/16 Пекина). Партия конечная — «用完即止», кончиться может раньше срока.</p>
+          <!-- Строку наливок пишет JS из расписания: список времён живёт в файле и
+               меняется без правки разметки. Пустой <p> до первого ответа ручки —
+               намеренно: в нём не должно быть зашитых времён, которые протухнут. -->
+          <p id="arq-sched-line" class="text-xs text-muted mb-2"></p>
           <div class="flex justify-center py-1"><span class="arq-host"></span></div>
           <!-- Что отвечает СЕЙЧАС и когда кончилась квота. Отдельной строкой и заметным
                цветом: владелец 16.09 не понял этого по мелкой подписи в карточке конфига. -->
@@ -6264,6 +6267,40 @@ window.finNavCount = async () => {
             <span id="arq-check-result" class="text-xs text-faint font-mono" aria-live="polite">—</span>
             <span id="arq-check-result-gpt" class="text-xs text-faint font-mono" aria-live="polite">—</span>
           </div>
+        </div>
+
+        <!-- AR-QUOTA-SCHED - расписание партий AgentRouter. Стоит отдельной карточкой,
+             а не полем в «Keepalive»:
+             оно относится не к процессу :20133, а к самому шлюзу, и читают его ДВЕ
+             стороны — часы и серверная автопроверка (она пробует пул через 2 и через
+             20 минут после партии). Схема у шлюза менялась трижды за девять дней, и
+             каждый раз это была правка кода; теперь — правка файла.
+             Времена вводятся в зоне ШЛЮЗА: так их объявляет вендор, и пересчитывать
+             в голове не нужно — строка ниже показывает результат в твоей зоне. -->
+        <div id="arq-sched" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between gap-3 mb-1">
+            <h2 class="text-sm font-semibold tracking-tight">📅 Расписание партий</h2>
+            <span id="arq-sched-state" class="text-[10px] font-mono text-faint shrink-0" aria-live="polite">—</span>
+          </div>
+          <p id="arq-sched-line2" class="text-xs text-muted mb-2"></p>
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1 w-56">
+              <span class="text-[10px] text-faint leading-tight">времена партий через запятую</span>
+              <input id="arq-sched-times" type="text" placeholder="10:00, 19:00" spellcheck="false"
+                     class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-44">
+              <span class="text-[10px] text-faint leading-tight">часовой пояс шлюза (IANA)</span>
+              <input id="arq-sched-tz" type="text" list="arq-tz-list" placeholder="Asia/Shanghai" spellcheck="false"
+                     class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+              <datalist id="arq-tz-list"></datalist>
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="arqSchedSave()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <span id="arq-sched-msg" class="text-xs text-faint font-mono" aria-live="polite">—</span>
+            </div>
+          </div>
+          <p class="text-[10px] text-faint mt-2">Пишется в <code class="font-mono">~/.claude/ar-quota-schedule.json</code> — тот же файл читают часы и серверная автопроверка. Применяется без рестарта; минимум две партии в сутки.</p>
         </div>
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
@@ -7417,7 +7454,7 @@ window.finNavCount = async () => {
                 <option value="none">напрямую</option>
               </select>
               <label class="text-[10px] text-faint font-mono" for="od-autoreg-count">аккаунтов</label>
-              <input id="od-autoreg-count" type="number" min="1" max="9" value="1"
+              <input id="od-autoreg-count" type="number" min="1" max="30" value="1"
                      class="w-14 text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-lime/60"
                      title="Сколько аккаунтов завести за один запуск. На каждый нужен свой адрес и своя сеть, поэтому прогон возьмёт столько адресов, сколько попросили (и столько попыток, сколько понадобится)">
               <!-- 🪤 Селекта почты тут больше НЕТ, и это замер, а не упрощение. Три сервиса
@@ -21372,7 +21409,7 @@ async function odAutoregStatus({ quiet = false } = {}) {
 
 async function odAutoregStart() {
   const tier = $('od-autoreg-tier').value;
-  const count = Math.max(1, Math.min(9, parseInt($('od-autoreg-count').value, 10) || 1));
+  const count = Math.max(1, Math.min(30, parseInt($('od-autoreg-count').value, 10) || 1));
   try {
     const r = await fetch('/__switch/api/od/autoreg/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -37126,14 +37163,86 @@ function sideOpenCurrentTab(ev) {
 <script>
 (() => {
 'use strict';
-/* ── Модель времени ───────────────────────────────────────────────────────
-   Квота льётся тремя партиями в сутки: 00:00, 08:00 и 16:00 по Пекину = UTC
-   16:00, 0:00, 8:00 = 03:00, 11:00 и 19:00 МСК (объявление 2026-09-10; до него
-   партий было две — 07:00/19:00 Пекина). Ни Китай, ни Россия часы не переводят,
-   поэтому связку можно зашить. Партии разнесены РОВНО на 8 ч, поэтому вся
-   арифметика — одна сетка по модулю от любой из них; опора взята 16:00 UTC. */
-const CYCLE = 8 * 3600 * 1000;
-const ANCHOR = Date.UTC(1970, 0, 1, 16, 0, 0);
+/* ── Расписание партий ────────────────────────────────────────────────────
+   Список времён в зоне ШЛЮЗА, а не сетка «цикл N часов»: объявление 18.09 дало
+   партии 05:00 и 14:00 МСК — промежутки 9 ч и 15 ч, одной константой такое не
+   выражается в принципе. Схема у этого шлюза менялась трижды за девять дней,
+   поэтому расписание живёт в файле `~/.claude/ar-quota-schedule.json`, правится
+   карточкой в панели AgentRouter и подхватывается без рестарта.
+
+   🎯 Вторая копия арифметики зон — намеренная, а не недосмотр. Ручки расписания
+   до рестарта `:8200` может не быть вовсе, и без своей копии часы стояли бы
+   мёртвыми ровно до него. Копии обязаны совпадать, и это проверяется: регресс
+   сверяет обе по батарее моментов, а не ассертом по исходнику. Серверная копия —
+   `routing/lib/ar-quota-probe.js`.
+
+   Встроенный дефолт = объявление 18.09, поэтому часы верны сразу по F5, ещё до
+   того как сервер отдаст файл. */
+const SCHED_FALLBACK = Object.freeze({ tz: 'Asia/Shanghai', times: ['10:00', '19:00'] });
+let SCHED = SCHED_FALLBACK;
+let SCHED_SRC = 'fallback';        // 'file' | 'default' | 'fallback' — панель объясняет разницу
+
+/* Имя зоны смотрящего, а не «МСК» константой: времена вводятся в зоне шлюза, а
+   показываются в той, где открыт дашборд. Здесь они совпадают. */
+const TZ_LABEL = (() => {
+  const z = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (z === 'Europe/Moscow') return 'МСК';
+  try {
+    const p = new Intl.DateTimeFormat('ru-RU', { timeZoneName: 'shortGeneric' }).formatToParts(new Date());
+    return (p.find(x => x.type === 'timeZoneName') || {}).value || z;
+  } catch (e) { return z; }
+})();
+
+/* ── Зона ↔ UTC: копия серверной, сверяется регрессом ────────────────────── */
+const tzFmt = new Map();
+function zonedParts(ts, tz) {
+  let f = tzFmt.get(tz);
+  if (!f) {
+    if (tzFmt.size >= 32) tzFmt.clear();   // зону задаёт человек — кеш не растёт без предела
+    f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit',
+      day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    tzFmt.set(tz, f);
+  }
+  const g = {};
+  for (const p of f.formatToParts(new Date(ts))) g[p.type] = p.value;
+  // 🪤 Полночь Intl отдаёт как «24» при hour12:false, и Date.UTC(…, 24, …) уезжает
+  // на сутки вперёд. Модуль обязателен, и на нём же стоит регресс.
+  return { y: +g.year, mo: +g.month, d: +g.day, h: +g.hour % 24, mi: +g.minute, s: +g.second };
+}
+const tzOffsetMs = (ts, tz) => { const p = zonedParts(ts, tz);
+  return Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s) - Math.floor(ts / 1000) * 1000; };
+function zonedToUtc(y, mo, d, hh, mi, tz) {
+  const guess = Date.UTC(y, mo - 1, d, hh, mi);   // два прохода: смещение↔момент зависят друг от друга
+  return guess - tzOffsetMs(guess - tzOffsetMs(guess, tz), tz);
+}
+/* Партии вокруг момента — одним разбором на -1/0/+1 сутки по стенным часам зоны:
+   часам нужны `last`/`next`, виду «Сутки» — метки всех партий показанных суток.
+   Трое суток берутся затем, чтобы обе точки были всегда, в том числе в день, когда
+   расписание сменили. */
+function batches(now) {
+  const t = Number(now), s = SCHED;
+  if (!Number.isFinite(t) || !s || !Array.isArray(s.times) || !s.times.length) return null;
+  const p = zonedParts(t, s.tz), all = [];
+  for (const off of [-1, 0, 1]) {
+    const b = new Date(Date.UTC(p.y, p.mo - 1, p.d + off));
+    for (const hhmm of s.times) {
+      const [hh, mi] = hhmm.split(':').map(Number);
+      all.push(zonedToUtc(b.getUTCFullYear(), b.getUTCMonth() + 1, b.getUTCDate(), hh, mi, s.tz));
+    }
+  }
+  all.sort((a, b) => a - b);
+  let last = null, next = null;
+  for (const c of all) { if (c <= t) last = c; else if (next === null) next = c; }
+  return { last, next, all };
+}
+/* Партии, попадающие в ЛОКАЛЬНЫЕ сутки показанного момента — метки вида «Сутки». */
+function batchesOfDay(ts) {
+  const b = batches(ts);
+  if (!b) return [];
+  const d = new Date(ts), from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return b.all.filter(x => x >= from && x < from + 86400000);
+}
+const fmtLocal = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 /* Поколение ключа 2: при переходе на тройную сетку (2026-09-12) сохранённый вид
    сброшен всем — дефолтом стали «Сутки»; дальше выбор снова сохраняется. */
 const KEY = 'ar-quota-dial2';
@@ -37148,10 +37257,16 @@ const polar = (r, deg) => { const a = (deg - 90) * Math.PI / 180;
   return [100 + r * Math.cos(a), 100 + r * Math.sin(a)]; };
 
 function cyc(t) {
-  const el = ((t - ANCHOR) % CYCLE + CYCLE) % CYCLE, rem = CYCLE - el;
-  const s = Math.floor(rem / 1000);
-  return { t, el, rem, p: el / CYCLE, next: new Date(t + rem),
-           h: pad(Math.floor(s / 3600)), m: pad(Math.floor(s / 60) % 60), s: pad(s % 60) };
+  const b = batches(t);
+  // Без расписания (состояние, которого быть не должно) часы не падают и не пустуют:
+  // показывают час до мнимой партии. Пустой циферблат хуже неточного.
+  const last = b ? b.last : t, next = b ? b.next : t + 3600000;
+  const gap = Math.max(1, next - last), rem = Math.max(0, next - t);
+  const sec = Math.floor(rem / 1000);
+  // `p` — доля ПРОЙДЕННОГО промежутка, а не суток: на прежней сетке 8 ч это было
+  // то же самое, теперь промежутки разные (9 ч и 15 ч), и все дуги считаются от него.
+  return { t, el: t - last, rem, gap, p: (t - last) / gap, next: new Date(next),
+           h: pad(Math.floor(sec / 3600)), m: pad(Math.floor(sec / 60) % 60), s: pad(sec % 60) };
 }
 
 /* ── Шесть видов ──────────────────────────────────────────────────────────
@@ -37211,7 +37326,7 @@ const V = [
     el.querySelector('.arq-arc').setAttribute('stroke-dasharray', `${(CIRC*c.p).toFixed(1)} ${CIRC}`);
     if (m) return;
     el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
-    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск · ${c.s} с`; } },
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} ${TZ_LABEL} · ${c.s} с`; } },
 
 { id: 'term', label: 'Терминал',
   svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
@@ -37230,7 +37345,11 @@ const V = [
     sg.forEach((t, i) => { t.classList.toggle('on', i < done); t.classList.toggle('now', i === done); });
     if (m) return;
     el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
-    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} MSK`; } },
+    /* Шаг деления подписывается, а не подразумевается: 32 сегмента значили «15 минут»
+       ровно на 8-часовой сетке, а на промежутке 9 ч значат 17, на 15 ч — 28. Немая
+       подпись «15 мин» стала бы враньём на первой же смене расписания. */
+    el.querySelector('.at').textContent =
+      `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} ${TZ_LABEL} · шаг ${Math.round(c.gap / n / 60000)} мин`; } },
 
 { id: 'min', label: 'Минимал',
   svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
@@ -37268,11 +37387,10 @@ const V = [
     hd.setAttribute('cx', x); hd.setAttribute('cy', y);
     if (m) return;
     el.querySelector('.hero').textContent = `${c.h}:${c.m}`;
-    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} мск`; } },
+    el.querySelector('.at').textContent = `${pad(c.next.getHours())}:${pad(c.next.getMinutes())} ${TZ_LABEL}`; } },
 
 /* Круг на 24 часа, а не на 12 — и это не украшение. На 12-часовом циферблате партия
-   ложится в одну точку с беспартийным часом (03↔15, 11↔23, 19↔07), и дуги между
-   метками путаются. На суточном 03/11/19 встают через ровные 120°. */
+   ложится в одну точку с беспартийным часом, и дуги между метками путаются. */
 { id: 'day', label: 'Сутки',
   svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
     <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?13:6}"/>
@@ -37293,24 +37411,36 @@ const V = [
         g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
           stroke-width="${big?2:1}" stroke="color-mix(in oklab, var(--color-ink) ${big?40:22}%, var(--color-surface))"/>`); } }
     const mk = el.querySelector('.mks');
-    [[3,'03'], [11,'11'], [19,'19']].forEach(([h, lbl]) => { const a = h * 15, [x,y] = polar(84, a);
-      const [lx,ly] = polar(68, a);
+    /* Меток столько, сколько партий в расписании — две, три, четыре. Прежняя тройка
+       03/11/19 была зашита под сетку 8 ч и пережила её на день. Углы берутся по
+       ЛОКАЛЬНЫМ часам: круг суточный и нарисован в зоне того, кто смотрит, а времена
+       в расписании записаны в зоне шлюза — их сводит `batches()`. */
+    for (const ts of batchesOfDay(Date.now())) {
+      const d = new Date(ts), a = (d.getHours() + d.getMinutes()/60) * 15;
+      const [x,y] = polar(84, a), [lx,ly] = polar(68, a);
       mk.insertAdjacentHTML('beforeend',
         `<circle cx="${x}" cy="${y}" r="${m?10:5.5}" fill="var(--color-surface)"
                  stroke="var(--arq-cc)" stroke-width="${m?5:2.5}"/>` +
         (m ? '' : `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle"
-                 class="arq-cap" font-size="9">${lbl}</text>`)); }); },
+                 class="arq-cap" font-size="9">${pad(d.getHours())}</text>`));
+    } },
   tick(el, c, m) {
     const d = new Date(c.t);
     const nowA = (d.getHours() + d.getMinutes()/60 + d.getSeconds()/3600) * 15;
-    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15,
-          // Сектор 120°, ЗАКАНЧИВАЮЩАЯСЯ на партии — поэтому минус, не плюс: дуга
-          // рисуется от fromA к toA по часовой и покрывает (toA−fromA) mod 360, так
-          // что +120 разворачивал её в 240° через соседний сектор. Половина круга
-          // симметрична и этот баг не ловила, треть — нет.
-          fromA = (toA - 120 + 360) % 360;
+    const toA = (c.next.getHours() + c.next.getMinutes()/60) * 15;
+    /* Начало сектора — ПРОШЛАЯ партия, а не «за 120° до следующей»: промежутки
+       теперь разные (9 ч = 135°, 15 ч = 225°), константы тут быть не может.
+       🎯 И флаг большой дуги СЧИТАЕТСЯ, а не зашит нулём, как было: на 15-часовом
+       промежутке дуга с нулём разворачивается через соседний сектор — ровно та же
+       грабля, что 12.09 чинили сменой знака на третьем круге. Полкруга (12 ч)
+       симметрична и этот дефект не ловит, а 225° — ловит. */
+    const prev = batches(c.t), lastTs = prev ? prev.last : c.t;
+    const ld = new Date(lastTs);
+    const fromA = (ld.getHours() + ld.getMinutes()/60) * 15;
     const [hx,hy] = polar(84, fromA), [ehx,ehy] = polar(84, toA);
-    el.querySelector('.hf').setAttribute('d', `M ${hx} ${hy} A 84 84 0 0 1 ${ehx} ${ehy}`);
+    const span = (toA - fromA + 360) % 360;
+    el.querySelector('.hf').setAttribute('d',
+      `M ${hx} ${hy} A 84 84 0 ${span > 180 ? 1 : 0} 1 ${ehx} ${ehy}`);
     const sweep = (nowA - fromA + 360) % 360, [ax,ay] = polar(84, nowA);
     el.querySelector('.arq-arc').setAttribute('d',
       sweep < 0.4 ? '' : `M ${hx} ${hy} A 84 84 0 ${sweep>180?1:0} 1 ${ax} ${ay}`);
@@ -37319,11 +37449,12 @@ const V = [
     el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
     const hn = c.next.getHours();
     el.querySelector('.ph').textContent =
-      `${hn < 7 ? 'ночная' : hn < 15 ? 'дневная' : 'вечерняя'} партия · ${pad(hn)}:${pad(c.next.getMinutes())}`; } },
+      `${hn < 6 ? 'ночная' : hn < 12 ? 'утренняя' : hn < 18 ? 'дневная' : 'вечерняя'} партия · ${pad(hn)}:${pad(c.next.getMinutes())}`; } },
 ];
 
-/* Вид по умолчанию — «Сутки»: под тройную сетку 03/11/19 суточный круг ложится
-   идеально, метки встают через ровные 120° (решение 2026-09-12). */
+/* Вид по умолчанию — «Сутки»: он один отвечает на вопрос «какая партия следующая»
+   и единственный, чьи метки не надо пересчитывать под смену расписания (решение
+   2026-09-12, подтверждено 18.09 при переходе на две партии). */
 const DAY = V.findIndex(x => x.id === 'day');
 
 /* ── Сборка и тик ─────────────────────────────────────────────────────── */
@@ -37440,9 +37571,10 @@ function stPoolLine(pool) {
    Инвалидация по ПАРТИИ, а не по TTL: пока идёт та же партия, ответ актуален
    сколько угодно; после налива запись мертва — красить часы вчерашним
    «квота закончилась» хуже, чем не красить вовсе.
-   Числа сетки — те же CYCLE/ANCHOR, что у циферблата выше, поэтому берутся оттуда,
-   а не дублируются. Серверная копия логики — routing/lib/ar-quota-probe.js. */
-const dropAt = t => t - (((t - ANCHOR) % CYCLE + CYCLE) % CYCLE);
+   Партию берём из того же расписания, что и циферблат: смена расписания обесценивает
+   весь кеш разом, и это правильно — одна лишняя проба честнее прошлой схемы.
+   Серверная копия логики — routing/lib/ar-quota-probe.js. */
+const dropAt = t => { const b = batches(t); return b ? b.last : t; };
 const stFresh = (e, now) => {
   if (!e || (e.state !== 'available' && e.state !== 'exhausted')) return false;
   const ch = Date.parse(e.checkedAt);
@@ -37455,6 +37587,20 @@ const stFresher = (a, b) => {
   if (!Number.isFinite(tb)) return a;
   return tb > ta ? b : a;
 };
+/* Запись, обесцененная сменой РАСПИСАНИЯ, и запись прошлой партии - разные вещи, и
+   различать их обязательно. Первая значит «эта страница устарела»: её календарь партий
+   уже не тот, что у сервера, и никакой ответ сервера она принять не сможет.
+   Признак: `checkedAt` записи, посчитанный ПО МОЕЙ сетке, даёт не тот `dropAt`, что
+   лежит в самой записи, - значит писала её другая схема.
+   🪤 Живой случай 18.09: вкладка, открытая до рестарта `:8200`, гасила результат
+   проверки квоты МОЛЧА, и владелец прочитал это как «кнопка не реагирует». Кнопка была
+   исправна - ответ отбрасывала проверка свежести. Молчать тут нельзя: цена молчания -
+   поиск поломки там, где её нет. */
+function stAlienGrid(e) {
+  const ch = e && Date.parse(e.checkedAt), dp = e && Date.parse(e.dropAt);
+  if (!Number.isFinite(ch) || !Number.isFinite(dp)) return false;
+  return dropAt(ch) !== dp;
+}
 /* ── Две полосы ───────────────────────────────────────────────────────────
    Claude и GPT наливают вместе (партии одни), но кончаются порознь: 15.09 пул
    Opus был пуст, а GPT отдавался. Поэтому и кеш, и серверный файл — словарь по
@@ -37487,12 +37633,23 @@ function stPaint(pool) {
   const fresh = stFresh(e, Date.now());
   const out = stEl(pool);
   if (out) {
-    if (!fresh) { out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; }
+    if (!fresh) {
+      if (stAlienGrid(e)) {
+        // Страница пережила смену расписания и говорит на другом календаре партий.
+        // Ответы сервера она принять не может - значит нужен F5, и сказать об этом надо.
+        out.className = 'text-xs text-amber font-mono';
+        out.textContent = 'запись от прежней схемы партий - обнови страницу и проверь заново';
+        out.title = `в записи партия ${e.dropAt}, а эта страница считает ${new Date(dropAt(Date.parse(e.checkedAt))).toISOString()}`;
+      } else {
+        out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; out.title = '';
+      }
+    }
     else {
       const d = new Date(e.checkedAt);
       const why = e.source === 'drop' ? 'при фолбэке' : 'по проверке';
       out.className = e.state === 'available' ? 'text-xs text-emerald font-mono'
                                               : 'text-xs text-amber font-mono';
+      out.title = '';
       out.textContent = (e.state === 'available' ? 'Квота есть' : 'Квота закончилась')
         + ` · ${why} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
     }
@@ -37518,7 +37675,10 @@ function arqView(pool) {
 function stExpire(now) {
   Object.keys(POOLS).forEach(p => {
     const e = stLoad()[p];
-    if (e && !stFresh(e, now)) stSave(p, null);
+    // Запись ЧУЖОЙ схемы не истекает - она объясняет себя. Стереть её здесь значило бы
+    // вернуть то самое молчание, из-за которого кнопка проверки выглядела сломанной:
+    // stPaint рисует по ней подсказку, а не прочерк. Уйдёт она от первой же новой пробы.
+    if (e && !stFresh(e, now) && !stAlienGrid(e)) stSave(p, null);
     stPaint(p);
   });
 }
@@ -37595,9 +37755,9 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
    в записи ключа от неё не растёт, поэтому сторож наливки, пускающий купюру на
    вкладке «Финансы», здесь молчит по устройству. Сигнал, который действительно
    есть, - ответ серверной пробы квоты: сервер сам пробует пул через 2 и через
-   20 минут после каждой партии (03/11/19 МСК) и кладёт ответ в `ar-quota-state`.
-   Звеним по нему, а не по часам: «available с новой партией» и есть «налили»,
-   а расписание у этого шлюза уже дважды менялось (10.09 партий стало три), и
+   20 минут после каждой партии (по расписанию, а не по зашитым часам) и кладёт ответ
+   в `ar-quota-state`. Звеним по нему, а не по часам: «available с новой партией» и
+   есть «налили», а расписание у этого шлюза менялось трижды за девять дней, и
    зашитые часы соврали бы молча.
 
    🎯 Почему звук доходит там, где купюра не летит: ручку `quota-state` опрашивает
@@ -37678,6 +37838,9 @@ function arqSndTone(a, t, out, o) {
   const osc = a.createOscillator();
   osc.type = o.type || 'sine';
   osc.frequency.setValueAtTime(o.f, t);
+  // Съезд по высоте: `f2` плюс доля длительности, за которую до него доехать. Экспонентой,
+  // потому что так высота падает на равные интервалы, а не рывком в конце.
+  if (o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t + o.dur * (o.bend == null ? 0.4 : o.bend));
   const g = a.createGain();
   g.gain.setValueAtTime(0.0001, t);
   g.gain.exponentialRampToValueAtTime(o.gain, t + o.attack);
@@ -37764,7 +37927,7 @@ function arqSndBtn() {
   b.title = mute
     ? 'звук выключен - нажми, чтобы включить'
     : armed
-      ? 'звенит дважды на партию: вверх - когда налили (03:00, 11:00, 19:00 МСК), вниз - когда пул выпит'
+      ? `звенит дважды на партию: вверх - когда налили (${SCHED.times.map(h => h).join(', ')} ${SCHED.tz}), вниз - когда пул выпит`
       : 'звук включён, но браузер ещё не разрешил звучать: оживёт после первого клика по странице';
 }
 window.arqSndToggle = function arqSndToggle() {
@@ -37775,6 +37938,171 @@ window.arqSndToggle = function arqSndToggle() {
   if (wasMute) { arqSndArm(); arqSndPlay(); }
   arqSndBtn();
 };
+
+/* ── Расписание: чтение, запись, подписи ──────────────────────────────────
+   Расписание лежит файлом на диске (`~/.claude/ar-quota-schedule.json`), читает его
+   сервер — и часы приезжают сюда ручкой. Панель правит тот же файл той же ручкой.
+   Часы при этом НЕ ждут ручку молча: у них своя копия арифметики и встроенный
+   дефолт (шапка модуля), поэтому циферблат верен сразу по F5 — в том числе в окне
+   до рестарта `:8200`, когда ручки ещё нет вовсе. */
+const SCHED_ROUTE = '/__switch/api/ar/quota-schedule';
+let schedTried = false;          // до первого ответа ручки молчим, а не пишем «не прочитано»
+let schedFormDirty = false;      // поля правит человек — не затираем их ответом сервера
+
+const schedSameZone = () => SCHED.tz === Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/* Локальные времена партий без привязки к суткам: берём три дня кандидатов и
+   схлопываем по «ЧЧ:ММ». Так строка не зависит от того, попала ли партия в текущие
+   локальные сутки — а она может и не попасть, если зона шлюза сдвинута от твоей. */
+function schedLocalTimes() {
+  const b = batches(Date.now());
+  if (!b) return [];
+  return [...new Set(b.all.map(fmtLocal))].sort();
+}
+function schedMiniTitle() {
+  const local = schedLocalTimes().join(', ');
+  return schedSameZone()
+    ? `Партии: ${SCHED.times.join(', ')}`
+    : `Партии: ${SCHED.times.join(', ')} (${SCHED.tz}) = ${local} ${TZ_LABEL}`;
+}
+function schedLine() {
+  const t = SCHED.times;
+  const word = t.length === 2 ? 'Две партии' : t.length === 3 ? 'Три партии' : `${t.length} партии`;
+  const tail = ' Партия конечная — «用完即止», кончиться может раньше срока.';
+  if (schedSameZone()) return `${word} в сутки: ${t.join(' и ')}.${tail}`;
+  return `${word} в сутки: ${SCHED.tz} ${t.join(' и ')} = ${schedLocalTimes().join(' и ')} ${TZ_LABEL}.${tail}`;
+}
+
+function schedPaint() {
+  const mini = document.getElementById('arq-mini');
+  if (mini) mini.title = schedMiniTitle();
+  const line = document.getElementById('arq-sched-line');
+  if (line) line.textContent = schedLine();
+  const st = document.getElementById('arq-sched-state');
+  if (!st) return;
+  if (!schedTried) return;
+  if (SCHED.error) {
+    st.className = 'text-[10px] font-mono text-amber';
+    st.textContent = `файл расписания не прочитан (${SCHED.error}) — работает поставка`;
+    st.title = SCHED.error;
+  } else if (SCHED_SRC === 'file') {
+    st.className = 'text-[10px] font-mono text-faint';
+    st.textContent = `из файла${SCHED.updated ? ', обновлено ' + SCHED.updated : ''}`;
+    st.title = '';
+  } else {
+    st.className = 'text-[10px] font-mono text-faint';
+    st.textContent = 'поставка (файла нет)';
+    st.title = '';
+  }
+}
+
+// Поля карточки заполняются расписанием, но только пока их не трогал человек: иначе
+// ответ сервера затирал бы набираемую строку прямо под курсором.
+function schedFill() {
+  const ti = document.getElementById('arq-sched-times');
+  const tz = document.getElementById('arq-sched-tz');
+  if (!ti || !tz || schedFormDirty) return;
+  ti.value = SCHED.times.join(', ');
+  tz.value = SCHED.tz;
+  schedPreview();
+}
+const schedMsg = (cls, text) => {
+  const m = document.getElementById('arq-sched-msg');
+  if (m) { m.className = `text-xs font-mono ${cls}`; m.textContent = text; }
+};
+
+const schedKey = s => s.tz + '|' + s.times.join(',');
+function schedApply(j) {
+  if (!j || !j.ok || !Array.isArray(j.times) || j.times.length < 2 || !j.tz) return false;
+  SCHED = { tz: String(j.tz), times: j.times.map(String), updated: j.updated || '', note: j.note || '' };
+  if (j.error) SCHED.error = j.error;
+  SCHED_SRC = j.source || 'file';
+  return true;
+}
+/* Читаем расписание при загрузке и потом раз в две минуты: его могли поменять из
+   другого окна, а дашборд открыт сутками. Пересборка разметки — только когда список
+   ДЕЙСТВИТЕЛЬНО другой: build() пересоздаёт SVG, и делать это по таймеру незачем. */
+function schedFetch() {
+  return fetch(SCHED_ROUTE).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => {
+    schedTried = true;
+    const before = schedKey(SCHED);
+    if (schedApply(j) && schedKey(SCHED) !== before) build();
+    paint(); schedFill(); schedPaint();
+    return true;
+  });
+}
+
+window.arqSchedSave = async function arqSchedSave() {
+  const ti = document.getElementById('arq-sched-times');
+  const tz = document.getElementById('arq-sched-tz');
+  if (!ti || !tz) return;
+  schedMsg('text-faint', 'записываю…');
+  try {
+    const r = await fetch(SCHED_ROUTE, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tz: tz.value.trim(), times: ti.value }),
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || `HTTP ${r.status}`);
+    schedFormDirty = false;
+    schedApply(j);
+    build(); paint(); schedFill(); schedPaint();
+    schedMsg('text-emerald', 'записано · ' + schedMiniTitle());
+  } catch (e) {
+    // Поля не трогаем: владелец видит, что именно не приняли, и правит текст, а не набирает заново.
+    schedMsg('text-crimson', 'не записано: ' + e.message);
+  }
+};
+
+// Кнопки «вернуть как в объявлении» здесь нет намеренно. Соблазн понятный, но она
+// противоречит самой правке: зашитое расписание из кода мы только что убрали, и кнопка
+// вернула бы его обратно - с тем же сроком годности. Вписать два числа из объявления
+// быстрее, чем искать кнопку, а что сейчас в силе, видно строкой состояния и без неё.
+
+const TZ_SUGGEST = ['Asia/Shanghai', 'Europe/Moscow', 'UTC', 'Asia/Tokyo', 'Asia/Singapore',
+                    'Europe/Berlin', 'America/New_York'];
+
+/* Разбор строки времён — та же грамматика, что у сервера (`arScheduleParseTimes`).
+   Нужен только для ПРЕДПРОСМОТРА: что именно уйдёт на диск, видно до нажатия, а
+   не после отказа. Пишет всё равно сервер — он же и валидирует. */
+function schedParseInput(raw) {
+  const out = [];
+  for (const item of String(raw == null ? '' : raw).split(/[,;\s]+/)) {
+    const s = item.trim();
+    if (!s) continue;
+    const m = /^(\d{1,2})(?:[:.](\d{2}))?$/.exec(s);
+    if (!m) return { ok: false, error: `не время: «${s}»` };
+    const hh = +m[1], mi = m[2] === undefined ? 0 : +m[2];
+    if (hh > 23 || mi > 59) return { ok: false, error: `не время: «${s}»` };
+    const t = `${pad(hh)}:${pad(mi)}`;
+    if (!out.includes(t)) out.push(t);
+  }
+  if (out.length < 2) return { ok: false, error: 'нужно минимум две партии' };
+  if (out.length > 8) return { ok: false, error: 'больше восьми партий не поддерживается' };
+  out.sort();
+  return { ok: true, times: out };
+}
+/* Предпросмотр: «Пекин 10:00, 19:00 → 05:00, 14:00 МСК». Ровно та строка, которой
+   не хватает при вводе: времена задаются в зоне шлюза, а жить по ним здесь. */
+function schedPreview() {
+  const ti = document.getElementById('arq-sched-times');
+  const tz = document.getElementById('arq-sched-tz');
+  const out = document.getElementById('arq-sched-line2');
+  if (!ti || !tz || !out) return;
+  const zone = tz.value.trim();
+  const p = schedParseInput(ti.value);
+  const bad = msg => { out.className = 'text-xs text-amber mb-2'; out.textContent = msg; };
+  if (!p.ok) return bad(p.error === 'нужно минимум две партии' ? 'нужно минимум две партии в сутки' : p.error);
+  let ref;
+  try { ref = zonedParts(Date.now(), zone); }
+  catch (e) { return bad(`неизвестная зона: «${zone}»`); }
+  const local = [...new Set(p.times.map(t => {
+    const [hh, mi] = t.split(':').map(Number);
+    return fmtLocal(zonedToUtc(ref.y, ref.mo, ref.d, hh, mi, zone));
+  }))].sort();
+  out.className = 'text-xs text-muted mb-2';
+  out.textContent = `${zone} ${p.times.join(', ')} → ${local.join(', ')} ${TZ_LABEL}`;
+}
 
 function init() {
   const mini = document.querySelector('#arq-mini .arq-host');
@@ -37797,12 +38125,27 @@ function init() {
   stSync();
   arqView(VIEW);
   arqSndBtn();      // 🔔 рисуем сразу: до первого жеста он честно говорит, что молчит
+  /* Расписание: подписи и метки зависят от него, а до первого ответа ручки работают
+     встроенные 10:00/19:00 Пекина — циферблат не пустует ни секунды. Опрос редкий:
+     2 минуты, потому что расписание меняет человек и не чаще раза в день. */
+  const tzl = document.getElementById('arq-tz-list');
+  if (tzl) tzl.innerHTML = TZ_SUGGEST.map(z => `<option value="${z}"></option>`).join('');
+  for (const id of ['arq-sched-times', 'arq-sched-tz']) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { schedFormDirty = true; schedPreview(); });
+  }
+  schedFill();
+  schedPaint();
+  schedFetch();
+  setInterval(schedFetch, 120000);
   /* Опрос обеих полос: фолбэк случается посреди дня, и часы обязаны покраснеть сами,
      без F5 и без клика. 30 с — вкладка открыта сутками, а ручка читает локальный файл,
      так что частить незачем. Возврат на вкладку опрашиваем сразу: пока её не было,
      состояние могло поменяться дважды. */
   setInterval(stSync, 30000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) stSync(); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { stSync(); schedFetch(); }
+  });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
 else init();

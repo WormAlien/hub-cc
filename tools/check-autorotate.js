@@ -759,6 +759,30 @@ async function main() {
             `noProbe: подмена по кешу без единого живого чека (получили ${r.email}, проб ${w.probes.length})`);
     }
 
+    // 19. AgentRouter (17.09): 403 `user quota is not enough` - та же нехватка денег, но
+    //     словами в ОБРАТНОМ порядке. `insufficient user quota` ловилось, а это - нет, и
+    //     403 уезжал клиенту: Claude Code показывал владельцу «Please run /login» вместо
+    //     молчаливой подмены аккаунта, хотя в пуле лежали живые ключи. Замер: четыре отказа
+    //     за вечер 17.09 на боевом `:20133`, все на аккаунте ***7lQZYS ($0.30 остатка).
+    //     🪤 Ловится ФРАЗА, а не слово `quota`: рядом живёт `quota exceeded for this model`
+    //     («нет прав на модель»), на которой ротация крутила бы пул зря.
+    {
+        const AR_QUOTA = '{"error":{"message":"user quota is not enough (request id: 20260918005258839199178snqllZ9bDMT0Y)","type":"new_api_error"}}';
+        const AR_QUOTA_ANTH = '{"type":"error","error":{"type":"invalid_request_error","message":"user quota is not enough (request id: 20260918005258839199178snqllZ9bDMT0Y)"}}';
+        const rotate = new Function('deps', `
+            ${cutConst(kaSrc, 'OUT_OF_BALANCE_RE')}
+            ${cutConst(kaSrc, 'DEAD_KEY_RE')}
+            ${cutFn(kaSrc, 'function rotateReason(')}
+            return rotateReason;
+        `)({});
+        check(rotate(403, Buffer.from(AR_QUOTA)) === 'out-of-balance',
+            'ar: `user quota is not enough` распознан как «кончились деньги» — а не отдан клиенту');
+        check(rotate(403, Buffer.from(AR_QUOTA_ANTH)) === 'out-of-balance',
+            'тот же текст в конверте Anthropic (второй вид тела у того же шлюза)');
+        check(rotate(403, Buffer.from('{"error":{"message":"quota exceeded for this model"}}')) === null,
+            '«нет прав на модель» ротацию НЕ запускает — пул не крутится зря');
+    }
+
     // Итог
     for (const m of ok) console.log(`  ok   ${m}`);
     for (const m of fails) console.log(`  FAIL ${m}`);

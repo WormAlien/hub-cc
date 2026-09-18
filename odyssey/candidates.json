@@ -1,23 +1,19 @@
 {
- "at": "2026-09-17T04:31:28.760Z",
+ "at": "2026-09-18T11:27:49.927Z",
  "candidates": [
   {
-   "label": "socks5://5.45.119.70:1080",
-   "as": "AS198068 CLOUD.DOG OU",
-   "country": "Estonia",
-   "pageMs": 1571
+   "label": "socks5://147.45.249.29:1080",
+   "as": "AS9123 JSC TIMEWEB",
+   "country": "Russia",
+   "pageMs": 965,
+   "hosting": false
   },
   {
-   "label": "socks5://193.233.139.106:1080",
-   "as": "AS210644 AEZA GROUP LLC",
-   "country": "Finland",
-   "pageMs": 1623
-  },
-  {
-   "label": "socks4://85.209.156.148:1080",
-   "as": "AS51765 Oy Creanova Hosting Solutions Ltd.",
-   "country": "United States",
-   "pageMs": 4800
+   "label": "socks5://178.236.16.4:1080",
+   "as": "AS205516 NLS ASTANA LLP",
+   "country": "Kazakhstan",
+   "pageMs": 4437,
+   "hosting": false
   }
  ]
 }

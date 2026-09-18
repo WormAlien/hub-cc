@@ -69,7 +69,7 @@ from od_common import (  # noqa: E402
     API_KEYS_URL, CONSOLE_URL, DIR, LAST_PROXY, POOL_HOST, POOL_PREFLIGHT_PATH,
     BILLING_URL, SIGNUP_URL, MailClient, acquire_fresh_proxy, acquire_proxy, asn_for_ip,
     click_button_by_text, fetch_22do_code, flat, goto_retry, load_used_networks, open_log,
-    OPEN_MAILERS, own_ip, pick_22do_gmail, short_url,
+    OPEN_MAILERS, ip_of_label, mark_bad_address, own_ip, pick_22do_gmail, short_url,
 )
 
 REC_DIR = DIR / "recordings"
@@ -276,6 +276,33 @@ async def register_in_dashboard(label, email, key, log, password=None):
     except Exception as e:
         log("ДАШБОРД", f"в пул не завёл ({flat(str(e), 80)}) - ключ всё равно в маркере")
         return None
+
+
+async def save_state_file(state, account_id, log):
+    """Записывает снимок сессии из УЖЕ снятых кук. False - снимок не годится, нужен добор.
+
+    Вынесено отдельно от `save_browser_session`, потому что куки теперь снимаются рано (сразу
+    после кабинета), а имя файла зависит от id аккаунта, который появляется позже.
+    """
+    if not account_id or not state:
+        return False
+    cookies = [c for c in (state.get("cookies") or []) if "odysseyapi.tech" in (c.get("domain") or "")]
+    names = [c.get("name", "") for c in cookies]
+    if not any(n.startswith("__refresh") for n in names):
+        log("СЕССИЯ", "в раннем снимке нет refresh-куки - добираю заходом в кабинет")
+        return False
+    origins = [o for o in (state.get("origins") or []) if "odysseyapi.tech" in (o.get("origin") or "")]
+    out = DIR / "sessions" / f"acct_{account_id}.json"
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"cookies": cookies, "origins": origins},
+                                  ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as e:
+        log("СЕССИЯ", f"записать снимок не вышло: {flat(str(e), 80)}")
+        return False
+    log("СЕССИЯ", f"✅ куки аккаунта сохранены для кнопки 🌐: {out.name} "
+                  f"({len(cookies)} кук, {len(origins)} origin'ов)")
+    return True
 
 
 async def save_browser_session(ctx, site, account_id, log):
@@ -633,7 +660,16 @@ async def main():
     if proxy_cfg:
         base["proxy"] = proxy_cfg
         if importlib.util.find_spec("geoip2") is not None:
-            base["geoip"] = True
+            # 🔴 IP передаём ЯВНО, а не `geoip=True`. При True Camoufox сам идёт за адресом
+            # на ipecho.net - и делает это ЧЕРЕЗ ПРОКСИ, а публичный прокси его не пускает:
+            # запуск браузера падал целиком («Failed to get IP address: … Max retries
+            # exceeded», замер 17.09 - прогон умер с кодом 5, не начавшись). Адрес выхода у
+            # нас и так известен: это адрес самого прокси из метки.
+            exit_ip = ip_of_label(LAST_PROXY.get("label"))
+            if exit_ip:
+                base["geoip"] = exit_ip
+            else:
+                log("ВНИМАНИЕ", "IP выхода не разобран - geoip не включаю, пояс останется локальным")
         else:
             log("ВНИМАНИЕ", "geoip недоступен (нет extra) - пояс и локаль останутся локальными")
 
@@ -660,10 +696,13 @@ async def main():
     OPEN_CMS.append(cm)
 
     # Ответы площадки слушаем, а не угадываем: по ним видно и отправку регистрации, и ключ.
-    seen = {"signup_sent": False, "signup_ok": False, "complete": False, "key": None}
+    seen = {"signup_sent": False, "signup_ok": False, "complete": False, "key": None,
+            "last_resp": asyncio.get_event_loop().time()}
 
     async def on_response(res):
         try:
+            # Метка активности страницы: нужна, чтобы отличить «медленно грузится» от «умер».
+            seen["last_resp"] = asyncio.get_event_loop().time()
             url = res.url
             if "/v1/client/sign_ups" in url and res.request.method == "POST":
                 body = await res.text()
@@ -824,26 +863,48 @@ async def main():
         log("ОКНО", f"состояние окна не спросилось: {flat(str(e).splitlines()[0], 70)}")
 
     # ALTCHA - proof-of-work: жмём галочку, дальше виджет считает сам, без человека.
+    # 🔴 Виджет ЖДЁМ, а не «кликаем если есть». На медленных адресах приложение собирается
+    # около минуты (замер 18.09: 20 с на челлендж Cloudflare, ещё 20 на Clerk), и прежний
+    # код в этот момент виджета не находил - клик уходил в пустоту, а без ALTCHA поля формы
+    # не появятся вовсе. Снаружи это выглядело как «форма не собралась».
     try:
         box = site.locator('input[id^="altcha-checkbox"]').first
-        if await box.count():
-            await site.evaluate("""() => {
-                const el = document.querySelector('input[id^="altcha-checkbox"]');
-                if (el) el.click();
-            }""")
-            log("ALTCHA", "галочку нажал, виджет считает proof-of-work")
+        await box.wait_for(state="attached", timeout=90000)
+        await site.evaluate("""() => {
+            const el = document.querySelector('input[id^="altcha-checkbox"]');
+            if (el) el.click();
+        }""")
+        log("ALTCHA", "галочку нажал, виджет считает proof-of-work")
     except Exception as e:
-        log("ALTCHA", f"не нажалась: {flat(str(e), 80)}")
+        log("ALTCHA", f"виджета не дождался: {flat(str(e), 80)}")
 
     # Поля Clerk появляются ПОСЛЕ ALTCHA - ждём их, а не спим фиксированно.
-    # 🪤 60 с, а не 90: на адресах, где чанки не приезжают, приложение не гидрируется НИКОГДА,
-    # и ожидание там - чистая потеря времени (замер 16.09: HAR показал, что 25 запросов за
-    # скриптами висят без ответа, а страница так и стоит на заставке «Loading verification…»).
-    try:
-        await site.wait_for_selector("input#emailAddress-field", timeout=60000)
-        form_ready = True
-    except Exception:
-        log("ФОРМА", "поле адреса не появилось - возможно, ALTCHA не прошла")
+    # 🔴 120 с, и это исправление моей же ошибки. Было 60 - и HAR провальной попытки 18.09
+    # показал, что приложение на ней СОБРАЛОСЬ, просто на 50-й секунде: 13 с уходило на свои
+    # чанки, 20 с - на SDK Clerk, ещё 20 с - на челлендж Cloudflare, и только потом
+    # `clerk /v1/environment`. То есть драйвер сдавался за мгновение до появления формы, и
+    # половина «негодных» адресов была не негодной, а МЕДЛЕННОЙ. Плата за ожидание - время
+    # на действительно мёртвых адресах; выигрыш - аккаунты, которые мы выбрасывали зря.
+    # 🔴 Ждём форму, но следим за АКТИВНОСТЬЮ страницы. Замер 18.09: у хорошего адреса
+    # приложение собирается медленно (20 с на Cloudflare, 20 на Clerk), а у мёртвого не
+    # собирается вовсе - и прежний код в обоих случаях ждал одинаковые 120 с, то есть на
+    # мёртвом адресе мы платили две минуты зря. Правило простое: пока страница что-то грузит,
+    # ждём; если она молчит 45 секунд - приложение уже не соберётся, выходим раньше.
+    form_ready = False
+    form_deadline = asyncio.get_event_loop().time() + 120
+    while asyncio.get_event_loop().time() < form_deadline:
+        try:
+            await site.wait_for_selector("input#emailAddress-field", timeout=5000)
+            form_ready = True
+            break
+        except Exception:
+            pass
+        idle = asyncio.get_event_loop().time() - seen.get("last_resp", 0)
+        if idle > 45:
+            log("ФОРМА", f"страница молчит {int(idle)} с и формы нет - не жду остальное время")
+            break
+    if not form_ready:
+        log("ФОРМА", "поле адреса не появилось - приложение не собралось")
     try:
         await site.fill("input#emailAddress-field", email, timeout=20000)
         await site.fill("input#password-field", password, timeout=20000)
@@ -973,6 +1034,10 @@ async def main():
         else:
             why = "капча Turnstile потребовала человека"
         log("КАПЧА", f"регистрация не ушла за {CAPTCHA_WAIT_S} с - {why}")
+        # Помечаем адрес, если причина НЕ наша: приложение не собралось или не приехал
+        # виджет Turnstile. Второй раз пробовать его незачем - это экономит целую попытку.
+        if "не появилась" in why or "captcha failed to load" in why.lower():
+            mark_bad_address(LAST_PROXY.get("label"), why)
         await dump_captcha_state(site, label, log)
         state["error"] = why
         save_meta(f"отказ: {why}")
@@ -1048,6 +1113,7 @@ async def main():
 
     # Приёмка: без подарочных $5 аккаунт бесполезен - не заводим его в пул.
     gift = await check_gift(site, log)
+    early_state = None
     state["gift"] = gift
     if gift is False:
         await mark_network_used(log)      # сеть отработана - больше её не берём
@@ -1066,6 +1132,19 @@ async def main():
     stage("key")
     key = await take_key(site, label, seen, log, need_console=bool(seen["complete"]))
 
+    # 🔴 Куки снимаем ЗДЕСЬ, а не отдельным заходом позже. Замер 18.09: снимок сессии стоил
+    # 31 с - это был лишний `goto` на `/dashboard`. К этому моменту мы уже прошли кабинет и
+    # страницу ключей, Clerk отработал и `__refresh_v-…` поставлен. Файл запишем позже, когда
+    # узнаем id аккаунта. 🪤 Сразу после проверки подарка снимать НЕЛЬЗЯ: проверил живьём -
+    # в тот момент refresh-куки ещё нет, и код уходит в старый путь с добором (лишние 40 с).
+    try:
+        early_state = await ctx.storage_state()
+        names = [c.get("name", "") for c in (early_state.get("cookies") or [])]
+        log("СЕССИЯ", "куки сняты после работы в кабинете"
+                      + ("" if any(n.startswith("__refresh") for n in names) else " (refresh-куки ещё нет)"))
+    except Exception as e:
+        log("СЕССИЯ", f"снять куки не вышло: {flat(str(e), 60)}")
+
     state["key"] = key
     state["finished"] = datetime.now().isoformat(timespec="seconds")
     save_meta()
@@ -1082,7 +1161,9 @@ async def main():
     await bind_account_proxy(account_id, log)
     await mark_network_used(log)
     # Снимок сессии - ПОСЛЕ заведения в пул: имя файла зависит от id аккаунта.
-    await save_browser_session(ctx, site, account_id, log)
+    if not await save_state_file(early_state, account_id, log):
+        # Ранний снимок не годится (нет refresh-куки) - идём проверенным путём с заходом.
+        await save_browser_session(ctx, site, account_id, log)
     marker = json.dumps({"ok": True, "key": seen["key"], "email": email,
                          "label": label, "tier": tier,
                          "proxy": LAST_PROXY.get("label")}, ensure_ascii=False)

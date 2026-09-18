@@ -104,7 +104,9 @@ def _target_for(host: str, path: str) -> DomainTarget:
         port=443,
         use_tls=True,
         enabled=True,
-        response="newapi_status",
+        # У Odyssey ответ ручки ALTCHA - `{"parameters":…}`, а не форма New API: критерий
+        # `newapi_status` требовал `data` словарём и браковал живые прокси (замер 17.09).
+        response="json_any",
     )
 
 
@@ -134,9 +136,16 @@ def find(
     timeout: int = 8,
     log=print,
 ) -> List[ProxyRecord]:
+    services = [s for s in load_services(str(sources_file)) if s.enabled]
+    # 🔴 Ограничиваем СБОР, а не только проверку. Раньше скрапер тянул все адреса со всех
+    # источников (живой замер 17.09: 288 312 кандидатов) и лишь потом обрезал список до
+    # `--max`. Держать это в памяти на ровном месте - сотни мегабайт, и 17.09 систему
+    # прибило по нехватке памяти прямо посреди прогона. Берём по 200 адресов с источника:
+    # 70 источников × 200 ≈ 14 тысяч, чего с большим запасом хватает перебору.
+    per_source = 200 if not max_candidates else max(100, min(2000, max_candidates * 4 // max(1, len(services))))
     scraper = ProxyScraper(
-        [s for s in load_services(str(sources_file)) if s.enabled],
-        threads=workers, timeout=timeout, retries=0,
+        services,
+        threads=workers, timeout=timeout, retries=0, max_per_source=per_source,
     )
     log(f"скраплю источники → {host}")
     records = scraper.run()

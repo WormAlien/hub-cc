@@ -23,7 +23,7 @@ DEFAULT_DOMAIN_TARGETS = [
     },
 ]
 
-VALID_RESPONSE_KINDS = {"html", "newapi_status"}
+VALID_RESPONSE_KINDS = {"html", "newapi_status", "json_any"}
 
 PROTOCOL_INPUTS = [
     ("http.txt", "HTTP"),

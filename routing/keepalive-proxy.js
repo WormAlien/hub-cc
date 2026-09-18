@@ -1290,7 +1290,16 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // Ни одно слово из списка ниже её не ловило, поэтому 402 уезжал клиенту как есть, хотя в пуле
 // лежали живые аккаунты. 🪤 `type` в этой ошибке НЕ константа (у той же площадки в логе стоит
 // `invalid_request_error`) - матчим по тексту сообщения, а не по типу.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
+// 🔴 AgentRouter/New-API (17.09, четыре раза за вечер) отказал по деньгам ПЕРЕВЁРНУТОЙ
+// формулировкой того же смысла, снято с боевого `:20133`:
+//   {"error":{"message":"user quota is not enough (request id: …)","type":"new_api_error"}}
+// и второй её вид, тем же телом в конверте Anthropic:
+//   {"type":"error","error":{"type":"invalid_request_error","message":"user quota is not enough …"}}
+// `insufficient user quota` ловилось, а `user quota is not enough` - нет: слова те же, порядок
+// другой. 403 доезжал до клиента, и Claude Code показывал владельцу «Please run /login» вместо
+// того, чтобы молча сменить аккаунт. 🪤 Ловим ФРАЗУ, а не слово `quota`: рядом живёт
+// `quota exceeded for this model` («нет прав на модель»), на которой ротация крутила бы пул зря.
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -3058,6 +3067,16 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(neededUsd(EN_PRE), 1.79758, 'нужно $1.80 прочитано из полноширинного ＄');
   assert.strictEqual(leftUsd(EN_PRE), 0.055238, 'осталось $0.055 — метка user quota не перехлестнулась с need quota');
   assert.strictEqual(rotateReason(200, Buffer.from(EN_PRE)), null, 'эхо английской формулировки в 200 — не отказ');
+  // Четвёртая формулировка — тот же смысл словами в обратном порядке, снята живьём 17.09 с
+  // боевого AgentRouter: `insufficient user quota` ловилось, а `user quota is not enough` —
+  // нет. 403 уезжал клиенту, и Claude Code показывал владельцу «Please run /login» вместо
+  // молчаливой подмены аккаунта. Второй вид — то же тело в конверте Anthropic.
+  const AR_QUOTA = '{"error":{"message":"user quota is not enough (request id: 20260918005258839199178snqllZ9bDMT0Y)","type":"new_api_error"}}';
+  const AR_QUOTA_ANTH = '{"type":"error","error":{"type":"invalid_request_error","message":"user quota is not enough (request id: 20260918005258839199178snqllZ9bDMT0Y)"}}';
+  assert.strictEqual(rotateReason(403, Buffer.from(AR_QUOTA)), 'out-of-balance', 'ar: user quota is not enough = нет денег');
+  assert.strictEqual(rotateReason(403, Buffer.from(AR_QUOTA_ANTH)), 'out-of-balance', 'тот же текст в конверте Anthropic');
+  assert.strictEqual(leftUsd(AR_QUOTA), null, 'в этой формулировке цифр нет — планка кандидата из moneyMinBal');
+  assert.strictEqual(rotateReason(200, Buffer.from(AR_QUOTA)), null, 'эхо той же фразы в 200 — не отказ');
   // Слово `quota` само по себе деньгами не является: у New-API так же звучат «нет прав на
   // модель» и лимит запросов. Ротация на них крутила бы пул зря, не вылечив запрос.
   assert.strictEqual(rotateReason(403, Buffer.from('{"error":{"message":"quota exceeded for this model"}}')), null, 'просто quota ≠ нет денег');

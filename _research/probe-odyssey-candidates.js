@@ -30,6 +30,10 @@ const BASE = 'https://odysseyapi.tech';
 const PATHS = ['/sign-up'];
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:129.0) Gecko/20100101 Firefox/129.0';
 const LEDGER = path.join(__dirname, '..', 'odyssey', 'networks-used.json');
+// Журнал плохих АДРЕСОВ (не сетей): те, где приложение не собралось или не приехал виджет
+// Turnstile. Пишет его драйвер, а проба по нему фильтрует - второй раз такой адрес пробовать
+// незачем, каждая попытка стоит две минуты.
+const BAD_FILE = path.join(__dirname, '..', 'odyssey', 'addresses-bad.json');
 const CONC = Number(process.argv[2] || 6);
 const WANT = Number(process.argv[3] || 3);   // хватит стольких годных - дальше не перебираем
 const TIMEOUT = 15000;
@@ -38,13 +42,17 @@ function ledger() {
     try { return JSON.parse(fs.readFileSync(LEDGER, 'utf8')); } catch { return {}; }
 }
 
+function badAddresses() {
+    try { return JSON.parse(fs.readFileSync(BAD_FILE, 'utf8')); } catch { return {}; }
+}
+
 // ASN батчами: бесплатный ip-api отдаёт до 100 адресов за запрос.
 async function asnOf(ips) {
     const out = {};
     for (let i = 0; i < ips.length; i += 100) {
         const chunk = ips.slice(i, i + 100);
         try {
-            const r = await fetch('http://ip-api.com/batch?fields=query,as,isp,country', {
+            const r = await fetch('http://ip-api.com/batch?fields=query,as,isp,country,org', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(chunk),
             });
@@ -63,7 +71,7 @@ async function asnOf(ips) {
 // попробовать ту же ПАЧКУ параллельно и убедиться, что чанки приезжают.
 async function burstCheck(p, html) {
     const urls = [...new Set([...html.matchAll(/\/_next\/static\/(?:chunks|media)\/[^"'\\]+\.(?:js|css)/g)]
-        .map(m => m[0]))].slice(0, 8);
+        .map(m => m[0]))].slice(0, 20);
     if (!urls.length) return { ok: 0, total: 0, ms: 0, note: 'ссылок на чанки в HTML не нашлось' };
     const t0 = Date.now();
     const got = await Promise.all(urls.map(u =>
@@ -74,6 +82,41 @@ async function burstCheck(p, html) {
     const ok = got.filter(Boolean).length;
     return { ok, total: urls.length, ms: Date.now() - t0 };
 }
+
+// 🔴 ТРЕТЬИ СТОРОНЫ - и это была дыра в пробе. Удачный прогон тянет не только сайт: по HAR
+// `clerk.odysseyapi.tech` даёт 57 запросов (SDK Clerk, БЕЗ него форма не рисуется вовсе),
+// `challenges.cloudflare.com` - 6 (Turnstile). Проба проверяла один лишь odysseyapi.tech,
+// поэтому адрес, у которого сайт открывается, а Clerk недоступен, проходил пробу и падал в
+// прогоне строкой «форма регистрации не появилась» (замер 17.09 22:38: адрес netcup - 19/20
+// чанков у пробы и пустая страница в браузере).
+const THIRDS = [
+    'https://clerk.odysseyapi.tech/npm/@clerk/clerk-js@6/dist/clerk.browser.js',
+    'https://clerk.odysseyapi.tech/npm/@clerk/ui@1/dist/ui.browser.js',
+    'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit',
+];
+
+async function thirdsCheck(p) {
+    const t0 = Date.now();
+    // 🔴 Критерий - «хост ОТВЕЧАЕТ», а не «отвечает 200 с телом». Живой замер 18.09:
+    // `clerk.odysseyapi.tech` отдаёт **307**, а `challenges.cloudflare.com` - **302**, оба с
+    // пустым телом. Требуя 200 с телом, проверка браковала ВСЕ адреса подряд (19 из 19
+    // «чужие 0/3»), и поток остался бы без адресов вовсе. Редирект доказывает доступность:
+    // браузер по нему пойдёт и скрипт получит.
+    const got = await Promise.all(THIRDS.map(u =>
+        pp.fetchVia(p, u, { timeoutMs: 12000, headers: { 'user-agent': UA, 'accept': '*/*' } })
+            .then(r => (r.status >= 200 && r.status < 400) ? 1 : 0)
+            .catch(() => 0)));
+    return { ok: got.filter(Boolean).length, total: THIRDS.length, ms: Date.now() - t0 };
+}
+
+// 🔴 Датацентровые сети уходят в КОНЕЦ очереди, и это замер, а не вкусовщина. Подарок даётся
+// «одна сеть - один аккаунт», где сеть - провайдер целиком (наши три прокси одного хостера
+// оказались одной сетью). Леджер знает только НАШИ регистрации, а у популярного хостера
+// (netcup, Hetzner и прочие) адресный пул общий: сеть выглядит свежей, а подарок по ней уже
+// забрал другой клиент. Живой случай 17.09: адрес netcup прошёл всё, аккаунт создался, баланс $0.
+// У ISP-адресов такой беды нет: домашние сети никто под реги не раздаёт, и наши удачные
+// регистрации шли именно с них (Уфанет, Ростелеком, Cogetel, BrainStorm).
+const HOSTING_RE = /hosting|cloud|vps|server|datacenter|data center|dedicat|colo|netcup|hetzner|amazon|google|microsoft|oracle|digitalocean|contabo|ovh|leaseweb|linode|vultr|akamai|cloudflare/i;
 
 async function probeOne(p) {
     const row = { label: p.label, ip: p.hostname, tier: null, as: '', country: '', res: {} };
@@ -90,7 +133,13 @@ async function probeOne(p) {
             const body = await r.text();
             row.res[path_] = { status: r.status, ms: Date.now() - t0, len: body.length };
             if (path_ === PATHS[0] && r.status === 200) {
-                row.burst = await burstCheck(p, body);
+                // 🔴 Две проверки идут ПАРАЛЛЕЛЬНО, а не друг за другом: каждая - это
+                // несколько запросов через прокси, и последовательно кандидат занимал до
+                // сорока секунд. Запуск прогона от этого растягивался, а владелец ждёт
+                // первую регистрацию, а не полную таблицу.
+                const [burst, thirds] = await Promise.all([burstCheck(p, body), thirdsCheck(p)]);
+                row.burst = burst;
+                row.thirds = thirds;
             }
         } catch (e) {
             row.res[path_] = { err: String(e.message || e).slice(0, 60), ms: Date.now() - t0 };
@@ -105,12 +154,15 @@ async function probeOne(p) {
     const all = pool.proxies;
 
     const asn = await asnOf([...new Set(all.map(p => p.hostname))]);
+    const bad = badAddresses();
+    // `isp` из ответа ip-api нужен для признака «датацентр» - вместе с ASN он и решает очередь.
     const fresh = [];
     const spent = [];
     for (const p of all) {
         const info = asn[p.hostname] || {};
         const key = String(info.as || '').trim();
-        const rec = { p, key, country: info.country || '?' };
+        if (bad[p.label]) continue;   // адрес уже проваливался по нашей вине - не пробуем
+        const rec = { p, key, country: info.country || '?', isp: info.isp || '' };
         (key && used[key] ? spent : fresh).push(rec);
     }
     console.log(`в пуле ${all.length} · сетей трачено ${Object.keys(used).length} · ` +
@@ -120,17 +172,23 @@ async function probeOne(p) {
     const good = [];
     // «Годен» теперь значит: HTML 200 И чанки приехали пачкой. Раньше хватало HTML, и такие
     // адреса уходили в прогон, где браузер не мог поднять приложение (см. burstCheck).
-    const usable = (r) => r.res[PATHS[0]].status === 200 && r.burst && r.burst.total > 0
-        && r.burst.ok >= Math.ceil(r.burst.total * 0.8);
+    // Порог поднят с 80 % до 90 %, и ссылок теперь двадцать: правило простое - не приехало
+    // почти всё, значит и браузер приложение не соберёт.
+    // Годен = страница 200 + почти все свои чанки + ВСЕ три чужих хоста (Clerk и Turnstile).
+    const usable = (r) => r.res[PATHS[0]].status === 200 && r.burst && r.burst.total >= 8
+        && r.burst.ok >= Math.ceil(r.burst.total * 0.9)
+        && r.thirds && r.thirds.ok === r.thirds.total;
     for (let i = 0; i < fresh.length; i += CONC) {
         const chunk = fresh.slice(i, i + CONC);
         const rows = await Promise.all(chunk.map(x => probeOne(x.p)));
         rows.forEach((r, j) => {
             r.as = chunk[j].key; r.country = chunk[j].country;
+            r.hosting = HOSTING_RE.test(String(chunk[j].key || '') + ' ' + String(chunk[j].isp || ''));
             out.push(r);
             if (usable(r)) good.push(r);
             const mark = (v) => v.err ? `✗ ${v.err}` : `${v.status} ${v.len}b`;
-            const b = r.burst ? `${r.burst.ok}/${r.burst.total} чанков за ${r.burst.ms}мс` : 'чанки не проверялись';
+            const b = (r.burst ? `${r.burst.ok}/${r.burst.total} чанков` : 'чанки не проверялись')
+                + (r.thirds ? ` · чужие хосты ${r.thirds.ok}/${r.thirds.total}` : '');
             console.log(`  ${r.ip.padEnd(16)} ${(r.as || 'ASN неизвестен').slice(0, 28).padEnd(28)} ` +
                         `${r.country.padEnd(3)} стр: ${mark(r.res[PATHS[0]]).padEnd(20)} ${b}`);
         });
@@ -162,10 +220,11 @@ async function probeOne(p) {
     // прогоне смысла не имеет (замер: два адреса AS60404 Liteserver попали в годные разом).
     const cand = [];
     const seenAs = new Set();
-    for (const r of ok.sort((a, b) => page(a).ms - page(b).ms)) {
+    for (const r of ok.sort((a, b) => (a.hosting - b.hosting) || (page(a).ms - page(b).ms))) {
         if (seenAs.has(r.as)) continue;
         seenAs.add(r.as);
-        cand.push({ label: r.label, as: r.as, country: r.country, pageMs: page(r).ms });
+        cand.push({ label: r.label, as: r.as, country: r.country, pageMs: page(r).ms,
+                    hosting: !!r.hosting });
     }
     fs.writeFileSync(path.join(__dirname, '..', 'odyssey', 'candidates.json'),
                      JSON.stringify({ at: new Date().toISOString(), candidates: cand }, null, 1));

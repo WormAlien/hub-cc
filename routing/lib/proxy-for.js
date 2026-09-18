@@ -53,6 +53,11 @@ const bindLabel = val('--bind-label');
 // Turnstile на части IP не поддаётся вообще (виджет висит и не нажимается), и
 // единственный выход - взять СЛЕДУЮЩИЙ адрес из пула и попробовать снова.
 const exclude = String(val('--exclude', '')).split(',').map(s => s.trim()).filter(Boolean);
+// `--skip-asn "AS123,AS456"` - сети, которые авторег Odyssey уже тратил. Пул про леджер
+// (`odyssey/networks-used.json`) не знает и потому выдаёт адреса из траченных сетей: подарок
+// там уже получен, аккаунт выйдет с нулём, драйвер его отвергает - а каждая такая попытка
+// стоит полного preflight (замер 17.09: 2.5 минуты на адрес, четыре адреса подряд впустую).
+const skipAsn = String(val('--skip-asn', '')).split(',').map(s => s.trim()).filter(Boolean);
 // `--force` - проверять кандидата ЖИВЬЁМ, не веря кэшу здоровья. Замер 16.09: у пула
 // проверка кэшируется на 10 минут, а публичный адрес умирает за минуты - прогон поднимал
 // окно и получал `NS_ERROR_CONNECTION_REFUSED` на живой, по мнению пула, прокси.
@@ -67,6 +72,43 @@ function browserProxy(p) {
     if (p.user) cfg.username = p.user;
     if (p.pass) cfg.password = p.pass;
     return cfg;
+}
+
+// ASN адреса по кэшу на диске: ip-api бесплатный и не любит частых запросов, а пул мы
+// обходим по нескольку раз за прогон.
+const ASN_CACHE_FILE = require('path').join(__dirname, '..', 'asn-cache.json');
+let _asnCache = null;
+function asnCache() {
+    if (_asnCache) return _asnCache;
+    try { _asnCache = JSON.parse(require('fs').readFileSync(ASN_CACHE_FILE, 'utf8')); }
+    catch { _asnCache = {}; }
+    return _asnCache;
+}
+async function asnOf(ip) {
+    const c = asnCache();
+    if (c[ip] !== undefined) return c[ip];
+    try {
+        const r = await fetch(`http://ip-api.com/json/${ip}?fields=as`);
+        const j = await r.json();
+        c[ip] = String(j.as || '').trim();
+    } catch { c[ip] = ''; }
+    try { require('fs').writeFileSync(ASN_CACHE_FILE, JSON.stringify(c, null, 1)); } catch { /* не критично */ }
+    return c[ip];
+}
+// Оставляем только адреса из НЕтраченных сетей. Пустой результат - не повод молча идти в
+// траченные: вызывающий сам решит, что делать.
+async function dropSpentNetworks(list) {
+    if (!skipAsn.length) return list;
+    const keep = [];
+    for (const p of list) {
+        const asn = await asnOf(p.hostname);
+        if (asn && skipAsn.includes(asn)) {
+            log_line(`сеть ${asn} уже трачена - пропускаю ${p.label}`);
+            continue;
+        }
+        keep.push(p);
+    }
+    return keep;
 }
 
 (async () => {
@@ -125,7 +167,7 @@ function browserProxy(p) {
         // «любой, кроме исключённых», и на ярусе «свои» выдавала публичный адрес скрапера -
         // то есть молча меняла ярус, а это ровно тот класс подмены, от которого пул и
         // защищается.
-        const all = pp.pool().proxies.filter(p => {
+        const all = await dropSpentNetworks(pp.pool().proxies.filter(p => {
             if (exclude.includes(p.label)) return false;
             if (tier === 'own') {
                 try { return pp.tierOf(p.id) === 'own'; } catch { return false; }
@@ -134,7 +176,7 @@ function browserProxy(p) {
                 try { return pp.tierOf(p.id) !== 'own'; } catch { return true; }
             }
             return true;
-        });
+        }));
         if (!all.length) return out({ ok: false, error: `в ярусе ${tier} больше нет непробованных прокси (исключено ${exclude.length})` });
         const assign = { ...pp.assignments() };
         delete assign[key];
@@ -161,7 +203,7 @@ function browserProxy(p) {
         // Перебор глубокий намеренно: публичные адреса скрапера в большинстве мертвы или
         // требуют авторизации, и трёх попыток не хватало - прогон падал на «пул отказал».
         for (let i = 0; i < 12 && !r.ok; i++) {
-            const pool = pp.pool().proxies.filter(p => !dead.has(p.label));
+            const pool = await dropSpentNetworks(pp.pool().proxies.filter(p => !dead.has(p.label)));
             if (!pool.length) break;
             const assign = { ...pp.assignments() };
             delete assign[key];

@@ -107,6 +107,28 @@ class DomainProxyChecker(StrictProxyChecker):
 
     def is_success_response(self, status: int, body: str, response_kind: str = "html") -> bool:
         kind = (response_kind or "html").strip().lower()
+        if kind == "json_any":
+            # 🔴 «200 и это JSON» - для площадок, у которых форма ответа НЕ как у New API.
+            # Замер 17.09: скрапер дважды подряд нашёл 0 живых прокси для odysseyapi.tech
+            # (2000 и 6000 кандидатов), потому что проверял ответ критерием `newapi_status`,
+            # а тот требует `payload["data"]` словарём. Ручка Odyssey отдаёт
+            # `{"parameters":…}` - поля `data` там нет, и КАЖДЫЙ рабочий прокси записывался
+            # в мёртвые. Ровно та же грабля, что была у rumeng с зондом `/api/status`:
+            # проверка мерила не то, чем пользуется боевой прогон.
+            if status != 200:
+                return False
+            text = (body or "").strip()
+            if not text:
+                return False
+            probe = text[:2048].lower()
+            if probe.startswith("<") or any(marker in probe for marker in HTML_MARKERS):
+                return False
+            try:
+                payload = json.loads(text)
+            except (ValueError, TypeError):
+                return False
+            return isinstance(payload, (dict, list))
+
         if kind != "newapi_status":
             return self._is_success_status(status)
 

@@ -23,6 +23,7 @@ import shutil
 import sys
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 # 🔴 Вывод в UTF-8 принудительно. В консоли Windows кодировка cp866, и ЛЮБАЯ строка с
@@ -50,9 +51,11 @@ BILLING_URL = "https://odysseyapi.tech/billing"
 MAIL_22DO_URL = "https://22.do/"
 
 POOL_HOST = "odysseyapi.tech"
-# Зонд пула: у Next.js нет `/api/status` из соглашения New API, зато ALTCHA-челлендж
-# отдаёт 200 JSON без авторизации (замер 16.09).
-POOL_PREFLIGHT_PATH = "/api/auth/altcha/challenge"
+# 🔴 Зонд пула - САМА СТРАНИЦА регистрации, а не ручка ALTCHA. Ручка отвечала 200 у адресов,
+# через которые браузер не мог открыть страницу вовсе: замер 17.09 - четыре попытки подряд
+# умерли на «форма не появилась», и каждая стоила двух минут. Пул теперь бракует такого
+# кандидата сразу, а не отдаёт его в прогон.
+POOL_PREFLIGHT_PATH = "/sign-up"
 
 # 🪤 Потолок нажатий с запасом: в разведке gmail выпадал раз в три-четыре нажатия, а на
 # живом прогоне - только на 32-м.
@@ -135,6 +138,39 @@ def own_ip(timeout=10):
     return ""
 
 
+# ── журнал плохих адресов ─────────────────────────────────────────────────────
+#
+# 🔴 Зачем отдельно от сетей. Леджер сетей отвечает на вопрос «дадут ли подарок», а этот
+# журнал - «работает ли адрес вообще». Замер 18.09: два класса отказов повторяются на одних
+# и тех же адресах, и каждый стоит полной попытки (две минуты):
+#   · «форма регистрации не появилась» - приложение не собралось;
+#   · «the captcha failed to load» - форму собрал, а виджет Turnstile не приехал (Clerk
+#     говорит это сам).
+# Один раз выяснив, что адрес такой, второй раз его пробовать незачем.
+
+BAD_ADDRESSES_FILE = DIR / "addresses-bad.json"
+
+
+def load_bad_addresses():
+    try:
+        d = json.loads(BAD_ADDRESSES_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def mark_bad_address(label, why):
+    """Запоминает адрес, на котором попытка провалилась по причине, не зависящей от нас."""
+    if not label:
+        return
+    doc = load_bad_addresses()
+    doc.setdefault(label, {"why": flat(why, 120), "at": datetime.now().strftime("%Y-%m-%d %H:%M")})
+    try:
+        BAD_ADDRESSES_FILE.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception:
+        pass
+
+
 # ── прокси из общего пула ─────────────────────────────────────────────────────
 
 async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGHT_PATH, pin=None,
@@ -170,6 +206,12 @@ async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGH
 
     cmd = ["node", str(BRIDGE), "--key", key, "--host", host,
            "--path", probe_path, "--tier", tier, "--force"]
+    # 🔴 Отдаём пулу список ТРАЧЕННЫХ сетей, чтобы он не предлагал их вовсе. Замер 17.09:
+    # без этого пул выдавал адреса из сетей, где подарок уже получен (Contabo, Тубанет), драйвер
+    # каждый отвергал, и на каждую пустую попытку уходил полный preflight - 2.5 минуты.
+    spent = list(load_used_networks().keys())
+    if spent:
+        cmd += ["--skip-asn", ",".join(spent)]
     # Уже пробованные адреса: капча Turnstile на части IP не поддаётся вообще, и
     # единственный выход - следующий прокси из того же яруса.
     if exclude:

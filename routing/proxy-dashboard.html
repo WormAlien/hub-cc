@@ -33892,7 +33892,12 @@ function lgTotal(p, r) {
   const m = LG.metric;
   r = r || LG.range;
   const t = p.tot || {};
-  if ((LG_M[m] || {}).source === 'cc') return lgCcTotal(p, r);
+  if ((LG_M[m] || {}).source === 'cc') {
+    // Нового счётчика нет - показываем прежние числа участника, но помеченными
+    // (`lgDefMark`) и без места. Прочерк оставляем только там, где нечего показать.
+    const cc = lgCcTotal(p, r);
+    return cc !== null ? cc : lgLegacyTotal(p, r);
+  }
   const k = (LG_TOT[m] || {})[r];
   if (k && t[k] !== undefined) return Number(t[k]) || 0;
   if (m === 'acc') return (Number(t.bought) || 0) + (Number(t.reg) || 0);
@@ -33901,24 +33906,45 @@ function lgTotal(p, r) {
 // Отдаёт ли сервер прирост аккаунтов за окно. Пока не отдаёт — плитки показывают уровень,
 // и подпись обязана говорить именно про уровень, а не про «заведено за сутки».
 const lgAccDeltaOn = () => ((LG.data && LG.data.me && LG.data.me.tot) || {}).accW !== undefined;
+// Объяснение для шапки вкладки: почему у кого-то другого счётчик, а не цифры. Значение
+// при этом НЕ подменяется прочерком - показываем то, что у человека есть.
+function lgDefNotice() {
+  const me = (LG.data && LG.data.me) || null;
+  if (!me) return '';
+  const m = LG_M[LG.metric] || {};
+  if (m.source !== 'cc') return '';
+  const peers = (LG.data && LG.data.peers) || [];
+  const legacyN = peers.filter(p => lgDef(p) === 'legacy').length;
+  const noDataN = peers.filter(p => lgDef(p) === 'none').length;
+  const ownLegacy = !lgCc(me) && lgDef(me) === 'legacy';
+  const parts = [];
+  if (ownLegacy) parts.push('свой канонический счётчик ещё не посчитан — пока показаны прежние числа');
+  if (legacyN) parts.push(`${legacyN} ${legacyN === 1 ? 'участник' : 'участников'} на старой версии:`
+    + ' их цифры считаны прежним способом и в местах не участвуют');
+  if (noDataN) parts.push(`${noDataN} без данных`);
+  return parts.join(' · ');
+}
 // Метрика, которую эта сборка сервера ещё не считает. Смотрим на ДАННЫЕ, а не на версию:
 // клиент обновляется по Ctrl+Shift+R, срез считает живой процесс. Возвращает объяснение
 // для человека или null.
 function lgMetricGap(p) {
   const m = LG_M[LG.metric] || {};
   const own = p || (LG.data && LG.data.me) || null;
-  // Канонического счётчика нет у того, кто не обновился. Это не «метрику не считает
-  // сервер»: сервер считает, а у участника поля в срезе просто нет.
-  if (m.source === 'cc' && !lgCc(own)) {
+  const need = m.need;
+  if (need) {
+    const ser = (LG.data && LG.data.me && LG.data.me[LG.metric]) || null;
+    const has = ser && ['h24', 'd7', 'd30', 'all'].some(w => Array.isArray(ser[w]) && ser[w].length);
+    if (!has) return need;
+  }
+  // Ни нового счётчика, ни прежних чисел - показывать нечего, и это надо назвать словами.
+  // Участник на старом клиенте сюда НЕ попадает: у него есть прежние поля, и они видны
+  // (см. lgDefMark/lgDefNote) - прочерк вместо его цифры и был той поломкой 18.09.
+  if (m.source === 'cc' && lgDef(own) === 'none') {
     return own && own.isMe
       ? 'канонический счётчик Claude Code ещё не посчитан — срез придёт после прогрева'
-      : 'участник на старой версии: канонического счётчика в его срезе нет';
+      : 'в срезе участника нет ни нового счётчика, ни прежних чисел';
   }
-  const need = m.need;
-  if (!need) return null;
-  const ser = (LG.data && LG.data.me && LG.data.me[LG.metric]) || null;
-  const has = ser && ['h24', 'd7', 'd30', 'all'].some(w => Array.isArray(ser[w]) && ser[w].length);
-  return has ? null : need;
+  return null;
 }
 // Отдаёт ли сервер парную величину (налив). Смотрим на ДАННЫЕ, а не на версию: клиент
 // обновляется по Ctrl+Shift+R, срез считает живой процесс.
@@ -34027,11 +34053,10 @@ function lgRows() {
       if (rec && rec.rid) { rows[0].rid = rec.rid; break; }
     }
   }
-  // Сортировка: у кого канонического итога нет, тот не получает места вовсе и уезжает
-  // вниз списка. Ставить его на последнее место значило бы сравнивать неизвестное с
-  // известным, то есть выдумывать результат.
-  const lgRank = p => { const v = lgTotal(p); return v === null ? -Infinity : v; };
-  rows.sort((a, b) => lgRank(b) - lgRank(a));
+  // Порядок доски: сравнимое впереди, прежний счётчик следом (внутри группы - по своей
+  // цифре), «нет данных» в хвосте. Общий рейтинг из двух определений не собирается, но
+  // увидеть чужие числа человек имеет право - поэтому они не прячутся.
+  rows.splice(0, rows.length, ...lgSort(rows));
   lgLabels(rows);
   for (const p of rows) {
     if (!p.avatar) { const f = lgFace(p); if (f) p.avatar = f; }
@@ -34056,7 +34081,9 @@ function lgAligned(p, keys, metric) {
   // Канонический ряд совмещаем по ЕГО ключам, и отсутствующий день остаётся null: ноль
   // означал бы «в этот день не потратил ничего», а день может быть просто не измерен.
   if ((LG_M[m] || {}).source === 'cc') {
-    const run = lgCcRun(p, LG.range);
+    // Канонического ряда нет - берём прежний ряд участника: он нарисован пунктиром и
+    // подписан как другой счётчик (см. lgDefMark в отрисовке).
+    const run = lgCcRun(p, LG.range) || lgLegacyRun(p, LG.range);
     if (!run) return keys.map(() => null);
     const map = new Map();
     run.keys.forEach((k, i) => { const v = lgCcNum(run.values[i]); if (v !== null) map.set(k, v); });
@@ -34072,11 +34099,62 @@ function lgAligned(p, keys, metric) {
 // прежних метрик - по сетке журналов хаба.
 function lgKeys(p, r) {
   if ((LG_M[LG.metric] || {}).source === 'cc') {
-    const run = lgCcRun(p, r);
+    const run = lgCcRun(p, r) || lgLegacyRun(p, r);
     return run ? run.keys : [];
   }
   return ((p && p.keys || {})[r]) || [];
 }
+// ── Совместимость версий: прежние поля показываем, но не смешиваем ──────────
+// Владелец 18.09: «статистика прошлых версий просто не отрисовывается». Участник, который
+// ещё не обновился, присылает прежние числа (`tok`, `tot.tok*`) - и их надо показать, а не
+// прятать за прочерком: он живой человек, и его расход виден. Но определения разные
+// (журнал front-door без кеша против счётчика Claude Code с кешем), поэтому:
+//   · свои числа показываем и помечаем меткой счётчика «~» с пояснением;
+//   · в места не пускаем: сравнение по разным определениям - это враньё в таблице;
+//   · между собой прежние сортируются честно, внутри одного определения.
+const LG_LEGACY_TOT = { h24: 'tokD', d7: 'tokW', d30: 'tokM', all: 'tokA' };
+function lgLegacyTotal(p, r) {
+  const t = (p && p.tot) || {};
+  const k = LG_LEGACY_TOT[r];
+  if (k && t[k] !== undefined) return lgCcNum(t[k]);
+  const run = ((p && p.tok) || {})[r];
+  if (!Array.isArray(run) || !run.length) return null;
+  const sum = run.reduce((a, x) => a + (Number(x) || 0), 0);
+  return Number.isFinite(sum) ? sum : null;
+}
+function lgDef(p) {
+  if (lgCc(p)) return 'cc';
+  return (lgLegacyTotal(p, 'd7') !== null || lgLegacyTotal(p, 'all') !== null) ? 'legacy' : 'none';
+}
+const lgDefMark = p => (lgDef(p) === 'legacy' ? '~' : '');
+const lgDefNote = p => (lgDef(p) === 'legacy'
+  ? 'прежний счётчик: журнал front-door, вход + выход (до 26.08 — дневной ряд кеша).'
+    + ' С новым счётчиком не сравнивается и в местах не участвует'
+  : '');
+const lgRankable = p => lgDef(p) === 'cc';
+// Порядок доски: сначала все, кого можно сравнивать, потом остальные. Внутри группы - по
+// убыванию своей цифры; «нет данных» уезжает в конец, а не притворяется нулём.
+function lgSort(rows) {
+  return rows.slice().sort((a, b) => {
+    const ra = lgRankable(a) ? 0 : 1, rb = lgRankable(b) ? 0 : 1;
+    if (ra !== rb) return ra - rb;
+    const va = lgTotal(a), vb = lgTotal(b);
+    return (vb === null ? -Infinity : vb) - (va === null ? -Infinity : va);
+  });
+}
+// Место в списке. Номер получает только тот, кого можно сравнивать; у прежнего вместо
+// номера стоит метка его счётчика, у пустого - прочерк.
+const lgPlace = (p, i) => (lgRankable(p) ? String(i + 1) : lgDef(p) === 'legacy' ? '~' : '—');
+// Ряд прежнего участника для графика: свои ключи и свои значения. Дни совмещаются по
+// ключам, как и у канонического, поэтому разные сетки не сдвигают чужую кривую.
+function lgLegacyRun(p, r) {
+  const keys = ((p && p.keys) || {})[r];
+  const values = ((p && p.tok) || {})[r];
+  if (!Array.isArray(keys) || !Array.isArray(values) || !keys.length) return null;
+  const n = Math.min(keys.length, values.length);
+  return { keys: keys.slice(-n), values: values.slice(-n) };
+}
+
 // ── Монотонный кубический сплайн (Fritsch–Carlson) ──────────────────────────
 // Гладко, но без горбов: наклоны ограничены так, чтобы кривая не выходила за пределы
 // соседних точек. Обычный Catmull-Rom этого не делает и придумывает пики между
@@ -34216,19 +34294,24 @@ function lgDrawPlot(top) {
   const body = ends.map(e => {
     if (!e.paths.length) return '';
     const k = e.k, col = LG_SER[k % LG_SER.length];
+    // Ряд участника на прежнем счётчике: без заливки и штриховой линией, с меткой у
+    // подписи. Рисуется так же (человеку нужны его числа), но не выглядит тем же
+    // измерением, что соседний: это другой счётчик.
+    const legacy = lgDef(top[k]) === 'legacy';
+    const dash = legacy ? ' stroke-dasharray="5 4" opacity=".75"' : '';
     // Заливка — только под последним непрерывным куском: под разрывом она рисовала бы
     // площадь, которой в данных нет.
-    const area = `<path d="${e.paths[e.paths.length - 1]} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>`;
+    const area = legacy ? '' : `<path d="${e.paths[e.paths.length - 1]} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>`;
     return `<linearGradient id="lgG${k}" x1="0" y1="${LG_PT}" x2="0" y2="${H - LG_PB}" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="${col}" stop-opacity=".28"/>
         <stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient>
       ${area}
-      ${e.paths.map(d => `<path class="lgserie" d="${d}" stroke="${col}"/>`).join('')}
+      ${e.paths.map(d => `<path class="lgserie" d="${d}" stroke="${col}"${dash}/>`).join('')}
       <circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="4.5" fill="${col}"
         stroke="var(--lg-surface)" stroke-width="2.5"/>
       ${Math.abs(e.ly - e.y) > 2 ? `<path d="M${(e.x + 5).toFixed(1)},${e.y.toFixed(1)} L${(e.x + 9).toFixed(1)},${e.ly.toFixed(1)}" stroke="${col}" stroke-width="1.2" fill="none" opacity=".55"/>` : ''}
       <text class="lgend" x="${(e.x + 12).toFixed(1)}" y="${(e.ly + 4.2).toFixed(1)}"
-        fill="${col}">${lgEsc(lgNm(top[k]).slice(0, 12))}</text>`;
+        fill="${col}">${lgEsc(lgNm(top[k]).slice(0, 12))}${lgDefMark(top[k])}</text>`;
   }).join('');
 
   // Пунктирные ряды парной величины: без заливки, без точки и без подписи на конце —
@@ -34778,11 +34861,16 @@ function lgRender() {
     if (cmp) document.getElementById('lg-lede').innerHTML +=
       `<div class="lgcap" style="margin-top:4px">состав: ${lgEsc(cmp)}</div>`;
   }
+  // Причина, по которой у кого-то цифры считаны иначе (или их нет вовсе). Не вместо цифр,
+  // а рядом с ними: человек пришёл смотреть расход, а не читать дисклеймер.
+  const defNotice = lgDefNotice();
+  if (defNotice) document.getElementById('lg-lede').innerHTML +=
+    `<div class="lgcap" style="margin-top:4px">${lgEsc(defNotice)}</div>`;
   const pr = LG_M[LG.metric].pair ? LG_M[LG.metric] : null;
   const pairOn = !!pr && lgPairOn();
   document.getElementById('lg-legend').innerHTML = top.map((p, k) =>
-    `<span><i style="background:${LG_SER[k % LG_SER.length]}"></i><b>${lgEsc(lgNm(p))}</b>
-      <u>${lgShow(p)}</u></span>`).join('')
+    `<span title="${lgEsc(lgDefNote(p))}"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
+      <b>${lgEsc(lgNm(p))}${lgDefMark(p)}</b><u>${lgShow(p)}</u></span>`).join('')
     // Начертание — второй признак, и он обязан быть назван словами: иначе пунктир
     // читается как «та же линия, только бледнее», а это другая величина.
     + (!pr ? '' : `<span class="lgcap" style="margin-left:2px">${pairOn
@@ -34805,9 +34893,9 @@ function lgRender() {
             <div class="who">${lgEsc(me.nick)}</div></div>
           ${bigOf(me, rk)}</div>`).join('')
     : top.map((p, k) => `
-        <div class="lgmat lgtile lgt${k + 1}">${lgAv(p.nick, 38, p.avatar)}
-          <div style="min-width:0"><div class="lgcap">${k + 1} место</div>
-            <div class="who">${lgEsc(lgNm(p))}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}</div></div>
+        <div class="lgmat lgtile lgt${k + 1}"${lgDefNote(p) ? ` title="${lgEsc(lgDefNote(p))}"` : ''}>${lgAv(p.nick, 38, p.avatar)}
+          <div style="min-width:0"><div class="lgcap">${lgRankable(p) ? (k + 1) + ' место' : 'прежний счётчик'}</div>
+            <div class="who">${lgEsc(lgNm(p))}${lgDefMark(p)}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}</div></div>
           ${bigOf(p)}</div>`).join('');
 
   // Список — ВСЕ участники, включая тройку: колонки «закуплено / зарегано / стрик»
@@ -34819,11 +34907,11 @@ function lgRender() {
      <span class="lgcap th">зарегано<i>ключей на шлюзах</i></span>
      <span class="lgcap th">стрик</span>`;
   document.getElementById('lg-list').innerHTML = rows.map((p, i) => `
-    <div class="lgrow${p.isMe ? ' me' : ''}">
-      <span class="lgrank"><b>${lgTotal(p) === null ? '—' : i + 1}</b></span>${lgAv(p.nick, 32, p.avatar)}
-      <span class="lgnm">${lgEsc(lgNm(p))}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}
+    <div class="lgrow${p.isMe ? ' me' : ''}"${lgDefNote(p) ? ` title="${lgEsc(lgDefNote(p))}"` : ''}>
+      <span class="lgrank"><b>${lgPlace(p, i)}</b></span>${lgAv(p.nick, 32, p.avatar)}
+      <span class="lgnm">${lgEsc(lgNm(p))}${lgDefMark(p)}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}
         <i>${p.isMe ? 'срез только что' : 'срез ' + lgAgo(p.stamp || p.recvAt)} · ${lgInt((p.tot || {}).ppd || 0)} промптов/д${p.ver ? ' · v' + lgEsc(p.ver) : ''}${p.dup && !p.isMe ? ' · ник совпал, различай по хвосту rid' : ''}</i></span>
-      <span class="lgv on">${lgShow(p)}${pr ? `<i style="display:block;font-style:normal;font-size:12px;color:var(--lg-dim)">${lgShowPair(p)}</i>` : ''}</span>
+      <span class="lgv on">${lgShow(p)}${lgDefMark(p) ? `<i style="font-style:normal;color:var(--lg-dim)">${lgDefMark(p)}</i>` : ''}${pr ? `<i style="display:block;font-style:normal;font-size:12px;color:var(--lg-dim)">${lgShowPair(p)}</i>` : ''}</span>
       <span class="lgv" title="куплено гитхабов с кредами">${lgInt((p.tot || {}).bought || 0)}</span>
       <span class="lgv" title="ключей, заведённых через эти гитхабы">${lgInt((p.tot || {}).reg || 0)}</span>
       <span class="lgv">🔥&nbsp;${lgStreak(p) > 0 ? lgInt(lgStreak(p)) : '—'}</span>

@@ -34643,6 +34643,11 @@ function lgSeg(host, items, cur, pick) {
     host.appendChild(b);
   }
 }
+// Возраст среза словами. Источников два, и это не украшение: своя строка несёт `stamp`
+// (время сборки среза), а чужие - только `recvAt` (метку приёмника), потому что `stamp`
+// в публичную выдачу не входит вовсе (`PEER_PUBLIC` в приёмнике). Без фолбэка
+// `lgAgo(undefined)` отдавал «только что» ВСЕГДА, и уснувшую установку на доске не было
+// видно: раздвоение одного человека выглядело как «обе живы».
 const lgAgo = iso => {
   const ms = Date.now() - Date.parse(iso);
   if (!isFinite(ms) || ms < 0) return 'только что';
@@ -34780,7 +34785,7 @@ function lgRender() {
     <div class="lgrow${p.isMe ? ' me' : ''}">
       <span class="lgrank"><b>${lgTotal(p) === null ? '—' : i + 1}</b></span>${lgAv(p.nick, 32, p.avatar)}
       <span class="lgnm">${lgEsc(lgNm(p))}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}
-        <i>${p.isMe ? 'срез только что' : 'срез ' + lgAgo(p.stamp)} · ${lgInt((p.tot || {}).ppd || 0)} промптов/д${p.ver ? ' · v' + lgEsc(p.ver) : ''}${p.dup && !p.isMe ? ' · ник совпал, различай по хвосту rid' : ''}</i></span>
+        <i>${p.isMe ? 'срез только что' : 'срез ' + lgAgo(p.stamp || p.recvAt)} · ${lgInt((p.tot || {}).ppd || 0)} промптов/д${p.ver ? ' · v' + lgEsc(p.ver) : ''}${p.dup && !p.isMe ? ' · ник совпал, различай по хвосту rid' : ''}</i></span>
       <span class="lgv on">${lgShow(p)}${pr ? `<i style="display:block;font-style:normal;font-size:12px;color:var(--lg-dim)">${lgShowPair(p)}</i>` : ''}</span>
       <span class="lgv" title="куплено гитхабов с кредами">${lgInt((p.tot || {}).bought || 0)}</span>
       <span class="lgv" title="ключей, заведённых через эти гитхабы">${lgInt((p.tot || {}).reg || 0)}</span>

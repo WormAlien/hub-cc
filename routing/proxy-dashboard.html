@@ -37710,18 +37710,16 @@ function arqSndVoice(a, t, out) {
   });
   arqSndBell(a, t, lp, { f: 523.25, ratio: 1.4, idx: 300, idur: 0.3, dur: 1.2, gain: 0.022 });
 }
-/* Голос «кончилось»: две ноты ВНИЗ, ниже и глуше налива - обломок, а не событие.
+/* Голос «кончилось»: ПРОВАЛ - одна нота, съезжающая по высоте с 300 до 90 Гц. Выбор
+   владельца 18.09 из пяти вариантов (`_sandbox/topup-sound-drafts/` § «Конец»).
    Вниз, потому что вверх у нас налив, и различать их надо не вслушиваясь: если за
-   работой слышишь направление - уже понял, что случилось. Короче чаши намеренно:
-   это неприятная новость, ей незачем висеть поверх музыки 1.8 с.
-   ⚠️ Заготовка до выбора владельца - варианты в `_sandbox/topup-sound-drafts/`. */
+   работой слышишь направление - уже понял, что случилось. Глухой тембр (lowpass 1600)
+   и короткий съезд: это неприятная новость, ей незачем висеть поверх музыки. */
 function arqSndVoiceDry(a, t, out) {
   const lp = a.createBiquadFilter();
-  lp.type = 'lowpass'; lp.frequency.value = 1200;
+  lp.type = 'lowpass'; lp.frequency.value = 1600;
   lp.connect(out);
-  arqSndTone(a, t, lp,       { f: 233.08, dur: 0.55, gain: 0.06,  attack: 0.012 });
-  arqSndTone(a, t + 0.26, lp, { f: 155.56, dur: 1.0,  gain: 0.055, attack: 0.012 });
-  arqSndBell(a, t, lp, { f: 155.56, ratio: 1.0, idx: 220, idur: 0.12, dur: 0.32, gain: 0.018 });
+  arqSndTone(a, t, lp, { f: 300, f2: 90, bend: 0.8, dur: 1.2, gain: 0.07, attack: 0.02, type: 'triangle' });
 }
 function arqSndPlay(kind) {
   if (arqSndMute()) return;

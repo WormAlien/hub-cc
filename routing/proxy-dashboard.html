@@ -10289,6 +10289,8 @@ async function loadRoutes(force) {
   let hiddenCount = 0;
   const shown = [];
   const visible = [];
+  routesMultiMap = (d && d.multi) || {};
+  if (Array.isArray(d.multiTiers) && d.multiTiers.length) routesMultiTiers = d.multiTiers;
   routesProviders = {};
   for (const p of (d.providers || [])) {
     const tab = ROUTES_TAB_OF[p.name] || p.name;
@@ -10332,6 +10334,7 @@ async function loadRoutes(force) {
   el.innerHTML = `
     <div class="text-xs text-muted mb-3">${rows.length} провайдер(ов) ${note}</div>
     ${dropBanner}
+    ${routesMultiBlock()}
     <div id="routes-rows" class="space-y-2">${rows.join('')}</div>`;
   // Обвязка — после отрисовки: контейнер только что создан, Sortable вешается на него,
   // а не на прежний (тот умер вместе со старым innerHTML).
@@ -10443,6 +10446,7 @@ async function routesLoadCatalogs(names) {
         const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
         if (sel) sel.innerHTML = routesOptions(name, sel.value);
       }
+      routesMultiRefreshModels(name);   // и model-селекты блока multi, если он на этом шлюзе
       routesMarkCatalogSource(name);
     } catch { /* каталог не обязателен — тихо пропускаем */ }
   }));
@@ -10567,6 +10571,109 @@ function routesRow(p) {
         ${['opus', 'sonnet', 'haiku'].map(tier).join('')}
       </div>
     </div>`);
+}
+
+// ── Виртуальный /model multi: провайдер+модель на КАЖДЫЙ тир ──────────────────
+// Блок сверху вкладки, отдельным «шлюзом» multi. В отличие от обычной строки, тут на
+// каждый тип ДВА селекта — провайдер и модель, — потому что окно и сабагенты могут
+// уходить на РАЗНЫЕ шлюзы (заявка владельца 19.09). Блок лежит ВНЕ #routes-rows,
+// поэтому Sortable его не трогает и грабли preventOnFilter тут нет вовсе.
+let routesMultiMap = {};
+let routesMultiTiers = ['default', 'opus', 'sonnet', 'haiku'];
+const MULTI_TIER_TITLE = {
+  default: 'окно: что получит /model multi (главное окно)',
+  opus: 'сабагенты, попросившие opus',
+  sonnet: 'сабагенты, попросившие sonnet',
+  haiku: 'сабагенты и служебные запросы — держи дешёвым',
+};
+const MULTI_TIER_LABEL = { default: 'окно', opus: 'opus', sonnet: 'sonnet', haiku: 'haiku' };
+
+// Провайдеры для селекта шлюза = те же, что показаны строками. Текущий всегда в списке.
+function routesMultiProvOptions(current) {
+  const names = Object.keys(routesProviders).sort();
+  if (current && !names.includes(current)) names.push(current);
+  return ['', ...names].map(n =>
+    `<option value="${esc(n)}"${n === (current || '') ? ' selected' : ''}>${n ? esc(n) : '— не выбран —'}</option>`).join('');
+}
+
+function routesMultiBlock() {
+  const rows = routesMultiTiers.map(t => {
+    const pair = (routesMultiMap && routesMultiMap[t] && typeof routesMultiMap[t] === 'object') ? routesMultiMap[t] : {};
+    const prov = String(pair.provider || ''), mdl = String(pair.model || '');
+    // Модели показываем каталогом ВЫБРАННОГО провайдера (routesOptions переиспользуем).
+    const models = prov ? routesOptions(prov, mdl) : '<option value="">— сначала провайдер —</option>';
+    return `<div class="flex items-center gap-2 mb-1">
+        <span class="text-[11px] w-14 shrink-0" title="${esc(MULTI_TIER_TITLE[t] || '')}">${esc(MULTI_TIER_LABEL[t] || t)}<span id="routes-mst-${t}"></span></span>
+        <select id="routes-mprov-${t}" data-tier="${t}" onchange="routesMultiProvChange(this)" class="rt-sel" title="шлюз для тира ${esc(t)}">${routesMultiProvOptions(prov)}</select>
+        <select id="routes-mmodel-${t}" data-tier="${t}" onchange="routesSaveMulti('${t}')" class="rt-sel" title="модель на выбранном шлюзе">${models}</select>
+      </div>`;
+  }).join('');
+  const cmd = '/model ' + withCtxSuffix('multi', 'multi');
+  const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
+  return `<div id="routes-multi" class="rt-row p-3 rounded-md bg-surface border border-line-soft mb-3">
+      <div class="rt-line1">
+        <div class="flex items-center gap-2 flex-wrap min-w-0">
+          <span class="font-medium">multi</span>
+          <span class="text-[10px] text-faint" title="каждый тип — свой шлюз и модель; окно и сабагенты могут идти на РАЗНЫЕ шлюзы">мультипровайдер: свой шлюз на каждый тип</span>
+        </div>
+        <span class="rt-cmd">
+          <code class="rt-badge">${esc(cmd)}</code>
+          <button class="rt-copy" onclick='copyToClipboard(${cmdJ}, "команда скопирована")' title="Скопировать /model multi для окна Claude Code">Скопировать</button>
+        </span>
+      </div>
+      <div class="mt-2 pl-9">${rows}</div>
+      <div class="text-[10px] text-amber mt-2 pl-9">⚠ каждый тир жжёт баланс своего шлюза — в одном окне работают 2-4 ключа</div>
+    </div>`;
+}
+
+// Смена провайдера в строке multi: подтягиваем каталог нового шлюза, сбрасываем модель
+// (у нового шлюза старая не валидна), сохраняем.
+async function routesMultiProvChange(sel) {
+  const tier = sel.dataset.tier, provider = sel.value;
+  const msel = document.getElementById(`routes-mmodel-${tier}`);
+  if (!provider) {
+    if (msel) msel.innerHTML = '<option value="">— сначала провайдер —</option>';
+    return routesSaveMulti(tier);          // провайдер пуст → сервер очистит тир
+  }
+  if (!routesCatalog[provider]) {
+    try {
+      const d = await (await fetch(`/__switch/api/routes/models?provider=${encodeURIComponent(provider)}`)).json();
+      if (d && Array.isArray(d.models) && d.models.length) routesCatalog[provider] = d.models;
+    } catch { /* каталог не обязателен */ }
+  }
+  if (msel) msel.innerHTML = routesOptions(provider, '');   // сброс модели под новый шлюз
+  routesSaveMulti(tier);
+}
+
+// Сохранить один тир multi. Читаем ОБА селекта строки; сервер пишет пару {provider,model}
+// точечно (сосед не стирается). Пустой провайдер = тир очищен.
+async function routesSaveMulti(tier) {
+  const psel = document.getElementById(`routes-mprov-${tier}`);
+  const msel = document.getElementById(`routes-mmodel-${tier}`);
+  const provider = psel ? psel.value : '';
+  const model = msel ? msel.value : '';
+  const st = document.getElementById(`routes-mst-${tier}`);
+  if (st) { st.textContent = '…'; st.className = 'text-[10px] text-faint ml-1'; }
+  try {
+    const r = await (await fetch('/__switch/api/routes/multi', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tier, provider, model }),
+    })).json();
+    if (!r || !r.ok) throw new Error((r && r.error) || 'сервер отказал');
+    if (r.tiers) routesMultiMap = r.tiers;
+    if (st) { st.textContent = '✓'; st.className = 'text-[10px] text-emerald ml-1'; setTimeout(() => { if (st.textContent === '✓') st.textContent = ''; }, 2000); }
+  } catch (e) {
+    if (st) { st.textContent = '✗ ' + (e.message || 'ошибка'); st.className = 'text-[10px] text-crimson ml-1'; }
+  }
+}
+
+// После загрузки каталога провайдера — обновить и его model-селекты в блоке multi.
+function routesMultiRefreshModels(name) {
+  for (const t of routesMultiTiers) {
+    const mp = document.getElementById(`routes-mprov-${t}`);
+    const mm = document.getElementById(`routes-mmodel-${t}`);
+    if (mp && mm && mp.value === name) mm.innerHTML = routesOptions(name, mm.value);
+  }
 }
 
 // ── Порядок карточек «Маршрутов» ─────────────────────────────────────────────

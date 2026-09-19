@@ -275,12 +275,23 @@ function modelInBody(buf) {
 // разнородного текста, max_tokens 64000, тул-пара WebSearch — все 200), а реальные
 // запросы ночной сессии падают стабильно — без тела не найти, ЧТО в содержимом
 // отвергает канал. Ротация: fail-*, последних 5; reqhdr-* и утилиты не трогаем.
+// Глубина ротации дампов. Было 4 (а держалось 5 из-за чистки до записи) - мало: разбор 19.09
+// показал, что тела отказов 11:56-12:08 исчезли раньше, чем понадобились для повторной пробы.
+// 40 файлов это ~120 МБ в худшем случае, тело бывает ~3 МБ.
+const FAILDUMP_KEEP = Number(process.env.FAILDUMP_KEEP || 40);
 function dumpFailBody(kind, body) {
     try {
-        const dumpDir = path.join(__dirname, 'runtime', 'faildump');
+        // FAILDUMP_DIR - для тестов и разборов: регресс со сценариями постоянных ошибок не должен
+        // писать в живой каталог улик (проверено на себе: мои же пробы вытеснили тела 11:56 и 12:02).
+        const dumpDir = process.env.FAILDUMP_DIR || path.join(__dirname, 'runtime', 'faildump');
         fs.mkdirSync(dumpDir, { recursive: true });
-        const olds = fs.readdirSync(dumpDir).filter((f) => f.startsWith('fail-')).sort();
-        for (const f of olds.slice(0, Math.max(0, olds.length - 4))) fs.unlinkSync(path.join(dumpDir, f));
+        // 🪤 Сортировка по mtime, а не по имени: имя начинается с вида дампа (`fail-perm-`,
+        // `fail-budget-`), и сортировка по имени выедала дампы одного вида целиком.
+        const olds = fs.readdirSync(dumpDir).filter((f) => f.startsWith('fail-'))
+            .map((f) => { try { return { f, t: fs.statSync(path.join(dumpDir, f)).mtimeMs }; } catch (e) { return { f, t: 0 }; } })
+            .sort((a, b) => a.t - b.t);
+        // Чистка идёт ДО записи, поэтому оставляем на один файл меньше итоговой глубины.
+        for (const x of olds.slice(0, Math.max(0, olds.length - (FAILDUMP_KEEP - 1)))) fs.unlinkSync(path.join(dumpDir, x.f));
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         fs.writeFileSync(path.join(dumpDir, `fail-${kind}-${stamp}.json`), body);
         log(`дамп упавшего тела: runtime/faildump/fail-${kind}-${stamp}.json (${body.length}Б)`);

@@ -75,7 +75,11 @@ MAX_MINUTES_DEFAULT = 120
 def parse(argv):
     positional = [a for a in argv if not a.startswith("--")]
     label = positional[0] if positional else f"acct_{int(datetime.now().timestamp())}"
-    tier, attempts, count, mail = "own", None, 1, "22do"
+    # Параллель по умолчанию - три. Замер 19.09: попытка идёт ~2.5 минуты, годен примерно
+    # каждый пятый-шестой адрес, и с двумя параллельными аккаунт выходил за 8-10 минут.
+    # Машина держит три попытки (около 700 МБ каждая при 6-8 ГБ свободных), это ~1 аккаунт
+    # за 5-6 минут.
+    tier, attempts, count, mail, parallel = "own", None, 1, "22do", 3
     for i, a in enumerate(argv):
         if a.startswith("--tier"):
             tier = (a.split("=", 1)[1] if "=" in a
@@ -90,6 +94,14 @@ def parse(argv):
             # проверяет значение драйвер, у него же и значения по умолчанию.
             mail = (a.split("=", 1)[1] if "=" in a
                     else (argv[i + 1] if i + 1 < len(argv) else "22do")).lower()
+        elif a.startswith("--parallel"):
+            # Сколько попыток вести ОДНОВРЕМЕННО. Замер 19.09: одна попытка идёт ~2.5 минуты,
+            # и годен примерно каждый третий адрес - то есть аккаунт выходит за 10-15 минут.
+            # Две параллельные попытки почти вдвое сокращают это, не меняя логику выбора.
+            try:
+                parallel = max(1, min(4, int(a.split("=", 1)[1] if "=" in a else argv[i + 1])))
+            except Exception:
+                parallel = 3
         elif a.startswith("--count"):
             # Сколько аккаунтов завести за ОДИН запуск (ручка на вкладке). Раньше прогон
             # останавливался на первом успехе, и «завести три» означало три нажатия кнопки.
@@ -101,7 +113,7 @@ def parse(argv):
     # регистрацию - поэтому попыток даём с запасом, но не меньше четырёх.
     if attempts is None:
         attempts = max(MAX_ATTEMPTS_DEFAULT, count * 3)
-    return label, tier, attempts, count, mail
+    return label, tier, attempts, count, mail, parallel
 
 
 def read_candidates(log):
@@ -273,7 +285,7 @@ async def run_attempt(args, log):
 
 async def main():
     argv = sys.argv[1:]
-    label, tier, attempts, count, mail = parse(argv)
+    label, tier, attempts, count, mail, parallel = parse(argv)
     tried = []
     made = 0
     started = time.time()
@@ -311,10 +323,16 @@ async def main():
         # около 2.5 минуты, а попытка регистрации - 2, поэтому с одним адресом цикл почти
         # всегда ждал долив, и в эти минуты простоя ничего не происходило. Два в буфере
         # закрывают разрыв: пока идёт попытка, следующий адрес успевает готовиться.
-        with_budget = 1 if fast else max(3, (count - made) + 2)
+        # 🔴 Просим ПАЧКУ, а не один адрес, и это исправление причины вчерашних остановок.
+        # Замер 19.09: до полного фильтра доходит примерно один адрес из пяти (30 живых по
+        # ручке ALTCHA → 6 годных по странице, чанкам и чужим хостам). Прося один, обёртка
+        # почти всегда получала адрес, который проба тут же отбраковывала, и после трёх таких
+        # кругов останавливалась с «ни одного годного адреса». Скрап при этом быстрый:
+        # 30 живых за 93 секунды, так что просить пачку дешевле, чем ждать впустую.
+        with_budget = 8 if fast else max(12, (count - made) + 4)
         log("скрап", f"нужно ещё {count - made}, беру: {with_budget}")
         await scrape_pool(log, with_budget)
-        return fresh_only(await refresh_candidates(log, want=1 if fast else 2) or [], log)
+        return fresh_only(await refresh_candidates(log, want=2 if fast else 4) or [], log)
 
     if "--no-candidates" not in argv:
         buffer = fresh_only(read_candidates(log) or [], log)
@@ -326,44 +344,18 @@ async def main():
     if "--no-candidates" in argv:
         log("проба", "адреса от пробы отключены - иду через пул (--tier), как раньше")
 
-    for n in range(1, attempts + 1):
-        spent_min = (time.time() - started) / 60
-        if spent_min > max_minutes:
-            log("стоп", f"прошло {round(spent_min)} мин (потолок {max_minutes}) - "
-                        f"заведено {made} из {count}, дальше не кручу")
-            return 1 if made < count else 0
-        # Метка профиля на каждую попытку своя: браузер поднимается заново, и общий профиль
-        # на второй попытке мог бы притащить состояние неудачной (в том числе куки).
-        attempt_label = label if n == 1 else f"{label}_r{n}"
-        # Окно ожидания капчи: молчаливый путь на годном адресе уходит за 20-45 с, поэтому 75
-        # даёт запас и оставляет место решателю (он зовётся только после 50-й секунды).
-        args = [sys.executable, "-u", str(DRIVER), attempt_label, "--tier", tier,
-                "--captcha-wait", "75", "--mail", mail]
+    # 🔴 Попытки идут ПАРАЛЛЕЛЬНО, а не по одной. Замер 19.09: попытка занимает ~2.5 минуты,
+    # а годен примерно каждый третий адрес - то есть один аккаунт выходил за 10-15 минут.
+    # Логика выбора адреса при этом не меняется: каждая попытка берёт свой адрес из буфера, и
+    # у каждой свои профили - браузера и ящика (два Firefox в один каталог не пустят).
+    inflight = {}       # задача → (номер попытки, метка профиля, адрес)
+    n = 0
+    empty_refills = 0
 
-        # 🔴 УМНОЕ ОЖИДАНИЕ и выбор адреса одним циклом. Заявка владельца 18.09: «запускаю на
-        # 10 аккаунтов, скрапится один адрес, потом рега идёт и дальше скрапится; если не успели
-        # скрапнуть - умное ожидание и продолжение». Поэтому: берём из буфера свежий адрес; если
-        # буфер пуст или всё в нём оказалось траченым - ждём долив и пробуем снова. Пустой
-        # буфер это НЕ повод уйти на старый путь через пул (там висит липкая привязка и прогон
-        # умирает кодом 5, как вышло 18.09), и не повод остановиться. Три пустых долива подряд -
-        # вот это уже «адресов нет», и об этом говорим вслух.
-        pin = None
-        empty_refills = 0
-        while pin is None and "--no-candidates" not in argv:
-            if not buffer:
-                if prefetch:
-                    log("скрап", f"жду долив: заведено {made} из {count}, адрес ещё готовится")
-                    buffer += await prefetch
-                    prefetch = None
-                else:
-                    buffer += await refill(fast=True)
-                if not buffer:
-                    empty_refills += 1
-                    if empty_refills >= 3:
-                        log("стоп", "три долива подряд не дали ни одного годного адреса - выхожу")
-                        return 1
-                    log("скрап", f"долив пустой ({empty_refills}/3) - пробую ещё раз")
-                continue
+    async def pick_address():
+        """Свежий адрес из буфера. Пополняет буфер сам; None - годных адресов нет."""
+        nonlocal empty_refills, prefetch
+        while True:
             while buffer:
                 nxt = buffer.pop(0)
                 if nxt.get("label") in tried:
@@ -375,54 +367,68 @@ async def main():
                 if asn and asn in spent_networks():
                     log("сеть", f"{asn} потрачена, пока адрес лежал в буфере - пропускаю {nxt.get('label')}")
                     continue
-                pin = nxt
+                return nxt
+            if "--no-candidates" in argv:
+                return None
+            if prefetch is not None:
+                log("скрап", f"жду долив: заведено {made} из {count}, адрес ещё готовится")
+                buffer.extend(await prefetch)
+                prefetch = None
+            else:
+                buffer.extend(await refill(fast=(count - made <= 1)))
+            if not buffer:
+                empty_refills += 1
+                if empty_refills >= 3:
+                    log("стоп", "три долива подряд не дали ни одного годного адреса - выхожу")
+                    return None
+                log("скрап", f"долив пустой ({empty_refills}/3) - пробую ещё раз")
+
+    while made < count and (n < attempts or inflight):
+        spent_min = (time.time() - started) / 60
+        if spent_min > max_minutes:
+            log("стоп", f"прошло {round(spent_min)} мин (потолок {max_minutes}) - "
+                        f"заведено {made} из {count}, дальше не кручу")
+            break
+        # Добираем попытки, пока есть место в пуле и не выбраны ни попытки, ни аккаунты.
+        while len(inflight) < parallel and n < attempts and (made + len(inflight)) < count:
+            pin = await pick_address()
+            if pin is None:
                 break
-        # Как только адрес выбран - сразу готовим следующий: регистрация идёт минуты, и за это
-        # время долив успевает отработать. Это и есть «скрапит дальше», без паузы между регами.
-        ahead_need = 1 if count - made <= 1 else 2
-        if (prefetch is None or prefetch.done()) and (made < count) and len(buffer) < ahead_need                 and "--no-candidates" not in argv:
-            prefetch = asyncio.create_task(refill(fast=(count - made <= 1)))
-        if pin:
-            args += ["--proxy", pin["label"]]
-            log("попытка", f"{n}/{attempts} · профиль {attempt_label} · адрес {pin['label']} "
-                           f"({pin.get('as', '?')} · {pin.get('country', '?')})")
-        else:
-            if tried:
+            n += 1
+            # Метка профиля на каждую попытку своя: браузер поднимается заново, и общий профиль
+            # притащил бы в новую попытку состояние предыдущей (в том числе куки).
+            attempt_label = label if n == 1 else f"{label}_r{n}"
+            args = [sys.executable, "-u", str(DRIVER), attempt_label, "--tier", tier,
+                    "--captcha-wait", "75", "--mail", mail]
+            if pin:
+                args += ["--proxy", pin["label"]]
+                log("попытка", f"{n}/{attempts} · профиль {attempt_label} · адрес {pin['label']} "
+                               f"({pin.get('as', '?')} · {pin.get('country', '?')})")
+            else:
                 args += ["--exclude", ",".join(tried)]
-            log("попытка", f"{n}/{attempts} · профиль {attempt_label} · исключено {len(tried)}")
-        code, marker = await run_attempt(args, log)
-
-        if code == 0 and marker and marker.get("ok"):
-            made += 1
-            log("успех", f"аккаунт {made} из {count} заведён с адреса {marker.get('proxy')}")
-            if made >= count:
-                return 0
-            # Следующий аккаунт: долив уходит в фон СРАЗУ, чтобы к новой попытке адрес уже был.
-            if prefetch is None and "--no-candidates" not in argv:
-                prefetch = asyncio.create_task(refill(fast=True))
-            continue
-
-        proxy = (marker or {}).get("proxy")
-        retryable = bool((marker or {}).get("retryable"))
-        if proxy and proxy not in tried:
-            tried.append(proxy)
-        # 🪤 Адреса нет - исключать нечего, и повтор прогонит те же прокси по кругу (видели
-        # 16.09: четыре попытки подряд упирались в одни и те же две сети, «исключено 0»).
-        # Такой отказ лечится не повтором, а другим ярусом.
-        if not proxy:
-            log("стоп", f"код {code}: адрес неизвестен, повтор ничего не изменит")
-            return code or 1
-        if not retryable:
-            log("стоп", f"код {code}: {str((marker or {}).get('error'))[:80]}")
-            return code or 1
-        if n == attempts:
-            log("стоп", f"попытки кончились: заведено {made} из {count}, "
-                        f"последний отказ - {str((marker or {}).get('error'))[:60]}")
-            return code or 1
-        log("ротация", f"адрес {proxy} не пропустил регистрацию ({(marker or {}).get('error')}) - "
-                       f"беру следующий")
-
-    return 1
+                log("попытка", f"{n}/{attempts} · профиль {attempt_label} · исключено {len(tried)}")
+            inflight[asyncio.create_task(run_attempt(args, log))] = (n, attempt_label, pin)
+            # Следующий адрес готовим сразу: пока попытка идёт, долив успевает отработать.
+            ahead_need = 2 if (count - made) > 1 else 1
+            if (prefetch is None or prefetch.done()) and len(buffer) < ahead_need                     and "--no-candidates" not in argv:
+                prefetch = asyncio.create_task(refill(fast=(count - made <= 1)))
+        if not inflight:
+            break
+        done, _pending = await asyncio.wait(list(inflight), return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            num, attempt_label, pin = inflight.pop(task)
+            code, marker = task.result()
+            if code == 0 and (marker or {}).get("ok"):
+                made += 1
+                log("успех", f"аккаунт {made} из {count} заведён с адреса {(marker or {}).get('proxy')}")
+                continue
+            # Неудача не останавливает прогон: исключаем адрес и берём следующий. Останавливают
+            # только потолки - попытки, время и три пустых долива подряд.
+            proxy = (marker or {}).get("proxy") or (pin or {}).get("label")
+            if proxy and proxy not in tried:
+                tried.append(proxy)
+            log("ротация", f"попытка {num}: {str((marker or {}).get('error'))[:70]} - беру следующий адрес")
+    return 0 if made >= count else 1
 
 
 if __name__ == "__main__":

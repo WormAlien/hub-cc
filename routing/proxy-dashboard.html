@@ -37792,6 +37792,9 @@ async function stSync() {
     // сервера (та, что ходит на +2 и +20 минут), и только она работает при свёрнутом окне.
     arqSndCheck(p, stLoad()[p]);
   });
+  // Налив по расписанию: не зависит от пробы и ключа, звенит даже когда ротация
+  // занулила quota-state. Дедуп общий с arqSndCheck, так что дважды не звякнет.
+  arqSndScheduleUp();
 }
 
 window.arqCheckQuota = async function arqCheckQuota(pool) {
@@ -38004,6 +38007,23 @@ function arqSndCheck(pool, rec) {
     return true;
   }
   return false;
+}
+/* Налив ПО РАСПИСАНИЮ - тем же сигналом, что и циферблат. Часы знают о партии из
+   dropAt() (= batches(now).last), чистого расписания: ни ключа, ни пробы. Проба квоты
+   под ротацией активного ключа отдаёт state:null - серверный `handleArQuotaState` бьёт
+   запись по хвосту `ar-active-key.txt`, а ротация меняет его каждые ~30 с, - и звук
+   вверх по пробе глохнет молча (19.09). Поэтому вверх звеним от пересечения границы
+   партии, как циферблат; проба остаётся честным сигналом там, где успевает.
+   Дедуп ОБЩИЙ с пробой (KEY_SND_DROP): кто первый заметил налив - тот и звенит, второй
+   молчит. Граница `> ARQ_OPENED_AT` та же, что у пробы: партия до открытия страницы не
+   звенит (F5 молчит). Вниз сюда НЕ переносим: конец пула из расписания не виден. */
+function arqSndScheduleUp(now) {
+  const d = dropAt(typeof now === 'number' ? now : Date.now());
+  if (!(d > ARQ_OPENED_AT)) return false;          // партия была до открытия страницы
+  if (arqSndSeen(KEY_SND_DROP) === d) return false; // об этой партии уже звенели (проба или мы)
+  arqSndMark(d, KEY_SND_DROP);
+  arqSndPlay('in');
+  return true;
 }
 function arqSndBtn() {
   const b = document.getElementById('arq-snd');

@@ -745,16 +745,50 @@ if [ "${map_prefix:-}" = "ar" ]; then
             q_state="${BASH_REMATCH[1]}"
         fi
         # Свежесть — по ПАРТИИ, а не по TTL: запись прошлой партии мертва, и «пул пуст»
-        # по ней врал бы ровно наоборот (после налива пул как раз полон). Сетка 8 ч от
-        # 19:00 МСК; по модулю якорь даёт 0, поэтому вычитаем остаток от 8 ч.
+        # по ней врал бы ровно наоборот (после налива пул как раз полон). Границу партии
+        # берём из того же расписания, что дашборд и проба (`ar-quota-schedule.json`), а НЕ
+        # по 8-часовой сетке: с 18.09 расписание файловое (Asia/Shanghai 10:00/19:00 =
+        # 02:00/11:00Z, промежутки 9 ч и 15 ч), а `% 28800000` давало 00:00Z — запись об
+        # истощении отвергалась как «прошлая партия», и «⛔ пул пуст» молчал на пустом пуле
+        # (баг 18.09–19.09). git-bash без tzdata (named-zone TZ игнорит), поэтому смещение
+        # зоны берём таблицей, а не `date`; незнакомую зону добираем ручкой расписания.
         if [ "$q_state" = "exhausted" ]; then
             q_drop_ms=0
             if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"dropAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
                 q_drop_ms=$(( $(date -d "${BASH_REMATCH[1]}" +%s 2>/dev/null || echo 0) * 1000 ))
             fi
             q_now_ms=$(( $(date +%s) * 1000 ))
-            q_cur_ms=$(( q_now_ms - q_now_ms % 28800000 ))
-            [ "$q_drop_ms" = "$q_cur_ms" ] && pool_dry=1
+            q_sched_raw=""
+            [ -r "$HOME/.claude/ar-quota-schedule.json" ] && q_sched_raw="$(<"$HOME/.claude/ar-quota-schedule.json")"
+            q_tz=""
+            [[ "$q_sched_raw" =~ \"tz\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && q_tz="${BASH_REMATCH[1]}"
+            case "$q_tz" in
+                Asia/Shanghai) q_off=480 ;;
+                Europe/Moscow) q_off=180 ;;
+                UTC|"")        q_off=0 ;;
+                *)             q_off="" ;;   # зоны нет в таблице — добор ручкой ниже
+            esac
+            q_cur_ms=0
+            if [ -n "$q_off" ] && [ -n "$q_sched_raw" ]; then
+                # локальное HH:MM → минута дня UTC (может уйти в ±сутки — перебираем -1/0/+1)
+                q_day0=$(( q_now_ms / 1000 - (q_now_ms / 1000) % 86400 ))
+                while read -r q_t; do
+                    [ -n "$q_t" ] || continue
+                    q_hh=${q_t%%:*}; q_mm=${q_t#*:}
+                    q_um=$(( 10#$q_hh * 60 + 10#$q_mm - q_off ))
+                    for q_d in -1 0 1; do
+                        q_b=$(( (q_day0 + q_d * 86400 + q_um * 60) * 1000 ))
+                        [ "$q_b" -le "$q_now_ms" ] && [ "$q_b" -gt "$q_cur_ms" ] && q_cur_ms=$q_b
+                    done
+                done <<< "$(printf '%s' "$q_sched_raw" | grep -oE '"[0-9]{2}:[0-9]{2}"' | tr -d '"')"
+            else
+                # Зоны нет в таблице (или файла нет): спросим сервер. Ветка редкая — пул уже
+                # пуст, и один короткий curl тут дешевле, чем молчащая метка.
+                q_last="$(curl -s -m 1 "http://localhost:8200/__switch/api/ar/quota-schedule" 2>/dev/null \
+                    | grep -oE '"last"[[:space:]]*:[[:space:]]*"[^"]+"' | grep -oE '[0-9T:.Z-]{20,}')"
+                [ -n "$q_last" ] && q_cur_ms=$(( $(date -d "$q_last" +%s 2>/dev/null || echo 0) * 1000 ))
+            fi
+            [ "$q_drop_ms" != "0" ] && [ "$q_drop_ms" = "$q_cur_ms" ] && pool_dry=1
         fi
         # Куда уедет при пустом пуле. «⛔ пул пуст» без адреса бесполезно: владелец
         # 16.09 видел пометку и всё равно не понимал, на чём работает. Берём ту же

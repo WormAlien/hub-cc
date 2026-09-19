@@ -1,19 +1,26 @@
 {
- "at": "2026-09-18T11:27:49.927Z",
+ "at": "2026-09-19T04:21:42.968Z",
  "candidates": [
   {
-   "label": "socks5://147.45.249.29:1080",
-   "as": "AS9123 JSC TIMEWEB",
-   "country": "Russia",
-   "pageMs": 965,
+   "label": "socks5://85.121.52.184:1080",
+   "as": "AS9009 M247 Europe SRL",
+   "country": "Germany",
+   "pageMs": 12968,
    "hosting": false
   },
   {
-   "label": "socks5://178.236.16.4:1080",
-   "as": "AS205516 NLS ASTANA LLP",
-   "country": "Kazakhstan",
-   "pageMs": 4437,
-   "hosting": false
+   "label": "socks5://83.147.217.103:1080",
+   "as": "AS214861 CloudExa-Hosting LTD",
+   "country": "United States",
+   "pageMs": 1961,
+   "hosting": true
+  },
+  {
+   "label": "socks5://178.92.72.205:1080",
+   "as": "AS134926 Micro Hosting Private Limited",
+   "country": "India",
+   "pageMs": 2573,
+   "hosting": true
   }
  ]
 }

@@ -114,6 +114,10 @@ ok(/const KEY_SND = 'ar-quota-sound'/.test(src) && /=== '0'/.test(src),
 ok(/const KEY_SND_DRY = 'ar-quota-sound-dry'/.test(src),
     'у конца партии своя метка: общая съела бы второе событие партии');
 ok(/addEventListener\('pointerdown', arqSndArm/.test(src), 'контекст будится жестом человека');
+ok(/function arqSndScheduleUp/.test(src) && /arqSndScheduleUp\(\);/.test(src),
+    'налив по расписанию определён и зовётся из stSync (звенит и когда ротация занулила пробу)');
+ok(/arqSndScheduleUp[\s\S]{0,400}?arqSndSeen\(KEY_SND_DROP\) === d[\s\S]{0,200}?arqSndPlay\('in'\)/.test(src),
+    'налив по расписанию: дедуп общий с пробой (KEY_SND_DROP), голос вверх');
 
 // ═════ 3. Живой прогон ══════════════════════════════════════════════════════
 // Подменяем AudioContext счётчиком: сколько осцилляторов попросил синтез. Голоса два,

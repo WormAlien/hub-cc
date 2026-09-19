@@ -697,13 +697,20 @@ async def main():
 
     # Ответы площадки слушаем, а не угадываем: по ним видно и отправку регистрации, и ключ.
     seen = {"signup_sent": False, "signup_ok": False, "complete": False, "key": None,
-            "last_resp": asyncio.get_event_loop().time()}
+            "clerk_ready": False, "last_resp": asyncio.get_event_loop().time()}
 
     async def on_response(res):
         try:
             # Метка активности страницы: нужна, чтобы отличить «медленно грузится» от «умер».
             seen["last_resp"] = asyncio.get_event_loop().time()
             url = res.url
+            # 🔴 Признак того, что приложение действительно собирается. Замер 18.09 по HAR
+            # удачной попытки: перед появлением формы идут `clerk /v1/environment` и
+            # `clerk /v1/client` (это SDK поднялся). Если их нет через минуту - приложение
+            # не соберётся, и ждать оставшееся время незачем: на адресах, прошедших пробу, но
+            # не собирающихся в браузере, мы теряли по две минуты на каждой.
+            if "clerk.odysseyapi.tech/v1/environment" in url or "clerk.odysseyapi.tech/v1/client" in url:
+                seen["clerk_ready"] = True
             if "/v1/client/sign_ups" in url and res.request.method == "POST":
                 body = await res.text()
                 if "/attempt_verification" in url:
@@ -805,7 +812,10 @@ async def main():
             try:
                 mail_cm = AsyncCamoufox(headless=True, os="windows", humanize=True,
                                         persistent_context=True,
-                                        user_data_dir=str(DIR / "profiles" / "_mail"),
+                                        # 🔴 Профиль на КАЖДУЮ метку: параллельные попытки поднимают
+                                    # по своему окну почты, а Firefox не пускает два процесса в
+                                    # один user-data-каталог - второй просто не запустится.
+                                    user_data_dir=str(DIR / "profiles" / f"_mail_{label}"),
                                         main_world_eval=True, i_know_what_im_doing=True)
                 mail_ctx = await mail_cm.__aenter__()
                 OPEN_CMS.append(mail_cm)
@@ -902,6 +912,11 @@ async def main():
         idle = asyncio.get_event_loop().time() - seen.get("last_resp", 0)
         if idle > 45:
             log("ФОРМА", f"страница молчит {int(idle)} с и формы нет - не жду остальное время")
+            break
+        waited = 120 - (form_deadline - asyncio.get_event_loop().time())
+        if waited > 60 and not seen.get("clerk_ready"):
+            log("ФОРМА", f"за {int(waited)} с Clerk так и не поднялся (нет /v1/client) - "
+                         f"приложение не соберётся, выхожу раньше")
             break
     if not form_ready:
         log("ФОРМА", "поле адреса не появилось - приложение не собралось")
@@ -1065,7 +1080,10 @@ async def main():
         log("КОД", "поле кода не появилось - код всё равно ищу в ящике")
     code = await code_task
     if not code:
-        print('OD_AUTOADD_RESULT {"ok":false,"error":"код из письма не получен"}', flush=True)
+        print("OD_AUTOADD_RESULT " + json.dumps(
+            {"ok": False, "error": "код из письма не получен", "retryable": True,
+             "proxy": LAST_PROXY.get("label"), "email": email, "label": label},
+            ensure_ascii=False), flush=True)
         await close_open()
         return 3
 
@@ -1112,18 +1130,10 @@ async def main():
     state["complete"] = bool(seen["complete"])
 
     # Приёмка: без подарочных $5 аккаунт бесполезен - не заводим его в пул.
-    gift = await check_gift(site, log)
-    early_state = None
-    state["gift"] = gift
-    if gift is False:
-        await mark_network_used(log)      # сеть отработана - больше её не берём
-        print("OD_AUTOADD_RESULT " + json.dumps(
-            {"ok": False, "error": "сеть уже получала подарок: аккаунт с нулевым балансом не берём",
-             "retryable": True, "proxy": LAST_PROXY.get("label"), "label": label},
-            ensure_ascii=False), flush=True)
-        await close_open()
-        return 7
-
+    # 🔴 КЛЮЧ СНИМАЕМ ДО ПРИЁМКИ, и это замер 19.09. Прокси живут минуты: в прогоне на десять
+    # аккаунтов адрес умер ровно между регистрацией и ключом, и аккаунт с подарком остался без
+    # ключа, хотя всё было готово. Ключ без живого адреса не добыть (сессия Clerk привязана к
+    # IP), а подарок читается с любой загрузки кабинета - поэтому сначала ключ, потом $5.
     # ── 7. ключ ──────────────────────────────────────────────────────────────
     deadline = asyncio.get_event_loop().time() + 30
     while asyncio.get_event_loop().time() < deadline and not seen["complete"]:
@@ -1131,6 +1141,15 @@ async def main():
 
     stage("key")
     key = await take_key(site, label, seen, log, need_console=bool(seen["complete"]))
+
+    # 🔴 Один повтор на шаге ключа, и это замер: 19.09 два аккаунта из трёх остались без ключа
+    # из-за `NS_ERROR_ABORT` на переходах - прокси дёргается, страница ключей не открывается,
+    # и `take_key` возвращается ни с чем. Повторный заход тем же профилем снял ключ с первого
+    # раза, вручную (`--key-only`). Аккаунт с подарком уже создан - терять его из-за одного
+    # сорванного перехода нельзя.
+    if not seen["key"]:
+        log("КЛЮЧ", "ключа нет - пробую зайти на страницу ключей ещё раз")
+        key = await take_key(site, label, seen, log)
 
     # 🔴 Куки снимаем ЗДЕСЬ, а не отдельным заходом позже. Замер 18.09: снимок сессии стоил
     # 31 с - это был лишний `goto` на `/dashboard`. К этому моменту мы уже прошли кабинет и
@@ -1145,14 +1164,31 @@ async def main():
     except Exception as e:
         log("СЕССИЯ", f"снять куки не вышло: {flat(str(e), 60)}")
 
+    gift = await check_gift(site, log)
+    state["gift"] = gift
+    if gift is False:
+        await mark_network_used(log)      # сеть отработана - больше её не берём
+        print("OD_AUTOADD_RESULT " + json.dumps(
+            {"ok": False, "error": "сеть уже получала подарок: аккаунт с нулевым балансом не берём",
+             "retryable": True, "proxy": LAST_PROXY.get("label"), "label": label},
+            ensure_ascii=False), flush=True)
+        await close_open()
+        return 7
+
     state["key"] = key
     state["finished"] = datetime.now().isoformat(timespec="seconds")
     save_meta()
 
     if not seen["key"]:
         log("ИТОГ", "аккаунт заведён, но ключ не пойман")
-        print(json.dumps({"ok": False, "error": "ключ не снят", "email": email,
-                          "label": label}, ensure_ascii=False), flush=True)
+        # 🔴 Маркер обязан нести адрес и признак повторяемости, и это не формальность. Замер
+        # 19.09: прогон на 10 аккаунтов встал на первом же «ключ не снят», потому что обёртка
+        # без адреса в маркере пишет «повтор ничего не изменит» и останавливается целиком.
+        # Одна неудачная попытка не должна убивать весь запуск.
+        print("OD_AUTOADD_RESULT " + json.dumps(
+            {"ok": False, "error": "аккаунт есть, ключ не снят", "retryable": True,
+             "proxy": LAST_PROXY.get("label"), "email": email, "label": label},
+            ensure_ascii=False), flush=True)
         await close_open()
         return 4
 

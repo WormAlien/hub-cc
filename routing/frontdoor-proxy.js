@@ -378,6 +378,61 @@ function routesMapFor(state) {
     return readModelMap(String(state.modelmap).replace(/-modelmap\.json$/, '-routes-modelmap.json'));
 }
 
+// ── Виртуальный /model multi: провайдер+модель на КАЖДЫЙ тир ─────────────────
+// Дополнение к однашлюзовому режиму (не разворот 12.09): обычный `/model agentrouter`
+// по-прежнему = один шлюз на окно. `multi` — отдельный режим, где тир выбирает И
+// провайдера, И модель (окно → justwoker/opus, сабагент sonnet → agentrouter/glm).
+// Значение тира в карте — ОБЪЕКТ {provider, model}. Разворачиваем в обычный механизм
+// префиксов на один хоп раньше: пара из карты → настоящий state провайдера из реестра →
+// форвард туда с конечной моделью. Ремап у keepalive гасим заголовком x-route-final
+// (иначе routes-карта резолвленного шлюза подменила бы модель повторно).
+//
+// 🪤 Файл карты — литералом (__dirname), а не через реестр: multi не провайдер, у него
+// нет ни апстрима, ни записи в backends.json.
+// Путь оверрайдится env — как REGISTRY_FILE: иначе регресс читал бы боевую карту.
+const MULTI_MAP_FILE = process.env.MULTI_MAP_FILE || path.join(__dirname, 'multi-routes-modelmap.json');
+const MULTI_TIERS = ['default', 'opus', 'sonnet', 'haiku'];
+
+function routeMulti(j, tier, reg, body) {
+    if (!MULTI_TIERS.includes(tier)) {
+        // gpt через multi не маршрутизируем — как и на обычном префиксном пути
+        // (явное gpt-имя пишет человек, сабагент его не назовёт).
+        return { multiError: true, code: 400,
+            message: `front-door: /model multi — тир «${tier}» не поддерживается (есть ${MULTI_TIERS.join(', ')}). `
+                + `Для явной gpt-модели назови шлюз прямо: /model <шлюз>/<модель>.` };
+    }
+    const mm = readModelMap(MULTI_MAP_FILE);
+    if (!mm) {
+        return { multiError: true, code: 400,
+            message: `front-door: /model multi выбран, но карта ${MULTI_MAP_FILE} не читается. `
+                + `Открой дашборд :8200 → «Маршруты» → блок multi и задай провайдер+модель для тира «${tier}».` };
+    }
+    const pair = mm[tier];
+    const prov = pair && typeof pair === 'object' ? String(pair.provider || '').trim() : '';
+    const mdl  = pair && typeof pair === 'object' ? String(pair.model || '').trim() : '';
+    if (!prov || !mdl) {
+        return { multiError: true, code: 400,
+            message: `front-door: /model multi — тир «${tier}» не настроен (нет провайдера или модели). `
+                + `Открой дашборд :8200 → «Маршруты» → блок multi → строка «${tier}» и выбери провайдера и модель.` };
+    }
+    const st = reg.get(prov.toLowerCase());
+    if (!st) {
+        return { multiError: true, code: 400,
+            message: `front-door: /model multi — тир «${tier}» указывает на провайдера «${prov}», которого нет в реестре ${REGISTRY_FILE}. `
+                + `Переактивируй шлюз в дашборде :8200 после его перезапуска, либо выбери другого провайдера в блоке multi.` };
+    }
+    return {
+        state: st,
+        prefix: 'multi',
+        from: j.model,
+        to: mdl,
+        tier: null,          // x-route-tier НЕ ставим: модель уже конечная
+        final: true,         // keepalive не ремапит (заголовок x-route-final)
+        multiTier: tier,     // для лога
+        body: Buffer.from(JSON.stringify(Object.assign({}, j, { model: mdl })), 'utf8'),
+    };
+}
+
 function routeByModel(method, body, reg) {
     if (method !== 'POST' || !reg || !reg.size) return null;
     // Быстрый отсев без JSON.parse: нет байтов `"model"` — нет и поля model.
@@ -398,6 +453,8 @@ function routeByModel(method, body, reg) {
         // человек может написать его руками. Без среза `reg.get()` промахнётся, и запрос
         // молча уедет на активный шлюз: ровно тот тихий отказ, ради которого вся правка.
         const bare = j.model.trim().replace(/\s*\[[^\]]*\]\s*$/, '');
+        // Голое `multi` — главное окно: тир default, провайдер+модель из multi-карты.
+        if (bare.toLowerCase() === 'multi') return routeMulti(j, 'default', reg, body);
         const st = reg.get(bare.toLowerCase());
         if (!st) return null;                          // обычное имя модели — не наше дело
         const tier = 'default';                        // имени модели нет → главное окно
@@ -431,6 +488,13 @@ function routeByModel(method, body, reg) {
     }
 
     if (slash === 0) return null;                      // ведущий слэш
+    // `multi/claude-sonnet-5` — сабагент в окне multi: тир определяем по имени, которым
+    // назвался сабагент, а провайдера+модель берёт multi-карта по этому тиру.
+    if (j.model.slice(0, slash).toLowerCase() === 'multi') {
+        const sub = j.model.slice(slash + 1);
+        if (!sub) return null;
+        return routeMulti(j, tierOfRequest(sub), reg, body);
+    }
     const state = reg.get(j.model.slice(0, slash).toLowerCase());
     if (!state) return null;                           // чужое имя — не наше дело
     const model = j.model.slice(slash + 1);
@@ -568,6 +632,12 @@ function handle(req, res) {
         let body = Buffer.concat(chunks);
         const routed = routeByModel(req.method, body, readRegistry());
         if (routed) {
+            // /model multi: тир не настроен / провайдер не в реестре — честная ошибка,
+            // называющая блок multi и тир, без ухода на активный шлюз (чужой баланс).
+            if (routed.multiError) {
+                log(`${req.method} ${reqPath} ▸multi → ${routed.code || 400}: ${routed.message}`);
+                return apiError(res, routed.code || 400, routed.message);
+            }
             // Шлюз назван, а цели нет: `default` в «Маршрутах» не выбран. Отвечаем
             // честной ошибкой вместо угадывания — подставить activeModel значило бы
             // вернуть угадывание, а пропустить дальше — молча уехать на активный шлюз
@@ -628,7 +698,13 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
     if (routed) {
         headers['x-route-prefixed'] = '1';
         if (routed.tier) headers['x-route-tier'] = routed.tier;
+        // /model multi: модель уже конечная — keepalive НЕ должен ремапить её по тир-карте
+        // резолвленного шлюза (иначе кросс-шлюзовой выбор владельца потеряется).
+        if (routed.final) headers['x-route-final'] = '1';
     } else {
+        // Клиент мог прислать заголовок сам — снимаем оба, иначе чужой запрос притворится
+        // финальным/префиксным и уведёт keepalive не туда.
+        delete headers['x-route-final'];
         // Клиент мог прислать заголовок сам — снимаем, иначе чужой запрос притворится
         // префиксным и уведёт keepalive на не ту карту.
         delete headers['x-route-prefixed'];

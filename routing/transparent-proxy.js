@@ -1062,6 +1062,67 @@ function routeWriteTier(provider, tier, value) {
     return { ok: true, provider, tier, value: clean, tiers: out };
 }
 
+// ── Виртуальный `/model multi`: провайдер+модель на КАЖДЫЙ тир ───────────────
+// Дополнение к однашлюзовому режиму (не разворот решения 12.09): обычный префикс
+// `/model agentrouter` по-прежнему = один шлюз на окно, тир меняет модель ВНУТРИ него.
+// `multi` — отдельный виртуальный режим, где тир выбирает И провайдера, И модель:
+//   окно/default → justwoker/opus, сабагент sonnet → agentrouter/glm, и т.д.
+// Поэтому значение тира тут — ОБЪЕКТ {provider, model}, а не строка-имя-модели.
+//
+// 🪤 `writeTierMap`/`routeWriteTier` переиспользовать НЕЛЬЗЯ: они делают
+// `String(v).trim()` на значении (:1054), пара {provider,model} схлопнулась бы в
+// "[object Object]". Отсюда своя пара read/write ниже.
+//
+// 🪤 `multi` НЕ добавлять в `CC_MODEL_PREFIX`: там ключ означает «это настоящий
+// бэкенд с апстримом» (normalizeCcModel/resolveCcModel/registrySeedEntry — шесть
+// мест). Файл карты адресуем литералом, а не через tierMapFile().
+// Путь оверрайдится env — как у остальных путей: иначе регресс писал бы в боевую карту.
+const MULTI_ROUTES_FILE = process.env.MULTI_MAP_FILE || path.join(__dirname, 'multi-routes-modelmap.json');
+const MULTI_TIERS = ['default', 'opus', 'sonnet', 'haiku'];   // gpt у multi нет
+
+function readMultiMap() {
+    // BOM-срез как у всех читателей карт (:980,:1024,:508); mtime-кеша у route-карт
+    // нет по устройству — читаем свежее на каждый вызов.
+    let mm = {};
+    try {
+        const raw = fs.readFileSync(MULTI_ROUTES_FILE, 'utf8');
+        mm = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { mm = {}; }
+    if (!mm || typeof mm !== 'object' || Array.isArray(mm)) mm = {};
+    return mm;
+}
+
+function routeWriteMulti(tier, provider, model) {
+    if (!MULTI_TIERS.includes(tier))
+        return { ok: false, error: `тир '${tier}' неизвестен (можно ${MULTI_TIERS.join(', ')})` };
+    const provRaw = String(provider || '').trim();
+    const mdl = String(model || '').trim();
+    // Пустой provider = тир осознанно очищен (пишем {}, а не удаляем ключ — как
+    // routeWriteTier пишет '' вместо delete: в диффе видно, что тир пуст осознанно).
+    if (!provRaw) {
+        const mm0 = readMultiMap();
+        mm0[tier] = {};
+        fs.writeFileSync(MULTI_ROUTES_FILE, JSON.stringify(mm0, null, 2) + '\n', 'utf8');
+        logLine(`routes multi: ${tier} → (очищен)`);
+        return { ok: true, tier, provider: '', model: '', tiers: mm0 };
+    }
+    // Провайдера резолвим из ЖИВОЙ таблицы CC_MODEL_PREFIX (тот же источник, что
+    // tierMapFile), а не из копии: копия рано или поздно разъедётся (разбор 12-13.09).
+    // Незнакомый провайдер тут — честный отказ, иначе на форварде reg.get(prov) даст
+    // undefined и запрос молча уедет на активный шлюз (тихий уход на чужой баланс).
+    const resolved = resolveProviderKey(provRaw);
+    if (resolved === 'multi' || provRaw.toLowerCase() === 'multi')
+        return { ok: false, error: 'multi не может ссылаться на самого себя' };
+    if (!CC_MODEL_PREFIX[resolved])
+        return { ok: false, error: `провайдер '${provRaw}' не адресуется префиксом (нет в CC_MODEL_PREFIX)` };
+    // read-modify-write ОДНОГО ключа — соседний тир не стирается ПО УСТРОЙСТВУ.
+    const mm = readMultiMap();
+    mm[tier] = { provider: resolved, model: mdl };
+    fs.writeFileSync(MULTI_ROUTES_FILE, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+    logLine(`routes multi: ${tier} → ${resolved}/${mdl || '(модель не названа)'}`);
+    return { ok: true, tier, provider: resolved, model: mdl, tiers: mm };
+}
+
 // ── Пул-дроп: тир-карта на фолбэк при пустом пуле наливки ────────────────────
 //
 // Контекст. Шлюз `agentrouter` выдаёт Claude- и GPT-модели только во время наливки
@@ -1412,7 +1473,9 @@ function handleRoutes(res) {
         };
     });
     providers.sort((a, b) => a.name.localeCompare(b.name));
-    jsonRes(res, 200, { ok: true, providers, updatedAt: doc.updatedAt || 0, tiers: ROUTE_TIERS });
+    // Виртуальный multi: карта {тир → {provider, model}} и список его тиров — для блока
+    // multi на вкладке «Маршруты». Пустой объект, если карты ещё нет.
+    jsonRes(res, 200, { ok: true, providers, updatedAt: doc.updatedAt || 0, tiers: ROUTE_TIERS, multi: readMultiMap(), multiTiers: MULTI_TIERS });
 }
 
 // Вызывается ИЗ writeSettings(), до записи файла.
@@ -4992,6 +5055,9 @@ async function handleCustomProviderCreate(req, res) {
         const b = String(baseUrl || '').trim().replace(/\/+$/, '');
         if (!n || !b) return jsonRes(res, 400, { error: 'name и baseUrl обязательны' });
         if (!/^https?:\/\//.test(b)) return jsonRes(res, 400, { error: 'baseUrl должен начинаться с http(s)://' });
+        // `multi` зарезервировано за виртуальным роутом `/model multi` — шлюз так назвать
+        // нельзя, иначе имя столкнётся с виртуальным префиксом на форварде.
+        if (n.toLowerCase() === 'multi') return jsonRes(res, 400, { error: 'имя «multi» зарезервировано за виртуальным мульти-роутом /model multi' });
         const data = customLoad();
         if (data.providers.some(p => p.baseUrl === b)) {
             return jsonRes(res, 400, { error: `провайдер с baseUrl ${b} уже есть (${data.providers.find(p => p.baseUrl === b).name})` });
@@ -5014,6 +5080,7 @@ async function handleCustomProviderUpdate(req, res) {
         const b = String(baseUrl || '').trim().replace(/\/+$/, '');
         if (!n || !b) return jsonRes(res, 400, { error: 'name и baseUrl обязательны' });
         if (!/^https?:\/\//.test(b)) return jsonRes(res, 400, { error: 'baseUrl должен начинаться с http(s)://' });
+        if (n.toLowerCase() === 'multi') return jsonRes(res, 400, { error: 'имя «multi» зарезервировано за виртуальным мульти-роутом /model multi' });
         if (data.providers.some(p => p.baseUrl === b && p.id !== provider.id)) {
             return jsonRes(res, 400, { error: `провайдер с baseUrl ${b} уже есть` });
         }
@@ -26498,6 +26565,22 @@ const server = http.createServer((req, res) => {
             try {
                 const j = JSON.parse(body || '{}');
                 const r = routeWriteTier(String(j.provider || ''), String(j.tier || ''), j.value);
+                jsonRes(res, r.ok ? 200 : 400, r);
+            } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
+        });
+        return;
+    }
+
+    // POST /__switch/api/routes/multi {tier, provider, model} — правка ОДНОГО тира
+    // виртуального multi. Значение тира — пара {provider, model}, поэтому своя ручка
+    // routeWriteMulti, а не routeWriteTier (тот пишет строку через String(v).trim()).
+    if (req.method === 'POST' && req.url === '/__switch/api/routes/multi') {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            try {
+                const j = JSON.parse(body || '{}');
+                const r = routeWriteMulti(String(j.tier || ''), j.provider, j.model);
                 jsonRes(res, r.ok ? 200 : 400, r);
             } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
         });

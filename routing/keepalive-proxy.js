@@ -422,6 +422,93 @@ const gptBase = gptProxy.pathname.replace(/\/+$/, '');
 // `let`, а не `const`, чтобы selftest мог проверить обе ветки роутинга.
 let GPT_PROXY_ENABLED = !!HAIKU_GPT_PROXY
   && (process.env.GPT_PROXY_FORCE === '1' || /(^|\.)agentrouter\.org$/i.test(upstream.hostname));
+
+// ── Odyssey: пустой text-блок в СТРИМЕ (фикс 19.09) ───────────────────────────
+// odyssey в /v1/messages со stream:true открывает `content_block_start {type:text,
+// text:""}` перед tool_use и НЕ шлёт в него ни одной дельты (в не-стриме преамбула на
+// месте — баг ровно в их SSE). Пустой text-блок Anthropic на обратном пути отвергает,
+// и Claude Code уходит в повтор: реплика модели пропадает («молча ответит»), а история
+// с пустым блоком дёргает повторы («500 раз переспросит»). Замер и разбор — вика
+// [[odyssey - тест ключа, прайс и нулевой usage]]. Гейт по апстриму: правка — только
+// odyssey, как и прочие per-шлюз gpt-правки. EMPTY_TEXT_FIX=1 включает принудительно
+// (selftest, другой шлюз с тем же багом).
+// 🔴 ВРЕМЕННО ВЫКЛЮЧЕНО (19.09): наивная версия («нет дельты сразу за стартом → дроп»)
+// съедала настоящий текст — odyssey шлёт text_delta ПОЗЖЕ, после блока thinking (замер
+// 19.09). Автогейт по odysseyapi.tech снят, пока фильтр не переделан на верное правило
+// (держать text-старт до ПЕРВОЙ дельты его индекса; дроп только если пришёл его
+// content_block_stop без единой дельты) с корректной перенумерацией. Включение — только
+// явным EMPTY_TEXT_FIX=1.
+let EMPTY_TEXT_FIX = process.env.EMPTY_TEXT_FIX === '1';
+
+// Стейт-машина над ГОТОВЫМИ SSE-событиями (режем по `\n\n`; одиночный \n границей не
+// считается, поэтому многобайтный UTF-8 на стыке чанков не рвётся). Один текстовый
+// content_block_start держим до вердикта: пришла ли в него дельта. Пришла — блок живой,
+// отдаём как есть. Не пришла (следующее событие — не дельта того же индекса) — выбрасываем
+// блок и запоминаем его индекс; все последующие индексы уезжают вниз на число выброшенных,
+// а «хвостовой» content_block_stop выброшенного блока глотаем. Так поток остаётся валидным.
+function makeEmptyTextFilter() {
+  let buf = Buffer.alloc(0);
+  let held = null;              // { text, index } — текстовый старт в ожидании вердикта
+  const dropped = new Set();    // исходные индексы выброшенных блоков
+  const SEP = Buffer.from('\n\n');
+
+  const parse = (ev) => {
+    const type = (ev.match(/"type":"([a-z_]+)"/) || [])[1] || '';
+    const idxM = ev.match(/"index":(\d+)/);
+    const index = idxM ? Number(idxM[1]) : null;
+    const cbType = type === 'content_block_start'
+      ? (ev.match(/"content_block":\{"type":"([a-z_]+)"/) || [])[1] || '' : '';
+    return { type, index, cbType };
+  };
+  const newIndex = (idx) => {
+    let shift = 0;
+    for (const d of dropped) if (d < idx) shift += 1;
+    return idx - shift;
+  };
+  const renumber = (ev, idx) => ev.replace(/"index":\d+/, `"index":${newIndex(idx)}`);
+
+  const handle = (ev) => {
+    const p = parse(ev);
+    let out = '';
+    if (held) {
+      if (p.type === 'content_block_delta' && p.index === held.index) {
+        // дельта в удержанный текст — блок живой, отдаём его старт, дельта уйдёт ниже
+        out += renumber(held.text, held.index) + '\n\n';
+        held = null;
+      } else {
+        // вердикт: текст пустой — выбрасываем
+        dropped.add(held.index);
+        held = null;
+      }
+    }
+    if (p.type === 'content_block_start' && p.cbType === 'text') {
+      held = { text: ev, index: p.index };
+      return out;                       // ждём вердикта
+    }
+    if (p.index !== null && dropped.has(p.index)) return out;   // событие выброшенного блока
+    if (p.index !== null) return out + renumber(ev, p.index) + '\n\n';
+    return out + ev + '\n\n';
+  };
+
+  return {
+    feed(chunk) {
+      buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+      let out = '';
+      let pos;
+      while ((pos = buf.indexOf(SEP)) >= 0) {
+        const ev = buf.subarray(0, pos).toString('utf8');
+        buf = buf.subarray(pos + 2);
+        if (ev.length) out += handle(ev);
+      }
+      return Buffer.from(out, 'utf8');
+    },
+    end() {
+      const tail = buf.toString('utf8'); buf = Buffer.alloc(0);
+      held = null;                      // недождавшийся текстовый старт в хвосте — пустой, дроп
+      return Buffer.from(tail, 'utf8');
+    },
+  };
+}
 // Настоящее SSE-событие на границе событий: watchdog клиента считает только
 // реальные события (замер v1tusha), комментарий его НЕ сбрасывает.
 const PING = 'event: ping\ndata: {"type":"ping"}\n\n';
@@ -1523,7 +1610,7 @@ function wantsStream(method, reqPath, headers, body) {
 // Возвращает { body, requester, hostname, port, base, host } или null.
 // Пятый аргумент `overrideModel` необязателен и нужен ровно одному вызывающему —
 // ветке 402 «пул исчерпан» в makeUpstream.
-function remapHaiku(method, reqPath, body, routes, overrideModel) {
+function remapHaiku(method, reqPath, body, routes, overrideModel, final) {
   if (method !== 'POST') return null;
   const p = reqPath.replace(/\?.*$/, '');
   if (p !== '/v1/messages') return null;
@@ -1535,6 +1622,15 @@ function remapHaiku(method, reqPath, body, routes, overrideModel) {
   }
   if (typeof j.model !== 'string') return null;
   const model = j.model;
+  // ── Виртуальный /model multi: модель УЖЕ конечная, тир-карту не спрашивать ────
+  // front-door сам выбрал провайдера и модель по multi-карте и пометил запрос
+  // заголовком x-route-final. Если пропустить его через tierTargetFor, routes-карта
+  // резолвленного шлюза подменила бы выбор multi повторно (напр. opus → glm у самого
+  // шлюза), и кросс-шлюзовой выбор владельца потерялся бы молча. Трактуем модель как
+  // принудительную цель — та же ветка, что и пул-фолбэк: upstreamModelFor нормализует
+  // `[1m]` (снимет для не-claude, сохранит для claude), gpt-цель уйдёт на конвертер,
+  // если он у этого шлюза есть. Пул-фолбэк (overrideModel) приоритетнее.
+  if (final && !overrideModel) overrideModel = model;
   // ── Принудительная цель: пул наливки пуст, уходим на беспуловую модель ───────
   // 🪤 Карта тиров здесь НЕ спрашивается ВООБЩЕ, и это не оптимизация, а защита от
   // цикла: фолбэк вида `claude-*` прошёл бы через tierTargetFor и замапился бы обратно
@@ -1966,6 +2062,10 @@ const server = http.createServer((req, res) => {
     return raw;
   };
 
+  // Фильтр пустого text-блока odyssey (см. makeEmptyTextFilter). Один на запрос, применяем
+  // ПОСЛЕ model-echo к исходящим SSE-байтам. Гейт EMPTY_TEXT_FIX — только odyssey.
+  const emptyTextFilter = EMPTY_TEXT_FIX ? makeEmptyTextFilter() : null;
+
   const forward = (status, headers, stream) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
     stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
@@ -1988,8 +2088,10 @@ const server = http.createServer((req, res) => {
         if (res.socket) res.socket.setNoDelay(true);
         armEmptyGuard(stream);
         stream.on('data', (chunk) => {
-          const out = patchSseChunk(chunk);
-          if (out === null) return;          // придержали до границы события
+          const patched = patchSseChunk(chunk);
+          if (patched === null) return;      // придержали до границы события (model-echo)
+          const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
+          if (!out.length) return;           // всё удержано фильтром пустого text-блока
           if (!contentSent) { contentSent = true; clearEmptyGuard(); }
           armStall(stream);
           sentBytes += out.length;
@@ -2000,7 +2102,14 @@ const server = http.createServer((req, res) => {
         });
         stream.on('end', () => {
           const rest = flushSseEcho();
-          if (rest) { res.write(rest); noteStop(rest); noteBytes(rest); }
+          if (rest) {
+            const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
+            if (o.length) { res.write(o); noteStop(o); noteBytes(o); }
+          }
+          if (emptyTextFilter) {
+            const f = emptyTextFilter.end();
+            if (f.length) { res.write(f); noteStop(f); noteBytes(f); }
+          }
           stopTimer();
           noteTruncated();
           if (!res.writableEnded) res.end();
@@ -2112,8 +2221,10 @@ const server = http.createServer((req, res) => {
     armEmptyGuard(stream);
 
     stream.on('data', (chunk) => {
-      const out = patchSseChunk(chunk);
-      if (out === null) return;            // придержали до границы события
+      const patched = patchSseChunk(chunk);
+      if (patched === null) return;        // придержали до границы события (model-echo)
+      const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
+      if (!out.length) return;             // всё удержано фильтром пустого text-блока
       if (!contentSent) { contentSent = true; clearEmptyGuard(); }
       armStall(stream);
       sentBytes += out.length;
@@ -2124,7 +2235,14 @@ const server = http.createServer((req, res) => {
     });
     stream.on('end', () => {
       const rest = flushSseEcho();
-      if (rest) { res.write(rest); noteStop(rest); noteBytes(rest); }
+      if (rest) {
+        const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
+        if (o.length) { res.write(o); noteStop(o); noteBytes(o); }
+      }
+      if (emptyTextFilter) {
+        const f = emptyTextFilter.end();
+        if (f.length) { res.write(f); noteStop(f); noteBytes(f); }
+      }
       stopTimer();
       noteTruncated();
       res.end();
@@ -2532,7 +2650,7 @@ const server = http.createServer((req, res) => {
             log(`${req.method} ${reqPath} ${status} «нет модели ${wasModel}» — обновляю каталог шлюза и ищу замену`);
             refreshCatalog(true, () => {
               if (finished || aborted) return;
-              const again = remapHaiku(req.method, reqPath, rawBody, String(req.headers['x-route-prefixed'] || '') === '1');
+              const again = remapHaiku(req.method, reqPath, rawBody, String(req.headers['x-route-prefixed'] || '') === '1', undefined, String(req.headers['x-route-final'] || '') === '1');
               const nextBody = again ? again.body : rawBody;
               const nextModel = modelInBody(nextBody);
               if (nextModel && nextModel !== wasModel) {
@@ -2671,7 +2789,7 @@ const server = http.createServer((req, res) => {
           markPoolDead(wasModel);        // память процесса: следующие запросы идут мимо
           askPoolDrop(wasModel, fb);     // дашборд: карта на диске + бэкап, best-effort
           const again = remapHaiku(req.method, reqPath, rawBody,
-            String(req.headers['x-route-prefixed'] || '') === '1', fb);
+            String(req.headers['x-route-prefixed'] || '') === '1', fb, String(req.headers['x-route-final'] || '') === '1');
           if (!again) {
             // Тело не переиграть (не-JSON) — отдаём как есть, но память о мёртвой
             // модели уже стоит, и следующий запрос уедет по карте тиров.
@@ -2737,7 +2855,9 @@ const server = http.createServer((req, res) => {
     // через префикс» видно только там (к нам префикс доезжает уже срезанным).
     // Заголовка нет — обычный путь, карта активного шлюза, как было до 12.09.
     const viaRoutes = String(req.headers['x-route-prefixed'] || '') === '1';
-    const remapped = remapHaiku(req.method, reqPath, rawBody0, viaRoutes);
+    // x-route-final: модель уже конечная (виртуальный /model multi) — тир-карту не спрашиваем.
+    const routeFinal = String(req.headers['x-route-final'] || '') === '1';
+    const remapped = remapHaiku(req.method, reqPath, rawBody0, viaRoutes, undefined, routeFinal);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
     echoName = echoModelFor(clientModel);
@@ -2842,6 +2962,70 @@ const server = http.createServer((req, res) => {
 if (process.argv[2] === 'selftest') {
   const assert = require('assert');
   const parse = (b) => JSON.parse(b.toString('utf8'));
+
+  // ── Фильтр пустого text-блока odyssey (makeEmptyTextFilter) ──────────────────
+  // Точный поток odyssey: пустой text (idx0) без дельт, thinking (idx1) с дельтой,
+  // tool_use (idx2), затем stop idx2 и stop idx0, message_delta/stop.
+  const ODY = [
+    'event: message_start\ndata: {"type":"message_start","message":{"model":"openai/gpt-6-astra[1m]","content":[]}}',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":""}}',
+    'data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"hi"}}',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call_x","name":"write_file","input":{}}}',
+    'data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{}"}}',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":2}',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}',
+    'event: message_stop\ndata: {"type":"message_stop"}',
+  ].map((e) => e + '\n\n').join('');
+  const runFilter = (buf) => {
+    const f = makeEmptyTextFilter();
+    return Buffer.concat([f.feed(buf), f.end()]).toString('utf8');
+  };
+  const dataObjs = (s) => s.split('\n\n').filter(Boolean)
+    .map((ev) => { const m = ev.match(/data: (\{.*\})/s); return m ? JSON.parse(m[1]) : null; })
+    .filter(Boolean);
+
+  const outWhole = runFilter(Buffer.from(ODY, 'utf8'));
+  const objsWhole = dataObjs(outWhole);
+  // пустой text-блок исчез
+  assert.ok(!objsWhole.some((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'text'),
+    'empty-text: пустой text-блок выброшен');
+  // thinking и tool_use остались и перенумерованы: thinking→0, tool_use→1
+  const think = objsWhole.find((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'thinking');
+  const tool = objsWhole.find((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'tool_use');
+  assert.ok(think && think.index === 0, 'empty-text: thinking перенумерован в 0');
+  assert.ok(tool && tool.index === 1, 'empty-text: tool_use перенумерован в 1');
+  // остался ровно один content_block_stop (у tool_use, idx1); stop выброшенного блока проглочен
+  const stops = objsWhole.filter((o) => o.type === 'content_block_stop');
+  assert.strictEqual(stops.length, 1, 'empty-text: один stop (выброшенного блока — проглочен)');
+  assert.strictEqual(stops[0].index, 1, 'empty-text: stop перенумерован в 1');
+  // хвост потока цел
+  assert.ok(objsWhole.some((o) => o.type === 'message_delta' && o.delta.stop_reason === 'tool_use'),
+    'empty-text: message_delta на месте');
+  assert.ok(objsWhole.some((o) => o.type === 'message_stop'), 'empty-text: message_stop на месте');
+
+  // тот же результат при разрезе потока пополам (буферизация по границе события)
+  const half = Math.floor(Buffer.byteLength(ODY, 'utf8') / 2);
+  const b = Buffer.from(ODY, 'utf8');
+  const f2 = makeEmptyTextFilter();
+  const outSplit = Buffer.concat([f2.feed(b.subarray(0, half)), f2.feed(b.subarray(half)), f2.end()]).toString('utf8');
+  assert.strictEqual(outSplit, outWhole, 'empty-text: разрез потока не меняет результат');
+
+  // ЖИВОЙ text-блок (с дельтой) НЕ трогаем
+  const LIVE = [
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+  ].map((e) => e + '\n\n').join('');
+  const objsLive = dataObjs(runFilter(Buffer.from(LIVE, 'utf8')));
+  assert.ok(objsLive.some((o) => o.type === 'content_block_start' && o.content_block.type === 'text' && o.index === 0),
+    'empty-text: живой text-блок сохранён');
+  assert.ok(objsLive.some((o) => o.type === 'content_block_delta' && o.delta.type === 'text_delta'),
+    'empty-text: text_delta живого блока сохранена');
+  assert.strictEqual(objsLive.filter((o) => o.type === 'content_block_stop').length, 1,
+    'empty-text: stop живого блока сохранён');
+
   let savedCfg = null;
   try { savedCfg = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { /* файла нет */ }
 

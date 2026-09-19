@@ -532,6 +532,11 @@ async function main() {
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: null,
+    // Разрешаем расширения в окне (друг ставит своё прокси-расширение): снимаем
+    // дефолтный --disable-extensions Playwright и берём системный Chrome —
+    // Chrome Web Store ставит расширения только в него, не в комплектный Chromium.
+    channel: 'chrome',
+    ignoreDefaultArgs: ['--disable-extensions'],
     // 🔴 Без этого окно идёт дефолтным UA Chromium, а панель держит сессию за UA —
     // вход отваливается на первом же `/auth/me`. Разбор и замер — у `resolvePoolRecord()`.
     ...(recordUA ? { userAgent: recordUA } : {}),

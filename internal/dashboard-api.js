@@ -582,7 +582,7 @@ async function _openOrFocusSession({ kind, name, storageState, gotoUrl, replyUrl
         }
     }
     const { chromium } = require('playwright');
-    const browser = await chromium.launch({ headless: false, args: ['--window-size=600,1000'] });
+    const browser = await chromium.launch({ headless: false, channel: 'chrome', ignoreDefaultArgs: ['--disable-extensions'], args: ['--window-size=600,1000'] });
     const context = await browser.newContext({ storageState, viewport: null, ...contextOpts });
     const page = await context.newPage();
     openedBrowsers.set(key, { browser, page });

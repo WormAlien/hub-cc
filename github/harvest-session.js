@@ -27,7 +27,12 @@
 // GitHub видит обычный визит. Плюс запуск профиля всё равно нужен для снимка, так что
 // проверка ничего не стоит.
 //
-// Коды возврата: 0 = снимок сохранён, 2 = профиль занят, 3 = живой GitHub-сессии нет.
+// Коды возврата: 0 = снимок сохранён и подтверждён живым, 2 = профиль занят,
+// 3 = заселять нечем (в профиле нет куки user_session), 4 = снимок сохранён, но
+// живость НЕ подтверждена (settings увёл на /login). Код 4 не блокирует заселение:
+// вход в аккаунт (панельный OAuth) либо молча переавторизует по этой user_session,
+// либо попросит логин у человека — и тот же логин через gh-live-capture обновит снимок.
+// Хардблок на непроверенной сессии отбирал у владельца ровно этот шаг восстановления.
 
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -94,7 +99,10 @@ async function main() {
     await page.goto(CHECK_URL, { waitUntil: 'domcontentloaded' }).catch(e => {
       console.log(`⚠️  навигация не задалась: ${e.message}`);
     });
-    const alive = !/\/login/.test(page.url());
+    // Живость settings-страницы — ВЕРДИКТ, а не блокировка. Мёртвой её делает /login,
+    // но заселять снимок всё равно можно (см. заголовок про код 4): вход в аккаунт
+    // сам оживит сессию, а хардблок этот шаг отбирал.
+    const verified = !/\/login/.test(page.url());
     const pageLogin = await page.evaluate(() => {
       const m = document.querySelector('meta[name="user-login"]');
       if (m && m.content) return m.content;
@@ -102,12 +110,8 @@ async function main() {
       return el ? el.getAttribute('data-login') : null;
     }).catch(() => null);
 
-    if (!alive) {
-      console.error('❌ Сессия мертва: GitHub увёл на страницу входа.');
-      console.error('    Залогинься в этом аккаунте один раз через вкладку GitHub («Открыть GitHub»).');
-      process.exit(3);
-    }
-    console.log(`🔓 сессия жива${pageLogin ? ` (${pageLogin})` : ''}`);
+    console.log(verified ? `🔓 сессия жива${pageLogin ? ` (${pageLogin})` : ''}`
+                         : '⚠️  settings увёл на /login — живость не подтверждена, снимаю снимок как непроверенный');
 
     // Даём Chromium'у досинхронизировать банку кук после навигации.
     await new Promise(r => setTimeout(r, SNAP_DELAY_MS));
@@ -123,8 +127,10 @@ async function main() {
     console.log(`   github-кук: ${cookies.length} (отброшено чужих: ${dropped}), origins: ${origins.length}`);
     console.log(`   логин: ${login || '—'} · user_session: ${hasUserSession ? 'есть' : 'НЕТ'}`);
 
+    // Единственный настоящий хардблок: куки user_session нет — заселять физически нечем.
     if (!hasUserSession) {
       console.error('❌ В профиле нет куки user_session — заселять нечем.');
+      console.error('    Залогинься в этом аккаунте один раз через вкладку GitHub («Открыть GitHub»).');
       process.exit(3);
     }
 
@@ -132,13 +138,14 @@ async function main() {
       seed: 'github',
       ghLogin: login,
       harvestedAt: new Date().toISOString(),
-      verifiedAt: new Date().toISOString(),
+      verifiedAt: verified ? new Date().toISOString() : null,
+      unverified: !verified,
       source: profileDir,
       cookies, origins,
     }, null, 2) + '\n', 'utf8');
 
-    console.log(`✅ Снимок сохранён: ${outFile}`);
-    process.exit(0);
+    console.log(`✅ Снимок сохранён${verified ? '' : ' (НЕ подтверждён — вход попросит логин и оживит сессию)'}: ${outFile}`);
+    process.exit(verified ? 0 : 4);
   } finally {
     await context.close().catch(() => {});
   }

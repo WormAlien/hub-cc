@@ -7343,8 +7343,12 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
             const tried = [];
             for (const src of free) {
                 const r = await ghHarvest(gsl, ghId, src);
-                if (r.code === 0) { snap = gsl.readCache(ghId); from = `${src.tag}/${src.label}`; break; }
-                tried.push(`${src.tag}/${src.label}: ${r.code === 3 ? 'сессия мертва' : r.code === 2 ? 'профиль занят' : (r.err || 'ошибка').trim().slice(0, 120)}`);
+                // код 0 = снят и подтверждён живым; код 4 = снят, но settings увёл на
+                // /login. Код 4 НЕ блокирует заселение: вход в аккаунт сам оживит сессию
+                // (панельный OAuth молча переавторизует по user_session либо владелец
+                // логинится руками, а gh-live-capture в open-session обновит снимок).
+                if (r.code === 0 || r.code === 4) { snap = gsl.readCache(ghId); from = `${src.tag}/${src.label}`; break; }
+                tried.push(`${src.tag}/${src.label}: ${r.code === 3 ? 'нет живой user_session' : r.code === 2 ? 'профиль занят' : (r.err || 'ошибка').trim().slice(0, 120)}`);
             }
             if (!snap) {
                 logLine(`${tag} add-github: ${nick} — снимок не снялся (${tried.join(' | ')})`);
@@ -7398,8 +7402,14 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         // «сессия мертва» и увела бы на полный релогин с паролем и 2FA.
         durableWriteJson(path.join(sessionsDir, label + '.json'), gsl.seedPayload(snap, nick));
 
-        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
-        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length, forced: force });
+        // Снимок мог прийти непроверенным (harvest код 4 / протухший кеш): заселяем, но
+        // честно предупреждаем — вход в аккаунт попросит логин и тем же логином оживит сессию.
+        const unverified = !!(snap && (snap.unverified === true || !snap.verifiedAt));
+        const note = unverified
+            ? `сессия ${nick} заселена, но её живость не подтверждена — при входе в аккаунт GitHub может попросить логин; он же её и оживит`
+            : undefined;
+        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}${unverified ? ', НЕ подтверждена' : ''}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
+        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length, forced: force, unverified, note });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }

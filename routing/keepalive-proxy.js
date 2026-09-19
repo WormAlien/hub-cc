@@ -423,33 +423,36 @@ const gptBase = gptProxy.pathname.replace(/\/+$/, '');
 let GPT_PROXY_ENABLED = !!HAIKU_GPT_PROXY
   && (process.env.GPT_PROXY_FORCE === '1' || /(^|\.)agentrouter\.org$/i.test(upstream.hostname));
 
-// ── Odyssey: пустой text-блок в СТРИМЕ (фикс 19.09) ───────────────────────────
-// odyssey в /v1/messages со stream:true открывает `content_block_start {type:text,
-// text:""}` перед tool_use и НЕ шлёт в него ни одной дельты (в не-стриме преамбула на
-// месте — баг ровно в их SSE). Пустой text-блок Anthropic на обратном пути отвергает,
+// ── Odyssey: чиним кривой SSE tool-ответа (фикс 19.09) ────────────────────────
+// odyssey в /v1/messages со stream:true отдаёт НЕВАЛИДНЫЙ Anthropic-поток: открывает
+// пустой `content_block_start {type:text,text:""}`, в который дельта либо не приходит
+// вовсе (tool-ответ), либо приходит ПОЗЖЕ — после блока thinking (обычный ответ); блоки
+// идут не по порядку, а thinking порой не закрывается вовсе. В не-стриме тот же ответ
+// корректен — баг ровно в их SSE. Пустой text-блок Anthropic на обратном пути отвергает,
 // и Claude Code уходит в повтор: реплика модели пропадает («молча ответит»), а история
 // с пустым блоком дёргает повторы («500 раз переспросит»). Замер и разбор — вика
-// [[odyssey - тест ключа, прайс и нулевой usage]]. Гейт по апстриму: правка — только
-// odyssey, как и прочие per-шлюз gpt-правки. EMPTY_TEXT_FIX=1 включает принудительно
-// (selftest, другой шлюз с тем же багом).
-// 🔴 ВРЕМЕННО ВЫКЛЮЧЕНО (19.09): наивная версия («нет дельты сразу за стартом → дроп»)
-// съедала настоящий текст — odyssey шлёт text_delta ПОЗЖЕ, после блока thinking (замер
-// 19.09). Автогейт по odysseyapi.tech снят, пока фильтр не переделан на верное правило
-// (держать text-старт до ПЕРВОЙ дельты его индекса; дроп только если пришёл его
-// content_block_stop без единой дельты) с корректной перенумерацией. Включение — только
-// явным EMPTY_TEXT_FIX=1.
-let EMPTY_TEXT_FIX = process.env.EMPTY_TEXT_FIX === '1';
+// [[odyssey - тест ключа, прайс и нулевой usage]]. Гейт по апстриму: правка нужна только
+// odyssey (как прочие per-шлюз gpt-правки). EMPTY_TEXT_FIX=1 — принудительно.
+let EMPTY_TEXT_FIX = process.env.EMPTY_TEXT_FIX === '1'
+  || /(^|\.)odysseyapi\.tech$/i.test(upstream.hostname);
 
 // Стейт-машина над ГОТОВЫМИ SSE-событиями (режем по `\n\n`; одиночный \n границей не
-// считается, поэтому многобайтный UTF-8 на стыке чанков не рвётся). Один текстовый
-// content_block_start держим до вердикта: пришла ли в него дельта. Пришла — блок живой,
-// отдаём как есть. Не пришла (следующее событие — не дельта того же индекса) — выбрасываем
-// блок и запоминаем его индекс; все последующие индексы уезжают вниз на число выброшенных,
-// а «хвостовой» content_block_stop выброшенного блока глотаем. Так поток остаётся валидным.
+// считается, поэтому многобайтный UTF-8 на стыке чанков не рвётся). Пересобирает поток в
+// валидный Anthropic, СОХРАНЯЯ потоковость:
+//   • выходные индексы назначаем сами, ПОДРЯД, в порядке реальной отдачи стартов
+//     (map: индекс odyssey → наш индекс) — дырок не бывает;
+//   • текстовый content_block_start ДЕРЖИМ: отдаём его лишь по ПЕРВОЙ его дельте (блок
+//     живой); если пришёл его content_block_stop или конец сообщения без единой дельты —
+//     блок пустой, выбрасываем целиком (и старт, и stop);
+//   • перед message_delta/message_stop синтезируем content_block_stop для всех блоков,
+//     оставшихся открытыми (odyssey не закрывает thinking).
+// Дельты и stop переиндексовываются через map; событие неизвестного индекса глотаем.
 function makeEmptyTextFilter() {
   let buf = Buffer.alloc(0);
-  let held = null;              // { text, index } — текстовый старт в ожидании вердикта
-  const dropped = new Set();    // исходные индексы выброшенных блоков
+  let held = null;              // { start, odyIndex } — текстовый старт в ожидании вердикта
+  const map = new Map();        // индекс odyssey → наш выходной индекс
+  const openOut = new Set();    // наши индексы открытых (не закрытых) блоков
+  let nextOut = 0;
   const SEP = Buffer.from('\n\n');
 
   const parse = (ev) => {
@@ -460,34 +463,57 @@ function makeEmptyTextFilter() {
       ? (ev.match(/"content_block":\{"type":"([a-z_]+)"/) || [])[1] || '' : '';
     return { type, index, cbType };
   };
-  const newIndex = (idx) => {
-    let shift = 0;
-    for (const d of dropped) if (d < idx) shift += 1;
-    return idx - shift;
+  const setIndex = (ev, idx) => ev.replace(/"index":\d+/, `"index":${idx}`);
+  const openStart = (ev, odyIndex) => {          // назначить наш индекс и отдать старт
+    const out = nextOut; nextOut += 1;
+    map.set(odyIndex, out); openOut.add(out);
+    return setIndex(ev, out) + '\n\n';
   };
-  const renumber = (ev, idx) => ev.replace(/"index":\d+/, `"index":${newIndex(idx)}`);
+  const dropHeldEmpty = () => { held = null; };  // пустой текст — просто забываем
+  const closeOpen = () => {                      // синтетические stop для незакрытых блоков
+    let out = '';
+    for (const oi of [...openOut].sort((a, b) => a - b)) {
+      out += `event: content_block_stop\ndata: {"type":"content_block_stop","index":${oi}}\n\n`;
+    }
+    openOut.clear();
+    return out;
+  };
 
   const handle = (ev) => {
     const p = parse(ev);
-    let out = '';
-    if (held) {
-      if (p.type === 'content_block_delta' && p.index === held.index) {
-        // дельта в удержанный текст — блок живой, отдаём его старт, дельта уйдёт ниже
-        out += renumber(held.text, held.index) + '\n\n';
-        held = null;
-      } else {
-        // вердикт: текст пустой — выбрасываем
-        dropped.add(held.index);
-        held = null;
+
+    if (p.type === 'content_block_start') {
+      if (p.cbType === 'text') {                 // текст держим до первой дельты
+        if (held) dropHeldEmpty();               // два текста подряд — прежний был пуст
+        held = { start: ev, odyIndex: p.index };
+        return '';
       }
+      return openStart(ev, p.index);             // thinking/tool_use — сразу
     }
-    if (p.type === 'content_block_start' && p.cbType === 'text') {
-      held = { text: ev, index: p.index };
-      return out;                       // ждём вердикта
+
+    if (p.type === 'content_block_delta') {
+      if (held && p.index === held.odyIndex) {   // текст ожил — отдаём его старт, затем дельту
+        let out = openStart(held.start, held.odyIndex);
+        held = null;
+        return out + setIndex(ev, map.get(p.index)) + '\n\n';
+      }
+      if (!map.has(p.index)) return '';          // дельта неизвестного блока — глотаем
+      return setIndex(ev, map.get(p.index)) + '\n\n';
     }
-    if (p.index !== null && dropped.has(p.index)) return out;   // событие выброшенного блока
-    if (p.index !== null) return out + renumber(ev, p.index) + '\n\n';
-    return out + ev + '\n\n';
+
+    if (p.type === 'content_block_stop') {
+      if (held && p.index === held.odyIndex) { dropHeldEmpty(); return ''; } // пустой текст
+      if (!map.has(p.index)) return '';
+      const oi = map.get(p.index); openOut.delete(oi);
+      return setIndex(ev, oi) + '\n\n';
+    }
+
+    if (p.type === 'message_delta' || p.type === 'message_stop') {
+      if (held) dropHeldEmpty();                 // текст без дельт к концу — пуст
+      return closeOpen() + ev + '\n\n';          // закрыть незакрытые блоки перед финалом
+    }
+
+    return ev + '\n\n';                          // message_start, ping и пр. — как есть
   };
 
   return {
@@ -504,7 +530,7 @@ function makeEmptyTextFilter() {
     },
     end() {
       const tail = buf.toString('utf8'); buf = Buffer.alloc(0);
-      held = null;                      // недождавшийся текстовый старт в хвосте — пустой, дроп
+      dropHeldEmpty();                            // недождавшийся текст в хвосте — пуст
       return Buffer.from(tail, 'utf8');
     },
   };
@@ -2986,21 +3012,38 @@ if (process.argv[2] === 'selftest') {
     .map((ev) => { const m = ev.match(/data: (\{.*\})/s); return m ? JSON.parse(m[1]) : null; })
     .filter(Boolean);
 
+  // Валидность потока: индексы стартов подряд с 0, каждый старт закрыт ровно одним stop.
+  const assertWellFormed = (objs, label) => {
+    let expect = 0;
+    const open = new Set();
+    for (const o of objs) {
+      if (o.type === 'content_block_start') {
+        assert.strictEqual(o.index, expect, `${label}: старт по порядку (${o.index}!=${expect})`);
+        open.add(o.index); expect += 1;
+      } else if (o.type === 'content_block_stop') {
+        assert.ok(open.has(o.index), `${label}: stop без старта (idx ${o.index})`);
+        open.delete(o.index);
+      } else if (o.type === 'content_block_delta') {
+        assert.ok(open.has(o.index), `${label}: дельта в незакрытый/несуществующий блок (idx ${o.index})`);
+      }
+    }
+    assert.strictEqual(open.size, 0, `${label}: остались незакрытые блоки`);
+  };
+
   const outWhole = runFilter(Buffer.from(ODY, 'utf8'));
   const objsWhole = dataObjs(outWhole);
+  assertWellFormed(objsWhole, 'tool');
   // пустой text-блок исчез
   assert.ok(!objsWhole.some((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'text'),
     'empty-text: пустой text-блок выброшен');
-  // thinking и tool_use остались и перенумерованы: thinking→0, tool_use→1
+  // thinking→0, tool_use→1
   const think = objsWhole.find((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'thinking');
   const tool = objsWhole.find((o) => o.type === 'content_block_start' && o.content_block && o.content_block.type === 'tool_use');
-  assert.ok(think && think.index === 0, 'empty-text: thinking перенумерован в 0');
-  assert.ok(tool && tool.index === 1, 'empty-text: tool_use перенумерован в 1');
-  // остался ровно один content_block_stop (у tool_use, idx1); stop выброшенного блока проглочен
-  const stops = objsWhole.filter((o) => o.type === 'content_block_stop');
-  assert.strictEqual(stops.length, 1, 'empty-text: один stop (выброшенного блока — проглочен)');
-  assert.strictEqual(stops[0].index, 1, 'empty-text: stop перенумерован в 1');
-  // хвост потока цел
+  assert.ok(think && think.index === 0, 'empty-text: thinking → 0');
+  assert.ok(tool && tool.index === 1, 'empty-text: tool_use → 1');
+  // thinking odyssey не закрывает — синтезируем; итого два stop (0 и 1)
+  const stops = objsWhole.filter((o) => o.type === 'content_block_stop').map((o) => o.index).sort();
+  assert.deepStrictEqual(stops, [0, 1], 'empty-text: оба блока закрыты (thinking-stop синтезирован)');
   assert.ok(objsWhole.some((o) => o.type === 'message_delta' && o.delta.stop_reason === 'tool_use'),
     'empty-text: message_delta на месте');
   assert.ok(objsWhole.some((o) => o.type === 'message_stop'), 'empty-text: message_stop на месте');
@@ -3012,19 +3055,38 @@ if (process.argv[2] === 'selftest') {
   const outSplit = Buffer.concat([f2.feed(b.subarray(0, half)), f2.feed(b.subarray(half)), f2.end()]).toString('utf8');
   assert.strictEqual(outSplit, outWhole, 'empty-text: разрез потока не меняет результат');
 
-  // ЖИВОЙ text-блок (с дельтой) НЕ трогаем
+  // 🔴 Регресс той поломки, что съедала текст: обычный ответ, где text_delta приходит
+  // ПОЗЖЕ блока thinking. Текст обязан выжить.
+  const PLAIN = [
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":""}}',
+    'data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"hmm"}}',
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello world"}}',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+    'event: message_stop\ndata: {"type":"message_stop"}',
+  ].map((e) => e + '\n\n').join('');
+  const objsPlain = dataObjs(runFilter(Buffer.from(PLAIN, 'utf8')));
+  assertWellFormed(objsPlain, 'plain');
+  assert.ok(objsPlain.some((o) => o.type === 'content_block_delta' && o.delta.type === 'text_delta' && o.delta.text === 'hello world'),
+    'empty-text: настоящий текст (поздняя дельта) НЕ съеден');
+  assert.ok(objsPlain.some((o) => o.type === 'content_block_start' && o.content_block.type === 'text'),
+    'empty-text: живой text-блок присутствует');
+
+  // ЖИВОЙ text-блок первым (без thinking) — «Say hi»
   const LIVE = [
     'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
     'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}',
+    'event: message_stop\ndata: {"type":"message_stop"}',
   ].map((e) => e + '\n\n').join('');
   const objsLive = dataObjs(runFilter(Buffer.from(LIVE, 'utf8')));
+  assertWellFormed(objsLive, 'live');
   assert.ok(objsLive.some((o) => o.type === 'content_block_start' && o.content_block.type === 'text' && o.index === 0),
     'empty-text: живой text-блок сохранён');
   assert.ok(objsLive.some((o) => o.type === 'content_block_delta' && o.delta.type === 'text_delta'),
     'empty-text: text_delta живого блока сохранена');
-  assert.strictEqual(objsLive.filter((o) => o.type === 'content_block_stop').length, 1,
-    'empty-text: stop живого блока сохранён');
 
   let savedCfg = null;
   try { savedCfg = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch (e) { /* файла нет */ }

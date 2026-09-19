@@ -302,8 +302,12 @@ function layout({ cols = process.stdout.columns || 80, rows = process.stdout.row
     // extra — строка про упрощённую шапку в безопасном наборе. Она обязана попасть в
     // арифметику, а не «просто печататься»: кадр, не влезающий в окно, уводит верх за
     // экран, и картинки не видно — так уже было дважды, при 33 строках и при 30.
+    // Блок состояния — 4 строки (дашборд + живы + ждут + права); в НЕ-компактном
+    // режиме перед ним ещё пустая, отсюда +1. Раньше здесь стояло 3/4 — но это
+    // недосчитывало строку «ждут выбора провайдера», и кадр на 113×26 с полным меню
+    // вылезал на строку за окно (картинку уводило вверх). Считаем 4/5.
     const total = (head, compact, extra = 0) => head + extra
-        + (compact ? 3 : 4) + (compact ? items + 1 : items + 2);
+        + (compact ? 4 : 5) + (compact ? items + 1 : items + 2);
 
     // Порядок жертв: сперва отступы, потом большой доллар, потом панель целиком, и
     // только в конце картинка — её владелец просил в первую очередь.
@@ -1383,7 +1387,91 @@ function gitHead() {
     return String(r.stdout || '').trim() || '(не git-репо?)';
 }
 
+// Есть ли git И это git-репо. Без .git даже установленный git бесполезен для
+// обновления. Кэшируем: за сессию наличие git не меняется, а menuItems() зовётся
+// на каждую перерисовку — spawn git на каждый кадр не нужен.
+let _hasGit = null;
+function hasGit() {
+    if (_hasGit !== null) return _hasGit;
+    _hasGit = false;
+    if (fs.existsSync(path.join(L.ROOT, '.git'))) {
+        try { _hasGit = spawnSync('git', ['--version'], { cwd: L.ROOT }).status === 0; }
+        catch { _hasGit = false; }
+    }
+    return _hasGit;
+}
+
+// Строка версии для показа. С git — обычный HEAD; без git — то, что записал
+// http-update в .hub-version.json.
+function codeVersion() {
+    if (hasGit()) return gitHead();
+    try {
+        const v = require('./tools/http-update').localVersion();
+        if (v && v.sha) return `${String(v.sha).slice(0, 7)}${dim(v.fetchedAt ? '  (без git, ' + v.fetchedAt.slice(0, 10) + ')' : '  (без git)')}`;
+    } catch {}
+    return '(версия неизвестна — без git, ещё не обновлялись этим путём)';
+}
+
+// Обновление БЕЗ git: скачать снимок master с GitHub и наложить. Механика —
+// tools/http-update.js. Две фазы, как у git-пути: фаза 1 тянет код (может
+// перезаписать сам hub.js), фаза 2 в СВЕЖЕМ процессе ставит зависимости и
+// перезапускает. Деп-фаза здесь через npm напрямую, а НЕ install.sh: нет git →
+// почти наверняка нет git-bash (он приезжает с Git for Windows), и install.sh
+// запускать нечем.
+async function doHttpUpdate({ interactive }) {
+    line();
+    line(bold('  Обновление без git'));
+    line(`  ${dim('было: ')}${codeVersion()}`);
+    line(`  ${dim('качаю снимок master с GitHub (публичный репозиторий, без токена)…')}`);
+
+    const HU = require('./tools/http-update');
+    let r;
+    try { r = await HU.applyUpdate(); }
+    catch (e) { line(); line(`  ${red('не удалось: ')}${(e && e.message) || e}`); return false; }
+
+    if (!r.ok) {
+        line();
+        line(`  ${red('не удалось: ')}${r.error || '?'}`);
+        line(`  ${dim('нужен интернет и доступ к github.com / codeload.github.com')}`);
+        return false;
+    }
+    if (r.already) {
+        line(`  ${OK()} уже актуально (${String(r.to || '').slice(0, 7)}) — код не трогал`);
+        return true;
+    }
+    line(`  ${dim('стало: ')}${String(r.to || '?').slice(0, 7)} ${dim(`(наложено ${r.copied}, настроек сохранено ${r.preserved})`)}`);
+
+    line();
+    line(`  ${dim('передаю управление обновлённому хабу…')}`);
+    const p = spawnSync(process.execPath, [__filename, '--post-update-nogit', interactive ? '--interactive' : '--plain'],
+        { cwd: L.ROOT, stdio: 'inherit' });
+    return p.status === 0;
+}
+
+// Фаза 2 git-free пути: зависимости через npm напрямую (без git-bash), рестарт.
+async function doPostUpdateNoGit({ interactive }) {
+    line();
+    line(bold('  Доставляю зависимости (npm install, без git-bash)'));
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const r = spawnSync(npmCmd, ['install', '--no-audit', '--no-fund'], {
+        cwd: L.ROOT, stdio: 'inherit', shell: process.platform === 'win32',
+    });
+    if (r.error || r.status !== 0) {
+        line();
+        line(`  ${red('npm install не прошёл')} ${dim(`(${r.error ? r.error.message : 'код ' + r.status})`)}`);
+        line(`  ${dim('нужен Node.js с npm в PATH, потом перезапусти хаб')}`);
+        return false;
+    }
+    line();
+    line(`  ${OK()} зависимости на месте`);
+    return doRestart({ open: interactive });
+}
+
 async function doUpdate({ interactive }) {
+    // Нет git (или это не git-репо) — обновляемся скачиванием архива. Тот самый
+    // «отдельный путь» для машин без git; пункт [4] уходит на него сам.
+    if (!hasGit()) return doHttpUpdate({ interactive });
+
     line();
     line(bold('  Обновление'));
     line(`  ${dim('было: ')}${gitHead()}`);
@@ -1558,12 +1646,15 @@ function menuItems() {
         { key: '1', label: 'Запустить', hint: 'поднять то, что лежит', run: () => doStart() },
         { key: '2', label: 'Перезапустить', hint: 'погасить и поднять заново на свежем коде', run: () => doRestart() },
         { key: '3', label: 'Остановить', hint: 'погасить всё, включая front-door', run: () => doStop({ ask: true }) },
-        { key: '4', label: 'Обновить', hint: 'git pull → зависимости → перезапуск', run: () => doUpdate({ interactive: true }) },
-        // Обратный путь к «Обновить» — и стоит рядом с ним. Клавиша буквенная (как
-        // [a] и [q]) НАМЕРЕННО: цифра сдвинула бы номера четырёх привычных пунктов
-        // ниже, а в списке соседство и так видно. Своё меню со своим выходом,
-        // поэтому noPause — иначе «q назад» упирается в «Enter — вернуться».
-        { key: 'v', label: 'Версии', hint: 'откатиться на любой коммит и вернуться обратно', noPause: true, run: () => doVersions() },
+        { key: '4', label: 'Обновить', hint: hasGit() ? 'git pull → зависимости → перезапуск' : 'скачать с GitHub (git не найден) → npm install → перезапуск', run: () => doUpdate({ interactive: true }) },
+        // Отдельный, ВСЕГДА видимый git-free путь: скачать снимок master архивом,
+        // без git и git-bash. Стоит рядом с «Обновить». Клавиша буквенная (как [v]/
+        // [q]) намеренно: цифра сдвинула бы номера пунктов ниже.
+        { key: 'g', label: 'Обновить без git', hint: 'скачать tar.gz с GitHub и наложить (нужен только Node)', run: () => doHttpUpdate({ interactive: true }) },
+        // Откат по коммитам — только с git (без него git log/reset нечем). Обратный
+        // путь к «Обновить». Своё меню со своим выходом, поэтому noPause — иначе
+        // «q назад» упирается в «Enter — вернуться».
+        ...(hasGit() ? [{ key: 'v', label: 'Версии', hint: 'откатиться на любой коммит и вернуться обратно', noPause: true, run: () => doVersions() }] : []),
         { key: '5', label: 'Проверка', hint: 'всё ли в порядке — список вердиктов, ничего не меняет', run: () => doCheck() },
         { key: '6', label: 'Отчёт для отправки', hint: 'окружение целиком в файл, чтобы прислать', run: () => doDoctor() },
         { key: '7', label: 'Поделиться', hint: 'своя версия репы веткой и PR', run: () => doShare() },
@@ -1844,6 +1935,9 @@ async function main() {
         try { fs.mkdirSync(path.dirname(mark), { recursive: true }); fs.writeFileSync(mark, String(process.pid)); } catch { /* не критично */ }
     }
 
+    if (argv.includes('--post-update-nogit')) {
+        process.exit((await doPostUpdateNoGit({ interactive: argv.includes('--interactive') })) ? 0 : 1);
+    }
     if (argv.includes('--post-update')) {
         process.exit((await doPostUpdate({ interactive: argv.includes('--interactive') })) ? 0 : 1);
     }

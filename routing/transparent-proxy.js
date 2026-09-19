@@ -6382,6 +6382,8 @@ function ghSnapHealth(gsl, account, fresh = true) {
         profileSource: profile ? `${profile.tag}:${profile.label}` : null,
         snapAgeDays: snap && Number.isFinite(ms) ? +(ms / 86400000).toFixed(1) : null,
         snapStale: snap ? gsl.cacheStale(snap) : null,
+        // snapLive — проживёт ли снимок дальше: срок его куки важнее возраста файла.
+        snapLive: snap ? gsl.cacheLive(snap) : null,
         indexStale,
     };
 }
@@ -6703,7 +6705,9 @@ async function ghStarSnapshot(acct) {
     if (!nick) return { error: 'у аккаунта нет ни ника, ни логина' };
 
     let snap = gsl.readCache(acct.id);
-    if (snap && gsl.cacheStale(snap)) snap = null;           // старше TTL — перечитать
+    // Годность решает срок куки, а не возраст файла (19.09): по TTL выбрасывался снимок,
+    // который ещё неделю был рабочим, и заселение уходило за мёртвой сессией.
+    if (snap && !gsl.cacheLive(snap)) snap = null;
     if (snap) return { snap, path: gsl.cachePath(acct.id), from: 'кеш' };
 
     const entry = gsl.indexByLogin().get(nick.toLowerCase());
@@ -7238,7 +7242,11 @@ async function handleGhAvailable(req, res) {
                 hereProfiles: hereProfiles.map(s => ({ label: s.label, archived: !!s.archived })),
                 hasSession: !!(cached || sources.length),
                 cached: !!cached,
+                // cacheStale — возраст файла (подсказка), cacheLive — годен ли снимок к
+                // заселению по сроку ЕГО куки. Для UI решает второе: снимок недельной
+                // давности с живой кукой «устаревшим» называть нельзя (19.09).
                 cacheStale: cached ? gsl.cacheStale(cached) : null,
+                cacheLive: cached ? gsl.cacheLive(cached) : null,
                 sessionFrom: sources.length ? `${sources[0].tag}/${sources[0].label}` : null,
                 sessionAgeDays: sources.length
                     ? Math.round(gsl.freshnessMs(sources[0]) / 86400000) : null,
@@ -7323,7 +7331,10 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         // Снимок: сначала кеш, иначе харвест из самого подходящего профиля-источника.
         let snap = gsl.readCache(ghId);
         let from = snap ? 'кеш' : null;
-        if (snap && gsl.cacheStale(snap)) { snap = null; from = null; }   // старше TTL — перечитать
+        // Кеш выбрасываем только по СРОКУ ЕГО КУКИ, а не по возрасту файла: user_session
+        // живёт 14 суток, а TTL снимка — 7, и по TTL выбрасывался рабочий снимок (19.09:
+        // «🐙 из менеджера» падал 409 при живой сессии в кэше).
+        if (snap && !gsl.cacheLive(snap)) { snap = null; from = null; }
         if (!snap) {
             const entry = index.get(nick.toLowerCase());
             const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);

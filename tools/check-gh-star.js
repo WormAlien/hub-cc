@@ -221,8 +221,10 @@ section('routing/transparent-proxy.js · каскад ghStarSnapshot()');
     const iCache = b.indexOf('gsl.readCache(acct.id)');
     const iHarvest = b.indexOf('ghHarvest(gsl');
     check(iCache >= 0 && iHarvest > iCache, 'кеш снимка читается ДО харвеста — иначе каждый клик запускает Chromium на минуту');
-    check(/if \(snap && gsl\.cacheStale\(snap\)\) snap = null/.test(b),
-        'просроченный кеш (TTL 7 суток) отбрасывается, а не отдаётся как живой');
+    // Гейт мерит срок КУКИ, а не возраст файла: GitHub отдаёт user_session на 14 суток, а
+    // TTL снимка 7 - по возрасту отбрасывался рабочий снимок (19.09, разбор в log.md).
+    check(/if \(snap && !gsl\.cacheLive\(snap\)\) snap = null/.test(b),
+        'снимок отбрасывается по сроку куки (cacheLive), а не по возрасту файла');
     check(/indexByLogin\(\)\.get\(nick\.toLowerCase\(\)\)/.test(b), 'источники ищутся по нику в индексе профилей');
     check(/\.filter\(s => s\.hasUserSession\)/.test(b), 'источниками считаются только профили с живой GitHub-сессией');
     check(/\.filter\(s => !ghProfileBusy\(s\)\)/.test(b),

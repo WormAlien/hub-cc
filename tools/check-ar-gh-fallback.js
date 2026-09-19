@@ -107,15 +107,18 @@ check(typeof GSL.transferableProfile === 'function'
 // ── 4. фронт: агрегированное состояние бейджа ──
 console.log('\n4. плашка в строке аккаунта');
 const badge = cutFn(HTML, 'function newapiGhBadge(');
-check(/snapStale/.test(badge) && /snapAgeDays/.test(badge), 'бейдж читает свежесть снимка');
+// Свежесть бейдж читает в двух измерениях: snapAgeDays (возраст файла) и snapLive
+// (проживёт ли снимок дальше - по сроку куки). 19.09 выяснилось, что решать должно
+// второе: снимок 11 суток от роду с кукой, которой жить ещё 3 суток, полностью рабочий.
+check(/snapLive/.test(badge) && /snapAgeDays/.test(badge), 'бейдж читает свежесть снимка');
 check(/hasSession === false/.test(badge) && /status === 'dead'/.test(badge),
     'красное состояние — только «сессии нет нигде» или аккаунт помечен dead');
 check(/sessionSource/.test(badge) && /profileSource/.test(badge),
     'подсказка бейджа различает общий снимок и профиль-источник');
 check(/crimson/.test(badge) && /amber/.test(badge) && /teal/.test(badge),
     'три цвета: живой / протух / нечем входить');
-check(/snapStale === true/.test(badge),
-    'протухшим считается только снимок без профильного источника');
+check(/snapLive === false/.test(badge),
+    'протухшим считается снимок с истёкшей кукой (snapLive), и только без профильного источника');
 
 // ── 5. имя аккаунта в тосте ошибки ──
 console.log('\n5. ошибка называет аккаунт');

@@ -58,7 +58,12 @@ const HARVEST_SCRIPT = path.join(ROOT, 'github', 'harvest-session.js');
 
 // Через сколько кешированный снимок считаем устаревшим. GitHub-сессия — скользящая,
 // живёт около двух недель; семь суток дают запас и не заставляют харвестить на каждый чих.
+// 🔴 Это ТОЛЬКО подсказка для UI («снимок давно не обновляли»). Годность снимка к заселению
+// решает срок его куки, а не возраст файла — см. cacheLive ниже.
 const CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
+
+// Запас на дорогу: куку, которой жить полчаса, заселять уже нельзя.
+const CACHE_EXPIRY_MARGIN_MS = 30 * 60 * 1000;
 
 function tagToHost(tag) {
     const r = PROFILE_ROOTS.find(x => x.tag === tag);
@@ -390,6 +395,33 @@ function cacheStale(snap) {
     return cacheAgeMs(snap) > CACHE_TTL_MS;
 }
 
+// Кука живого входа в снимке. Домен сверяем мягко: harvest пишет `github.com`
+// (host-only), gh-live-capture — то же, но формат чужой не должен ронять проверку.
+function userSessionCookie(snap) {
+    const cookies = (snap && snap.cookies) || [];
+    return cookies.find(c => c.name === 'user_session'
+        && /(^|\.)github\.com$/i.test(String(c.domain || '').replace(/^\./, ''))) || null;
+}
+
+// Годен ли снимок для заселения. Возраст файла тут НЕ решает: GitHub отдаёт user_session
+// на 14 суток, а CACHE_TTL_MS — 7, поэтому по TTL «протухал» снимок, который ещё неделю
+// был полностью рабочим. Замер 19.09: владелец жал на «🐙 из менеджера» (ciciaidiltaslim),
+// в кэше лежал снимок с кукой до 22.09 (живой, 11 суток от роду) — TTL его выбрасывал,
+// заселение уходило харвестить семь профилей, где та же кука истекла 05-16.09, Chromium
+// просроченную не отдаёт → код 3 → 409 «нет живой user_session». По банку снимков тогда
+// же: 22 живых отброшены TTL против 4 свежих.
+//
+// Нет куки `user_session` — не годен (заселять нечем). Кука без срока (сессионная) —
+// годен: срок ей ставит GitHub при первом же визите. Истёкшая или истекающая вот-вот —
+// не годен, тут честнее сходить за свежей.
+function cacheLive(snap) {
+    const c = userSessionCookie(snap);
+    if (!c || !c.value) return false;
+    const exp = Number(c.expires);
+    if (!Number.isFinite(exp) || exp <= 0) return true;
+    return exp * 1000 - CACHE_EXPIRY_MARGIN_MS > Date.now();
+}
+
 function writeCache(ghId, snap) {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     // durable: снимок GitHub-сессии — то, чем авторег входит. Нулёвка после BSOD
@@ -417,6 +449,6 @@ module.exports = {
     scanProfiles, scanProfilesCached, invalidateScan, scanStats, dropIndex,
     indexInfo, profilesFromIndex, transferableProfile, indexOutdatedDirs,
     indexByLogin, usedOnHost, freshnessMs,
-    cachePath, readCache, writeCache, cacheAgeMs, cacheStale,
+    cachePath, readCache, writeCache, cacheAgeMs, cacheStale, cacheLive, userSessionCookie,
     seedPayload,
 };

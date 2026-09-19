@@ -15536,7 +15536,10 @@ function newapiGhBadge(s, prov) {
     // нельзя: 17.09 так покраснел аккаунт, у которого сессия лежала в профиле AgentRouter.
     const checking = gh.hasSession !== true && gh.indexStale === true;
     const bad = !checking && (gh.hasSession === false || gh.status === 'dead');
-    const stale = !bad && !checking && !gh.profileSource && gh.snapStale === true;
+    // Протух снимок не от возраста файла, а от срока своей куки: до 19.09 тут стоял
+    // snapStale (старше TTL 7 сут) и красил в предупреждение снимок, который ещё неделю
+    // был полностью рабочим - GitHub отдаёт user_session на 14 суток.
+    const stale = !bad && !checking && !gh.profileSource && gh.snapLive === false;
     const tone = checking ? 'amber' : bad ? 'crimson' : stale ? 'amber' : 'teal';
     const mark = checking ? ' ⏳' : (bad || stale) ? ' ⚠' : '';
     const note = checking
@@ -15546,8 +15549,8 @@ function newapiGhBadge(s, prov) {
       : gh.sessionSource === 'profile'
         ? `сессия в профиле ${gh.profileSource}`
         : stale
-          ? `снимок ${age} дн — старше TTL 7 сут, автоподарок попробует, но GitHub может попросить пароль`
-          : age === null ? 'сессия есть' : `снимок свежий (${age} дн)`;
+          ? `снимок ${age} дн, но его кука user_session истекла - GitHub попросит логин, и тот же логин сессию оживит`
+          : age === null ? 'сессия есть' : `снимок живой (${age} дн)`;
     return `<button onclick='newapiPickGithub(${pJ}, ${kJ})' title="${esc(`GitHub: ${gh.login} · ${note} · клик — сменить/отвязать`)}"
       class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 bg-${tone}/10 border border-${tone}/40 text-${tone} rounded font-mono hover:bg-${tone}/20 whitespace-nowrap">🐙 ${esc(nick)}${mark}</button>`;
   }
@@ -16109,7 +16112,9 @@ function newapiSeedRender(data) {
     // профиль на диске переживает удаление записи, а регистрация могла и не состояться,
     // поэтому это предупреждение с выбором, а не отказ (разбор 2026-08-21).
     const why = ghRowSeedBlock(a);
-    const src = a.cached ? `кеш${a.cacheStale ? ' (устарел, перечитаю)' : ''}`
+    // «Перечитаю» — только когда снимок правда не пойдёт в дело: кука истекла. Снимок
+    // недельной давности с живой кукой заселяется как есть (14 суток жизни user_session).
+    const src = a.cached ? `кеш${a.cacheLive === false ? ' (кука истекла, перечитаю)' : ''}`
       : a.sessionFrom ? `${a.sessionFrom}${a.sessionAgeDays !== null ? ` · ${a.sessionAgeDays} дн.` : ''}`
       : '—';
     const idJ = JSON.stringify(a.id).replace(/'/g, '&#39;');

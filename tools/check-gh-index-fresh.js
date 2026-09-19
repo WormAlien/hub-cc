@@ -95,6 +95,8 @@ ok('источники для проверки вырезаются', () => {
 const stubGsl = (o = {}) => Object.assign({
     readCache: () => null, transferableProfile: () => null,
     cacheAgeMs: () => Infinity, cacheStale: () => null,
+    // cacheLive — годность снимка по сроку ЕГО куки (19.09); в ответе ghSnapInfo это snapLive.
+    cacheLive: () => null,
 }, o);
 
 ok('свежесть индекса считается по stat, без расшифровки', () => {
@@ -121,7 +123,7 @@ ok('устаревший индекс не мешает положительно
     const snap = need(B_snap);
     const gsl = stubGsl({
         readCache: () => ({ ghLogin: 'stupidread', harvestedAt: new Date().toISOString() }),
-        cacheAgeMs: () => 60000, cacheStale: () => false,
+        cacheAgeMs: () => 60000, cacheStale: () => false, cacheLive: () => true,
     });
     const h = snap(gsl, { id: 'gh_1', login: 'stupidread', nickname: 'stupidread' }, false);
     assert.strictEqual(h.hasSession, true, 'снимок найден - это факт, его устаревший индекс не отменяет');

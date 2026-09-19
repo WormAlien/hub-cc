@@ -155,6 +155,9 @@ function spawnKeepalive(port, upPort, env) {
       LATENCY_FILE: path.join(TMP, `lat-${port}.json`),
       EVENTS_FILE: path.join(TMP, `ev-${port}.json`),
       KEY_FILE: path.join(TMP, 'no-such-key.txt'),
+      // Сценарии промаха маршрута дают ПОСТОЯННУЮ ошибку, а на ней keepalive пишет дамп тела.
+      // Без этой строки регресс сваливал дампы в живой каталог улик и вытеснял оттуда настоящие.
+      FAILDUMP_DIR: path.join(TMP, 'faildump'),
       AUTOROTATE: '0',
       HAIKU_REMAP: '0',
       HEDGE_MS: '0',

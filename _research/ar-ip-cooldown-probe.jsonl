@@ -1,6 +1,0 @@
-{"t":"2026-09-19 20:56:22","elapsedS":65,"kind":"start","proxy":"socks5://203.189.150.44:1080","exitIp":"203.189.150.44","burn":2,"burnGap":2000,"pollGap":20000}
-{"t":"2026-09-19 20:56:31","elapsedS":74,"kind":"burn","cycle":1,"n":1,"ok":true,"error":null,"status":200,"ms":9705,"body":"{\"data\":{\"announcements\":[{\"content\":\"为保障服务长期运行，Claude 和 GPT 模型已调整为限量供应，每日分批次发放，用完即止。新的投放时间为🕙北京时间10:00和19:00（对应UTC时间02:"}
-{"t":"2026-09-19 20:56:53","elapsedS":96,"kind":"burn","cycle":1,"n":2,"ok":false,"error":"Proxy connection timed out","status":0,"ms":20007,"body":""}
-{"t":"2026-09-19 20:56:53","elapsedS":96,"kind":"burn-end","cycle":1,"sent":2,"okCount":1,"error":"Proxy connection timed out","body":""}
-{"t":"2026-09-19 20:57:18","elapsedS":121,"kind":"poll","cycle":1,"poll":1,"healMs":24873,"ok":true,"error":null,"status":200,"ms":4865,"body":"{\"data\":{\"announcements\":[{\"content\":\"为保障服务长期运行，Claude 和 GPT 模型已调整为限量供应，每日分批次发放，用完即止。新的投放时间为🕙北京时间10:00和19:00（对应UTC时间02:","transport":null}
-{"t":"2026-09-19 20:57:18","elapsedS":121,"kind":"healed","cycle":1,"healMs":24873}

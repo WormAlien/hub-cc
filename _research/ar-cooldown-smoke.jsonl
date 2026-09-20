@@ -1,5 +1,0 @@
-{"t":"2026-09-19 21:46:42","elapsedS":1,"kind":"start","proxy":"socks5://127.0.0.1:1080","exitIp":"13.143.166.37","burn":3,"burnGap":1000,"pollGap":20000}
-{"t":"2026-09-19 21:46:44","elapsedS":2,"kind":"burn","cycle":1,"n":1,"ok":true,"error":null,"status":200,"ms":1251,"body":"{\"data\":{\"announcements\":[{\"content\":\"为保障服务长期运行，Claude 和 GPT 模型已调整为限量供应，每日分批次发放，用完即止。新的投放时间为🕙北京时间10:00和19:00（对应UTC时间02:"}
-{"t":"2026-09-19 21:46:46","elapsedS":4,"kind":"burn","cycle":1,"n":2,"ok":true,"error":null,"status":200,"ms":1137,"body":"{\"data\":{\"announcements\":[{\"content\":\"为保障服务长期运行，Claude 和 GPT 模型已调整为限量供应，每日分批次发放，用完即止。新的投放时间为🕙北京时间10:00和19:00（对应UTC时间02:"}
-{"t":"2026-09-19 21:46:48","elapsedS":6,"kind":"burn","cycle":1,"n":3,"ok":true,"error":null,"status":200,"ms":1198,"body":"{\"data\":{\"announcements\":[{\"content\":\"为保障服务长期运行，Claude 和 GPT 模型已调整为限量供应，每日分批次发放，用完即止。新的投放时间为🕙北京时间10:00和19:00（对应UTC时间02:"}
-{"t":"2026-09-19 21:46:48","elapsedS":6,"kind":"burn-end","cycle":1,"sent":3,"okCount":3,"verdict":"no-block"}

@@ -603,3 +603,11 @@ _research/*.out
 # Журнал плохих адресов `odyssey/addresses-bad.json`, наоборот, ОТСЛЕЖИВАЕТСЯ - он
 # накапливает опыт прогонов (адреса, где приложение не собралось), как networks-used.json.
 routing/asn-cache.json
+
+# Логи проб: рабочий мусор, в публичный репозиторий не едет (20.09.2026).
+# Имена аккаунтов и балансы - не креды, но и не для чужого глаза. Сами пробы (.js) остаются.
+_research/ar-cooldown-*
+_research/ar-ip-cooldown-probe.txt
+_research/ar-ip-cooldown-probe.jsonl
+_research/ar-balances-sweep.txt
+_research/collect-gifts-progress.txt

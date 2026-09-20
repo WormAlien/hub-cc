@@ -13716,7 +13716,7 @@ async function handleArCheckinAll(req, res) {
             });
         }
         arEnqueueBatch(jobs);
-        logLine(`agentrouter чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready.length} готовых`
+        logLine(`agentrouter чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready} готовых`
             + (skipped.length ? `, пропущено ${skipped.length}` : '') + ' — добор до конца включён');
         arCheckinPump();
         jsonRes(res, 200, {
@@ -26278,8 +26278,26 @@ async function moneyRotate(p, opts = {}) {
         if (from) {
             if (opts.reason === 'dead') from.status = 'dead';
             const left = Number(opts.leftUsd);
-            if (Number.isFinite(left)) { from.balance = round2(left); from.balanceSource = 'gateway'; from.balanceCheckedAt = new Date().toISOString(); }
-            else if (opts.reason === 'out-of-balance' && typeof from.balance === 'number' && from.balance > 0) from.balance = 0;
+            // 🔴 Не затираем СВЕЖИЙ ТОЧНЫЙ чек цифрой шлюза.
+            //
+            // 21.09 владелец: «вход был, но не переспрошен, и не везде баланс проверился». Разбор:
+            // подарок брался и точная цифра снималась чеком сразу после входа (у 39 аккаунтов
+            // checkinAt и balanceCheckedAt совпадают посекундно), а ПОСЛЕ этого ротация денег
+            // записывала в баланс остаток, названный шлюзом, и меняла источник на `gateway`.
+            // Свежая цифра терялась, а в таблице у этих строк не было даже подписи источника -
+            // выглядело как «чек не прошёл».
+            //
+            // Цифра шлюза нужна там, где точной нет или она протухла; точная и свежая главнее.
+            const exactFresh = from.balanceSource === 'self' && from.balanceCheckedAt
+                && (Date.now() - Date.parse(from.balanceCheckedAt)) < 10 * 60_000;
+            if (Number.isFinite(left) && !exactFresh) {
+                from.balance = round2(left);
+                from.balanceSource = 'gateway';
+                from.balanceCheckedAt = new Date().toISOString();
+            } else if (opts.reason === 'out-of-balance' && typeof from.balance === 'number' && from.balance > 0
+                && from.balanceSource !== 'self') {
+                from.balance = 0;
+            }
         }
         const need = Number(opts.needUsd) || 0;
         const queue = moneyRank(sessions.filter(s => moneyUsable(s, p) && s.api_key !== cur && s.api_key !== opts.fromKey), need, p);

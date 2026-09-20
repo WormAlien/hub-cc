@@ -15069,6 +15069,12 @@ const BAL_SRC = {
   self:   { icon: '⚡', cls: 'text-emerald', label: 'точный'   },
   anchor: { icon: '✏️', cls: 'text-sky',     label: 'вручную'  },
   guess:  { icon: '~',  cls: 'text-faint',   label: 'прикидка' },
+  // 🔴 Цифра от ШЛЮЗА, а не от чека аккаунта. Ставит её ротация денег: когда аккаунт
+  // выпадает из денежного пула (`dead` / `out-of-balance`), он пишет в баланс остаток,
+  // который назвал шлюз (`leftUsd`). Подписи тут не было вовсе - и пять таких строк
+  // выглядели как «баланс не проверился» (вопрос владельца 21.09). Точность ниже, чем у
+  // `self` (это не переспрос ЛК), но выше прикидки: цифру назвал тот же шлюз.
+  gateway: { icon: '🔌', cls: 'text-amber',  label: 'от шлюза' },
 };
 
 // Подпись источника для тоста ручного чека баланса.
@@ -15104,6 +15110,11 @@ function balanceSourceBadge(s) {
   if (s.balanceSource === 'self') {
     tip = `Точный остаток из ЛК аккаунта${s.newApiUsername ? ` (${s.newApiUsername})` : ''}`
       + `${typeof s.granted === 'number' ? ` · выдано всего $${s.granted.toFixed(2)}` : ''}`;
+  } else if (s.balanceSource === 'gateway') {
+    tip = 'Цифра от ШЛЮЗА, а не переспрос ЛК аккаунта: её записала ротация денег, когда'
+      + ' аккаунт выпал из денежного пула. Чтобы взять точную, нужен чек баланса по этому'
+      + ' аккаунту (кнопка 💰 или вход 🌐)';
+    if (s.balanceCheckedAt) tip += ` · записана ${new Date(s.balanceCheckedAt).toLocaleString('ru-RU')}`;
   } else if (s.balanceSource === 'anchor') {
     const drawn = (typeof s.spent === 'number' && typeof s.anchorSpent === 'number')
       ? Math.max(0, s.spent - s.anchorSpent) : 0;

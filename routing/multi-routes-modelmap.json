@@ -1,0 +1,7 @@
+{
+  "default": {},
+  "opus": {
+    "provider": "agentrouter",
+    "model": ""
+  }
+}

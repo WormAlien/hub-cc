@@ -16303,12 +16303,19 @@ async function newapiAddGithub(ghId, opts) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     closeGhSeedModal();
-    toast(`🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 4000);
+    // Сессии не было вовсе (harvest код 3): запись заведена пустышкой, и это не отказ -
+    // вход по логину в аккаунт провайдера оживит и запись, и общий снимок. Обещать
+    // «сессия переехала» в этом случае нельзя: браузер откроется на логине.
+    toast(data.deadSession
+      ? `🐙 ${data.ghLogin}: запись создана без GitHub-сессии — жми «Continue with GitHub», логин её оживит`
+      : `🐙 ${data.ghLogin}: аккаунт создан, сессия из ${data.from} (${data.cookieCount} кук)`, 'success', 6000);
 
     // JustWoker умеет довести дело сам: вход через GitHub и снятие ключа, без открытого
     // браузера и без кнопки 🔑. Остальным провайдерам сценарий не переносится: у них вход
     // уезжает в попап, и ключа в ответе колбэка нет (замер рекордером 2026-08-22).
-    if (prov === 'jw' && auto && !mode) {
+    // Без снимка авторегу входить нечем — он логинится GitHub-куками, а их нет: тот же
+    // случай ведём путём «🌐 вручную», иначе гарантированный провал через 90 с.
+    if (prov === 'jw' && auto && !mode && !data.deadSession) {
       const done = await jwAutoAdd(data.id, data.ghLogin);
       await p.reload();
       // Ключ в пуле — креды GitHub не понадобились, окно с паролем только мешало бы.

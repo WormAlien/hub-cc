@@ -7335,16 +7335,23 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         // живёт 14 суток, а TTL снимка — 7, и по TTL выбрасывался рабочий снимок (19.09:
         // «🐙 из менеджера» падал 409 при живой сессии в кэше).
         if (snap && !gsl.cacheLive(snap)) { snap = null; from = null; }
+        // Сеять нечем - это НЕ повод отказывать в заведении записи. Запись заводится без
+        // снимка, браузер открывается на регистрации, человек логинится в GitHub прямо
+        // там - и gh-live-capture по новому user_session оживляет и запись, и общий снимок.
+        // 21.09: кнопка из менеджера падала 409 ровно на этом шаге, то есть хардблок
+        // отбирал единственное действие, которое сессию и оживляет.
+        let seedWhy = null;
         if (!snap) {
             const entry = index.get(nick.toLowerCase());
             const sources = (entry ? entry.sources : []).filter(s => s.hasUserSession);
             if (!sources.length) {
-                return jsonRes(res, 409, {
-                    error: `живой GitHub-сессии для ${nick} на диске нет — открой его один раз во вкладке GitHub («Открыть GitHub») и залогинься`,
-                });
+                // Профиля-источника нет вовсе: дальше идти некуда, заводим без снимка.
+                seedWhy = `профиля с сессией ${nick} на диске нет`;
             }
             const free = sources.filter(s => !ghProfileBusy(s));
-            if (!free.length) {
+            if (sources.length && !free.length) {
+                // Занятость - это НЕ мёртвая сессия, а открытое окно: лечится закрытием,
+                // и заселять вслепую тут нельзя - живая сессия сгорела бы зря.
                 return jsonRes(res, 409, {
                     error: `все профили с сессией ${nick} заняты открытым браузером — закрой его и повтори`,
                 });
@@ -7361,13 +7368,11 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
                 if (r.code === 0 || r.code === 4) { snap = gsl.readCache(ghId); from = `${src.tag}/${src.label}`; break; }
                 tried.push(`${src.tag}/${src.label}: ${r.code === 3 ? 'нет живой user_session' : r.code === 2 ? 'профиль занят' : (r.err || 'ошибка').trim().slice(0, 120)}`);
             }
-            if (!snap) {
-                logLine(`${tag} add-github: ${nick} — снимок не снялся (${tried.join(' | ')})`);
-                return jsonRes(res, 409, {
-                    error: `GitHub-сессия ${nick} не годится: ${tried.join('; ')}. Залогинься заново во вкладке GitHub.`,
-                });
-            }
+            // tried пуст, когда источников не было вовсе - тогда причина уже в seedWhy.
+            if (!snap && tried.length) seedWhy = tried.join('; ');
         }
+        // Мёртвая сессия - не отказ: заводим запись без снимка, оживление за входом.
+        if (seedWhy) logLine(`${tag} add-github: ${nick} — сеять нечем (${seedWhy}); завожу запись без сессии, оживит вход`);
 
         // Запись пула. email = ник GitHub осознанно: резервная ветка сопоставления
         // профилей (newapiMapProfiles) сверяет `s.email || s.name` с githubLogin(cookies),
@@ -7411,16 +7416,23 @@ async function newapiAddGithub(req, res, { tag, host, prefix, load, save, sessio
         fs.mkdirSync(sessionsDir, { recursive: true });
         // durable: снимок сессии — то, чем потом входят. Нулёвка после BSOD дала бы
         // «сессия мертва» и увела бы на полный релогин с паролем и 2FA.
-        durableWriteJson(path.join(sessionsDir, label + '.json'), gsl.seedPayload(snap, nick));
+        // Сеять нечем — файла не пишем вовсе: пустой seed:'github' притворился бы сессией
+        // перед open-session, а он и так уходит на регистрацию (кук нет - применять нечего).
+        if (snap) durableWriteJson(path.join(sessionsDir, label + '.json'), gsl.seedPayload(snap, nick));
 
         // Снимок мог прийти непроверенным (harvest код 4 / протухший кеш): заселяем, но
         // честно предупреждаем — вход в аккаунт попросит логин и тем же логином оживит сессию.
+        // Снимка нет вовсе — предупреждение то же, но без обещания «сессия заселена».
         const unverified = !!(snap && (snap.unverified === true || !snap.verifiedAt));
-        const note = unverified
-            ? `сессия ${nick} заселена, но её живость не подтверждена — при входе в аккаунт GitHub может попросить логин; он же её и оживит`
-            : undefined;
-        logLine(`${tag} add-github: ${nick} → ${label} (сессия из ${from}${unverified ? ', НЕ подтверждена' : ''}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
-        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: (snap.cookies || []).length, forced: force, unverified, note });
+        const note = seedWhy
+            ? `запись ${nick} заведена БЕЗ GitHub-сессии (${seedWhy}) — жми «Continue with GitHub» на открывшейся странице: вход по логину оживит и эту запись, и общий снимок`
+            : unverified
+                ? `сессия ${nick} заселена, но её живость не подтверждена — при входе в аккаунт GitHub может попросить логин; он же её и оживит`
+                : undefined;
+        logLine(seedWhy
+            ? `${tag} add-github: ${nick} → ${label} (без сессии, кук 0${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`
+            : `${tag} add-github: ${nick} → ${label} (сессия из ${from}${unverified ? ', НЕ подтверждена' : ''}, кук ${(snap.cookies || []).length}${force ? ', ПОВЕРХ предупреждения о засвете' : ''})`);
+        jsonRes(res, 200, { ok: true, id, label, ghLogin: nick, from, cookieCount: snap ? (snap.cookies || []).length : 0, forced: force, unverified, deadSession: !!seedWhy, note });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }

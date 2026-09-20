@@ -13251,7 +13251,7 @@ async function arCheckinMark(id, on) {
       if (data.checkinAt) { s.checkinAt = data.checkinAt; s.checkinFrom = data.checkinFrom; }
       else { delete s.checkinAt; delete s.checkinFrom; }
     }
-    renderAr(); renderArGauge(); arRenderCheckinCard(); arSetNavCount();
+    renderAr(); renderArGauge(); arRenderCheckinCard(); arSetNavCount(); arLoadProxySource();
     toast(on ? `📦 отмечено вручную: бонус забран, следующий после ${arCheckinCfg().resetHhmmMsk} МСК`
              : '🎁 отметка снята — подарок снова считается доступным', 'success', 4000);
   } catch (e) { toast('отметка чек-ина: ' + e.message, 'error', 8000); }
@@ -13286,6 +13286,14 @@ function arRenderCheckinCard() {
           class="hidden px-2.5 py-1 bg-rose/10 border border-rose/50 text-rose rounded hover:bg-rose/20 font-medium">⏹ Стоп</button>
         <span id="ar-batch-progress" class="text-faint font-mono"></span>
       </div>
+      <div class="flex items-center gap-1 text-xs" title="Через что ходить в панель: перелогин, чеки и балансы. Тот же выбор, что во вкладке «Свои прокси».">
+        <span class="text-faint mr-1">источник</span>
+        ${(arProxySrc.sources || ['auto', 'own', 'scraped', 'direct']).map(s => `
+          <button onclick="arSetProxySource('${s}')"
+            class="px-1.5 py-0.5 rounded border ${arProxySrc.source === s
+              ? 'border-sky/60 text-sky bg-sky/10 font-semibold'
+              : 'border-line-soft text-faint hover:text-ink'}">${arSourceName(s)}</button>`).join('')}
+      </div>
       <div class="flex items-center gap-2 text-xs">
         <span class="text-faint" title="Наблюдение владельца: после этого времени бонус можно забрать снова, независимо от того, во сколько забирал вчера.">граница суток</span>
         <input id="ar-checkin-hhmm" value="${esc(cfg.resetHhmmMsk)}" size="5" maxlength="5" placeholder="20:30"
@@ -13294,7 +13302,7 @@ function arRenderCheckinCard() {
         <button onclick="arSaveCheckinCfg()" class="px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded hover:bg-sky/20">💾</button>
       </div>
     </div>
-    <p class="text-[10px] text-faint mt-2">Забрать: 🎁 в колонке «${'🎁'} $${cfg.bonusUsd}» → <span class="text-emerald">⚡ забрать автоматически</span> (браузер откроется и закроется сам, баланс пересчитается). Не вышло — в том же меню 🌐 «открыть браузер руками»: сайт выйдет из аккаунта через меню профиля, останется клик «Continue with GitHub». <span class="text-amber/80">Пачка ⚡ идёт по одному с паузой ${arBatchLimits.gapSec}с и не больше ${arBatchLimits.max} за раз: залпом по всему пулу шлюз ловит рейт-лимит и точный баланс на 10 минут выродится в прикидку.</span></p>`;
+    <p class="text-[10px] text-faint mt-2">Забрать: 🎁 в колонке «${'🎁'} $${cfg.bonusUsd}» → <span class="text-emerald">⚡ забрать автоматически</span> (браузер откроется и закроется сам, баланс пересчитается). Не вышло — в том же меню 🌐 «открыть браузер руками»: сайт выйдет из аккаунта через меню профиля, останется клик «Continue with GitHub». <span class="text-amber/80">Пачка ⚡ идёт по ${arBatchLimits.max} за раз с паузой ${arBatchLimits.gapSec}с, а дальше я поднимаю следующие сам, пока есть готовые — остановить можно ⏹ Стоп. Залпом по всему пулу шлюз ловит рейт-лимит, а окна при этом идут через адреса из пула: пачки расходятся по разным IP.</span></p>`;
   // Кнопки рисуем один раз вместе с карточкой, а их подписи — отдельной функцией:
   // innerHTML целиком сбрасывал бы фокус в поле «граница суток» посреди набора,
   // а прогресс пачки надо обновлять каждые 3 секунды.
@@ -13542,6 +13550,43 @@ async function arBatchSync(force) {
 // ⚡ Забрать у всех: готовность считает БЭКЕНД по диску, фронт лишь показывает цифру.
 // Список id мы не отправляем намеренно — в браузере лежит снимок пула минутной давности,
 // а отметка могла встать между рендером и кликом.
+// ───── Через что ходить: выбор источника прокси прямо у кнопки сбора ─────
+//
+// Тот же выбор, что во вкладке «Свои прокси» (одна ручка `POST /api/proxies/source`), но
+// рядом с местом, где он нужен: человек решает «через что забирать» в момент нажатия, а не
+// вспоминает, что где-то есть вкладка. Живёт в конфиге пула, переживает перезапуск.
+let arProxySrc = { source: 'auto', sources: ['auto', 'own', 'scraped', 'direct'] };
+
+function arSourceName(s) {
+  return { auto: 'свой+скрапер', own: 'свой пул', scraped: 'скрапер', direct: 'напрямую' }[s] || s;
+}
+
+async function arLoadProxySource() {
+  try {
+    const r = await fetch('/__switch/api/proxies/state');
+    const j = await r.json();
+    if (j && j.source) {
+      arProxySrc = { source: j.source, sources: j.sources || arProxySrc.sources };
+      arRenderCheckinCard();
+    }
+  } catch { /* пул недоступен - оставляем как есть, карточка не должна падать */ }
+}
+
+async function arSetProxySource(src) {
+  if (arProxySrc.source === src) return;
+  try {
+    const r = await fetch('/__switch/api/proxies/source', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: src }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) throw new Error(j.error || 'не сохранилось');
+    arProxySrc.source = j.source;
+    arRenderCheckinCard();
+    toast(`источник прокси: ${arSourceName(j.source)}`, 'success', 4000);
+  } catch (e) { toast('источник прокси: ' + e.message, 'error', 8000); }
+}
+
 async function arCheckinAll() {
   const ready = arCheckinReadyCount(state.agentrouter).ready;
   if (!ready) return toast('🎁 готовых подарков нет — все забраны в этом суточном окне', 'info', 6000);

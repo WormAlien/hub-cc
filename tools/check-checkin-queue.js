@@ -129,7 +129,7 @@ console.log('\n6. поведение: полосы не держат друг д
     } else {
         const block = PROXY.slice(from, to);
         const build = new Function('deps', `
-            const { arLkPids, arRunKind, arPidAlive, AR_AUTO_CHECKIN, logLine, arSpawnSession } = deps;
+            const { arLkPids, arRunKind, arPidAlive, AR_AUTO_CHECKIN, logLine, arSpawnSession, arPoolGate } = deps;
             ${block}
             return { AR_CHECKIN_QUEUE, AR_CHECKIN_GAP_MS, arCheckinLastStart,
                      arLaneOf, arCheckinBusy, arCheckinWaitMs, arQueueSpot, arQueueEta, arCheckinPump };
@@ -143,6 +143,10 @@ console.log('\n6. поведение: полосы не держат друг д
             const deps = {
                 arLkPids, arRunKind, AR_AUTO_CHECKIN: new Map(), logLine: () => {},
                 arPidAlive: (pid) => alive.has(pid),
+                // Отстой адресов проверяется отдельно (check-proxy-ledger, check-checkin-proxy):
+                // здесь песочнице нужен только ответ «адреса есть», иначе насос встал бы на
+                // паузу ожидания и полосы было бы не проверить.
+                arPoolGate: () => null,
                 // Повторяет то, что делает настоящий arSpawnSession: занимает полосу.
                 // Без этого насос за один круг выпустил бы всю очередь — и тест прошёл бы
                 // на сломанном коде.

@@ -79,6 +79,18 @@ const CONFIG_MEMO_MS = 5000;      // конфиг читается на кажд
 
 const SCHEMES = ['http', 'https', 'socks', 'socks4', 'socks5'];
 
+// ── ротация адреса под перелогины (замер 20.09.2026) ──
+//
+// Панель agentrouter режет ручку логина `/api/oauth/state?mode=login` по IP: замер дал
+// ~19 запросов на адрес и окно отстоя ~20 минут, воспроизведено дважды (проба
+// `_research/ar-ip-cooldown-probe.js`). Один перелогин дёргает ручку 3-4 раза - отсюда
+// владельцевские «5-6 аккаунтов на IP». Порог 15 - с запасом до 19.
+//
+// 🪤 Считаем ЗАПРОСЫ, а не аккаунты: лимит панель считает в запросах, и «аккаунт» как
+// единица врёт (перелогин с ретраями стоит дороже).
+const ROTATE_AFTER_DEFAULT = 15;
+const COOLDOWN_MS_DEFAULT = 20 * 60_000;
+
 function readJson(file) {
     try {
         const raw = fs.readFileSync(file, 'utf8');
@@ -223,7 +235,8 @@ function envKey() {
     return [e.PROXY_POOL, e.PROXY_POOL_FILE, e.PROXY_POOL_SCHEME,
         e.PROXY_POOL_HOSTS, e.PROXY_POOL_ENABLED, e.PROXY_POOL_ASSIGN,
         e.PROXY_POOL_OWN, e.PROXY_POOL_OWN_FILE, e.PROXY_POOL_OWN_FIRST, e.PROXY_POOL_MAX_PER_HOST,
-        e.PROXY_POOL_PREFLIGHT_TTL].join('\u0000');
+        e.PROXY_POOL_PREFLIGHT_TTL,
+        e.PROXY_POOL_ROTATE_AFTER, e.PROXY_POOL_COOLDOWN_MS, e.PROXY_POOL_SOURCE].join('\u0000');
 }
 
 function config() {
@@ -277,6 +290,17 @@ function config() {
         }
     }
 
+    // Ручки ротации: порог запросов на адрес и окно отстоя. Числа не «на глаз» - замер
+    // 20.09 дал 19 запросов и 19,6 мин, отсюда 15 и 20 мин.
+    const rotateRaw = Number(e.PROXY_POOL_ROTATE_AFTER != null ? e.PROXY_POOL_ROTATE_AFTER : doc.rotateAfter);
+    const coolRaw = Number(e.PROXY_POOL_COOLDOWN_MS != null ? e.PROXY_POOL_COOLDOWN_MS : doc.cooldownMs);
+    const rotateAfter = Number.isFinite(rotateRaw) && rotateRaw > 0 ? Math.floor(rotateRaw) : ROTATE_AFTER_DEFAULT;
+    const cooldownMs = Number.isFinite(coolRaw) && coolRaw >= 0 ? coolRaw : COOLDOWN_MS_DEFAULT;
+
+    // Источник прокси: auto (свои, потом скрапер - как было) | own | scraped | direct.
+    const srcRaw = String(e.PROXY_POOL_SOURCE || doc.source || 'auto').toLowerCase();
+    const source = ['auto', 'own', 'scraped', 'direct'].includes(srcRaw) ? srcRaw : 'auto';
+
     // Отсутствующий НЕОБЯЗАТЕЛЬНЫЙ own-proxies.txt не включает пустой пул на чистой
     // установке. Явно заданный, но потерянный файл, наоборот, оставляет fail-closed.
     const ownConfigured = !!ownFile && (hasEnvOwn || !!doc.ownFile || fs.existsSync(ownFile));
@@ -303,6 +327,9 @@ function config() {
         scheme,
         hosts,
         preflightTtlMs: Number.isFinite(ttl) && ttl >= 0 ? ttl : PREFLIGHT_TTL_MS,
+        rotateAfter,
+        cooldownMs,
+        source,
         assignFile: e.PROXY_POOL_ASSIGN || (doc.assignFile ? String(doc.assignFile) : DEFAULT_ASSIGN_FILE),
         configFile: CONFIG_FILE,
     };
@@ -310,7 +337,38 @@ function config() {
     return cfg;
 }
 
+// Попадает ли ярус адреса в выбранный источник. `auto` и `direct` не ограничивают
+// (`direct` отсекается раньше, до всякой привязки).
+function tierAllowed(source, tier) {
+    if (source === 'own') return tier === 'own';
+    if (source === 'scraped') return tier === 'scraped';
+    return true;
+}
+
 function enabled() { return config().enabled; }
+
+// Выбор источника человеком. Пишем в ФАЙЛ конфига (не в память): решение должно пережить
+// перезапуск `:8200`, иначе после каждого рестарта источник молча откатывался бы к auto.
+const SOURCES = ['auto', 'own', 'scraped', 'direct'];
+function setSource(source) {
+    const src = String(source == null ? '' : source).toLowerCase().trim();
+    if (!SOURCES.includes(src)) {
+        return { ok: false, error: `источник: ${SOURCES.join(' | ')}` };
+    }
+    let doc = {};
+    try { doc = fs.existsSync(CONFIG_FILE) ? readJson(CONFIG_FILE) : {}; }
+    catch { doc = {}; }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) doc = {};
+    doc.source = src;
+    try {
+        fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+    } catch (e) {
+        return { ok: false, error: `конфиг не записался: ${e.message}` };
+    }
+    CFG_MEMO = null;                      // перечитать сразу, не ждать мемо
+    return { ok: true, source: config().source };
+}
 
 // Работает ли пул на этом хосте. Пустой белый список = на всех.
 function enabledForHost(host) {
@@ -675,6 +733,94 @@ function writeAssign(key, value) {
 function assignments() { return loadAssign().assign; }
 function assignmentFor(key) { return loadAssign().assign[String(key || '')] || null; }
 
+// ───────────────── счётчик и отстой адреса ─────────────────
+//
+// Учёт живёт РЯДОМ С ПРИВЯЗКАМИ, в том же файле: он обязан пережить перезапуск `:8200`,
+// иначе отстой обнуляется на каждом рестарте и адрес снова идёт в бой сожжённым.
+//
+// 🪤 Гонки записи здесь нет по конструкции: и `writeAssign`, и `writeLedger` делают
+// СИНХРОННЫЙ read-modify-write, а Node однопоточный - два вызова не могут перемешаться
+// внутри процесса. Перезапись целого файла снимком (как делали раньше в соседних
+// модулях) как раз теряла бы привязку соседа.
+
+function ledger() {
+    const doc = loadAssign();
+    const l = doc.ledger;
+    return (l && typeof l === 'object' && !Array.isArray(l)) ? l : {};
+}
+
+function writeLedger(proxyId, value) {
+    const doc = loadAssign();
+    if (!doc.ledger || typeof doc.ledger !== 'object' || Array.isArray(doc.ledger)) doc.ledger = {};
+    if (value == null) delete doc.ledger[proxyId];
+    else doc.ledger[proxyId] = value;
+    doc.updatedAt = nowIso();
+    try {
+        fs.mkdirSync(path.dirname(assignFile()), { recursive: true });
+        fs.writeFileSync(assignFile(), JSON.stringify(doc, null, 2) + '\n', 'utf8');
+    } catch { /* не записалось - узнаем по следующему разбору */ }
+    return doc.ledger[proxyId] || null;
+}
+
+// Состояние адреса на СЕЙЧАС, а не то, что лежит в файле. Два способа его обнулить:
+// отстой истёк, либо адрес простоял дольше окна без единого запроса - лимит панели
+// скользящий, и «десять запросов утром плюс десять вечером» это не двадцать подряд.
+function ledgerRow(proxyId) {
+    const cfg = config();
+    const id = String(proxyId == null ? '' : proxyId);
+    const rec = ledger()[id] || null;
+    const now = Date.now();
+    let used = 0, until = null, at = null;
+    if (rec) {
+        at = rec.at || null;
+        until = rec.until || null;
+        used = Number.isFinite(Number(rec.used)) ? Number(rec.used) : 0;
+        const over = until && Date.parse(until) <= now;
+        const idle = !until && at && (now - Date.parse(at)) > cfg.cooldownMs;
+        if (over || idle) { used = 0; until = null; }
+    }
+    const untilMs = until ? Date.parse(until) : null;
+    const cooling = !!(untilMs && untilMs > now);
+    return { id, used, until, at, cooling, untilMs: cooling ? untilMs : null, leftMs: cooling ? untilMs - now : 0 };
+}
+
+// Записать в счётчик адреса N запросов ручки логина. Возвращает состояние ПОСЛЕ.
+//
+// Зовётся из пути перелогина (после того как браузер отработал), а не из чеков баланса:
+// чеки ходят на другие ручки и лимит панели не жгут.
+function spend(proxyId, n = 1, { host = null } = {}) {
+    const cfg = config();
+    const id = String(proxyId == null ? '' : proxyId);
+    if (!id) return null;
+    const add = Number.isFinite(Number(n)) && Number(n) > 0 ? Math.floor(Number(n)) : 1;
+    const cur = ledgerRow(id);
+    const at = nowIso();
+    const total = cur.used + add;
+    const rec = total >= cfg.rotateAfter
+        // Порог: адрес в отстой, счёт обнуляем - при возврате он приходит чистым.
+        ? { used: 0, until: new Date(Date.now() + cfg.cooldownMs).toISOString(), at, hit: total, host: host || null }
+        : { used: total, until: null, at, host: host || null };
+    writeLedger(id, rec);
+    return ledgerRow(id);
+}
+
+// Разбор файла учёта для вкладки: кто в отстое и сколько осталось.
+function ledgerSnapshot() {
+    const cfg = config();
+    const out = [];
+    for (const [id, rec] of Object.entries(ledger())) {
+        const row = ledgerRow(id);
+        out.push({
+            id, used: row.used, cooling: row.cooling, until: row.until,
+            leftMs: row.leftMs, at: rec && rec.at || null,
+            hit: (rec && rec.hit) || null, host: (rec && rec.host) || null,
+            rotateAfter: cfg.rotateAfter, cooldownMs: cfg.cooldownMs,
+        });
+    }
+    return out;
+}
+
+
 // Вердикт по прокси и хосту из кеша здоровья, без сетевого похода.
 //
 // 🪤 Ключ кеша включает ПУТЬ (`proxyId|host|path`), а нам здесь хост нужен целиком.
@@ -1001,6 +1147,11 @@ function capacity() {
 function tierOrder() {
     const cfg = config();
     const t = tiers();
+    // Источник выбирает человек (решение владельца 20.09): свой пул уже есть, и скрапер
+    // больше не обязателен. `own` НЕ переливает в скрапер - если своих нет или все в отстое,
+    // это честный отказ/ожидание, а не тихая подмена чужого адреса нашим видом.
+    if (cfg.source === 'own') return [['own', t.own]];
+    if (cfg.source === 'scraped') return [['scraped', t.scraped]];
     return cfg.ownFirst ? [['own', t.own], ['scraped', t.scraped]]
         : [['scraped', t.scraped], ['own', t.own]];
 }
@@ -1047,7 +1198,8 @@ function withAssignLock(host, fn) {
 // Возвращает { proxy, tier } | { exhausted: true, tier } | { saturated: true }.
 // 🪤 «Свои кончились» и «у своих нет места» - разные вещи: в первом случае корректно
 // перелить на скрапер, во втором перелив означал бы, что мы обходим лимит панели.
-function pick(host = null) {
+function pick(host = null, { byUsage = false, exclude = null } = {}) {
+    const skip = exclude && exclude.length ? new Set(exclude.map(String)) : null;
     const assign = assignments();
     const global = new Map();
     for (const v of Object.values(assign)) {
@@ -1056,23 +1208,67 @@ function pick(host = null) {
     const limit = maxPerHostFor(host);
     const hLoad = hostLoad(host);
     let sawTier = false;
+    let sawCooling = false;
+    let soonest = null;
     for (const [tier, list] of tierOrder()) {
         if (!list.length) continue;
         sawTier = true;
-        const free = list.filter(p => (hLoad.get(p.id) || 0) < limit);
-        if (!free.length) continue;          // ярус занят под потолок - пробуем следующий
+        const free = [];
+        let tierSoonest = null;
+        for (const p of list) {
+            // 🔴 Названный мёртвым не берём вовсе. Сетевую пробу здесь делать нельзя - иначе
+            // раскладка перестала бы быть повторяемой (см. знаменатель формулы ёмкости);
+            // мёртвых называет вызывающий по кешу здоровья.
+            if (skip && skip.has(String(p.id))) continue;
+            // 🔴 Сожжённый адрес не берём даже под новую посадку: панель режет его по IP,
+            // и посадка об него - это гарантированный отказ, а не «повезёт».
+            const row = ledgerRow(p.id);
+            if (row.cooling) {
+                sawCooling = true;
+                if (soonest == null || row.untilMs < soonest) soonest = row.untilMs;
+                if (tierSoonest == null || row.untilMs < tierSoonest) tierSoonest = row.untilMs;
+                continue;
+            }
+            // 🔴 Потолок «аккаунтов на адрес» - про ПОСАДКУ, а не про ротацию. Ротацию
+            // ограничивает счётчик запросов (ROTATE_AFTER); мерить её остатком мест значит
+            // уводить перелогины на скрапер - живые свои стоят, а очередь едет по чужим.
+            // Ровно это и случилось в бою 20.09: по одному привязанному аккаунту на каждом
+            // своём адресе сделали ярус «свои» полным при потолке 1.
+            if (!byUsage && (hLoad.get(p.id) || 0) >= limit) continue;
+            free.push(p);
+        }
+        if (!free.length) {
+            // Для РОТАЦИИ ярус не покидаем: свои в отстое - значит ЖДАТЬ их, а не брать
+            // скраперный адрес. Скраперный не наш, живёт минуты и делится с чужими.
+            // То же и когда все свои названы мёртвыми: «возьмём хоть какой-нибудь» тут
+            // означало бы потерянный логин.
+            if (byUsage) {
+                if (tierSoonest != null) {
+                    return { cooling: true, untilMs: tierSoonest, waitMs: Math.max(0, tierSoonest - Date.now()) };
+                }
+                return { saturated: true };
+            }
+            continue;                        // посадка: ярус занят под потолок - пробуем следующий
+        }
         const rank = p => [
+            // byUsage - для ПЕРЕЛОГИНОВ: кольцо должно расходиться по наименее
+            // использованным, иначе один адрес примет все перелогины подряд.
+            byUsage ? ledgerRow(p.id).used : 0,
             hLoad.get(p.id) || 0,
             global.get(p.id) || 0,
             list.indexOf(p),
         ];
         free.sort((a, b) => {
             const ra = rank(a), rb = rank(b);
-            return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2];
+            return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2] || ra[3] - rb[3];
         });
         return { proxy: free[0], tier };
     }
-    // Ни один ярус не дал места. Если прокси вообще есть, значит упёрлись в лимиты.
+    // Ни один ярус не дал места. Отстой - это НЕ «нагрузка»: очередь обязана узнать,
+    // сколько ждать (ближайший возврат), иначе она либо идёт напрямую, либо рвёт пачку.
+    if (sawCooling && soonest != null) {
+        return { cooling: true, untilMs: soonest, waitMs: Math.max(0, soonest - Date.now()) };
+    }
     if (sawTier) return { saturated: true };
     return { exhausted: true };
 }
@@ -1098,6 +1294,10 @@ async function forAccount(key, { host = null, force = false, usePreflight = true
 async function _forAccount(key, { host = null, force = false, usePreflight = true, preflightPath = DEFAULT_PREFLIGHT_PATH } = {}) {
     const cfg = config();
     if (!cfg.enabled) return { ok: true, proxy: null, direct: true, reason: 'пул прокси не настроен' };
+    // Источник «напрямую» выбран человеком: это не отказ и не поломка, а решение.
+    if (cfg.source === 'direct') {
+        return { ok: true, proxy: null, direct: true, reason: 'источник: напрямую (выбрано вручную)' };
+    }
     if (cfg.hosts.length && (!host || !cfg.hosts.includes(String(host)))) {
         return { ok: true, proxy: null, direct: true, reason: `хост ${host || '—'} вне белого списка пула` };
     }
@@ -1136,6 +1336,34 @@ async function _forAccount(key, { host = null, force = false, usePreflight = tru
             };
         }
         tier = tierOf(proxy.id);
+        // 🔴 ВЫБОР ИСТОЧНИКА ВАЖНЕЕ ЛИПКОСТИ. Если человек выбрал «только свой», а аккаунт
+        // сидит на скраперном адресе, чек обязан переехать - иначе выбор не работает: снаружи
+        // он включён, а трафик идёт по старому ярусу, и заметить это нечем.
+        if (!tierAllowed(cfg.source, tier)) {
+            const moved = await withAssignLock(host, () => {
+                const c = pick(host, { byUsage: true });
+                if (c.proxy) {
+                    writeAssign(k, {
+                        proxy: c.proxy.id, at: nowIso(), why: `переезд под источник «${cfg.source}»`,
+                        host: host || null, tier: c.tier,
+                    });
+                    return c;
+                }
+                return null;
+            });
+            if (moved && moved.proxy) {
+                proxy = moved.proxy;
+                tier = moved.tier;
+            } else {
+                // Свободного адреса в выбранном ярусе нет - говорим прямо, а не подсовываем
+                // адрес из яруса, который человек выключил.
+                return {
+                    ok: false, sourceMismatch: true,
+                    error: `аккаунт на ${cur.proxy} (ярус ${tier || 'неизвестен'}), а источник выбран`
+                        + ` «${cfg.source}» - свободного адреса в нём нет`,
+                };
+            }
+        }
     } else {
         // 🔴 Посадка НОВОГО аккаунта - под очередью хоста. Без неё параллельная пачка
         // видит одинаковую нагрузку (её ещё нет) и все выбирают один прокси, а формула
@@ -1228,6 +1456,48 @@ function reassign(key, proxyId = null) {
 
 // Привязки, которые держат АККАУНТЫ, а не прокси. Ключ здесь - `key` записи
 // (`ar_1789…`), а не id прокси: у одного прокси таких записей много.
+// Адреса, про которые в кеше здоровья УЖЕ известно, что на этом хосте они не отвечают.
+// Нужно ротации: сама она в сеть не ходит (иначе раскладка перестала бы быть повторяемой),
+// а мёртвый адрес под перелогин - это потерянный логин аккаунта, а не «повезёт».
+function deadProxiesFor(host = null) {
+    const dead = [];
+    for (const [, list] of tierOrder()) {
+        for (const p of list) {
+            const v = healthCacheGet(p.id, host || '');
+            if (v && v.ok === false) dead.push(p.id);
+        }
+    }
+    return dead;
+}
+
+// Адрес под ПЕРЕЛОГИН: свежий, а не тот, что прилип к аккаунту.
+//
+// 🔴 Это расходится с липкостью чеков намеренно. Липкая привязка живёт ради того, чтобы не
+// менять IP под живой сессией, - но панель режет адрес после ~19 запросов логина, и упорство
+// стоит ровно того логина, ради которого всё делается. Решение владельца 19.09: свободная
+// ротация по счётчику - адрес берётся на перелогин, а чеки потом идут тем же адресом.
+function rotateFor(key, { host = null, exclude = null } = {}) {
+    const k = String(key || '').trim();
+    if (!k) return { ok: false, error: 'нет ключа привязки - адрес вслепую не выдам' };
+    // Источник «напрямую» - окно идёт без прокси, и это НЕ ошибка: родитель не должен
+    // считать это отказом и рвать очередь.
+    if (config().source === 'direct') return { ok: true, proxy: null, direct: true, how: 'direct' };
+    const c = pick(host, { byUsage: true, exclude });
+    if (c.cooling) {
+        return {
+            ok: false, cooling: true, untilMs: c.untilMs, waitMs: c.waitMs,
+            error: `все адреса в отстое, ближайший вернётся через ${Math.ceil(c.waitMs / 60000)} мин`,
+        };
+    }
+    if (c.saturated) return { ok: false, saturated: true, error: `на хосте ${host} нет свободного адреса` };
+    if (c.exhausted) return { ok: false, error: 'пул прокси пуст - ротировать нечего' };
+    writeAssign(k, {
+        proxy: c.proxy.id, at: nowIso(), why: 'ротация под перелогин',
+        host: host || null, tier: c.tier,
+    });
+    return { ok: true, proxy: c.proxy, tier: c.tier, how: 'rotate' };
+}
+
 function assignmentRows() {
     const rows = [];
     for (const [key, v] of Object.entries(assignments())) {
@@ -1257,6 +1527,12 @@ function rebalancePlan({ host = null } = {}) {
     for (const r of rows) {
         if (!r.proxy) continue;
         if (t.byId.has(r.proxy)) continue;               // прокси на месте
+        // 🔴 Фильтр по хосту ОБЯЗАН работать и здесь, а не только в ветке переполнения.
+        // Живой случай 20.09: вкладка просит план для `agentrouter.org`, а план приносит
+        // 97 перемещений по всем провайдерам сразу (aikeysapi, rumeng, odyssey и 32 без
+        // хоста). Применение такого плана двигает привязки чужих шлюзов - то есть чинит
+        // один хост, ломая четыре. Симптом тихий: план выглядит «полным», а не «чужим».
+        if (host && r.host !== String(host)) continue;
         if (r.tier === 'own') {
             skipped.push({ key: r.key, proxy: r.proxy, host: r.host, why: 'осиротел на СВОЁМ ярусе — снимает только владелец' });
         } else {
@@ -1318,7 +1594,14 @@ function applyRebalance(plan) {
         const host = m.host == null ? null : String(m.host);
         const saved = assignmentFor(k);
         writeAssign(k, null);                            // себя в нагрузку не берём
-        const chosen = pick(host);
+        // 🔴 Расселяем РОТАЦИОННЫМ выбором (`byUsage`), а не посадочным с потолком.
+        //
+        // Потолок «аккаунтов на адрес» считает только тех, кого пул обслуживает, и осиротевшие
+        // привязки в него не входят вовсе. Отсюда тупик 20.09: 38 привязок просят переселения,
+        // потолок выходит 1, и ВСЕ 38 отказов - «нет свободного прокси», хотя шесть своих
+        // адресов стоят живые и пустые. Ротация же раскладывает по счёту и потолка не боится:
+        // в новой модели лимит адреса задаёт счётчик запросов, а не число привязок.
+        const chosen = pick(host, { byUsage: true });
         if (chosen.saturated || chosen.exhausted) {
             if (saved) writeAssign(k, saved);            // не смогли - вернуть как было
             errors.push({ key: k, error: chosen.saturated
@@ -1402,7 +1685,7 @@ module.exports = {
     // разбор
     parseProxy, parseList, loadFile, schemeFromFilename, SCHEMES,
     // конфиг и пул
-    config, enabled, enabledForHost, pool, describe,
+    config, enabled, enabledForHost, pool, describe, setSource, SOURCES,
     CONFIG_FILE, DEFAULT_ASSIGN_FILE, DEFAULT_OWN_FILE,
     // ярусы и мэппинг «прокси × хост»
     tiers, tierOf, hostLoad, maxPerHostFor, pick, tierOrder,
@@ -1412,6 +1695,8 @@ module.exports = {
     preflight, preflightVerdict, health, forgetHealth, healthCacheGet, healthSnapshot,
     // липкость
     stickyKey, forAccount, assignments, assignmentFor, release, reassign, leastLoaded,
+    // счётчик и отстой адреса (ротация под перелогины)
+    ledger, ledgerRow, ledgerSnapshot, spend, rotateFor, deadProxiesFor,
     // ребаланс
     assignmentRows, rebalancePlan, applyRebalance,
     // служебное

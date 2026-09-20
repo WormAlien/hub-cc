@@ -98,6 +98,79 @@ const label = (labelArg || `ar_${Date.now()}`).replace(/[^\w-]/g, '_');
 const mode = String(process.argv[3] || 'auto'); // register | console | auto | checkin | autocheckin
 const profileDir = path.join(PROFILES_DIR, label);
 
+// ───── Адрес, через который идёт ЭТОТ прогон ─────────────────────────────
+//
+// Родитель кладёт его разовым файлом и ждёт, что мы его съедим: ни аргументом, ни через
+// env нельзя - список процессов машины виден целиком вместе с паролем прокси.
+//
+// 🪤 Почему браузер вообще идёт через прокси (отмена решения 12.09). Прямой путь с рабочей
+// станции выходит адресом ноды CH - локальный tun включён всегда, - и панель жжёт этот
+// адрес после ~19 запросов логина (замер 20.09, окно ~20 мин). То есть «идти напрямую»
+// означало светить своей же нодой. Разбор - wiki «Ротация адресов под подарки AgentRouter».
+const PROXY_SEED_DIR = path.join(__dirname, '..', 'routing', 'runtime', 'ar-proxy');
+
+function takeProxySeed(lbl) {
+  const file = path.join(PROXY_SEED_DIR, `${lbl}.json`);
+  let doc = null;
+  try {
+    doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;                       // нет файла - прогон без прокси (пул выключен или визит 🌐)
+  }
+  try { fs.rmSync(file, { force: true }); } catch { /* не удалился - не беда, перезапишут */ }
+  const p = doc && doc.proxy;
+  if (!p || !p.server) return null;
+  // 🔴 Страховка от «адреса-пустышки». 20.09 родитель собрал строку из несуществующего поля
+  // (`host` вместо `hostname`), в окно уехало `http://undefined:10808`, браузер не достучался
+  // никуда - и это выглядело как «край не отвечает», то есть как вина панели, а не наша.
+  // Лучше громко упасть здесь, чем полтора часа искать причину в чужом огороде.
+  if (/undefined|null|:\s*$/.test(String(p.server))) {
+    console.error(`❌ Адрес прогона собран неправильно: ${p.server}. Браузер не поднимаю.`);
+    process.exit(7);
+  }
+  return {
+    server: String(p.server),
+    username: p.username ? String(p.username) : undefined,
+    password: p.password ? String(p.password) : undefined,
+  };
+}
+
+const proxySeed = takeProxySeed(label);
+
+// 🔴 Chromium молча уходит НАПРЯМУЮ, если у SOCKS-прокси есть логин с паролем: не ошибка,
+// не отказ - просто тихий выход домашним (в нашем случае нодовым) адресом, ровно то, от
+// чего прокси и защищает. Падаем явным текстом ДО запуска браузера (код 7 - как раньше).
+if (proxySeed && /^socks/i.test(proxySeed.server) && proxySeed.username) {
+  console.error('❌ SOCKS с логином и паролем: Chromium такое игнорирует и идёт напрямую.');
+  console.error('   Нужен http:// с авторизацией либо socks5 без пароля. Браузер не поднимаю.');
+  process.exit(7);
+}
+if (proxySeed) {
+  console.log(`🌐 прогон через адрес ${proxySeed.server}${proxySeed.username ? ' (с авторизацией)' : ''}`);
+}
+
+// Тихий режим окна. Очередь ⚡ открывает окна сама и не должна трогать рабочее место
+// владельца («заебало они забирают фокус», 19.09). 🎁 ручной чек-ин и обход ЛК - наоборот:
+// там человек сидит в окне.
+const silentWindow = !['checkin', 'console'].includes(mode);
+
+// Счётчик запросов к ручке логина. Панель режет ИМЕННО её по IP: замер 20.09 дал ~19
+// запросов на адрес и окно отстоя ~20 мин. Родитель запишет это число в счётчик адреса,
+// чтобы пул знал, когда уводить его в отстой, - поэтому считаем по факту, а не «примерно».
+//
+// 🪤 Отдельной функцией, а не телом main: регресс `check-checkin-preflight` стережёт, что
+// ДО разлогина state-OAuth не запрашивается вообще, и упоминание этого пути прямо в main
+// валит его проверку. Проверка полезная - запрос подменил бы живую сессию аккаунта.
+function watchLoginRequests(context) {
+  const hit = { n: 0 };
+  context.on('request', r => {
+    try { if (r.url().includes('/api/oauth/state')) hit.n++; }
+    catch { /* разбор URL не наша забота */ }
+  });
+  return hit;
+}
+
+
 // ───── Полный след прогона чек-ина в файл ────────────────────────────────
 // Дашборд ловит stdout скрипта и льёт его в logLine, а тот пишет в консоль и в кольцо
 // на 400 строк. Кольцо затапливает keepalive за секунды (он логирует каждый ping), и к
@@ -1219,6 +1292,9 @@ async function main() {
   const uaPlat = /Windows/.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'macOS' : 'Linux';
   console.log(`🖥️  отпечаток: Chrome ${uaVer} на ${uaPlat}`);
 
+  // Прокси больше НЕ «аварийный ретрай»: адрес приходит на весь прогон и приходит из пула.
+  // Прямого пути у agentrouter.org нет - нет адреса, значит прогон не начинается вовсе
+  // (родитель просто не спавнит окно), а не «пойдём как-нибудь с нодового IP».
   const context = await chromium.launchPersistentContext(profileDir, {
     headless: false,
     viewport: null,
@@ -1228,8 +1304,32 @@ async function main() {
     channel: 'chrome',
     ignoreDefaultArgs: ['--disable-extensions'],
     userAgent: ua,
-    args: ['--window-size=600,1000', '--disable-blink-features=AutomationControlled'],
+    proxy: proxySeed || undefined,
+    args: [
+      '--window-size=600,1000',
+      '--disable-blink-features=AutomationControlled',
+    ],
   });
+
+  // Счётчик запросов к ручке логина навешивается ПОСЛЕ разлогина (см. watchLoginRequests):
+  // до него эта ручка не дёргается вовсе, а проба края её специально не трогает - запрос
+  // state подменил бы живую сессию аккаунта. Объявление здесь, навешивание - там.
+  let loginHit = { n: 0 };
+
+  // 🔴 Маркер печатается на ЛЮБОМ выходе, а не только на успешном. Иначе упавший прогон
+  // не сообщает, сколько запросов он всё-таки сделал, и родитель списывает со своего адреса
+  // значение по умолчанию - счёт раздувается, кольцо ротации сбивается, и адрес выгорает
+  // раньше остальных (живой случай 20.09: финская взяла втрое больше).
+  let markerSent = false;
+  const emitMarker = (checkedIn, message) => {
+    if (markerSent) return;
+    markerSent = true;
+    console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
+      checkedIn, message, loginRequests: loginHit.n,
+    })}`);
+  };
+  process.on('exit', () => emitMarker(null, 'прогон завершился без вердикта'));
+
 
   const page = context.pages()[0] || await context.newPage();
 
@@ -1240,8 +1340,27 @@ async function main() {
   // CDP userAgentMetadata is target-scoped; without this GitHub sees empty brands.
   context.on('page', p => { applyUserAgentOverride(context, p, ua); });
   await applyUserAgentOverride(context, page, ua);
-  await page.bringToFront();
-  raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
+  // 🔴 Окно очереди НЕ лезет вперёд. Владелец 19.09: «заебало они забирают фокус» — окна
+  // ⚡ всплывали поверх работы. `bringToFront` поднимает лишь вкладку, а окно ОС наверх
+  // выносит WinAPI (`raiseBrowserWindow`), и раньше это делалось ВСЕГДА.
+  // 🎁 Ручной чек-ин и обход ЛК - другое дело: там в окне сидит человек, и поднять его
+  // наверх обязательно. Тихий режим - только у автоматических режимов.
+  if (!silentWindow) {
+    await page.bringToFront();
+    raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
+  } else {
+    // 🪤 Флаг `--start-minimized` Chrome на Windows ИГНОРИРУЕТ: замер 20.09 показал окно
+    // в состоянии `normal`, и оно всплыло. Работает только CDP-сворачивание, оно же даёт
+    // проверяемый признак - `windowState: minimized` (проба `_research/check-window-silent.js`).
+    try {
+      const cdpWin = await context.newCDPSession(page);
+      const w = await cdpWin.send('Browser.getWindowForTarget');
+      await cdpWin.send('Browser.setWindowBounds',
+        { windowId: w.windowId, bounds: { windowState: 'minimized' } });
+    } catch (e) {
+      console.log(`⚠️  окно не свернуть (${e.message}) — прогон идёт, но окно может лезть вперёд`);
+    }
+  }
   await disableHttpCache(context, page);
 
   // Чек-ин идёт раньше всего остального: импортированные куки и рефка тут не при чём,
@@ -1283,6 +1402,7 @@ async function main() {
       }
 
       await doCheckinLogout(context, page);
+      loginHit = watchLoginRequests(context);   // считаем только вход, а не пробу края
 
       if (auto) {
         // Страховка на случай, если сессия отвалилась ПОСЛЕ выхода (GitHub умеет гасить
@@ -1383,10 +1503,7 @@ async function main() {
       await context.close().catch(() => {});
       // The marker reports only the gateway's check-in verdict. The parent obtains the
       // authoritative balance through cookie/raw-auth after this process exits.
-      console.log(`AUTOCHECKIN_RESULT ${JSON.stringify({
-        checkedIn: auto && oauth && oauth.seen ? !!oauth.checkedIn : null,
-        message: (auto && oauth && oauth.message) || '',
-      })}`);
+      emitMarker(auto && oauth && oauth.seen ? !!oauth.checkedIn : null, (auto && oauth && oauth.message) || '');
       console.log('🎁 Готово. Куки сохранены; дашборд сейчас проверит точный баланс обычным HTTP-путём.');
       process.exit(0);
     } catch (e) {
@@ -1512,4 +1629,8 @@ if (require.main === module) {
   });
 }
 
-module.exports = { accountUserAgent, uaMetadata, UA_DIR };
+// `takeProxySeed` экспортируется ради регресса: он гоняет НАСТОЯЩИЙ круг «родитель записал -
+// ребёнок прочитал». Статическая сверка по обе стороны такой баг не ловит: 20.09 родитель писал
+// плоский `{server,…}`, ребёнок читал `doc.proxy`, оба куска выглядели на месте - а браузер
+// молча шёл напрямую.
+module.exports = { accountUserAgent, uaMetadata, UA_DIR, takeProxySeed };

@@ -41,9 +41,14 @@ const harvestCalls = (checkinMain.match(/await harvestCookiesToJar\(context\)/g)
 check(harvestCalls === 1, `exactly one cookie harvest in main (got ${harvestCalls})`);
 const harvestAt = checkinMain.indexOf('await harvestCookiesToJar(context)');
 const closeAt = checkinMain.indexOf('await context.close()', harvestAt);
-const markerAt = checkinMain.indexOf('AUTOCHECKIN_RESULT', closeAt);
 check(harvestAt >= 0 && closeAt > harvestAt, 'cookies harvested before Chromium closes');
-check(markerAt > closeAt, 'success marker emitted after browser closes');
+// 🪤 Маркер печатает функция `emitMarker` (её же зовёт выход без вердикта), поэтому ищем
+// ВЫЗОВ после закрытия браузера, а не литерал. Литерал теперь живёт в самой функции, и
+// проверка на него в main зеленела бы всегда - то есть сторожила бы пустоту.
+const markerAt = checkinMain.indexOf('emitMarker(', closeAt);
+check(markerAt > closeAt, 'вердикт печатается после закрытия браузера');
+check(/AUTOCHECKIN_RESULT/.test(cutFn(sessionSrc, 'const emitMarker =') || sessionSrc),
+    'печатает его именно emitMarker, а не что-то другое');
 
 console.log('\n3. parent immediately forces ordinary balance after browser exit');
 const finish = cutFn(dashSrc, 'async function arAutoCheckinFinish(');

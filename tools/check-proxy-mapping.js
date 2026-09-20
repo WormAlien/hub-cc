@@ -41,6 +41,10 @@ function writeFile(file, lines) { fs.writeFileSync(file, lines.join('\n') + '\n'
 async function withPool(env, fn) {
     const saved = { ...process.env };
     process.env.PROXY_POOL_ASSIGN = ASSIGN;
+    // 🪤 Источник задаём ЯВНО. Он живёт в боевом `routing/proxy-pool.json`, и когда владелец
+    // переключает его на «только свой» (20.09), песочница подхватывала это и валила проверки
+    // перелива: тест мерил не свою настройку, а чужую. Здесь проверяется поведение `auto`.
+    process.env.PROXY_POOL_SOURCE = 'auto';
     for (const [k, v] of Object.entries(env)) {
         if (v == null) delete process.env[k];
         else process.env[k] = String(v);

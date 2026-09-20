@@ -570,6 +570,7 @@
           </div>
         </header>
         ${notice}
+        ${sourceSection(d)}
         ${ownSection(d)}
         ${capacitySection(d)}
         ${scrapedSection(d)}
@@ -582,7 +583,50 @@
       </div>`;
   }
 
-  window.PROXIES = { load, saveOwn, checkOwn, planRebalance, applyRebalance, releaseKey, render, openInlineForm, addFromFields };
+  // Источник прокси: что пул вообще берёт в работу. Это ВЫБОР человека, а не догадка пула -
+  // решение владельца 20.09: свой пул уже есть, и скрапер больше не обязателен.
+  function sourceSection(d) {
+    const cur = d.source || 'auto';
+    const all = d.sources || ['auto', 'own', 'scraped', 'direct'];
+    const name = {
+      auto: 'свой, потом скрапер',
+      own: 'только свой пул',
+      scraped: 'только скрапер',
+      direct: 'напрямую',
+    };
+    const hint = cur === 'own'
+      ? 'Свои кончились или в отстое — очередь ЖДЁТ их, а в скрапер не переливает.'
+      : cur === 'scraped'
+        ? 'Свой ярус не используется вовсе: весь флот идёт через скраперные адреса.'
+        : cur === 'direct'
+          ? 'Прокси не используется: окна и чеки идут с адреса машины.'
+          : 'Как было: свои первыми, при исчерпании — скрапер.';
+    return `<section class="px-card">
+      <div class="px-card-title">Источник прокси</div>
+      <div class="px-src">
+        ${all.map(s => `<button class="px-btn px-src-btn${s === cur ? ' px-src-on' : ''}"
+          onclick="PROXIES.setSource('${s}')">${esc(name[s] || s)}</button>`).join('')}
+      </div>
+      <div class="px-note-faint">${esc(hint)}</div>
+    </section>`;
+  }
+
+  async function setSource(src) {
+    try {
+      const r = await fetch('/__switch/api/proxies/source', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ source: src }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'не сохранилось');
+      await load();
+    } catch (e) {
+      alert('источник прокси: ' + e.message);
+    }
+  }
+
+  window.PROXIES = { load, saveOwn, checkOwn, planRebalance, applyRebalance, releaseKey, render, openInlineForm, addFromFields, setSource };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startPoll);
   else startPoll();
 })();

@@ -1088,8 +1088,50 @@ function directFailureLabel(result) {
     return `direct HTTP ${result.status}`;
 }
 
+// Хосты, у которых прямого пути нет вовсе. Решение владельца 20.09 (вариант 3 из трёх):
+// чек идёт ТЕМ ЖЕ адресом, что и перелогин аккаунта, а если адрес в отстое - прямым путём,
+// чтобы отчёт не врал «шлюз лежит».
+//
+// Повод измеренный: «прямой» путь с рабочей станции выходит адресом ноды - его выбирает
+// балансир локального tun'а (ночью это была CH, утром FI). То есть чек аккаунта и его
+// перелогин приезжали к панели с РАЗНЫХ адресов, и какой достанется - не наша воля.
+const PROXY_FIRST_HOSTS = new Set(['agentrouter.org']);
+
+// Через адрес аккаунта. Возвращает ответ либо null, если идти надо прямым путём
+// (адреса нет, он в отстое, или туннель не поднялся вовсе).
+async function addressFirst({ host, accountId, profileDir, force, direct, viaProxy }) {
+    const px = await accountProxy({ host, accountId, profileDir, force });
+    if (!px.ok || !px.proxy) {
+        console.log(`[чек] ${host}: адреса нет (${px.error || 'не выдан'}) — иду прямым путём`);
+        return null;
+    }
+    if (PROXY && PROXY.ledgerRow && PROXY.ledgerRow(px.proxy.id).cooling) {
+        console.log(`[чек] ${host}: адрес ${px.proxy.id} в отстое — иду прямым путём`);
+        return null;
+    }
+    let through;
+    try {
+        through = await proxyGate(px.proxy.id, host, () => viaProxy(px.proxy));
+    } catch {
+        return null;                       // даже начать не смогли - падаем в прямой путь
+    }
+    const out = { ...through, viaProxy: true, proxyFirst: true };
+    console.log(`[чек] ${host}: ${out.ok ? 'через адрес' : 'адрес отбил'} ${px.proxy.id} (HTTP ${out.status})`);
+    if (!retryableDirectFailure(out)) return out;     // смысловой ответ - он и есть ответ
+    // Адрес отбился транспортом, WAF или 429. Аккаунт без цифры не оставляем - добираем прямым
+    // путём, но причину отказа адреса сохраняем в ответе: иначе это выглядело бы как «шлюз лежит».
+    const failure = out.transportError ? `адрес: ${out.error || 'ошибка транспорта'}`
+        : out.waf ? `адрес: WAF HTML (HTTP ${out.status})` : `адрес: HTTP ${out.status}`;
+    const fallback = await direct().catch(e => transportFailure(e));
+    return { ...fallback, proxyFirst: true, proxyFirstFailure: failure };
+}
+
 async function directFirstRequest({ host, accountId = null, profileDir = null, force = false,
     direct, viaProxy }) {
+    if (PROXY_FIRST_HOSTS.has(String(host || '').toLowerCase())) {
+        const viaAddr = await addressFirst({ host, accountId, profileDir, force, direct, viaProxy });
+        if (viaAddr) return viaAddr;
+    }
     let original;
     try { original = await direct(); }
     catch (e) { original = transportFailure(e); }

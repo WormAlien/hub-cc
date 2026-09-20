@@ -307,3 +307,22 @@
   outline: none;
   border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
 }
+
+/* ── выбор источника прокси (20.09) ── */
+.px-src {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 6px;
+}
+.px-src-btn {
+  cursor: pointer;
+  opacity: 0.75;
+}
+.px-src-btn:hover { opacity: 1; }
+.px-src-on {
+  opacity: 1;
+  font-weight: 600;
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}

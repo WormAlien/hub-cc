@@ -162,8 +162,21 @@ function state() {
             orphans: d.orphans, orphansOwn: d.orphansOwn, orphansScraped: d.orphansScraped,
         },
         assignFile: d.assignFile,
+        // Источник прокси выбирает человек (решение владельца 20.09): свой пул уже есть, и
+        // скрапер больше не обязателен. Отдаём и текущее значение, и полный список вариантов,
+        // чтобы вкладка не выдумывала их у себя.
+        source: cfg.source || 'auto',
+        sources: lib.SOURCES || ['auto', 'own', 'scraped', 'direct'],
         updatedAt: nowIso(),
     };
+}
+
+// Выбор источника: auto | own | scraped | direct. Пишется в конфиг пула - переживает рестарт.
+function setSource(source) {
+    const lib = poolLib();
+    if (!lib || !lib.setSource) return unavailable('setSource');
+    try { return lib.setSource(source); }
+    catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
 }
 
 // ───────────────────────────── сохранение своего списка ─────────────────────────────
@@ -300,4 +313,4 @@ function unassign({ key } = {}) {
     return { ok: true, released: prev ? { proxy: prev.proxy, at: prev.at || null, why: prev.why || null } : null };
 }
 
-module.exports = { state, saveOwn, checkOwn, rebalance, assign, unassign, preflightPathFor };
+module.exports = { state, saveOwn, checkOwn, rebalance, assign, unassign, preflightPathFor, setSource };

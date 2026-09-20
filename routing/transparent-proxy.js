@@ -13174,6 +13174,100 @@ function handleArCheckinStatus(req, res) {
 // Полосы сериализованы каждая сама в себе — человек всё равно сидит в одном окне, а ⚡
 // по-прежнему идут по одному, — но друг друга не ждут. Максимум два окна разом: защита
 // от залпа из одиннадцати при этом сохраняется полностью.
+// ───── Адрес прогона: пул решает, через что идёт окно ─────────────────────
+//
+// Браузер идёт через адрес аккаунта, а не напрямую. Это отмена решения 12.09 («прокси не
+// сопровождает сбор подарка»): прямой путь с рабочей станции выходит адресом ноды CH -
+// локальный tun включён всегда, - и панель жжёт этот адрес после ~19 запросов логина
+// (замер 20.09, окно ~20 мин, воспроизведено дважды). То есть «напрямую» означало светить
+// своей же нодой. Разбор и числа - wiki «Ротация адресов под подарки AgentRouter».
+//
+// 🪤 Блок живёт ДО `AR_CHECKIN_QUEUE`: он тянет `path`, `fs` и `proxyPoolLib`, а блок
+// очереди регресс `check-checkin-queue.js` вырезает и исполняет в песочнице с подставными
+// зависимостями. Насос получает `arPoolGate` там через deps.
+const AR_POOL_HOST = 'agentrouter.org';
+const AR_PROXY_SEED_DIR = path.join(__dirname, 'runtime', 'ar-proxy');
+// Запасное значение, если ребёнок почему-то не отчитался вовсе. Меряно: ОДИН перелогин
+// тратит один запрос ручки логина (замер 20.09). Раньше здесь стояло 4 - и упавший прогон,
+// который маркера не печатал, списывал вчетверо против сделанного: счёт раздувался, кольцо
+// ротации сбивалось, и один адрес выгорал раньше остальных.
+const AR_LOGIN_COST = 1;
+const arRunProxy = new Map();         // label → id адреса, чтобы списать расход на выходе
+
+// Адрес под прогон. Пул выключен или хост вне его белого списка - как раньше, без прокси:
+// пустая установка не должна ломаться от того, что пула нет.
+function arTakeAddress(job) {
+    const lib = proxyPoolLib();
+    if (!lib) return { ok: true, proxy: null };
+    if (!lib.enabledForHost(AR_POOL_HOST)) return { ok: true, proxy: null };
+    // Мёртвых называем ротации сами: она в сеть не ходит (иначе решение перестало бы
+    // быть повторяемым), а адрес из кеша здоровья с вердиктом «не отвечает» - это
+    // потерянный логин аккаунта, а не «повезёт».
+    const dead = lib.deadProxiesFor ? lib.deadProxiesFor(AR_POOL_HOST) : null;
+    const r = lib.rotateFor(job.id || job.label, { host: AR_POOL_HOST, exclude: dead });
+    if (!r.ok) return r;                       // cooling | saturated | exhausted
+    // Источник «напрямую» выбран человеком: окно поднимается БЕЗ прокси, и это не ошибка.
+    if (r.direct || !r.proxy) return { ok: true, proxy: null, direct: true };
+    const p = r.proxy;
+    if (dead && dead.length) logLine(`пул: в ротации не участвуют мёртвые адреса (${dead.length})`);
+    const file = path.join(AR_PROXY_SEED_DIR, `${job.label}.json`);
+    try {
+        fs.mkdirSync(AR_PROXY_SEED_DIR, { recursive: true });
+        // Разовым файлом, а не аргументом и не через env: и то, и другое видно в списке
+        // процессов машины вместе с паролем прокси.
+        //
+        // 🔴 Форма - `{ proxy: {...} }`, и это ДОГОВОР с ребёнком: `takeProxySeed` читает
+        // именно `doc.proxy`. Плоский `{server,…}` (как было 20.09) ребёнок принимал за
+        // отсутствие адреса, молча возвращал null и поднимал браузер НАПРЯМУЮ - через tun,
+        // то есть через тот же адрес ноды, ради ухода от которого всё и делалось. А родитель
+        // при этом честно списывал расход с выданного адреса: счётчик врал в обе стороны.
+        fs.writeFileSync(file, JSON.stringify({
+            proxy: {
+                // 🪤 Поля прокси в пуле - `hostname`/`user`/`pass` (см. parseProxy), а НЕ `host`:
+                // 20.09 я написал по памяти, и в окно уезжало `http://undefined:10808`. Браузер
+                // с таким адресом не достучался никуда, и прогон падал на предпроверке края.
+                server: `${p.scheme}://${p.hostname}:${p.port}`,
+                username: p.user || undefined,
+                password: p.pass || undefined,
+            },
+            // 🪤 `nowIso` живёт в proxy-pool.js, а не здесь: 20.09 я позаимствовал её имя, и
+            // КАЖДЫЙ запуск падал `nowIso is not defined` ещё до спавна окна. Fail-closed
+            // отработал - ни один аккаунт не тронут, - но прогон встал целиком.
+            at: new Date().toISOString(),
+            host: AR_POOL_HOST,
+        }, null, 1), 'utf8');
+    } catch (e) {
+        return { ok: false, error: `адрес не передать в окно: ${e.message}` };
+    }
+    arRunProxy.set(job.label, p.id);
+    return { ok: true, proxy: p, tier: r.tier, seedFile: file };
+}
+
+function arDropSeed(label) {
+    try { fs.rmSync(path.join(AR_PROXY_SEED_DIR, `${label}.json`), { force: true }); }
+    catch { /* нет файла - и хорошо */ }
+}
+
+// Расход адреса: сколько ручка логина получила запросов за прогон, столько и списываем.
+// Считает РЕБЁНОК (он один видит браузер) и отдаёт числом в маркере - «примерно четыре»
+// здесь не годится, потому что порог 15 и ошибка в пару запросов сдвигает отстой.
+function arSpendAddress(label, requests) {
+    const lib = proxyPoolLib();
+    const id = arRunProxy.get(label);
+    arRunProxy.delete(label);
+    if (!lib || !id) return null;
+    try { return lib.spend(id, requests || AR_LOGIN_COST, { host: AR_POOL_HOST }); }
+    catch (e) { logLine(`пул: расход адреса не записан (${e.message})`); return null; }
+}
+
+// Свободен ли хоть один адрес. Все в отстое - очередь ЖДЁТ ближайший: идти напрямую
+// означало бы светить нодовым адресом, который панель и зажгла.
+function arPoolGate() {
+    const lib = proxyPoolLib();
+    if (!lib || !lib.enabledForHost(AR_POOL_HOST)) return null;
+    try { return lib.pick(AR_POOL_HOST, { byUsage: true }); } catch { return null; }
+}
+
 const AR_CHECKIN_QUEUE = [];
 const AR_CHECKIN_GAP_MS = 25_000;   // пауза между прогонами: залп ловит рейт-лимит
 const arCheckinLastStart = { auto: 0, manual: 0 };
@@ -13214,6 +13308,28 @@ function arQueueEta(lane, index) {
 
 function arCheckinPump() {
     if (arCheckinPumpTimer) { clearTimeout(arCheckinPumpTimer); arCheckinPumpTimer = null; }
+
+    // Все адреса в отстое - очередь ЖДЁТ ближайший и показывает таймер вместо старта.
+    // Раньше такой ветки не было вовсе: спавнили и получали отказ панели, который в статусе
+    // выглядел как вина аккаунта, а не адреса.
+    if (AR_CHECKIN_QUEUE.length) {
+        const gate = arPoolGate();
+        if (gate && gate.cooling) {
+            const waitMs = Math.min(Math.max(gate.waitMs, 1000), 60_000);
+            const secs = Math.max(1, Math.ceil(waitMs / 1000));
+            for (const job of AR_CHECKIN_QUEUE) {
+                const st = AR_AUTO_CHECKIN.get(job.label);
+                if (!st || st.state !== 'queued') continue;
+                st.message = `ждём адрес: все в отстое, ближайший через ~${secs}с`;
+                AR_AUTO_CHECKIN.set(job.label, st);
+            }
+            logLine(`agentrouter чек-ин: все адреса в отстое, ждём ~${secs}с`);
+            arCheckinPumpTimer = setTimeout(arCheckinPump, waitMs);
+            if (arCheckinPumpTimer.unref) arCheckinPumpTimer.unref();
+            return;
+        }
+    }
+
     // Пускаем всё, чья полоса свободна прямо сейчас. Круг короткий: полос две, а спавн
     // тут же делает свою занятой, так что стартует максимум по одному с каждой.
     for (;;) {
@@ -13397,6 +13513,15 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
     const script = path.join(__dirname, '..', 'agentrouter', 'open-session.js');
     const kind = wantAuto ? 'auto' : wantCheckin ? 'manual' : 'plain';
 
+    // Адрес берём ДО спавна и падаем, если его нет: открытый и тут же упавший браузер стоит
+    // ровно той попытки, ради которой всё делается. Визит 🌐 - исключение, он человеческий.
+    const addr = kind === 'plain' ? { ok: true, proxy: null } : arTakeAddress({ id, label, dispName });
+    if (!addr.ok) {
+        arDropSeed(label);
+        throw new Error(addr.error || 'нет свободного адреса под прогон');
+    }
+    if (addr.proxy) logLine(`agentrouter чек-ин: ${label} идёт через ${addr.proxy.id} (${addr.tier})`);
+
     const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
     // Чек-ину stdout нужен только для слова шлюза о суточном бонусе. Баланс браузер
     // не вычисляет: после закрытия parent запускает обычный cookie/raw-auth чек.
@@ -13407,12 +13532,16 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
         logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
     });
     proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
-    proc.on('error', e => logLine(`agentrouter session/open spawn error: ${e.message}`));
+    proc.on('error', e => { arDropSeed(label); logLine(`agentrouter session/open spawn error: ${e.message}`); });
     proc.on('exit', (code, sig) => {
         arLkPids.delete(label);
         arRunKind.delete(label);
         logLine(`agentrouter session/open: ${label} — exited (code ${code}, sig ${sig})`);
-        if (wantCheckin) arAutoCheckinFinish(id, label, code, arParseAutoCheckinMarker(outTail), wantAuto);
+        const marker = arParseAutoCheckinMarker(outTail);
+        // Расход адреса пишем ПЕРВЫМ: даже если дальше что-то упадёт, пул уже знает, что
+        // адрес потрачен. Иначе окно отработало, а сожжённый адрес остался «чистым».
+        arSpendAddress(label, marker && marker.loginRequests);
+        if (wantCheckin) arAutoCheckinFinish(id, label, code, marker, wantAuto);
         // Ordinary browser visits also refresh the balance after the profile is released.
         else newapiRecheckAfterLk('ar', id);
         // Прогресс пачки и её предохранитель — СИНХРОННО и до насоса. arAutoCheckinFinish
@@ -13599,7 +13728,11 @@ async function handleArSessionOpen(req, res) {
                 return jsonRes(res, 200, { ok: true, label, queued: true, position: pos, etaSec, mode: runMode });
             }
             newapiLkVisited(label);
-            const proc = arSpawnSession(job);
+            let proc;
+            // Нет свободного адреса (все в отстое) - это НЕ поломка запуска, а ожидание:
+            // отдаём 409 с причиной, а не 500 из необработанного throw.
+            try { proc = arSpawnSession(job); }
+            catch (e) { return jsonRes(res, 409, { ok: false, error: e.message }); }
             logLine(`agentrouter session/open: ${dispName} label=${label} mode=${runMode} (pid ${proc.pid})`);
             return jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode: runMode });
         }
@@ -19976,6 +20109,20 @@ function handleProxiesState(_req, res) {
     if (!lib) return proxyAdminUnavailable(res, 'state');
     try { jsonRes(res, 200, lib.state()); }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/proxies/source { source } → выбрать источник: auto | own | scraped | direct.
+// Решение владельца 20.09: свой пул уже есть, и скрапер больше не обязателен - выбор за человеком.
+// Живёт в конфиге пула, поэтому переживает перезапуск `:8200`.
+function handleProxiesSource(req, res) {
+    const lib = proxyAdminLib();
+    if (!lib) return proxyAdminUnavailable(res, 'source');
+    readJsonBody(req, 8 * 1024).then(body => {
+        const out = lib.setSource(body && body.source);
+        if (!out.ok) return jsonRes(res, 400, out);
+        logLine(`пул прокси: источник → ${out.source}`);
+        jsonRes(res, 200, { ok: true, source: out.source });
+    }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
 }
 
 // POST /__switch/api/proxies/own { text } → сохранить свой список.
@@ -27766,6 +27913,7 @@ const server = http.createServer((req, res) => {
     // шлюзы сразу, в отличие от ak/rm-ручек, которые показывают пул глазами одной панели.
     if (req.method === 'GET'  && req.url === '/__switch/api/proxies/state')     return handleProxiesState(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/proxies/own')       return handleProxiesOwn(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/proxies/source')    return handleProxiesSource(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/proxies/check')     return handleProxiesCheck(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/proxies/rebalance') return handleProxiesRebalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/proxies/assign')    return handleProxiesAssign(req, res);

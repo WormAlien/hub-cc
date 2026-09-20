@@ -13309,6 +13309,33 @@ function arQueueEta(lane, index) {
 function arCheckinPump() {
     if (arCheckinPumpTimer) { clearTimeout(arCheckinPumpTimer); arCheckinPumpTimer = null; }
 
+    // ДОБОР ДО КОНЦА. Человек нажал «получить все» - значит пачка за пачкой, пока есть готовые.
+    // Пачка остаётся по 6: предохранитель от залпа не отменяется, отменяется только «нажми ещё раз».
+    //
+    // Два предохранителя, чтобы добор не ушёл в бесконечность: пачка без единого успеха означает
+    // стену (её и так ловит пачечный предохранитель ниже), и есть жёсткий потолок числа пачек.
+    if (AR_COLLECT_ALL && !AR_CHECKIN_QUEUE.length) {
+        const wall = AR_CHECKIN_BATCH.total > 0 && AR_CHECKIN_BATCH.ok === 0 && AR_CHECKIN_BATCH.failed > 0;
+        if (wall || AR_COLLECT_BATCHES >= AR_COLLECT_MAX) {
+            AR_COLLECT_ALL = false;
+            logLine(`agentrouter чек-ин: добор остановлен - ${wall
+                ? 'пачка ушла в стену без единого успеха'
+                : `набрано ${AR_COLLECT_BATCHES} пачек, дальше не гоню`}`);
+        } else {
+            const next = arBuildBatch(AR_CHECKIN_BATCH_MAX);
+            if (next.jobs.length) {
+                AR_COLLECT_BATCHES++;
+                arEnqueueBatch(next.jobs);
+                logLine(`agentrouter чек-ин: добор, пачка ${AR_COLLECT_BATCHES} -`
+                    + ` ${next.jobs.length} аккаунт(ов), готовых было ${next.ready}`);
+            } else {
+                AR_COLLECT_ALL = false;
+                logLine('agentrouter чек-ин: добор закончен - готовых подарков больше нет');
+                return;
+            }
+        }
+    }
+
     // Все адреса в отстое - очередь ЖДЁТ ближайший и показывает таймер вместо старта.
     // Раньше такой ветки не было вовсе: спавнили и получали отказ панели, который в статусе
     // выглядел как вина аккаунта, а не адреса.
@@ -13374,6 +13401,9 @@ function arCheckinPump() {
 // killRunning — и предупреждаем об этом в статусе прибитого.
 const AR_CHECKIN_KILLED = new Set();   // label'ы, прибитые нами намеренно
 function arCheckinCancel({ lane = null, reason = 'отменено', killRunning = false } = {}) {
+    // Стоп-кран гасит и добор: иначе кнопка «Стоп» останавливала бы пачку, а насос поднимал
+    // следующую - снаружи это выглядело бы как «Стоп не работает».
+    if (!lane || lane === 'auto') AR_COLLECT_ALL = false;
     const dropped = [];
     // Идём с конца: splice в прямом проходе перескакивает через соседа.
     for (let i = AR_CHECKIN_QUEUE.length - 1; i >= 0; i--) {
@@ -13432,6 +13462,17 @@ const AR_CHECKIN_BATCH = {
     consecFail: 0, startedAt: null, finishedAt: null, reason: null,
     labels: new Set(),   // чьи прогоны ещё считаем своими
 };
+
+// «Получить все» - это не одна пачка, а ДОБОР ДО КОНЦА.
+//
+// Кнопка ставит в очередь не больше AR_CHECKIN_BATCH_MAX (6): предохранитель от залпа, из-за
+// которого 25.08 одиннадцать окон разом поймали WAF. Раньше это значило, что «получить все»
+// получало шесть подарков, а остальные молча ждали следующего нажатия - кнопка обещала одно,
+// делала другое. Флаг ниже означает «человек просил всё»: насос, отработав пачку, поднимает
+// следующую сам, пока есть готовые. Останавливают его стоп-кран и предохранитель пачки.
+let AR_COLLECT_ALL = false;
+let AR_COLLECT_BATCHES = 0;          // сколько пачек набрал сам насос в текущем доборе
+const AR_COLLECT_MAX = 20;           // потолок добора: 20 пачек по 6 - это 120 подарков за раз
 
 // Запуск прогона провалился до того, как появился процесс. Вынесено из насоса, потому что
 // с асинхронным arSpawnSession отказ приходит двумя путями: синхронным throw и отказом
@@ -13504,6 +13545,9 @@ function arBatchSnapshot() {
         total: b.total, done: b.done, ok: b.ok, failed: b.failed, cancelled: b.cancelled,
         queued, running, active: queued + running > 0,
         startedAt: b.startedAt, finishedAt: b.finishedAt, reason: b.reason,
+        // Идёт ли добор до конца: кнопка «получить все» обещает все подарки, а не первую
+        // шестёрку, и карточка обязана показывать, что работа продолжается.
+        collectAll: AR_COLLECT_ALL, batches: AR_COLLECT_BATCHES,
     };
 }
 
@@ -13609,55 +13653,75 @@ async function handleArCheckinCancel(req, res) {
 // Идут по полосе auto, по одному, с паузой AR_CHECKIN_GAP_MS — то есть ровно так же, как
 // одиночные клики. Залп здесь невозможен by design, и это главное: пачка отличается от
 // одиннадцати кликов не темпом, а тем, что её видно и можно остановить.
+// Сбор пачки ⚡: кто готов, кто ещё не в очереди и не открыт. Вынесено из обработчика кнопки,
+// потому что теперь её зовёт и насос (добор до конца) - две копии этого отбора разъехались бы.
+function arBuildBatch(limit) {
+    const ready = arCheckinReadyList(arLoad());
+    const jobs = [];
+    const skipped = [];
+    for (const s of ready) {
+        const label = 'acct_' + s.id;
+        const dispName = String(s.name || s.email || label);
+        // Дедуп тот же, что у одиночного клика: уже стоит в очереди / уже открыт браузер на
+        // этот профиль (два Chromium на один профиль пишут в один SQLite).
+        if (arQueueSpot(label)) { skipped.push(`${dispName}: уже в очереди`); continue; }
+        if (arPidAlive(arLkPids.get(label))) { skipped.push(`${dispName}: браузер уже открыт`); continue; }
+        if (jobs.length >= limit) { skipped.push(`${dispName}: сверх предела пачки (${limit})`); continue; }
+        jobs.push({ id: s.id, label, dispName, mode: 'autocheckin', wantCheckin: true, wantAuto: true, batch: true });
+    }
+    return { jobs, skipped, ready: ready.length };
+}
+
+// Постановка пачки в очередь. Новая пачка обнуляет счётчики: старые цифры на кнопке хуже,
+// чем никакие.
+function arEnqueueBatch(jobs) {
+    AR_CHECKIN_BATCH.total = jobs.length;
+    AR_CHECKIN_BATCH.done = 0;
+    AR_CHECKIN_BATCH.ok = 0;
+    AR_CHECKIN_BATCH.failed = 0;
+    AR_CHECKIN_BATCH.cancelled = 0;
+    AR_CHECKIN_BATCH.consecFail = 0;
+    AR_CHECKIN_BATCH.reason = null;
+    AR_CHECKIN_BATCH.finishedAt = null;
+    AR_CHECKIN_BATCH.startedAt = new Date().toISOString();
+    AR_CHECKIN_BATCH.labels = new Set(jobs.map(j => j.label));
+    for (const job of jobs) {
+        AR_CHECKIN_QUEUE.push(job);
+        AR_AUTO_CHECKIN.set(job.label, {
+            id: job.id, label: job.label, name: job.dispName, state: 'queued',
+            message: 'пачка ⚡ — ждёт очереди',   // позицию и ETA впишет насос ниже
+            startedAt: new Date().toISOString(), finishedAt: null,
+        });
+    }
+}
+
 async function handleArCheckinAll(req, res) {
     try {
         const body = await readJsonBody(req).catch(() => ({}));
         const ask = Number(body && body.limit);
         const limit = Math.min(isFinite(ask) && ask > 0 ? Math.floor(ask) : AR_CHECKIN_BATCH_MAX, AR_CHECKIN_BATCH_MAX);
-        const ready = arCheckinReadyList(arLoad());
-        const jobs = [];
-        const skipped = [];
-        for (const s of ready) {
-            const label = 'acct_' + s.id;
-            const dispName = String(s.name || s.email || label);
-            // Дедуп тот же, что у одиночного клика: уже стоит в очереди / уже открыт
-            // браузер на этот профиль (два Chromium на один профиль пишут в один SQLite).
-            if (arQueueSpot(label)) { skipped.push(`${dispName}: уже в очереди`); continue; }
-            if (arPidAlive(arLkPids.get(label))) { skipped.push(`${dispName}: браузер уже открыт`); continue; }
-            if (jobs.length >= limit) { skipped.push(`${dispName}: сверх предела пачки (${limit})`); continue; }
-            jobs.push({ id: s.id, label, dispName, mode: 'autocheckin', wantCheckin: true, wantAuto: true, batch: true });
-        }
+        // Человек нажал «получить все» - значит просит ВСЁ, а не первую шестёрку. Пачка
+        // остаётся по 6 (предохранитель от залпа), но насос теперь добёрет остальное сам.
+        AR_COLLECT_ALL = true;
+        AR_COLLECT_BATCHES = 0;              // новый заход - новый счёт пачек
+        const { jobs, skipped, ready } = arBuildBatch(limit);
         if (!jobs.length) {
+            AR_COLLECT_ALL = false;
             return jsonRes(res, 200, {
-                ok: true, queued: 0, ready: ready.length, skipped: skipped.length,
+                // 🪤 `ready` здесь уже ЧИСЛО (столько готовых), а не список: `.length` от него
+                // даёт undefined, и поле молча выпадает из ответа - фронт показал бы «готовых
+                // undefined» вместо числа. Ошибка тихая, ловится только сверкой ключей ответа.
+                ok: true, queued: 0, ready, skipped: skipped.length,
                 skippedWhy: skipped, limit, batch: arBatchSnapshot(),
             });
         }
-        // Новая пачка обнуляет счётчики: старые цифры на кнопке хуже, чем никакие.
-        AR_CHECKIN_BATCH.total = jobs.length;
-        AR_CHECKIN_BATCH.done = 0;
-        AR_CHECKIN_BATCH.ok = 0;
-        AR_CHECKIN_BATCH.failed = 0;
-        AR_CHECKIN_BATCH.cancelled = 0;
-        AR_CHECKIN_BATCH.consecFail = 0;
-        AR_CHECKIN_BATCH.reason = null;
-        AR_CHECKIN_BATCH.finishedAt = null;
-        AR_CHECKIN_BATCH.startedAt = new Date().toISOString();
-        AR_CHECKIN_BATCH.labels = new Set(jobs.map(j => j.label));
-        for (const job of jobs) {
-            AR_CHECKIN_QUEUE.push(job);
-            AR_AUTO_CHECKIN.set(job.label, {
-                id: job.id, label: job.label, name: job.dispName, state: 'queued',
-                message: 'пачка ⚡ — ждёт очереди',   // позицию и ETA впишет насос ниже
-                startedAt: new Date().toISOString(), finishedAt: null,
-            });
-        }
+        arEnqueueBatch(jobs);
         logLine(`agentrouter чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready.length} готовых`
-            + (skipped.length ? `, пропущено ${skipped.length}` : ''));
+            + (skipped.length ? `, пропущено ${skipped.length}` : '') + ' — добор до конца включён');
         arCheckinPump();
         jsonRes(res, 200, {
-            ok: true, queued: jobs.length, ready: ready.length, skipped: skipped.length,
-            skippedWhy: skipped, limit, batch: arBatchSnapshot(),
+            ok: true, queued: jobs.length, ready, skipped: skipped.length,
+            skippedWhy: skipped, limit, collectAll: true, batch: arBatchSnapshot(),
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }

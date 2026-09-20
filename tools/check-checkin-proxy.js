@@ -155,5 +155,20 @@ console.log('\n7. круг «родитель записал → ребёнок 
     check(!fs.existsSync(file), 'разовый файл съеден - второй прогон его не найдёт');
 }
 
+console.log('\n8. «Получить все» доводит до конца, стоп его гасит');
+// Кнопка обещала «все», а ставила шесть: дальше надо было жать ещё раз, и снаружи это
+// выглядело как «кнопка не работает». Добор живёт в насосе и обязан иметь предохранители.
+const allFn = cutFn(dashSrc, 'async function handleArCheckinAll(');
+const pumpFn = cutFn(dashSrc, 'function arCheckinPump(');
+const cancelFn = cutFn(dashSrc, 'function arCheckinCancel(');
+check(/AR_COLLECT_ALL = true/.test(allFn), 'кнопка включает добор до конца');
+check(/AR_COLLECT_BATCHES = 0/.test(allFn), 'новый заход обнуляет счёт пачек');
+check(/AR_COLLECT_ALL && !AR_CHECKIN_QUEUE\.length/.test(pumpFn), 'насос добирает, когда очередь опустела');
+check(/arBuildBatch\(AR_CHECKIN_BATCH_MAX\)/.test(pumpFn), 'добор идёт теми же пачками по 6');
+check(/AR_COLLECT_BATCHES >= AR_COLLECT_MAX/.test(pumpFn), 'у добора есть потолок числа пачек');
+check(/пачка ушла в стену/.test(pumpFn), 'пачка без единого успеха останавливает добор');
+check(/AR_COLLECT_ALL = false/.test(cancelFn), 'стоп-кран гасит добор, а не только очередь');
+check(/collectAll: AR_COLLECT_ALL/.test(dashSrc), 'карточка видит, что добор идёт');
+
 console.log(fail ? `\n❌ ${fail} failed` : '\n✅ Релогин идёт через адрес из пула; UA и CDP-подсказки на месте.');
 process.exit(fail ? 1 : 0);

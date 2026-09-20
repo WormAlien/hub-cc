@@ -1504,8 +1504,15 @@ const ROTATE_ON = process.env.AUTOROTATE !== '0' && !!ROTATE_PROVIDER;
 const MAX_ROTATIONS = Number(process.env.MAX_ROTATIONS || 5);
 
 // Просьба к дашборду сменить активный ключ. Возвращает {ok, already?, email, mask}.
-// Таймаут щедрый: на той стороне живой чек баланса кандидата (~1.5с на аккаунт,
-// до трёх кандидатов). Ключ в лог не пишем — только маску (контракт прокси).
+// Таймаут - потолок НАД бюджетом дашборда (`MONEY_ROTATE_BUDGET_MS`, 25 с): на той стороне
+// считается, сколько стоит живой чек кандидата, и по исчерпании бюджета кандидат берётся по
+// кешу. Так прокси всегда получает ОТВЕТ - подмену или честный `pool-dry`, - а не
+// «не дождался», который снаружи неотличим от «ротации не было».
+// 🪤 Прежние 20 с были МЕНЬШЕ худшего случая: у agentrouter.org чек идёт через гейт хоста
+// 2,5 с между стартами и это 3-4 запроса, то есть ~10 с на кандидата, а кандидатов до трёх.
+// Живой отказ 20.09 10:18 МСК: пять таймаутов за сорок минут, каждый доехал до клиента
+// сырым `403` при пуле в 37 живых аккаунтов и подменой, случившейся уже «в фоне».
+// Ключ в лог не пишем — только маску (контракт прокси).
 function askRotate(payload) {
   return new Promise((resolve) => {
     let body;
@@ -1515,7 +1522,7 @@ function askRotate(payload) {
     const r = requester({
       hostname: u.hostname, port: u.port, method: 'POST', path: u.pathname,
       headers: { 'content-type': 'application/json', 'content-length': body.length },
-      timeout: 20000,
+      timeout: 35000,
     }, (resp) => {
       const chunks = [];
       resp.on('data', (c) => chunks.push(c));

@@ -94,6 +94,10 @@ function cutObjConst(text, name) {
 const parts = [
     cutConst(src, 'MONEY_MIN_BAL'),
     cutConst(src, 'MONEY_MAX_PROBES'),
+    // Бюджет ротации и оценка одной живой проверки (20.09). Бюджет берём ИЗ ИСХОДНИКА, а
+    // проверяем его сценой 1в через env: иначе тест кодировал бы своё число, а не боевое.
+    cutConst(src, 'MONEY_ROTATE_BUDGET_MS'),
+    cutConst(src, 'MONEY_PROBE_EST_MS'),
     cutConst(src, 'MONEY_DEDUP_MS'),
     cutConst(src, 'moneyAuto'),
     cutConst(src, 'moneyAutoShared'),
@@ -196,6 +200,33 @@ async function main() {
         check(w.pool.filter(s => s.active).length === 1 && w.pool.find(s => s.active).email === 'small',
             'флаг active переставлен ровно на одного');
         check(w.probes.length === 1, `живой чек только у выбранного кандидата (было ${w.probes.length})`);
+    }
+
+    // 1в. Бюджет ротации исчерпан - кандидат берётся по кешу, а не теряется запрос.
+    //     Живой случай 20.09 10:18 МСК: у agentrouter.org живой чек идёт через гейт хоста
+    //     2,5 с и стоит ~10 с на кандидата, три кандидата не влезали в ответ `askRotate`,
+    //     прокси сдавался (`ротация не состоялась (rotate timeout)`) и клиент получал
+    //     сырой `403` при пуле в 37 живых аккаунтов. Теперь бюджет считает дашборд.
+    //     🪤 Проверяем ОБЕ половины правила: без живой проверки подмена всё равно есть, и
+    //     о ней сказано в логе - молчаливая подмена неотличима от «кеш взяли наугад».
+    {
+        process.env.MONEY_ROTATE_BUDGET_MS = '1';
+        const w = makeWorld({
+            pool: [
+                { name: 'active', balance: 0.0, active: true },
+                { name: 'small', balance: 2.40 },
+                { name: 'mid', balance: 77.16 },
+            ],
+        });
+        w.api.moneyState('go').enabled = true;
+        const r = await w.api.moneyRotate('go', { reason: 'out-of-balance', fromKey: 'sk-active' });
+        check(r.ok && nameByKey(w, activeKeyOf(w)) === 'small',
+            `бюджет кончился - подмена всё равно состоялась: ${r.email} (ждали small $2.40)`);
+        check(w.probes.length === 0,
+            `при исчерпанном бюджете живых чеков нет (было ${w.probes.length})`);
+        check(w.logs.some(l => /бюджет ротации исчерпан/.test(l)),
+            'подмена по кешу названа в логе, а не сделана молча');
+        delete process.env.MONEY_ROTATE_BUDGET_MS;
     }
 
     // 1б. Шлюз назвал нужную сумму — кандидатов ниже неё НЕ берём вовсе.

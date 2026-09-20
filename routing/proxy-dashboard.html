@@ -13501,10 +13501,16 @@ function arBatchPaint() {
   stop.title = 'Снимает с очереди всё, что ещё не стартовало.'
     + ' 🪤 Текущее окно доигрывает намеренно: убийство между разлогином и входом оставит'
     + ' аккаунт разлогиненным. Shift+клик — прибить и текущий прогон';
-  prog.textContent = b && b.total
+  // Кто в работе - первым и с именем: «3/6» само по себе не отвечает на вопрос «а что
+  // сейчас происходит», а окно при этом свёрнуто и смотреть на него нечего.
+  const now = arBatchLive.now;
+  const nowTxt = now ? `⚡ ${now.name}${now.message ? ' — ' + now.message : ''} · ` : '';
+  prog.textContent = nowTxt + (b && b.total
     ? (b.active ? `${b.done}/${b.total}` : `✓ ${b.ok}/${b.total}`)
       + (b.failed ? ` ✗${b.failed}` : '') + (b.cancelled ? ` ⏹${b.cancelled}` : '')
-    : busy ? `${arBatchLive.running} идёт, ${arBatchLive.queued} в очереди` : '';
+      : busy ? `${arBatchLive.running} идёт, ${arBatchLive.queued} в очереди` : '');
+  // Добор: пока он идёт, «пачка» - не всё, что делает кнопка. Скажем это прямо.
+  if (b && b.collectAll) prog.textContent += ` · добираю до конца (пачка ${(b.batches || 0) + 1})`;
 }
 
 // Один опрос статуса → перекраска; пока что-то идёт, повторяем каждые 3 с.
@@ -13525,6 +13531,12 @@ async function arBatchSync(force) {
       queued: runs.filter(r => r.state === 'queued').length,
       running: runs.filter(r => r.state === 'running').length,
       batch: data.batch || null,
+      // Кто ИМЕННО в работе: «1 идёт» ничего не говорит, когда идёт сорок подарков -
+      // владелец должен видеть аккаунт и что с ним делают прямо сейчас.
+      now: (() => {
+        const r = runs.find(x => x.state === 'running');
+        return r ? { name: r.name || r.label || '?', message: r.message || '' } : null;
+      })(),
     };
     if (Number(data.limit) > 0) {
       arBatchLimits = { max: Number(data.limit), gapSec: Number(data.gapSec) || arBatchLimits.gapSec };

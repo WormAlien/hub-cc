@@ -1279,7 +1279,12 @@ async function main() {
   const fresh = isFreshProfile();
   const imported = loadImportedSession();
 
-  console.log(`🚀 Запускаю Chromium (видимый режим)…`);
+  // 🪤 Строка обязана называть РЕЖИМ, а не затвердеть: пока она говорила «видимый режим»
+  // всегда, по логу нельзя было понять, идёт прогон с окном или без - а это первое, что
+  // проверяешь, когда владелец жалуется на фокус.
+  console.log(silentWindow
+    ? '🚀 Запускаю Chromium (без окна — тихий режим очереди)…'
+    : '🚀 Запускаю Chromium (видимый режим)…');
   console.log(`📂 профиль аккаунта: ${profileDir} · ${fresh ? 'чистый (нужен GitHub-логин)' : 'уже есть (сохранённый)'}`);
 
   // Browser relogin is always direct. Proxy fallback is confined to the parent process's
@@ -1296,7 +1301,11 @@ async function main() {
   // Прямого пути у agentrouter.org нет - нет адреса, значит прогон не начинается вовсе
   // (родитель просто не спавнит окно), а не «пойдём как-нибудь с нодового IP».
   const context = await chromium.launchPersistentContext(profileDir, {
-    headless: false,
+    // 🔴 Тихий режим = ОКНА НЕТ. Сворачивание через CDP окно создаёт и Windows успевает его
+    // активировать: замер 21.09 во время прогона активным было окно «Agent Router - Google
+    // Chrome», то есть фокус забирался всё равно. Автоматические прогоны идут headless,
+    // ручные (🎁 чек-ин и обход ЛК) остаются видимыми - там в окне сидит человек.
+    headless: silentWindow,
     viewport: null,
     // Разрешаем расширения в окне (друг ставит своё прокси-расширение): снимаем
     // дефолтный --disable-extensions Playwright и берём системный Chrome —
@@ -1348,19 +1357,9 @@ async function main() {
   if (!silentWindow) {
     await page.bringToFront();
     raiseBrowserWindow(); // bringToFront поднимает только вкладку — окно ОС наверх выносит WinAPI
-  } else {
-    // 🪤 Флаг `--start-minimized` Chrome на Windows ИГНОРИРУЕТ: замер 20.09 показал окно
-    // в состоянии `normal`, и оно всплыло. Работает только CDP-сворачивание, оно же даёт
-    // проверяемый признак - `windowState: minimized` (проба `_research/check-window-silent.js`).
-    try {
-      const cdpWin = await context.newCDPSession(page);
-      const w = await cdpWin.send('Browser.getWindowForTarget');
-      await cdpWin.send('Browser.setWindowBounds',
-        { windowId: w.windowId, bounds: { windowState: 'minimized' } });
-    } catch (e) {
-      console.log(`⚠️  окно не свернуть (${e.message}) — прогон идёт, но окно может лезть вперёд`);
-    }
   }
+  // 🎯 Тихие прогоны идут headless (см. `headless: silentWindow` выше): окна нет вовсе,
+  // сворачивать нечего, и фокус у владельца не забирается ни на мгновение.
   await disableHttpCache(context, page);
 
   // Чек-ин идёт раньше всего остального: импортированные куки и рефка тут не при чём,

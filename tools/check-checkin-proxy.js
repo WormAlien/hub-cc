@@ -114,8 +114,11 @@ const raiseIdx = sessionSrc.indexOf('raiseBrowserWindow();');
 const guardIdx = sessionSrc.lastIndexOf('if (!silentWindow) {', raiseIdx);
 check(raiseIdx > 0 && guardIdx > 0 && raiseIdx - guardIdx < 200,
     'bringToFront и raiseBrowserWindow стоят ПОД условием «не тихий режим»');
-check(/Browser\.setWindowBounds/.test(sessionSrc) && /windowState: 'minimized'/.test(sessionSrc),
-    'окно автоматического прогона сворачивается через CDP');
+// 🎯 Автоматический прогон идёт БЕЗ ОКНА. Сворачивание через CDP не годилось: окно всё
+// равно создаётся и Windows успевает его активировать - замер 21.09 поймал активным окно
+// «Agent Router - Google Chrome» прямо во время прогона.
+check(/headless:\s*silentWindow/.test(launch), 'автоматический прогон идёт headless - окна нет вовсе');
+check(!/Browser\.setWindowBounds/.test(sessionSrc), 'костыля со сворачиванием больше нет');
 check(!/--start-minimized/.test(launch),
     'в АРГУМЕНТАХ запуска нет --start-minimized: замер 20.09 показал, что Chrome на Windows его игнорирует');
 

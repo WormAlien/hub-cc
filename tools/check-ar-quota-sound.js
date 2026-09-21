@@ -25,6 +25,12 @@
 // `quota-state` и AudioContext, счёт идёт по осцилляторам, которые просит синтез.
 // Часть 4 и 5 - живые режимы против настоящего :8200 (`--live`, `--watch`).
 // Сети нет, сервер :8200 не нужен. Запуск: node tools/check-ar-quota-sound.js
+//
+// 🪤 Домен пробы `dashboard.test` на этой машине не резолвится (в hosts записи нет), и
+// страница не открывалась: проба падала в таймаут waitForFunction, где «сервер не отдал
+// страницу» неотличимо от «фича сломалась». Поэтому запросы уводятся на живой :8200
+// (routeDash) - он отвечает и на чужой Host. Если поднимаешь стенд по-настоящему,
+// запись в hosts вернёт прежнее поведение и ничего не сломает.
 
 const fs = require('fs');
 const path = require('path');
@@ -106,7 +112,8 @@ ok(arqSndDecide(rec('exhausted', T + 120000, b11), true, T, b03, 'exhausted') ==
 // ═════ 2. Ограды по исходнику ═══════════════════════════════════════════════
 console.log('\n── вызовы на месте ──────────────────────────────────────────────────');
 ok(/<div id="arq-mini"[\s\S]{0,700}?id="arq-snd"/.test(src), '🔔 стоит в строке мини-часов в сайдбаре');
-ok(/arqSndCheck\(p, stLoad\(\)\[p\]\)/.test(src), 'оба звука зовутся из stSync (автопроба сервера, по полосе)');
+ok(/await arqSndCheck\(p, stLoad\(\)\[p\]\)/.test(src),
+    'оба звука зовутся из stSync (автопроба сервера, по полосе)');
 ok(/if \(data\.state === 'available'\) arqSndMark/.test(src),
     'ручная проверка помечает партию просмотренной только при available');
 ok(/const KEY_SND = 'ar-quota-sound'/.test(src) && /=== '0'/.test(src),
@@ -114,7 +121,7 @@ ok(/const KEY_SND = 'ar-quota-sound'/.test(src) && /=== '0'/.test(src),
 ok(/const KEY_SND_DRY = 'ar-quota-sound-dry'/.test(src),
     'у конца партии своя метка: общая съела бы второе событие партии');
 ok(/addEventListener\('pointerdown', arqSndArm/.test(src), 'контекст будится жестом человека');
-ok(/function arqSndScheduleUp/.test(src) && /arqSndScheduleUp\(\);/.test(src),
+ok(/function arqSndScheduleUp/.test(src) && /await arqSndScheduleUp\(\);/.test(src),
     'налив по расписанию определён и зовётся из stSync (звенит и когда ротация занулила пробу)');
 ok(/arqSndScheduleUp[\s\S]{0,400}?arqSndSeen\(KEY_SND_DROP\) === d[\s\S]{0,200}?arqSndPlay\('in'\)/.test(src),
     'налив по расписанию: дедуп общий с пробой (KEY_SND_DROP), голос вверх');
@@ -127,6 +134,21 @@ ok(/arqSndScheduleUp[\s\S]{0,400}?arqSndSeen\(KEY_SND_DROP\) === d[\s\S]{0,200}?
 //   конец («Провал»): одна нота со съездом = 1
 const VOICE_OSC = 5;
 const DRY_OSC = 1;
+
+// Домен пробы не резолвится на этой машине (в hosts его нет): уводим те же запросы
+// на живой :8200 - хаб отвечает и на чужой Host. Без этого проба падает в таймаут
+// waitForFunction, и «страница не открылась» неотличимо от «фича сломалась».
+async function routeDash(page) {
+    await page.route('**/*', (route) => {
+        const u = route.request().url();
+        if (!u.startsWith(URL)) return route.continue();
+        const dst = URL.replace('://dashboard.test', '://localhost:8200') + u.slice(URL.length);
+        if (u.includes('/api/')) return route.continue({ url: dst });
+        const h = Object.assign({}, route.request().headers());
+        delete h.host;
+        return route.continue({ url: dst, headers: h });
+    });
+}
 
 async function mkPage(context, stub) {
     await context.route('**/*', (route) => {
@@ -148,7 +170,11 @@ async function mkPage(context, stub) {
             buffer: null, type: '', connect() { return this; }, disconnect() {}, start() {}, stop() {} });
         class AC {
             constructor() { this.state = 'suspended'; this.currentTime = 0; this.destination = N(); }
-            resume() { this.state = 'running'; return Promise.resolve(); }
+            // resume() разрешается отложенно, как в настоящем браузере: с синхронным
+            // `Promise.resolve()` проба зеленела бы и на коде, который читает `state`
+            // сразу после вызова, не дожидаясь пробуждения (21.09 - чуть не уехало в бой).
+            resume() { const self = this; return new Promise((res) => {
+                Promise.resolve().then(() => { self.state = 'running'; res(); }); }); }
             createOscillator() { window.__osc++; return N(); }
             createGain() { return N(); }
             createBiquadFilter() { return N(); }
@@ -315,6 +341,7 @@ async function live() {
     const browser = await chromium.launch();
     const ctx = await browser.newContext();
     const page = await ctx.newPage();
+    await routeDash(page);
     await page.addInitScript(() => {
         window.__osc = 0;
         const P = () => ({ value: 0, setValueAtTime() {}, linearRampToValueAtTime() {},

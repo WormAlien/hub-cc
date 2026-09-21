@@ -14767,6 +14767,10 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const odApplyKeepalive  = () => applyKeepaliveCard('od', KEEPALIVE_API.od);
+const ukApplyKeepalive  = () => applyKeepaliveCard('uk', KEEPALIVE_API.uk);
+const baiApplyKeepalive  = () => applyKeepaliveCard('bai', KEEPALIVE_API.bai);
+const nvApplyKeepalive  = () => applyKeepaliveCard('nv', KEEPALIVE_API.nv);
 const bdApplyKeepalive  = () => applyKeepaliveCard('bd', KEEPALIVE_API.bd);
 // ts-трио пропустили при заведении вкладки TrueSOTA: `tsLoadKeepalive()` зовётся из
 // switchTab и трёх кнопок карточки, а определения не было — открытие вкладки падало
@@ -14786,6 +14790,10 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const odResetKeepalive  = () => resetKeepaliveCard('od', KEEPALIVE_API.od);
+const ukResetKeepalive  = () => resetKeepaliveCard('uk', KEEPALIVE_API.uk);
+const baiResetKeepalive  = () => resetKeepaliveCard('bai', KEEPALIVE_API.bai);
+const nvResetKeepalive  = () => resetKeepaliveCard('nv', KEEPALIVE_API.nv);
 const bdResetKeepalive  = () => resetKeepaliveCard('bd', KEEPALIVE_API.bd);
 const apLoadKeepalive   = () => loadKeepaliveCard('ap', KEEPALIVE_API.ap);
 const apApplyKeepalive  = () => applyKeepaliveCard('ap', KEEPALIVE_API.ap);
@@ -15049,7 +15057,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }

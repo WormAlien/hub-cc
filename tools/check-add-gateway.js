@@ -581,6 +581,46 @@ section('полнота спеки · реестры с ключом этало�
         `каждый реестр с ключом «${gw.p}:» / «${gw.full}:» покрыт точкой спеки${uncovered.length ? ' — нет: ' + uncovered.slice(0, 4).join(' | ') : ''}`);
 }
 
+// ── 9. полнота спеки: литеральный СПИСОК префиксов, под который нет точки ──────
+section('полнота спеки · литеральные списки префиксов');
+{
+    // Сторож §8 видит реестр с КЛЮЧОМ эталона (`kk: …`) и слеп ко второй форме того же
+    // реестра — ЛИТЕРАЛЬНОМУ перечислению префиксов: `(?:ar|…|kk|hn|ol)` в регулярке или
+    // `['ar', …, 'kk', 'hn']` в массиве. Мимо него прошёл список ручек ротации в
+    // `routing/transparent-proxy.js`: без `od` (17.09), без `bd` и `nv` (21.09) — просьба
+    // о подмене ключа уезжала в 404, а снаружи это выглядело как «авторотация не
+    // сработала на пустом пуле». Ровно тот класс, ради которого инструмент и существует:
+    // вкладка есть, а одна ветка молчит. Контракт тот же, что у §8: эталон в списке —
+    // значит под список обязана быть точка спеки.
+    const gw = config[REF];
+    const known = [...new Set(Object.values(config).filter((x) => x && x.p).map((x) => x.p))];
+    const inList = (line, p) => new RegExp("[" + "\\|\\(\\)\\[\\]'\"" + "]" + p + "[" + "\\|\\(\\)\\[\\]'\"" + "]").test(line);
+    const targets = [...new Set([
+        ...Object.values(spec.files || {}).map((rel) => path.join(REPO, rel)),
+        ...(spec.points || []).map((p) => resolve(p.file, gw)),   // точки с путём вместо алиаса (check-hub.js)
+    ])];
+    const uncovered = [];
+    for (const abs of targets) {
+        const text = read(abs);
+        if (!text) continue;
+        const rel = path.relative(REPO, abs).split(path.sep).join('/');
+        const anchors = (spec.points || [])
+            .filter((p) => resolve(p.file, gw) === abs)
+            .flatMap((p) => [...(Array.isArray(p.expect) ? p.expect : [p.expect]), ...(p.any || [])])
+            .filter((x) => typeof x === 'string')
+            .map((x) => subst(x, gw));
+        text.split('\n').forEach((line, i) => {
+            if (/^\s*(\/\/|\*|<!--)/.test(line)) return;              // упоминание в комментарии — не реестр
+            if (!inList(line, gw.p)) return;
+            // Именно СПИСОК, а не случайное упоминание: на строке минимум три префикса конфига.
+            if (known.filter((p) => inList(line, p)).length < 3) return;
+            if (!anchors.some((a) => a && line.includes(a))) uncovered.push(`${rel}:${i + 1} → ${line.trim().slice(0, 70)}`);
+        });
+    }
+    check(uncovered.length === 0,
+        `каждый литеральный список префиксов покрыт точкой спеки${uncovered.length ? ' — нет: ' + uncovered.slice(0, 4).join(' | ') : ''}`);
+}
+
 // ── итог ──────────────────────────────────────────────────────────────────────
 if (warns.length) console.log(`\n! замечаний без провала: ${warns.length} (в вердикт не идут)`);
 console.log(`\ncheck-add-gateway: ${total - fails.length}/${total}`);

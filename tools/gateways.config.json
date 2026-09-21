@@ -10,60 +10,60 @@
     "p": "kk", "P": "KK", "full": "kktoken", "NAME": "KKtoken",
     "HOST": "kktoken.cc", "PORT": 20161, "FOLDER": "kktoken",
     "ICON": "🪙", "COLOR": "emerald", "REF": "Sog2",
-    "github": true, "ref": true, "flatRate": false, "anthropic": false
+    "github": true, "ref": true, "flatRate": false, "anthropic": false, "pool": true
   },
 
   "hcnsec": {
     "p": "hn", "P": "HN", "full": "hcnsec", "NAME": "HCNsec",
     "HOST": "api.hcnsec.cn", "PORT": 20162, "FOLDER": "hcnsec",
     "ICON": "🛡️", "COLOR": "emerald", "REF": "u4eN",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true
   },
 
   "aipm": {
     "p": "ap", "P": "AP", "full": "aipm", "NAME": "AIPM",
     "HOST": "emtf.aipm9527.online", "PORT": 20163, "FOLDER": "aipm",
     "ICON": "🔷", "COLOR": "indigo", "REF": "NS3L",
-    "github": true, "ref": true, "flatRate": true, "anthropic": false
+    "github": true, "ref": true, "flatRate": true, "anthropic": false, "pool": true
   },
 
   "fluxnat": {
     "p": "fn", "P": "FN", "full": "fluxnat", "NAME": "FluxRouter",
     "HOST": "llm.fluxnat.dev", "PORT": 20167, "FOLDER": "fluxnat",
     "ICON": "🌀", "COLOR": "fuchsia", "REF": "",
-    "github": true, "ref": false, "flatRate": false, "anthropic": true
+    "github": true, "ref": false, "flatRate": false, "anthropic": true, "pool": true
   },
 
   "getunikey": {
     "p": "uk", "P": "UK", "full": "getunikey", "NAME": "UniKey",
     "HOST": "www.getunikey.ai", "PORT": 20168, "FOLDER": "getunikey",
     "ICON": "🔑", "COLOR": "sky", "REF": "6ssC",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false
   },
   "bai": {
     "p": "bai", "P": "BAI", "full": "bai", "NAME": "B.AI",
     "HOST": "chat.b.ai", "PORT": 20169, "FOLDER": "bai",
     "ICON": "🅱️", "COLOR": "amber", "REF": "6H755H",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false
   },
   "odyssey": {
     "p": "od", "P": "OD", "full": "odyssey", "NAME": "Odyssey",
     "HOST": "odysseyapi.tech", "PORT": 20170, "FOLDER": "odyssey",
     "ICON": "🧭", "COLOR": "lime", "REF": "",
-    "github": false, "ref": false, "flatRate": false, "anthropic": false
+    "github": false, "ref": false, "flatRate": false, "anthropic": false, "pool": true
   },
 
   "nova": {
     "p": "nv", "P": "NV", "full": "nova", "NAME": "Nova",
     "HOST": "nova.vcrauo.com", "PORT": 20172, "FOLDER": "nova",
     "ICON": "🛰️", "COLOR": "cyan", "REF": "ITSp",
-    "github": true, "ref": true, "flatRate": false, "anthropic": true
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true
   },
 
   "budsin": {
     "p": "bd", "P": "BD", "full": "budsin", "NAME": "BudsAI",
     "HOST": "apichat.budsin.dev", "PORT": 20173, "FOLDER": "budsin",
     "ICON": "🌿", "COLOR": "teal", "REF": "kSyu",
-    "github": true, "ref": true, "flatRate": false, "anthropic": true
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true
   }
 }

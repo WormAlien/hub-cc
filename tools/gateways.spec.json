@@ -10,7 +10,7 @@
     "  must-not-count — счётчик: max (дубли, грабля 19) и expectMin (ровно одна такая строка)",
     "  file           — файл обязан существовать",
     "",
-    "when — условие применимости по флагам конфига шлюза (github / ref / flatRate / anthropic).",
+    "when — условие применимости по флагам конфига шлюза (github / ref / flatRate / anthropic / pool).",
     "Ослабление — не kind, а РЕЗУЛЬТАТ when: точка с ложным флагом уходит в «ослабления» отчёта.",
     "",
     "Файлы, которых нет в files, проверяются относительно корня проекта."
@@ -115,6 +115,8 @@
     { "id": "2.5",  "title": "Фронт: showTab()",            "file": "frontend", "kind": "must", "expect": "name === '%full%'" },
     { "id": "2.6",  "title": "Фронт: KEEPALIVE_API",        "file": "frontend", "kind": "must", "expect": "%p%: '/__switch/api/%p%/keepalive'" },
     { "id": "2.7",  "title": "Фронт: обёртки keepalive",    "file": "frontend", "kind": "must", "expect": "loadKeepaliveCard('%p%'" },
+    { "id": "2.7b",   "title": "Фронт: обёртка keepalive apply", "file": "frontend", "kind": "must", "expect": "applyKeepaliveCard('%p%'", "note": "Три обёртки одной вкладки, а не одна: кнопка «Применить» зовёт apply-версию, и без определения вкладка падает ReferenceError при клике. У nova на 21.09 нет ни apply, ни reset - найдено этой точкой." },
+    { "id": "2.7c",   "title": "Фронт: обёртка keepalive reset", "file": "frontend", "kind": "must", "expect": "resetKeepaliveCard('%p%'" },
     { "id": "2.8",  "title": "Фронт: KEEPALIVE_POLL_TABS",  "file": "frontend", "kind": "must", "expect": "%full%: ['%p%', '/__switch/api/%p%/keepalive']" },
     { "id": "2.9",  "title": "Фронт: GH_USE_META",          "file": "frontend", "kind": "must", "when": ["github"], "expect": "%p%: { icon: '%ICON%'" },
     { "id": "2.10", "title": "Фронт: DEFAULT_TABS_VISIBLE", "file": "frontend", "kind": "must", "expect": "'%full%'", "within": "const DEFAULT_TABS_VISIBLE" },
@@ -142,13 +144,16 @@
     { "id": "4.5",    "title": "COLORS вкладки", "file": "frontend", "kind": "must", "expect": "%full%: 'text-%COLOR% bg-%COLOR%',", "within": "const COLORS = {" },
     { "id": "4.6",    "title": "NEWAPI_RERENDER вкладки", "file": "frontend", "kind": "must", "expect": "%p%: () => render%x%(),", "within": "const NEWAPI_RERENDER = {" },
     { "id": "4.7",    "title": "check-hub: ожидаемый список вкладок", "file": "tools/check-hub.js", "kind": "must", "expect": "'%full%',", "within": "const want = [" },
+    { "id": "4.8",    "title": "check-hub: префиксы в сверке «зовут ↔ объявлено»", "file": "tools/check-hub.js", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "note": "PREF в check-hub.js перечисляет префиксы литерально: вкладки вне списка не проверяются на «зовёт функцию, которой нет» - ровно так молча ломались ts, hn и ol." },
 
     { "id": "1.8k",   "title": "Реестр ghLkPidsByTag (карты pid по тегу)", "file": "backend", "kind": "must", "expect": "%p%: %p%LkPids", "within": "function ghLkPidsByTag", "when": ["github"] },
+    { "id": "1.8m",   "title": "Список ручек ротации денежных шлюзов", "file": "backend", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "within": "rotate|auto", "when": ["pool"], "note": "ВТОРАЯ карта денежного шлюза: MONEY_GW знает шлюз, а эта регулярка - какие префиксы роутятся. Разъехались молча: 17.09 Odyssey, 21.09 budsin и nova - просьба о подмене уезжала в 404, снаружи «авторотация не сработала на пустом пуле»." },
     { "id": "2.15",   "title": "Фронт: NEWAPI_SEED_PROV (модалка GitHub)", "file": "frontend", "kind": "must", "expect": "%p%: { label: '%NAME%',", "when": ["github"] },
     { "id": "2.16",   "title": "Фронт: ghAddPick (выбор GitHub в форме)", "file": "frontend", "kind": "must", "expect": "%p%: null", "within": "const ghAddPick", "when": ["github"] },
     { "id": "2.17",   "title": "Фронт: карта тег → полное имя (GitHub-usage)", "file": "frontend", "kind": "must", "expect": "%p%: '%full%'", "when": ["github"] },
     { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" },
-    { "id": "2.19",   "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)", "file": "frontend", "kind": "must", "expect": "%full%: '%p%',", "within": "const CATALOG_EP" }
+    { "id": "2.19",   "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)", "file": "frontend", "kind": "must", "expect": "%full%: '%p%',", "within": "const CATALOG_EP" },
+    { "id": "2.20",   "title": "Фронт: возврат сохранённого порядка сортировки", "file": "frontend", "kind": "must", "expect": "'%p%',", "within": "// Выбранный порядок переживает F5", "note": "Цикл возврата сортировки перечисляет префиксы литерально: вкладка вне списка после F5 молча сбрасывает выбранный порядок." }
   ],
 
   "_source": "kktoken",
@@ -201,6 +206,8 @@
     "2.5":   {},
     "2.6":   {},
     "2.7":   {},
+    "2.7b":  {},
+    "2.7c":  {},
     "2.8":   {},
     "2.9":   {},
     "2.10":  { "mode": "inline", "find": "'%full%',",                    "add": " '%full%'," },
@@ -255,12 +262,15 @@
     "4.5":   { "mode": "inline", "find": "%full%: 'text-%COLOR% bg-%COLOR%',", "add": " %full%: 'text-%COLOR% bg-%COLOR%'," },
     "4.6":   { "mode": "inline", "find": "%p%: () => render%x%(),", "add": " %p%: () => render%x%()," },
     "4.7":   { "mode": "inline", "find": "'%full%',", "add": " '%full%'," },
+    "4.8":   { "mode": "inline", "ref": "|%p%|", "find": "|%p%|", "add": "%p%|" },
 
     "1.8k":  { "mode": "inline", "find": "%p%: %p%LkPids", "add": ", %p%: %p%LkPids" },
+    "1.8m":  { "mode": "inline", "ref": "|%p%|", "find": "|%p%|", "add": "%p%|" },
     "2.15":  {},
     "2.16":  { "mode": "inline", "find": "%p%: null", "add": ", %p%: null" },
     "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },
     "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" },
-    "2.19":  { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," }
+    "2.19":  { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," },
+    "2.20":  { "mode": "inline", "ref": "'%p%',", "find": "'%p%',", "add": " '%p%'," }
   }
-}
+}

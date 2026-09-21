@@ -127,7 +127,9 @@ function isGptModel(model) {
 }
 
 // Pass-through: claude-модели и всё не-GPT — шлём тело как есть в /v1/messages.
-function handlePassthrough(req, res, body) {
+// У не-claude моделей дополнительно вырезаем фейковую подпись thinking-блоков —
+// почему именно, написано у фильтра в теле функции.
+function handlePassthrough(req, res, body, claudeReq) {
     const apiKey = resolveKey(req);
     if (!apiKey) return claudeError(res, 401, 'Нет ключа AgentRouter', 'authentication_error');
 
@@ -150,7 +152,66 @@ function handlePassthrough(req, res, body) {
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
         });
-        upRes.pipe(res);
+
+        // Подпись thinking-блока у не-claude моделей — ФИКЦИЯ: upstream (agentrouter)
+        // ставит туда обычный UUID вместо настоящей подписи Anthropic. DeepSeek за
+        // Anthropic-эндпоинтом требует, чтобы пришедшие thinking-блоки возвращались
+        // в API как есть, но клиент, знающий про отсутствие подписей у DeepSeek
+        // (например, Hermes: см. _manage_thinking_signatures), подписанные блоки
+        // вырезает — и следующий ход падает с
+        //   400 «The content[].thinking in the thinking mode must be passed back to the API».
+        // Проверять эту подпись некому, поэтому у не-claude моделей вырезаем и поле
+        // signature, и событие signature_delta. Claude-модели не трогаем: у них
+        // подписи настоящие и обязаны доехать до клиента нетронутыми.
+        const stripThinkingSignatures = !/^claude/i.test(String((claudeReq && claudeReq.model) || ''));
+        if (!stripThinkingSignatures) {
+            upRes.pipe(res);
+            res.on('close', () => { if (!res.writableEnded) upReq.destroy(); });
+            return;
+        }
+
+        const dropSignature = b => { if (b && typeof b === 'object') delete b.signature; };
+        const dropSignatures = obj => {
+            dropSignature(obj.content_block);
+            dropSignature(obj.delta);
+            if (Array.isArray(obj.content)) obj.content.forEach(dropSignature);
+        };
+        // Не-стриминговый ответ — правим целиком, стриминговый — по событиям SSE.
+        if (!String(upRes.headers['content-type'] || '').includes('text/event-stream')) {
+            let raw = '';
+            upRes.setEncoding('utf8');
+            upRes.on('data', c => raw += c);
+            upRes.on('end', () => {
+                try { const obj = JSON.parse(raw); dropSignatures(obj); res.end(JSON.stringify(obj)); }
+                catch { res.end(raw); }
+            });
+            res.on('close', () => { if (!res.writableEnded) upReq.destroy(); });
+            return;
+        }
+        // События разделяются пустой строкой; внутри — строки `event:` и `data:`.
+        // Событие signature_delta выбрасываем целиком, в остальных чистим поле.
+        let sseBuf = '';
+        upRes.setEncoding('utf8');
+        upRes.on('data', chunk => {
+            sseBuf += chunk;
+            let sep;
+            while ((sep = sseBuf.indexOf('\n\n')) !== -1) {
+                const event = sseBuf.slice(0, sep);
+                sseBuf = sseBuf.slice(sep + 2);
+                const dataLine = event.match(/^data: (.*)$/m);
+                if (dataLine) {
+                    try {
+                        const obj = JSON.parse(dataLine[1]);
+                        if (obj.delta && obj.delta.type === 'signature_delta') continue;
+                        dropSignatures(obj);
+                        res.write(event.replace(/^data: .*$/m, 'data: ' + JSON.stringify(obj)) + '\n\n');
+                        continue;
+                    } catch {}
+                }
+                res.write(event + '\n\n');
+            }
+        });
+        upRes.on('end', () => { if (sseBuf) res.write(sseBuf); res.end(); });
         res.on('close', () => { if (!res.writableEnded) upReq.destroy(); });
     }, (err) => claudeError(res, 502, 'upstream: ' + err.message));
 }
@@ -1112,7 +1173,7 @@ function handleMessages(req, res, body) {
         stats.requests++;
         stats.lastModel = `${claudeReq.model} → passthrough`;
         logLine(`/v1/messages ${claudeReq.model} → passthrough stream=${!!claudeReq.stream}`);
-        return handlePassthrough(req, res, body);
+        return handlePassthrough(req, res, body, claudeReq);
     }
 
     // gpt-6-astra → Responses API вместо chat/completions (см. блок

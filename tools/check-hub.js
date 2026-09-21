@@ -950,7 +950,7 @@ t('вкладки не зовут функций, которых нет: све�
     // `switchTab` зовёт такую функцию первой — открытие вкладки падает ReferenceError и
     // не доходит до конца, то есть пустая вкладка вместо содержимого.
     const src = read('routing/proxy-dashboard.html');
-    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|hn|ol)';
+    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|bd|hn|ol)';
     const called = new Set([...src.matchAll(new RegExp('\\b(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*\\(', 'g'))].map(m => m[1]));
     const defined = new Set();
     for (const re of [

@@ -14767,6 +14767,7 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const bdApplyKeepalive  = () => applyKeepaliveCard('bd', KEEPALIVE_API.bd);
 // ts-трио пропустили при заведении вкладки TrueSOTA: `tsLoadKeepalive()` зовётся из
 // switchTab и трёх кнопок карточки, а определения не было — открытие вкладки падало
 // ReferenceError и не доходило до конца. Найдено при сверке множеств для hcnsec.
@@ -14785,6 +14786,7 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const bdResetKeepalive  = () => resetKeepaliveCard('bd', KEEPALIVE_API.bd);
 const apLoadKeepalive   = () => loadKeepaliveCard('ap', KEEPALIVE_API.ap);
 const apApplyKeepalive  = () => applyKeepaliveCard('ap', KEEPALIVE_API.ap);
 const apResetKeepalive  = () => resetKeepaliveCard('ap', KEEPALIVE_API.ap);
@@ -15047,7 +15049,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }

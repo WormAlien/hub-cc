@@ -12997,6 +12997,92 @@ async function customCopyKey(apiKey) {
   } catch (e) { toast('копировать: ' + e.message, 'error'); }
 }
 
+// ── Облако моделей шлюза: топовые сверху, остальное — за «развернуть» ──────────
+//
+// Зачем. Каталог крупного релея — сотни чипов одной простынёй (у budsin на 21.09 их
+// **447**, и это половина каталога чужих хабов: `unorouter/*`, `zzz/*`, `crax-gpt/*`).
+// Найти в такой простыне нужную модель глазами нельзя: чипы одного размера, порядок —
+// как отдал шлюз. Показываем верх списка, остальное прячем под кнопку.
+//
+// Развёрнутость помним в localStorage: список перерисовывается на каждом тике
+// автоперечитки вкладки, и без памяти он схлопывался бы сам через минуту.
+const MODELS_TOP_N = 12;
+const MODELS_OPEN_KEY = 'dashboard-models-open';
+
+function modelsOpenSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(MODELS_OPEN_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function modelsIsOpen(key) { return modelsOpenSet().has(String(key)); }
+function modelsToggle(key) {
+  const set = modelsOpenSet();
+  const k = String(key);
+  if (set.has(k)) set.delete(k); else set.add(k);
+  try { localStorage.setItem(MODELS_OPEN_KEY, JSON.stringify([...set])); } catch (e) { /* приватный режим — раскрытие не переживёт F5 */ }
+  modelsApplyOpen(k);
+}
+function modelsApplyOpen(key) {
+  const open = modelsIsOpen(key);
+  const rest = document.getElementById('models-rest-' + key);
+  const btn = document.getElementById('models-more-' + key);
+  if (rest) rest.style.display = open ? 'flex' : 'none';
+  if (btn) btn.textContent = open ? '▴ свернуть' : (btn.dataset.more || '▾ развернуть');
+}
+
+// Порядок «что показать первым». Каталог приходит своим порядком, а выбирают модель
+// глазами сверху вниз — значит наверху обязано стоять пригодное для работы, а не
+// `unorouter/awesome-model:free`. Семейства — по тому, чем реально ходит Claude Code.
+const MODEL_FAMILY_ORDER = [
+  /^anthropic\/claude-opus/, /^claude-opus/,
+  /^anthropic\/claude-sonnet/, /^claude-sonnet/,
+  /^claude-(fable|haiku)/, /^fable/,
+  /claude/,
+  /gpt-6|gpt-5\.6|gpt-5\.5|gpt-5\.4|codex/,
+  /^openai\//, /gpt/,
+  /gemini/, /grok/,
+  /deepseek/, /glm|zai/, /kimi/, /qwen/, /minimax|mimo/,
+];
+function modelFamilyRank(id) {
+  for (let i = 0; i < MODEL_FAMILY_ORDER.length; i++) if (MODEL_FAMILY_ORDER[i].test(id)) return i;
+  return MODEL_FAMILY_ORDER.length;
+}
+
+// Верх списка: сначала цели тир-карты и активная модель (их ищут всегда, и активная
+// обязана быть видна, даже если она по ранжиру в хвосте), потом семейства по порядку.
+// Остаток отдаём КАК ЕСТЬ, в порядке каталога: под кнопкой список работает как
+// справочник, и перетасовывать его значит ломать группировку шлюза (у реселлеров
+// модели сгруппированы по хабам, и по ним же их и ищут).
+function modelsSplit(list, active, modelMap) {
+  const pinned = [];
+  for (const id of [active, ...Object.values(modelMap || {})]) {
+    if (!id || pinned.some(m => m.id === id)) continue;
+    const m = list.find(x => x.id === id);
+    if (m) pinned.push(m);          // именно объект из списка: чип рисует m.id, а не строку
+  }
+  const rest = list.filter(m => !pinned.some(p => p.id === m.id));
+  const room = Math.max(0, MODELS_TOP_N - pinned.length);
+  const ranked = rest.slice().sort((a, b) => modelFamilyRank(a.id) - modelFamilyRank(b.id));
+  const top = [...pinned, ...ranked.slice(0, room)];
+  const topIds = new Set(top.map(m => m.id));
+  return { top, rest: rest.filter(m => !topIds.has(m.id)) };
+}
+
+// Разметка облака: верхние чипы, скрытый остаток и кнопка. Мелкий каталог не трогаем —
+// порог в шесть чипов сверх верхушки, чтобы вкладки на 15-20 моделей выглядели как раньше.
+function modelsCloudHtml(key, list, active, modelMap, chip) {
+  if (list.length <= MODELS_TOP_N + 6) return list.map(chip).join('');
+  const { top, rest } = modelsSplit(list, active, modelMap);
+  if (!rest.length) return top.map(chip).join('');
+  const open = modelsIsOpen(key);
+  const more = `▾ ещё ${rest.length} — развернуть`;
+  return top.map(chip).join('')
+    + `<div id="models-rest-${key}" class="flex flex-wrap gap-1.5 w-full mt-1.5" style="display:${open ? 'flex' : 'none'}">${rest.map(chip).join('')}</div>`
+    + `<button id="models-more-${key}" data-more="${esc(more)}" onclick="modelsToggle('${key}')" `
+    + `class="w-full text-left text-[10px] text-faint hover:text-ink font-mono px-2 py-1 mt-1.5 rounded border border-dashed border-line-soft hover:border-line">`
+    + `${open ? '▴ свернуть' : esc(more)}</button>`;
+}
+
+
 // ── Модели для Claude Code (маппинг claude-тиров → модели провайдера) ──
 async function customShowModelMap(providerId, show = true) {
   const form = document.getElementById('custom-modelmap-' + providerId);
@@ -17920,7 +18006,8 @@ async function renderBdModels(models) {
     const j = await r.json();
     if (j.ok && j.model) { state.bdActiveModel = j.model; active = j.model; }
   } catch {}
-  $('bd-models-list').innerHTML = list.map(m => {
+  // Облако сворачиваемое: каталог budsin — 447 чипов, половина это чужие хабы.
+  const chip = m => {
     const id = m.id;
     const isActive = active && id === active;
     // 🪤 Акцент вкладки — teal, а teal же во всём дашборде значит «активно».
@@ -17933,7 +18020,8 @@ async function renderBdModels(models) {
       <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "budsin")' title="Копировать /model id[1m]"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
-  }).join('');
+  };
+  $('bd-models-list').innerHTML = modelsCloudHtml('bd', list, active, state.bdModelMap, chip);
   // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
   // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
   renderBdModelMap();

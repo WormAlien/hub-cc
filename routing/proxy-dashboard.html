@@ -244,6 +244,10 @@
   border-radius: 6px; padding: 6px 8px; cursor: pointer;
 }
 .rt-sel-big { font-size: 13px; padding: 8px 9px; background: var(--color-surface); border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
+/* Цель тира, которой нет в подтверждённом каталоге шлюза. Селект остаётся рабочим и
+   выбор не слетает - помечен только вид, иначе «— как есть —» читалось бы как «ничего
+   не выбрано», хотя запрос уедет ровно на эту модель (см. routesRefreshHints). */
+.rt-sel.rt-unconf { border-color: color-mix(in oklab, var(--color-amber) 65%, var(--color-line)); }
 .rt-cmd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .rt-badge {
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; padding: 3px 7px; border-radius: 5px;
@@ -10511,6 +10515,9 @@ async function loadRoutes(force) {
   if (resetBtn) resetBtn.hidden = routesOrderList().length === 0;
   // Каталоги — после разметки: селекты уже в DOM, дополним их опциями. Не ждём (await
   // выше уже отрисовал строки с текущими значениями), мёртвый шлюз просто не обогатит.
+  // Пометки ставим сразу: до каталога опций нет ни у кого, и без этого шага селект
+  // каждой строки выглядел бы слетевшим до первой подгрузки.
+  for (const p of shown) if (p.tiers) routesRefreshHints(p.name);
   routesLoadCatalogs(visible);
 }
 
@@ -10523,24 +10530,55 @@ const routesCatalog = {};
 // Безопасный id из имени провайдера. Имена в реестре — [a-z0-9_], но не рискуем.
 function routesId(name) { return String(name).replace(/[^a-z0-9_-]/gi, '_'); }
 
-// Опции одного тира: '' («как есть») + каталог провайдера + модели, уже стоящие на ЕГО
-// вкладке + текущее значение (всегда в списке, даже если его нет в каталоге — иначе выбор
-// молча слетел бы на пустой).
+// Опции одного тира: '' («как есть») + ПОДТВЕРЖДЁННЫЙ каталог шлюза. Больше ничего.
 //
-// 🎯 Зачем сюда `gatewayTiers`. Каталог приходит от самого шлюза и у него же бывает пустым —
-// замер 12.09: GoRouter, KKtoken и Tabi не отдают список моделей даже на своём сайте, и
-// строка на вкладке превращалась в селект с единственным «— как есть —»: выбирать нечего,
-// выглядит как выключенное. А модели этих шлюзов известны локально — в обычной тир-карте,
-// которую правит вкладка шлюза. Предлагаем их как варианты: это не перенос значений
-// (карты остаются разными, как и решено 12.09), а подсказка без похода в сеть.
+// 🎯 С 21.09 сюда не идут ни карта ШЛЮЗА (`gatewayTiers`), ни значения самой тир-карты.
+// Раньше шли, и владелец видел в списке модели, которых шлюз не отдаёт вовсе: hcnsec
+// держал `kimi-k3` и `step-explore` (в живом каталоге из 22 нет ни одной), justwoker -
+// три `gpt-5.6-*` при живом каталоге из одной модели, agentrouter - `glm-5.3`, seekai -
+// `claude-opus-5`/`sonnet-5`/`fable-5`. Список опций отвечает на вопрос «что этот шлюз
+// умеет СЕЙЧАС», а не «что здесь когда-то выбирали».
+//
+// 🪤 Значение тир-карты, которого в каталоге нет, продолжает РОУТИТЬ, а из списка уходит
+// только его предложение. Что цель стоит и не подтверждена, говорит пометка на селекте
+// (`routesRefreshHints`): без неё селект показывал бы «— как есть —» и молча врал бы,
+// а запрос уезжал бы на несуществующую модель.
+//
+// 🪤 `current` больше НЕ подмешивается в список (решение владельца 21.09). Селект с
+// несуществующим `value` показывает первый пункт, поэтому перерисовка обязана брать
+// значение из карты (`data-prev`), а не из `sel.value`, иначе выбор теряется молча.
 function routesOptions(name, current) {
   const cat = routesCatalog[name] || [];
-  const gw = Object.values(routesProviders[name] && routesProviders[name].gatewayTiers || {})
-    .filter(v => typeof v === 'string' && v.trim()).map(v => v.trim());
   const seen = new Set();
-  const opts = ['', ...cat, ...gw, current].filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true));
+  const opts = ['', ...cat].filter(v => typeof v === 'string' && !seen.has(v) && (seen.add(v), true));
   return opts.map(id =>
     `<option value="${esc(id)}"${id === (current || '') ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+}
+
+// Подсказки и пометки одного провайдера: откуда список и не слетела ли цель.
+// Зовётся и после отрисовки, и после подгрузки каталога, и после сохранения тира:
+// до подгрузки каталога его нет ни у кого, и метка врала бы всем подряд.
+function routesRefreshHints(name) {
+  const p = routesProviders[name];
+  if (!p || !p.tiers) return;
+  const meta = routesCatalogMeta[name] || {};
+  const cat = routesCatalog[name] || [];
+  const id = routesId(name);
+  // Источник показываем ТОЛЬКО когда список не живой: свежий каталог сам себя объясняет.
+  const srcNote = (meta.note && meta.source !== 'live' && meta.source !== 'pricing') ? meta.note : '';
+  for (const t of ['default', 'opus', 'sonnet', 'haiku']) {
+    const sel = document.getElementById(`routes-sel-${id}-${t}`);
+    if (!sel) continue;
+    const v = String(p.tiers[t] || '').trim();
+    const miss = (v && !cat.includes(v)) ? v : '';
+    const missNote = miss
+      ? (cat.length ? `цель «${miss}» каталогом шлюза не подтверждена`
+                    : `шлюз каталога не отдаёт, цель «${miss}» не подтверждена`)
+      : '';
+    const title = [missNote, srcNote].filter(Boolean).join(' · ');
+    if (title) sel.title = title; else sel.removeAttribute('title');
+    sel.classList.toggle('rt-unconf', !!miss);
+  }
 }
 
 // Сохранение одного тира. Вызывается из onchange селекта. Оптимистично не рисуем —
@@ -10570,6 +10608,9 @@ async function routesSaveTier(sel) {
     // Рядом с командой показан итог развёртки (`→ glm-5.3`), а он берётся из
     // `tiers.default` — значит смена ЛЮБОГО тира может его поменять. Перерисовываем.
     routesRefreshCmd(name);
+    // И пометку «цель не подтверждена каталогом»: выбор мог лечь ровно на модель,
+    // которой шлюз не отдаёт, тогда строка обязана сказать об этом сразу.
+    routesRefreshHints(name);
   } catch (e) {
     sel.value = prev;                          // откат: на диск не легло — и в UI не оставляем
     if (st) { st.textContent = '✗ ' + (e.message || 'ошибка'); st.className = 'text-[10px] text-crimson ml-1'; }
@@ -10603,32 +10644,30 @@ async function routesLoadCatalogs(names) {
       if (d) routesCatalogMeta[name] = { source: d.source || '', note: d.note || '', staleDays: d.staleDays };
       if (!models.length) return;                   // нечем обогащать — оставляем как есть
       routesCatalog[name] = models;
-      // Обновляем опции каждого селекта провайдера, сохраняя выбранное значение.
+      // Обновляем опции каждого селекта провайдера. 🪤 Значение берём из карты
+      // (`data-prev`), а НЕ из `sel.value`: список опций теперь строгий, и селект с
+      // несуществующим значением отдаёт пустую строку, и выбор стёрся бы молча.
       // Обогащаем только те тиры, что есть в разметке: `gpt` на этой вкладке не
       // рендерится (см. routesRow), его селекта в DOM нет.
       for (const tier of ['default', 'opus', 'sonnet', 'haiku']) {
         const sel = document.getElementById(`routes-sel-${routesId(name)}-${tier}`);
-        if (sel) sel.innerHTML = routesOptions(name, sel.value);
+        if (sel) {
+          const prev = sel.dataset.prev || '';
+          sel.innerHTML = routesOptions(name, prev);
+          sel.value = prev;                          // пустая строка, если цели нет в каталоге
+        }
       }
       routesMultiRefreshModels(name);   // и model-селекты блока multi, если он на этом шлюзе
-      routesMarkCatalogSource(name);
+      routesRefreshHints(name);
     } catch { /* каталог не обязателен — тихо пропускаем */ }
   }));
 }
 
-// Откуда список моделей. Показываем ТОЛЬКО когда список не живой: снимок месячной
-// давности и «только значения тир-карты» — разные вещи, и знать про это владельцу нужно
-// (свежий каталог сам себя объясняет). Подсказкой на селекте, а не строкой в разметке:
-// геометрию строки трогать нельзя, её держит проба.
-function routesMarkCatalogSource(name) {
-  const meta = routesCatalogMeta[name];
-  if (!meta || !meta.note || meta.source === 'live') return;
-  const id = routesId(name);
-  for (const tier of ['default', 'opus', 'sonnet', 'haiku']) {
-    const sel = document.getElementById(`routes-sel-${id}-${tier}`);
-    if (sel) sel.title = meta.note;
-  }
-}
+// Откуда список моделей и не слетела ли цель — `routesRefreshHints` выше. Подсказкой на
+// селекте, а не строкой в разметке: геометрию строки трогать нельзя, её держит проба.
+// `routesMarkCatalogSource` жил здесь до 21.09; его работа вошла в `routesRefreshHints`,
+// потому что подсказок стало две (источник и неподтверждённая цель) и писать `title`
+// из двух мест значило бы затирать одну другой.
 
 // HTML команды копирования (отдельно, чтобы перерисовывать при смене opus).
 //
@@ -10832,11 +10871,17 @@ async function routesSaveMulti(tier) {
 }
 
 // После загрузки каталога провайдера — обновить и его model-селекты в блоке multi.
+// 🪤 Значение берём из карты multi, а не из `mm.value`: список опций строгий, и у цели,
+// которой нет в каталоге, селект отдаёт пустую строку, и по ней выбор потерялся бы молча.
 function routesMultiRefreshModels(name) {
   for (const t of routesMultiTiers) {
     const mp = document.getElementById(`routes-mprov-${t}`);
     const mm = document.getElementById(`routes-mmodel-${t}`);
-    if (mp && mm && mp.value === name) mm.innerHTML = routesOptions(name, mm.value);
+    if (!mp || !mm || mp.value !== name) continue;
+    const pair = (routesMultiMap && routesMultiMap[t] && typeof routesMultiMap[t] === 'object') ? routesMultiMap[t] : {};
+    const mine = String(pair.model || '');
+    mm.innerHTML = routesOptions(name, mine);
+    mm.value = mine;
   }
 }
 
@@ -13006,7 +13051,7 @@ async function customCopyKey(apiKey) {
 //
 // Развёрнутость помним в localStorage: список перерисовывается на каждом тике
 // автоперечитки вкладки, и без памяти он схлопывался бы сам через минуту.
-const MODELS_TOP_N = 12;
+const MODELS_TOP_N = 16;
 const MODELS_OPEN_KEY = 'dashboard-models-open';
 
 function modelsOpenSet() {
@@ -13030,28 +13075,43 @@ function modelsApplyOpen(key) {
 }
 
 // Порядок «что показать первым». Каталог приходит своим порядком, а выбирают модель
-// глазами сверху вниз — значит наверху обязано стоять пригодное для работы, а не
-// `unorouter/awesome-model:free`. Семейства — по тому, чем реально ходит Claude Code.
-const MODEL_FAMILY_ORDER = [
-  /^anthropic\/claude-opus/, /^claude-opus/,
-  /^anthropic\/claude-sonnet/, /^claude-sonnet/,
-  /^claude-(fable|haiku)/, /^fable/,
-  /claude/,
-  /gpt-6|gpt-5\.6|gpt-5\.5|gpt-5\.4|codex/,
-  /^openai\//, /gpt/,
-  /gemini/, /grok/,
-  /deepseek/, /glm|zai/, /kimi/, /qwen/, /minimax|mimo/,
+// глазами сверху вниз — значит наверху обязано стоять пригодное для работы.
+//
+// 🪤 Первая версия ранжировала БЛОКАМИ («все Claude, потом все GPT…») — и вышло плохо:
+// у budsin клановых позиций 28 (включая `-thinking`, `anthropic/`, `custom/kilgore-ai/`),
+// они забили все 12 слотов, и вкладка выглядела как «остался один Anthropic» (владелец,
+// 21.09). Правильно — по ОДНОМУ лучшему представителю семейства, сверху вниз по списку
+// ниже: Claude, GPT terra/sol/luna, Astra, Grok, Gemini, GLM, Kimi, Qwen, DeepSeek, MiniMax.
+// Хвост списка — фолбэки: они добирают слоты, когда верхних моделей в каталоге нет.
+const MODEL_TOP_PICKS = [
+  /claude-opus-5/, /gpt-5\.6-terra/, /gpt-5\.6-sol/, /gpt-5\.6-luna/, /gpt-6-astra/,
+  /grok-4\.6/, /gemini-3\.1-pro/, /glm-5\.3/, /kimi-k3/, /qwen3\.8-max/,
+  /deepseek-v4-pro/, /minimax-m3/,
+  // фолбэки
+  /claude-opus-4-8/, /claude-sonnet-5/, /gpt-5\.6/, /gpt-6/, /grok-4\.5/, /grok/,
+  /gemini-3\.8-flash/, /gemini/, /glm-5\.2/, /kimi/, /qwen3\.7-max/, /qwen/,
+  /deepseek-v4\.1-flash/, /deepseek/, /minimax/, /claude-sonnet/, /claude/,
 ];
-function modelFamilyRank(id) {
-  for (let i = 0; i < MODEL_FAMILY_ORDER.length; i++) if (MODEL_FAMILY_ORDER[i].test(id)) return i;
-  return MODEL_FAMILY_ORDER.length;
+
+// «Чистота» имени: одно и то же семейство приходит и голым (`gpt-5.6-terra`), и через
+// чужой хаб (`mt/gpt-5.6-terra`), и из бесплатного пула (`lnk/c1/[free]gpt-5.6-sol`).
+// В топ ставим представителя с наименьшим штрафом — по нему и кликать безопаснее
+// (хаб и :free это чужая ёмкость).
+function modelCleanliness(id) {
+  let s = 0;
+  if (id.includes('/')) s += 4;                     // чужой хаб в имени
+  if (/:free|\[free\]/i.test(id)) s += 8;           // бесплатный пул — чужая ёмкость
+  if (/-thinking\b/i.test(id)) s += 2;              // тот же тир, но «думающая» обёртка
+  if (/(^|[-./])(flash|lite|mini|nano|small)(-|$)/i.test(id)) s += 1;   // младший тир семьи
+  if (/(^|[-.])preview(-|$)/i.test(id)) s += 1;     // превью-снапшот
+  return s;
 }
 
 // Верх списка: сначала цели тир-карты и активная модель (их ищут всегда, и активная
-// обязана быть видна, даже если она по ранжиру в хвосте), потом семейства по порядку.
-// Остаток отдаём КАК ЕСТЬ, в порядке каталога: под кнопкой список работает как
-// справочник, и перетасовывать его значит ломать группировку шлюза (у реселлеров
-// модели сгруппированы по хабам, и по ним же их и ищут).
+// обязана быть видна, даже если по ранжиру в хвосте), потом по одному представителю
+// каждого семейства из MODEL_TOP_PICKS. Остаток отдаём КАК ЕСТЬ, в порядке каталога:
+// под кнопкой список работает справочником, и перетасовывать его значит ломать
+// группировку шлюза (у реселлеров модели сгруппированы по хабам, и по ним же их ищут).
 function modelsSplit(list, active, modelMap) {
   const pinned = [];
   for (const id of [active, ...Object.values(modelMap || {})]) {
@@ -13059,12 +13119,22 @@ function modelsSplit(list, active, modelMap) {
     const m = list.find(x => x.id === id);
     if (m) pinned.push(m);          // именно объект из списка: чип рисует m.id, а не строку
   }
-  const rest = list.filter(m => !pinned.some(p => p.id === m.id));
-  const room = Math.max(0, MODELS_TOP_N - pinned.length);
-  const ranked = rest.slice().sort((a, b) => modelFamilyRank(a.id) - modelFamilyRank(b.id));
-  const top = [...pinned, ...ranked.slice(0, room)];
-  const topIds = new Set(top.map(m => m.id));
-  return { top, rest: rest.filter(m => !topIds.has(m.id)) };
+  const used = new Set(pinned.map(m => m.id));
+  // 🪤 По базовому имени тоже: `gpt-5.6-terra` и `mt/gpt-5.6-terra` — одна модель в двух
+  // обёртках, и без этого в топ лезли обе (видел владелец в первой версии).
+  const base = id => id.split('/').pop();
+  const seenBase = new Set(pinned.map(m => base(m.id)));
+  const top = [...pinned];
+  for (const re of MODEL_TOP_PICKS) {
+    if (top.length >= MODELS_TOP_N) break;
+    let best = null;
+    for (const m of list) {
+      if (used.has(m.id) || seenBase.has(base(m.id)) || !re.test(m.id)) continue;
+      if (!best || modelCleanliness(m.id) < modelCleanliness(best.id)) best = m;
+    }
+    if (best) { top.push(best); used.add(best.id); seenBase.add(base(best.id)); }
+  }
+  return { top, rest: list.filter(m => !used.has(m.id)) };
 }
 
 // Разметка облака: верхние чипы, скрытый остаток и кнопка. Мелкий каталог не трогаем —

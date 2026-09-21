@@ -13051,7 +13051,7 @@ async function customCopyKey(apiKey) {
 //
 // Развёрнутость помним в localStorage: список перерисовывается на каждом тике
 // автоперечитки вкладки, и без памяти он схлопывался бы сам через минуту.
-const MODELS_TOP_N = 16;
+const MODELS_TOP_N = 18;
 const MODELS_OPEN_KEY = 'dashboard-models-open';
 
 function modelsOpenSet() {
@@ -13085,12 +13085,13 @@ function modelsApplyOpen(key) {
 // Хвост списка — фолбэки: они добирают слоты, когда верхних моделей в каталоге нет.
 const MODEL_TOP_PICKS = [
   /claude-opus-5/, /gpt-5\.6-terra/, /gpt-5\.6-sol/, /gpt-5\.6-luna/, /gpt-6-astra/,
-  /grok-4\.6/, /gemini-3\.1-pro/, /glm-5\.3/, /kimi-k3/, /qwen3\.8-max/,
-  /deepseek-v4-pro/, /minimax-m3/,
+  /grok-4\.6/, /gemini-3[.-]1-pro/, /gemini-3[.-]8-flash/, /glm-5[.-]3/, /glm-5[.-]3-flash/,
+  /kimi-k3/, /qwen3[.-]8-max/, /qwen3[.-]8-flash/, /deepseek-v4-pro/, /deepseek-v4[.-]?flash/,
+  /minimax-m3/,
   // фолбэки
   /claude-opus-4-8/, /claude-sonnet-5/, /gpt-5\.6/, /gpt-6/, /grok-4\.5/, /grok/,
-  /gemini-3\.8-flash/, /gemini/, /glm-5\.2/, /kimi/, /qwen3\.7-max/, /qwen/,
-  /deepseek-v4\.1-flash/, /deepseek/, /minimax/, /claude-sonnet/, /claude/,
+  /gemini/, /glm-5\.2/, /glm/, /kimi/, /qwen3\.7-max/, /qwen/,
+  /deepseek-v4/, /deepseek/, /minimax/, /claude-sonnet/, /claude/,
 ];
 
 // «Чистота» имени: одно и то же семейство приходит и голым (`gpt-5.6-terra`), и через
@@ -13100,9 +13101,12 @@ const MODEL_TOP_PICKS = [
 function modelCleanliness(id) {
   let s = 0;
   if (id.includes('/')) s += 4;                     // чужой хаб в имени
-  if (/:free|\[free\]/i.test(id)) s += 8;           // бесплатный пул — чужая ёмкость
+  if (/:free|\[free\]|(^|[-.])free($|[-.])/i.test(id)) s += 8;   // бесплатный пул — чужая ёмкость
   if (/-thinking\b/i.test(id)) s += 2;              // тот же тир, но «думающая» обёртка
-  if (/(^|[-./])(flash|lite|mini|nano|small)(-|$)/i.test(id)) s += 1;   // младший тир семьи
+  // 🪤 Младший тир семьи штрафуем, чтобы `glm-5.3` выигрывал у `glm-5.3-flash` внутри
+  // одного шаблона. Но сам flash — не обрезок: у deepseek это ОСНОВНАЯ дешёвая линейка,
+  // у gemini/qwen тоже рабочая, поэтому у каждой семьи он взят отдельным шаблоном выше.
+  if (/(^|[-./])(flash|lite|mini|nano|small)(-|$)/i.test(id)) s += 1;
   if (/(^|[-.])preview(-|$)/i.test(id)) s += 1;     // превью-снапшот
   return s;
 }

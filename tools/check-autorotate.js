@@ -774,6 +774,18 @@ async function main() {
         const routeList = i < 0 ? '' : (src.slice(i).match(/\(([a-z|]+)\)/) || [])[1] || '';
         check(routeList.split('|').includes('od'),
             `od есть в списке ручек /__switch/api/<p>/rotate (в списке: ${routeList || 'строка не найдена'})`);
+        // Проверяем ВЕСЬ реестр, а не одну `od`: тест знал про один шлюз, и 21.09 тем же
+        // молчанием прошли budsin (новая вкладка) и nova (с 17.09) - запись в `MONEY_GW`
+        // есть, а ручки нет, то есть просьба о подмене уезжала бы в 404.
+        // Исключение - `bai` и `uk`: их отсутствие в списке НЕ пропуск, а мёртвая ветка
+        // (пулов на диске у этих площадок нет вовсе, см. комментарий в transparent-proxy.js).
+        const ms = src.indexOf('const MONEY_GW');
+        const me = ms < 0 ? -1 : src.indexOf('\n};', ms);
+        const moneyKeys = me < 0 ? [] : [...src.slice(ms, me).matchAll(/^ {4}([a-z0-9_]+): \{ tag:/gm)].map(x => x[1]);
+        const moneyDead = ['bai', 'uk'];
+        const moneyMissing = moneyKeys.filter(k => !moneyDead.includes(k) && !routeList.split('|').includes(k));
+        check(moneyKeys.length >= 10 && moneyMissing.length === 0,
+            `у каждого шлюза MONEY_GW (кроме bai/uk) есть ручка ротации — реестр ${moneyKeys.length}, без ручки: ${moneyMissing.join(',') || 'ни одного'}`);
         check(/od: \{[^}]*noProbe: true/.test(src), 'у Odyssey в MONEY_GW стоит `noProbe: true` (баланс берётся из кеша)');
 
         // Поведение: шлюз с noProbe меняет ключ по кешу и НЕ поднимает браузер.

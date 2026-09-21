@@ -28963,8 +28963,11 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // (в `MONEY_GW` он есть с 16.09, а здесь его не было). Добавляя шлюз, править оба места.
     // У bai и uk пулов на диске нет вовсе (нет `bai-sessions.json`/`getunikey-sessions.json`),
     // поэтому их отсутствие здесь сегодня ветка мёртвая, а не такой же пропуск.
+    // 🪤 21.09 тем же молчанием прошли budsin и nova - обе с записью в `MONEY_GW` и без ручки
+    // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
+    // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn|ak|rm|od)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|ap|hn|ak|rm|od|bd|nv)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

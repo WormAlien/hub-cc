@@ -140,7 +140,26 @@ function handlePassthrough(req, res, body) {
     const apiKey = resolveKey(req);
     if (!apiKey) return claudeError(res, 401, 'Нет ключа AgentRouter', 'authentication_error');
 
-    const upReq = upstreamRequest('/v1/messages', apiKey, body, (upRes) => {
+    // Claude-модели идут прежним потоком; всё остальное (DeepSeek и родня) — с
+    // правками под их особенности, см. ниже.
+    const isClaudeModel = /^claude/i.test(String((claudeReq && claudeReq.model) || ''));
+
+    // Шлюз держит блок-лист фраз, и на теле, куда такая фраза попала, отвечает не
+    // JSON-ошибкой, а HTML-страницей края (её ловит edgeRejectedAsHtml). В ветках
+    // конвертации тело давно прогоняется через wafSanitize, а passthrough слал как
+    // есть — и живая сессия ложилась целиком: фраза приезжает из истории на КАЖДОМ
+    // следующем ходу, так что отказ не проходил сам. Замены — из того же списка,
+    // что и раньше; регистр и границы слова в нём уже учтены.
+    let sentBody = body;
+    if (!isClaudeModel) {
+        const san = wafSanitize(body);
+        if (san.hits) {
+            logLine(`waf sanitize (passthrough): ${san.hits} hit(s) — нейтрализована фраза из блок-листа шлюза`);
+            sentBody = san.text;
+        }
+    }
+
+    const upReq = upstreamRequest('/v1/messages', apiKey, sentBody, (upRes) => {
         if (upRes.statusCode !== 200) {
             let b = '';
             upRes.on('data', c => b += c);
@@ -151,6 +170,9 @@ function handlePassthrough(req, res, body) {
                 const code = edgeBlocked ? 503 : upRes.statusCode;
                 if (edgeBlocked) {
                     logLine(`upstream edge ответил ${upRes.statusCode} HTML — отдаю клиенту ${code}, чтобы повторил`);
+                    // Тело кладём в файл: по HTML-странице края не понять, что именно
+                    // не понравилось, а разбирать потом придётся именно это.
+                    dumpBlocked(sentBody, upRes.statusCode);
                     message = `agentrouter edge вернул ${upRes.statusCode} HTML вместо ответа API (похоже на WAF) — временный отказ`;
                 }
                 const errType = code === 401 ? 'authentication_error'
@@ -279,6 +301,19 @@ const WAF_PHRASES = [
     // и замена покалечила бы пользовательский код. Это известные мины, а не повод
     // расширять список до бесконечности.
     { re: /ключевое/gi, to: 'важное' },
+    // 2026-09-21: шлюз режет `echo` с аргументом после разделителя команд — ту самую
+    // форму `<команда>; echo "маркер"`, которой агенты (Hermes, Claude Code) размечают
+    // вывод нескольких команд внутри одного вызова. Ложится живая сессия целиком:
+    // вызов остаётся в истории и уезжает наверх на КАЖДОМ следующем ходу, так что
+    // отказ не проходит сам. Сведено бисекцией живого 90к-тела:
+    //   `ls /tmp; echo abc` → отказ, `ls /tmp; printf abc` → 200,
+    //   `ls /tmp; echo` (без аргумента) → 200, `ls /tmp; "echo" abc` → 200,
+    //   `ls /tmp && echo abc` → отказ, `; ECHO abc` → отказ (регистр не важен).
+    // Замена — `printf` вместо `echo`: ту же форму шлюз пропускает, а JSON-спецсимволов
+    // в ней нет (кавычки тут нельзя — они закрыли бы строку и тело перестало быть JSON).
+    // Границы жёсткие — разделитель слева и пробел справа, поэтому идентификаторы вроде
+    // `my_echo_func` и одиночный `echo hi` не задеты.
+    { re: /([;&|]\s*)echo(\s)/gi, to: (m, pre, post) => `${pre}printf${post}` },
 ];
 
 // ══════════════════════ CONTENT-FILTER: BASE64-ОБРАЗЫ ══════════════════════
@@ -312,7 +347,13 @@ function wafSanitize(jsonStr) {
     let text = String(jsonStr);
     let hits = 0;
     for (const { re, to } of WAF_PHRASES) {
-        text = text.replace(re, () => { hits++; return to; });   // один проход
+        // `to` бывает строкой (замена целиком) и функцией — когда нужно сохранить
+        // захваченные группы: часть правил зависит от того, что стоит рядом со словом,
+        // и слепая замена калечила бы идентификаторы.
+        text = text.replace(re, (m, ...groups) => {
+            hits++;
+            return typeof to === 'function' ? to(m, ...groups.slice(0, -2)) : to;
+        });
     }
     let b64 = 0;
     text = text.replace(IMAGE_B64_RE, m => {
@@ -1559,6 +1600,15 @@ if (process.argv[2] === 'selftest') {
     // Соседние формы шлюз пропускает — их трогать нельзя (иначе правим то, что не режется).
     assert.strictEqual(wafSanitize(JSON.stringify({ m: 'ключ ключев ключевой' })).hits, 0,
         'соседние формы не задеваем');
+
+    // `; echo <слово>` шлюз режет, `; printf <слово>` пропускает — меняем имя команды.
+    const ec = wafSanitize(JSON.stringify({ c: 'ls /tmp; echo abc' }));
+    assert.strictEqual(ec.hits, 1, 'echo после разделителя ловится');
+    assert.ok(/;\s*printf\s/.test(ec.text), 'заменён на printf');
+    assert.ok(JSON.parse(ec.text), 'тело остаётся разбираемым JSON — замены без спецсимволов');
+    assert.strictEqual(wafSanitize(JSON.stringify({ c: 'ls /tmp && echo abc' })).hits, 1, '&& тоже разделитель');
+    assert.strictEqual(wafSanitize(JSON.stringify({ c: 'echo abc' })).hits, 0, 'одиночный echo не трогаем');
+    assert.strictEqual(wafSanitize(JSON.stringify({ c: 'my_echo_func()' })).hits, 0, 'идентификатор не задет');
 
     // Регистр и множественные вхождения (system + user + tool_result в одном теле).
     const s3 = wafSanitize(JSON.stringify({

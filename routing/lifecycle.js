@@ -146,6 +146,7 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20173, name: 'BudsAI keepalive', respawn: false },
         { port: 20172, name: 'Nova keepalive', respawn: false },
         { port: 20170, name: 'Odyssey keepalive', respawn: false },
         // Конвертер Odyssey (Anthropic → OpenAI): им gpt-модели шлюза уводятся на путь,

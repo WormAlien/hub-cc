@@ -58,5 +58,12 @@
     "HOST": "nova.vcrauo.com", "PORT": 20172, "FOLDER": "nova",
     "ICON": "🛰️", "COLOR": "cyan", "REF": "ITSp",
     "github": true, "ref": true, "flatRate": false, "anthropic": true
+  },
+
+  "budsin": {
+    "p": "bd", "P": "BD", "full": "budsin", "NAME": "BudsAI",
+    "HOST": "apichat.budsin.dev", "PORT": 20173, "FOLDER": "budsin",
+    "ICON": "🌿", "COLOR": "teal", "REF": "kSyu",
+    "github": true, "ref": true, "flatRate": false, "anthropic": true
   }
 }

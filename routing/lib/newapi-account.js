@@ -220,6 +220,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'apichat.budsin.dev': 'jwt',
     'nova.vcrauo.com': 'jwt',
     // odysseyapi.tech — НЕ New-API вовсе: свой шлюз на Next.js, вход через Clerk
     // (`clerk.odysseyapi.tech`), публичных /api/user/* нет — `GET /api/status` отдаёт

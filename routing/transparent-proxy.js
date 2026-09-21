@@ -233,6 +233,18 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    budsin: {
+        label: 'BudsAI',
+        base_url: 'http://localhost:20173',
+        api_key: 'dummy',           // real key keepalive reads from budsin-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20173) → apichat.budsin.dev (БЕЗ /v1).
+        // Активация через handleBdActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в budsin-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у budsin каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
     nova: {
         label: 'Nova',
         base_url: 'http://localhost:20172',
@@ -488,6 +500,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    budsin: 'budsin',
     nova: 'nova',
     odyssey: 'odyssey',
     bai: 'bai',
@@ -768,7 +781,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 // route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
 const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
@@ -945,7 +958,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -1906,6 +1919,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveBd = makeKeepaliveHandlers(Number(process.env.BD_KEEPALIVE_PORT || 20173));
 const keepaliveNv = makeKeepaliveHandlers(Number(process.env.NV_KEEPALIVE_PORT || 20172));
 const keepaliveOd = makeKeepaliveHandlers(Number(process.env.OD_KEEPALIVE_PORT || 20170));
 const keepaliveBai = makeKeepaliveHandlers(Number(process.env.BAI_KEEPALIVE_PORT || 20169));
@@ -4871,6 +4885,7 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive BudsAI',  port: Number(process.env.BD_KEEPALIVE_PORT || 20173), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Nova',  port: Number(process.env.NV_KEEPALIVE_PORT || 20172), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Odyssey',  port: Number(process.env.OD_KEEPALIVE_PORT || 20170), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive B.AI',  port: Number(process.env.BAI_KEEPALIVE_PORT || 20169), path: '/__keepalive/api/status', keepalive: true },
@@ -6865,7 +6880,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, nv: nvLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, bd: bdLkPids, nv: nvLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -6977,12 +6992,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), nv: () => nvLoad(), ap: () => apLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', nv: 'Nova', ap: 'AIPM' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -7445,6 +7460,9 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleBdAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'budsin', host: 'apichat.budsin.dev', prefix: 'bd_', load: bdLoad, save: bdSave, sessionsDir: BD_SESSIONS_DIR });
 }
 function handleNvAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'nova', host: 'nova.vcrauo.com', prefix: 'nv_', load: nvLoad, save: nvSave, sessionsDir: NV_SESSIONS_DIR });
@@ -8807,6 +8825,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'apichat.budsin.dev':      path.join(__dirname, '..', 'budsin', 'profiles'),
     'nova.vcrauo.com':      path.join(__dirname, '..', 'nova', 'profiles'),
     'odysseyapi.tech':      path.join(__dirname, '..', 'odyssey', 'profiles'),
     'chat.b.ai':      path.join(__dirname, '..', 'bai', 'profiles'),
@@ -8957,7 +8976,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -12722,6 +12741,9 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleBdMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'budsin', host: 'apichat.budsin.dev', load: bdLoad, save: bdSave });
+}
 function handleNvMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'nova', host: 'nova.vcrauo.com', load: nvLoad, save: nvSave });
 }
@@ -12798,6 +12820,9 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleBdSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'budsin', load: bdLoad, save: bdSave });
 }
 function handleNvSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'nova', load: nvLoad, save: nvSave });
@@ -15143,6 +15168,32 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const BD_SESSIONS_FILE = path.join(__dirname, 'budsin-sessions.json');
+const BD_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'budsin-active-key.txt');
+const BD_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'budsin-active-model.txt');
+const BD_BASE_URL = 'https://apichat.budsin.dev/v1';
+// SSE keepalive proxy для budsin (как у tabi :20155): форвардит напрямую в
+// apichat.budsin.dev, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у budsin КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const BD_UPSTREAM = 'https://apichat.budsin.dev';
+const BD_KEEPALIVE_PORT = 20173;
+const BD_KEEPALIVE_URL = `http://localhost:${BD_KEEPALIVE_PORT}`;
+const BD_MODELMAP_FILE = path.join(__dirname, 'budsin-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У budsin гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const BD_GRANT_STEP = 5;
+const BD_DEFAULT_GRANT = 5;
+const BD_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const NV_SESSIONS_FILE = path.join(__dirname, 'nova-sessions.json');
 const NV_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'nova-active-key.txt');
 const NV_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'nova-active-model.txt');
@@ -15244,6 +15295,13 @@ const BAI_DEFAULT_GRANT = 5;
 const BAI_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
 const KK_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const BD_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
     'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
@@ -15361,6 +15419,32 @@ function kkLoad() {
         return arr;
     } catch { return []; }
 }
+function bdLoad() {
+    try {
+        const raw = fs.readFileSync(BD_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'BudsAI');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'bd_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { bdSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
 function nvLoad() {
     try {
         const raw = fs.readFileSync(NV_SESSIONS_FILE, 'utf8');
@@ -15442,6 +15526,9 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function bdSave(arr) {
+    durableWriteJson(BD_SESSIONS_FILE, arr);
+}
 function nvSave(arr) {
     durableWriteJson(NV_SESSIONS_FILE, arr);
 }
@@ -15453,6 +15540,10 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function bdReadActiveModel() {
+    try { return fs.readFileSync(BD_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function nvReadActiveModel() {
@@ -15469,6 +15560,10 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function bdReadActiveKey() {
+    try { return fs.readFileSync(BD_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function nvReadActiveKey() {
@@ -15514,6 +15609,36 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function bdKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(BD_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(BD_KEEPALIVE_PORT),
+                UPSTREAM: BD_UPSTREAM,
+                KEY_FILE: BD_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: BD_SESSIONS_FILE,
+                MODELMAP_FILE: BD_MODELMAP_FILE,
+                ...(process.env.BD_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.BD_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive BudsAI', BD_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`budsin keepalive proxy spawn: :${BD_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`budsin keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -15663,6 +15788,19 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function bdProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${BD_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...BD_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function nvProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -15716,6 +15854,17 @@ async function kkBalance(target, opts = {}) {
         usageUrl: 'https://kktoken.cc/v1/dashboard/billing/usage',
         subUrl: null,
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function bdBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'apichat.budsin.dev',
+        ccHeaders: BD_CC_HEADERS,
+        usageUrl: 'https://apichat.budsin.dev/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(BD_DEFAULT_GRANT, Math.ceil(spent / BD_GRANT_STEP) * BD_GRANT_STEP),
         force: !!opts.force,
     });
 }
@@ -15829,6 +15978,7 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function bdApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'budsin' }); }
 function nvApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'nova' }); }
 function odApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'odyssey' }); }
 function baiApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'bai' }); }
@@ -16143,6 +16293,29 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleBdSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = bdLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await bdProbe(s.api_key); }));
+            }
+            bdSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => bdApplyBalance(s, await bdBalance(s))));
+            }
+            bdSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: bdReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 async function handleNvSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
     try {
@@ -16225,6 +16398,18 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await bdProbe(api_key);
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; bdSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -16278,6 +16463,28 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBdBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = bdLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await bdBalance(target || { api_key }, { force });
+            if (target) { bdApplyBalance(target, bal); bdSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('bd:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -16354,6 +16561,9 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleBdSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'budsin', load: bdLoad, save: bdSave, balanceFn: bdBalance, applyFn: bdApplyBalance });
+}
 function handleNvSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'nova', load: nvLoad, save: nvSave, balanceFn: nvBalance, applyFn: nvApplyBalance });
 }
@@ -16365,10 +16575,15 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const bdLkPids = new Map();
 const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function bdPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -16435,6 +16650,59 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBdSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = bdLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = bdLkPids.get(label);
+        if (bdPidAlive(prevPid)) {
+            logLine(`budsin session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'budsin', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('apichat.budsin.dev', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`budsin session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`budsin session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`budsin session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            bdLkPids.delete(label);
+            logLine(`budsin session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('bd', id);
+        });
+        proc.unref();
+        bdLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            bdLkPids.delete(label);
+            logLine(`budsin session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`budsin session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -16667,6 +16935,57 @@ async function handleKkShare(req, res) {
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = bdLkPids.get(label);
+        if (bdPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(BD_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [BD_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`budsin share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'budsin',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = bdB64UrlEncode(JSON.stringify(payload));
+        logLine(`budsin share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvShare(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -16871,6 +17190,65 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBdImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(bdB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'budsin' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не budsin-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = bdLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'bd_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        bdSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(BD_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(BD_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`budsin import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`budsin import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -17089,6 +17467,36 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = bdLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'bd_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        bdSave(sessions);
+        logLine(`budsin add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17227,6 +17635,30 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(BD_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        bdSave(sessions);
+        logLine(`budsin set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17325,6 +17757,29 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        bdSave(sessions);
+        logLine(`budsin rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17408,6 +17863,22 @@ async function handleKkDelete(req, res) {
             try { fs.rmSync(KK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
         }
         logLine(`kktoken delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBdDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.id === idKey);
+        bdSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === bdReadActiveKey()) {
+            try { fs.rmSync(BD_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(BD_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`budsin delete: ${target ? target.email : '?'}`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17513,6 +17984,59 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleBdActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в budsin-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = bdLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(BD_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        bdSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-bd');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = BD_KEEPALIVE_URL;   // keepalive :20173 → apichat.budsin.dev напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — budsin-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const bdCurModel = bdReadActiveModel() || '';
+            if (bdCurModel) settings.model = bdCurModel;
+            else { delete settings.model; logLine('budsin activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из budsin-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`budsin activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20173, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const bdKa = await keepaliveBring(BD_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!bdKa.ok) logLine(`budsin activate: keepalive :${BD_KEEPALIVE_PORT} НЕ поднялся — ${bdKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`budsin activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${BD_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: bdKa.ok, port: BD_KEEPALIVE_PORT, error: bdKa.ok ? null : (bdKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17711,6 +18235,40 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleBdModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (BD_MODELS_CACHE.data && Date.now() - BD_MODELS_CACHE.ts < BD_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: BD_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${BD_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...BD_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        BD_MODELS_CACHE.data = models;
+        BD_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (BD_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: BD_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleNvModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -17847,6 +18405,38 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(BD_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-bd-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = BD_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`budsin set-model: settings.json FAILED: ${e.message}`);
+        }
+        const bdKaM = await keepaliveBring(BD_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!bdKaM.ok) logLine(`budsin set-model: keepalive :${BD_KEEPALIVE_PORT} НЕ поднялся — ${bdKaM.error || '?'}`);
+        logLine(`budsin set-model: ${m} (base ${BD_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: BD_ACTIVE_MODEL_FILE, base: BD_KEEPALIVE_URL, needRestart: true, keepalive: { up: bdKaM.ok, port: BD_KEEPALIVE_PORT, error: bdKaM.ok ? null : (bdKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17958,6 +18548,18 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleBdModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(BD_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`budsin modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleNvModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17998,6 +18600,12 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function bdReadModelMap() {
+    try {
+        const raw = fs.readFileSync(BD_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -24700,6 +25308,7 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [BD_KEEPALIVE_PORT]: { name: 'BudsAI', spawn: bdKeepaliveSpawn },
         [NV_KEEPALIVE_PORT]: { name: 'Nova', spawn: nvKeepaliveSpawn },
         [OD_KEEPALIVE_PORT]: { name: 'Odyssey', spawn: odKeepaliveSpawn },
         [BAI_KEEPALIVE_PORT]: { name: 'B.AI', spawn: baiKeepaliveSpawn },
@@ -26112,6 +26721,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    bd: { tag: 'budsin',     label: 'BudsAI',     host: 'apichat.budsin.dev',     keyFile: BD_ACTIVE_KEY_FILE, load: bdLoad, save: bdSave, balanceFn: bdBalance, applyFn: bdApplyBalance },
     nv: { tag: 'nova',     label: 'Nova',     host: 'nova.vcrauo.com',     keyFile: NV_ACTIVE_KEY_FILE, load: nvLoad, save: nvSave, balanceFn: nvBalance, applyFn: nvApplyBalance },
     // 🪤 `noProbe` у Odyssey - не оптимизация, а условие работоспособности ротации. Баланс
     // этой площадки ключом не читается вовсе (нет billing-ручек, `odBalance` поднимает
@@ -27749,6 +28359,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/set-github') return handleBdSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-github') return handleNvSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ap/set-github') return handleApSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/set-github') return handleTbSetGithub(req, res);
@@ -27807,12 +28418,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/bd/keepalive/state')  return keepaliveBd.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/keepalive/state')  return keepaliveNv.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/od/keepalive/state')  return keepaliveOd.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/keepalive/state')  return keepaliveBai.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/keepalive/config') return keepaliveBd.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/keepalive/config') return keepaliveNv.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/keepalive/config') return keepaliveOd.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/keepalive/config') return keepaliveBai.config(req, res);
@@ -27837,6 +28450,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/keepalive/latency')) return keepaliveBd.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/keepalive/latency')) return keepaliveNv.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/keepalive/latency')) return keepaliveOd.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/keepalive/latency')) return keepaliveBai.latency(req, res);
@@ -27887,85 +28501,102 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/sessions')) return handleBdSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/sessions')) return handleNvSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/sessions')) return handleOdSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/ping'))     return handleBdPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/ping'))     return handleNvPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/ping'))     return handleOdPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/balance'))  return handleBdBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/balance'))  return handleNvBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/balance'))  return handleOdBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/models'))   return handleBdModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/models'))   return handleNvModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/models'))   return handleOdModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/bd/active-model') return jsonRes(res, 200, { model: bdReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/active-model') return jsonRes(res, 200, { model: nvReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/od/active-model') return jsonRes(res, 200, { model: odReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/bd/modelmap') return jsonRes(res, 200, { ok: true, modelMap: bdReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/modelmap') return jsonRes(res, 200, { ok: true, modelMap: nvReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/od/modelmap') return jsonRes(res, 200, { ok: true, modelMap: odReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/add')       return handleBdAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/add')       return handleNvAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/add')       return handleOdAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/key')       return handleBdSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/key')       return handleNvSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/key')       return handleOdSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/set-password') return handleOdSetPassword(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/rename')    return handleBdRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/rename')    return handleNvRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/rename')    return handleOdRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/delete')    return handleBdDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/delete')    return handleNvDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/delete')    return handleOdDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/activate')  return handleBdActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/activate')  return handleNvActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/activate')  return handleOdActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/set-model') return handleBdSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-model') return handleNvSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/set-model') return handleOdSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/set-balance') return handleBdSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-balance') return handleNvSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/set-balance') return handleOdSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/session/open') return handleBdSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/session/open') return handleNvSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/session/open') return handleOdSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/share')    return handleBdShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/share')    return handleNvShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/share')    return handleOdShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/import')   return handleBdImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/import')   return handleNvImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/import')   return handleOdImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/import')   return handleBaiImport(req, res);
@@ -28229,6 +28860,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/bd/add-github')       return handleBdAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/add-github')       return handleNvAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ap/add-github')       return handleApAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tb/add-github')       return handleTbAddGithub(req, res);

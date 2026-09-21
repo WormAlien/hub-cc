@@ -1473,6 +1473,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'apichat.budsin.dev': 'bd',
   'nova.vcrauo.com': 'nv',
   'odysseyapi.tech': 'od',
   'chat.b.ai': 'bai',

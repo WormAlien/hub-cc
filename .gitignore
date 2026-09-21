@@ -437,6 +437,7 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/budsin-sessions.json
 routing/odyssey-sessions.json
 routing/bai-sessions.json
 
@@ -611,3 +612,11 @@ _research/ar-ip-cooldown-probe.txt
 _research/ar-ip-cooldown-probe.jsonl
 _research/ar-balances-sweep.txt
 _research/collect-gifts-progress.txt
+
+# ── BudsAI / budsin (вкладка дашборда): приватные данные ──────────────────────
+# Папки закрываем ДО первого прогона сессии: там профили браузера и живые куки
+# GitHub (budsin/gh-sessions/acct_*.json). Репозиторий публичный.
+# budsin-modelmap.json — безопасный конфиг маппинга, его коммитим.
+budsin/profiles/
+budsin/sessions/
+budsin/gh-sessions/

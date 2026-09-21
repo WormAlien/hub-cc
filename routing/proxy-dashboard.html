@@ -38678,16 +38678,18 @@ async function stSync() {
     const r = await fetch('/__switch/api/ar/quota-state');
     if (r.ok) { const j = await r.json(); remote = (j && j.pools) || {}; }
   } catch (e) { /* ручки ещё нет — живём на localStorage */ }
-  Object.keys(POOLS).forEach(p => {
+  // Полосы - по очереди, а не forEach: звонок стал асинхронным (ждёт resume), а дедуп
+  // налива общий на партию. Два залпа, читающие метку одновременно, звякнули бы дважды.
+  for (const p of Object.keys(POOLS)) {
     const best = stFresher(stLoad()[p], remote[p]);
     if (best && best !== stLoad()[p]) { stSave(p, best); stPaint(p); }
     // Звук на наливку - здесь, а не в ручной проверке: сюда приезжает и автопроба
     // сервера (та, что ходит на +2 и +20 минут), и только она работает при свёрнутом окне.
-    arqSndCheck(p, stLoad()[p]);
-  });
+    await arqSndCheck(p, stLoad()[p]);
+  }
   // Налив по расписанию: не зависит от пробы и ключа, звенит даже когда ротация
   // занулила quota-state. Дедуп общий с arqSndCheck, так что дважды не звякнет.
-  arqSndScheduleUp();
+  await arqSndScheduleUp();
 }
 
 window.arqCheckQuota = async function arqCheckQuota(pool) {
@@ -38760,6 +38762,7 @@ const KEY_SND_DROP = 'ar-quota-sound-drop';  // партия, о наливе к
 const KEY_SND_DRY = 'ar-quota-sound-dry';    // партия, о конце которой уже звенели
 const ARQ_OPENED_AT = Date.now();            // загрузка страницы: граница «звенит / молчит»
 let ARQ_AC = null;
+let ARQ_ARM = null;                          // resume() в полёте: второй вызов ждёт тот же, а не зовёт свой
 
 function arqSndMute() {
   try { return localStorage.getItem(KEY_SND) === '0'; } catch (e) { return false; }
@@ -38794,15 +38797,25 @@ function arqSndDecide(rec, fresh, openedAt, seenDrop, want) {
   return true;
 }
 
+/* Возвращает промис, и это не стиль: `resume()` асинхронный, а `arqSndPlay` стал
+   спрашивать `state`. Пока шло «arm и сразу читаем state», ответ всегда был `suspended` -
+   то есть правка «звеним только при живом звуке» превратилась бы в вечное молчание.
+   Ожидание будит контекст и в фоне, не только в жесте: `resume()` не требует жеста там,
+   где он уже был однажды. */
 function arqSndArm() {
-  if (ARQ_AC && ARQ_AC.state === 'running') return;
+  if (ARQ_AC && ARQ_AC.state === 'running') return Promise.resolve();
   const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) return;
+  if (!AC) return Promise.resolve();
   try {
     if (!ARQ_AC) ARQ_AC = new AC();
-    if (ARQ_AC.state === 'suspended') ARQ_AC.resume().then(arqSndBtn, () => {});
-    else arqSndBtn();
+    if (ARQ_AC.state === 'suspended') {
+      if (!ARQ_ARM) ARQ_ARM = ARQ_AC.resume().then(() => { ARQ_ARM = null; arqSndBtn(); },
+                                    () => { ARQ_ARM = null; });
+      return ARQ_ARM;
+    }
+    arqSndBtn();
   } catch (e) { ARQ_AC = null; }
+  return Promise.resolve();
 }
 addEventListener('pointerdown', arqSndArm, { passive: true });
 addEventListener('keydown', arqSndArm, { passive: true });
@@ -38868,12 +38881,20 @@ function arqSndVoiceDry(a, t, out) {
   lp.connect(out);
   arqSndTone(a, t, lp, { f: 300, f2: 90, bend: 0.8, dur: 1.2, gain: 0.07, attack: 0.02, type: 'triangle' });
 }
-function arqSndPlay(kind) {
-  if (arqSndMute()) return;
-  arqSndArm();
-  const a = ARQ_AC;
-  if (!a || a.state !== 'running') return;   // не разбужен - играть нечем
+/* Возвращает, ПРОЗВЕНЕЛО ли. Нужно вызывающему, а не человеку: пометка партии -
+   это утверждение «о ней прозвенели», и ставить её, не прозвенев, нельзя (21.09).
+   🪤 Пометка шла ПЕРЕД звонком, а тут - тихий выход в двух случаях: приглушён 🔔 или
+   AudioContext ещё в `suspended` (страницу не трогали с загрузки). Партия помечалась
+   «прозвенели», дедуп её потом глушил - и она не звенела уже НИКОГДА, в том числе
+   когда владелец тронет страницу и звук разбудится. Молчание неотличимо от «партии
+   не было», поэтому дефект жил незамеченным. */
+async function arqSndPlay(kind) {
+  if (arqSndMute()) return false;
+  await arqSndArm();                                // resume() асинхронный: без ожидания
+  const a = ARQ_AC;                                 // state прочтётся как `suspended`
+  if (!a || a.state !== 'running') return false;   // не разбужен - играть нечем
   (kind === 'dry' ? arqSndVoiceDry : arqSndVoice)(a, a.currentTime + 0.02, a.destination);
+  return true;
 }
 /* Звенит, если событие новое: налив ('available') или пул выпит ('exhausted').
    Пул досуха - тот же путь, что и налив: серверная проба пишет state, бросок на 402
@@ -38886,18 +38907,21 @@ function arqSndPlay(kind) {
    помечать его партией значило бы, что смерть opus глушит смерть gpt, и вторая смерть
    проходит молча. Поэтому метка налива - партия, метка конца - полоса и партия.
    Возвращает, прозвенело ли, - регрессу это нужнее, чем человеку. */
-function arqSndCheck(pool, rec) {
+async function arqSndCheck(pool, rec) {
   const fresh = stFresh(rec, Date.now());
   if (arqSndDecide(rec, fresh, ARQ_OPENED_AT, arqSndSeen(KEY_SND_DROP), 'available')) {
-    arqSndMark(rec.dropAt, KEY_SND_DROP);
-    arqSndPlay('in');
-    return true;
+    // Помечаем ТОЛЬКО прозвеневшее: не прозвенело (звук приглушён или не разбужен) -
+    // не помечаем вовсе, и следующий тик попробует снова. Раньше метка ставилась
+    // вслепую, и партия, заставшая AudioContext спящим, пропадала навсегда.
+    // Границу «догона» здесь не ставим: окно задаёт свежесть записи (stFresh) - пока
+    // идёт та же партия, звонок уместен, а после налива запись мертва и звонок гаснет сам.
+    if (await arqSndPlay('in')) { arqSndMark(rec.dropAt, KEY_SND_DROP); return true; }
+    return false;
   }
   const dryKey = KEY_SND_DRY + ':' + pool;
   if (arqSndDecide(rec, fresh, ARQ_OPENED_AT, arqSndSeen(dryKey), 'exhausted')) {
-    arqSndMark(rec.dropAt, dryKey);
-    arqSndPlay('dry');
-    return true;
+    if (await arqSndPlay('dry')) { arqSndMark(rec.dropAt, dryKey); return true; }
+    return false;
   }
   return false;
 }
@@ -38910,12 +38934,12 @@ function arqSndCheck(pool, rec) {
    Дедуп ОБЩИЙ с пробой (KEY_SND_DROP): кто первый заметил налив - тот и звенит, второй
    молчит. Граница `> ARQ_OPENED_AT` та же, что у пробы: партия до открытия страницы не
    звенит (F5 молчит). Вниз сюда НЕ переносим: конец пула из расписания не виден. */
-function arqSndScheduleUp(now) {
+async function arqSndScheduleUp(now) {
   const d = dropAt(typeof now === 'number' ? now : Date.now());
   if (!(d > ARQ_OPENED_AT)) return false;          // партия была до открытия страницы
   if (arqSndSeen(KEY_SND_DROP) === d) return false; // об этой партии уже звенели (проба или мы)
+  if (!await arqSndPlay('in')) return false;        // не разбужен - попробуем на следующем тике
   arqSndMark(d, KEY_SND_DROP);
-  arqSndPlay('in');
   return true;
 }
 function arqSndBtn() {

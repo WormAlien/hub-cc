@@ -126,6 +126,15 @@ function isGptModel(model) {
     return /(^|[-_.\/])?(gpt|o[0-9]|davinci|chatgpt)/.test(m) || m.includes('gpt');
 }
 
+// Край agentrouter (WAF на Aliyun) иногда отвечает HTML-страницей 405 на совершенно
+// валидный запрос. Отказ временный, но клиент читает 405 как «метод не тот» и не
+// повторяет — сессия падает на ровном месте. Отличаем по телу: у API всегда JSON,
+// у заслонки — HTML. Такие ответы отдаём как 503 (api_error): его и Hermes, и
+// Claude Code считают временным и повторяют сами.
+function edgeRejectedAsHtml(statusCode, body) {
+    return /^\s*</.test(String(body || '')) && statusCode >= 400 && statusCode < 500;
+}
+
 // Pass-through: claude-модели и всё не-GPT — шлём тело как есть в /v1/messages.
 function handlePassthrough(req, res, body) {
     const apiKey = resolveKey(req);
@@ -138,10 +147,16 @@ function handlePassthrough(req, res, body) {
             upRes.on('end', () => {
                 let message = b.slice(0, 500);
                 try { message = JSON.parse(b).error?.message || message; } catch {}
-                const errType = upRes.statusCode === 401 ? 'authentication_error'
-                    : upRes.statusCode === 429 ? 'rate_limit_error'
-                    : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error';
-                claudeError(res, upRes.statusCode, message, errType);
+                const edgeBlocked = edgeRejectedAsHtml(upRes.statusCode, b);
+                const code = edgeBlocked ? 503 : upRes.statusCode;
+                if (edgeBlocked) {
+                    logLine(`upstream edge ответил ${upRes.statusCode} HTML — отдаю клиенту ${code}, чтобы повторил`);
+                    message = `agentrouter edge вернул ${upRes.statusCode} HTML вместо ответа API (похоже на WAF) — временный отказ`;
+                }
+                const errType = code === 401 ? 'authentication_error'
+                    : code === 429 ? 'rate_limit_error'
+                    : code >= 500 ? 'api_error' : 'invalid_request_error';
+                claudeError(res, code, message, errType);
             });
             return;
         }
@@ -1793,6 +1808,14 @@ if (process.argv[2] === 'selftest') {
     const t3 = runEmitter([{ type: 'response.created' }, { type: 'response.in_progress' }]);
     assert.strictEqual(t3.seen.hard && t3.seen.hard.code, 'empty_stream', 'пустой поток = отказ, а не пустой 200');
     assert.strictEqual(t3.res.headers, null, 'клиенту ничего не отдано');
+
+    // Заслонка края (WAF на Aliyun) отвечает HTML — такой отказ отдаём как 503,
+    // чтобы клиент повторил сам, а не сдался на 405.
+    assert.strictEqual(edgeRejectedAsHtml(405, '<!doctype html><html lang="zh-cn">405</html>'), true, 'HTML-405 от края — временный отказ, повторяем');
+    assert.strictEqual(edgeRejectedAsHtml(403, '<html>blocked</html>'), true, 'HTML-403 от края тоже повторяем');
+    assert.strictEqual(edgeRejectedAsHtml(405, '{"error":{"message":"method not allowed"}}'), false, 'JSON-405 — ответ API, не подменяем');
+    assert.strictEqual(edgeRejectedAsHtml(500, '<html>oops</html>'), false, '5xx клиент и так повторяет');
+    assert.strictEqual(edgeRejectedAsHtml(200, '<html>ok</html>'), false, 'успех — не наш случай');
 
     console.log('agentrouter-proxy selftest: OK');
     process.exit(0);

@@ -144,7 +144,7 @@
     { "id": "4.5",    "title": "COLORS вкладки", "file": "frontend", "kind": "must", "expect": "%full%: 'text-%COLOR% bg-%COLOR%',", "within": "const COLORS = {" },
     { "id": "4.6",    "title": "NEWAPI_RERENDER вкладки", "file": "frontend", "kind": "must", "expect": "%p%: () => render%x%(),", "within": "const NEWAPI_RERENDER = {" },
     { "id": "4.7",    "title": "check-hub: ожидаемый список вкладок", "file": "tools/check-hub.js", "kind": "must", "expect": "'%full%',", "within": "const want = [" },
-    { "id": "4.8",    "title": "check-hub: префиксы в сверке «зовут ↔ объявлено»", "file": "tools/check-hub.js", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "note": "PREF в check-hub.js перечисляет префиксы литерально: вкладки вне списка не проверяются на «зовёт функцию, которой нет» - ровно так молча ломались ts, hn и ol." },
+    { "id": "4.8",    "title": "check-hub: префиксы в сверке «зовут ↔ объявлено»", "file": "tools/check-hub.js", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "within": "const PREF = ", "note": "PREF в check-hub.js перечисляет префиксы литерально: вкладки вне списка не проверяются на «зовёт функцию, которой нет» - ровно так молча ломались ts, hn и ol." },
 
     { "id": "1.8k",   "title": "Реестр ghLkPidsByTag (карты pid по тегу)", "file": "backend", "kind": "must", "expect": "%p%: %p%LkPids", "within": "function ghLkPidsByTag", "when": ["github"] },
     { "id": "1.8m",   "title": "Список ручек ротации денежных шлюзов", "file": "backend", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "within": "rotate|auto", "when": ["pool"], "note": "ВТОРАЯ карта денежного шлюза: MONEY_GW знает шлюз, а эта регулярка - какие префиксы роутятся. Разъехались молча: 17.09 Odyssey, 21.09 budsin и nova - просьба о подмене уезжала в 404, снаружи «авторотация не сработала на пустом пуле»." },
@@ -265,7 +265,7 @@
     "4.8":   { "mode": "inline", "ref": "|%p%|", "find": "|%p%|", "add": "%p%|" },
 
     "1.8k":  { "mode": "inline", "find": "%p%: %p%LkPids", "add": ", %p%: %p%LkPids" },
-    "1.8m":  { "mode": "inline", "ref": "|%p%|", "find": "|%p%|", "add": "%p%|" },
+    "1.8m":  { "mode": "inline", "ref": "|%p%|", "find": "|%p%", "add": "|%p%" },
     "2.15":  {},
     "2.16":  { "mode": "inline", "find": "%p%: null", "add": ", %p%: null" },
     "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },

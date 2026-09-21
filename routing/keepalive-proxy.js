@@ -258,6 +258,66 @@ function stripClaudeOnlyFields(body) {
         return Buffer.from(JSON.stringify(j), 'utf8');
     } catch (e) { return null; }
 }
+// ── Поддельные подписи thinking-блоков (2026-09-21) ──────────────────────────
+// В телах, упавших с `400 ... Invalid \`signature\` in \`thinking\` block`, ВСЕ подписи
+// оказались обычными UUID — 117 из 117, вида `8445635e-7434-4ebe-ba00-6f2113768f60`,
+// ровно 36 символов, — тогда как настоящая подпись Anthropic это сотни символов
+// base64. Их синтезирует шлюз: reasoner-модели он отдаёт в форме Anthropic, а
+// подписать не может. Пока запрос живёт на канале шлюза, это никому не мешает;
+// стоит ему попасть на канал, который подпись РЕАЛЬНО проверяет, — 400 на весь
+// запрос, и окно клиента мертво навсегда: `context_management: keep "all"` гонит
+// ту же историю в каждом ходу, поэтому отказ повторяется до последнего сообщения.
+//
+// 🎯 Версия «сессию провели через дипсик, оттуда чужие подписи» (17.09) оказалась
+// лишь частным случаем: ломает не подмена модели, а выбор канала на стороне шлюза.
+// Проба tools/check-thinking-signature.js — 5 сообщений, ~200 токенов — дала три
+// ответа подряд: подписи как есть → 400; чистка одной ИСТОРИИ, последний ход цел →
+// снова 400 (яруса «чистить прошлое» мало); чистка ВЕЗДЕ, включая последний
+// ассистентский ход с tool_use, → 200 и осмысленный ответ. Документация Anthropic
+// последнее сообщение трогать запрещает («edited, reordered, filtered out»), живой
+// шлюз его чистку принимает — верим замеру, но держим рубильник THINK_STRIP=0.
+const THINK_STRIP = String(process.env.THINK_STRIP || '1') !== '0';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Порог 64 отделяет настоящую подпись и от UUID, и от пустой строки, не полагаясь
+// на одну лишь форму UUID: завтра шлюз начнёт синтезировать её иначе, а короткой
+// она останется — подписать по-настоящему ему всё равно нечем.
+function fakeSignature(sig) {
+    const s = String(sig || '');
+    return !s || s.length < 64 || UUID_RE.test(s);
+}
+// all=false — режем только блоки с ПОДДЕЛЬНОЙ подписью: обычный путь, чужие
+// настоящие подписи не трогаем, потому что их апстрим принимает.
+// all=true — режем ВСЕ thinking-блоки: лечение уже упавшего запроса, когда подпись
+// выглядит настоящей, но принадлежит другому аккаунту (случай 19.09, сессия
+// c05d2daa: 261 подписанный блок, все отвергнуты).
+// 🪤 tool_use и tool_result не трогаем НИКОГДА. Соблазн «откатить последний ход
+// целиком» есть, но это заставило бы модель переиграть уже выполненную команду —
+// в агентском окне она бывает разрушительной.
+// 🪤 Ход, который после чистки остался бы ПУСТЫМ, не трогаем вовсе: пустой
+// content апстрим отвергает, а выкинуть сообщение нельзя — роли обязаны
+// чередоваться. В 27 реальных телах таких ходов ноль, сторож на будущее.
+// Возвращает {body, cut} или null, если резать нечего / тело не-JSON.
+function stripFakeThinking(body, all) {
+    try {
+        const j = JSON.parse(body.toString('utf8') || '{}');
+        if (!Array.isArray(j.messages)) return null;
+        let cut = 0;
+        for (const m of j.messages) {
+            if (!m || m.role !== 'assistant' || !Array.isArray(m.content)) continue;
+            const kept = m.content.filter((b) => {
+                if (!b || b.type !== 'thinking') return true;
+                return !all && !fakeSignature(b.signature);
+            });
+            if (kept.length === m.content.length || kept.length === 0) continue;
+            cut += m.content.length - kept.length;
+            m.content = kept;
+        }
+        if (!cut) return null;
+        return { body: Buffer.from(JSON.stringify(j), 'utf8'), cut };
+    } catch (e) { return null; }
+}
+// Текст отказа, ради которого всё это: его же ловит ветка лечения на 400.
+const SIG_ERR_RE = /Invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
 // 🪤 Срезка image-блоков (была 11.09) СНЯТА 12.09 по прямой пробе зрения
 // (probe-vision.js): канал glm-5.3 снова принимает картинки и модель честно
 // отвечает «НЕ ВИЖУ ИЗОБРАЖЕНИЕ», а deepseek-v4-flash РЕАЛЬНО ВИДИТ и описывает
@@ -1892,6 +1952,11 @@ const server = http.createServer((req, res) => {
   // Пул наливки кончился — уходим на беспуловый фолбэк. РОВНО ОДИН раз на запрос:
   // если фолбэк сам отдаст 402, клиент получит честную ошибку, а не цикл.
   let poolDropTried = false;
+  // Лечение отказа по подписи thinking-блока. Тоже РОВНО ОДИН раз на запрос:
+  // упреждающая срезка (stripFakeThinking на входе) снимает поддельные подписи, а
+  // сюда доходит редкий остаток — настоящая подпись чужого аккаунта. Режем тогда
+  // все блоки подряд; не помогло — клиент получает честную ошибку, а не цикл.
+  let thinkStripTried = false;
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
@@ -2733,6 +2798,27 @@ const server = http.createServer((req, res) => {
           if (!fastFail && isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
+            // Отказ по подписи thinking-блока — лечится чисткой истории, а не
+            // повтором: тело поедет тем же самым и получит тот же 400. Упреждающая
+            // срезка уже сняла поддельные подписи, значит здесь остались настоящие,
+            // но чужие (случай 19.09) — режем все блоки подряд и пробуем ещё раз.
+            // 🪤 Гейт по цели обязателен и здесь: у сервера рассуждений отказ ровно
+            // противоположный (`must be passed back`), и вычищенная история сделает
+            // только хуже. На claude-цели чистка всех блоков проверена пробой - 200.
+            const curModel = modelInBody(reqBody);
+            if (!thinkStripTried && /^claude[-_]/i.test(curModel) && SIG_ERR_RE.test(buf.toString('utf8'))) {
+              const healed = stripFakeThinking(reqBody, true);
+              if (healed) {
+                thinkStripTried = true;
+                reqBody = healed.body;
+                bonusAttempts += 1;   // лечение не ретрай — бюджет попыток не съедает
+                ev.note('thinkstrip');
+                log(`${req.method} ${reqPath} отказ по подписи thinking: срезаю ВСЕ блоки`
+                  + ` (${healed.cut} шт.), повторяю`);
+                makeUpstream('чистка thinking');
+                return;
+              }
+            }
             // clientModel — модель из тела КЛИЕНТА (до ремапа); остальное — разбор
             // 11.09: 500 «Upstream rejected» ловился на ремапнутых запросах тоже,
             // и без списка полей тела/заголовков причина не локализовалась.
@@ -2926,6 +3012,27 @@ const server = http.createServer((req, res) => {
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
       }
     } catch (e) { /* не-JSON тело — срезать нечего */ }
+    // Блоки рассуждений с поддельной подписью — вон из истории, но ТОЛЬКО на claude-цель (21.09).
+    // 🪤 Срезать всем целям нельзя, и это поймано пробой сразу после первой выкатки: сервер
+    // рассуждений (deepseek-v4-flash, куда уходит подмена при пустом пуле) поддельные подписи
+    // ПРИНИМАЕТ, но требует блоки обратно - на вычищенной истории отвечает `The content[].thinking
+    // in the thinking mode must be passed back to the API`, и запрос умирает с 400. Класс отказа
+    // ровно противоположен тому, который мы лечим, поэтому цель надо различать.
+    // Настоящий Anthropic, наоборот, подпись проверяет и на вычищенную историю не жалуется
+    // (проба 21.09: чистка всех блоков на opus-цели - 200).
+    if (THINK_STRIP) {
+      let outModel2 = '';
+      try { outModel2 = String(JSON.parse(reqBody.toString('utf8') || '{}').model || ''); } catch (e) { /* не-JSON */ }
+      if (/^claude[-_]/i.test(outModel2)) {
+        const th = stripFakeThinking(reqBody, false);
+        if (th) {
+          log(`${req.method} ${reqPath} срезано thinking-блоков с поддельной подписью: ${th.cut}`
+            + ` (${reqBody.length}Б → ${th.body.length}Б)`);
+          reqBody = th.body;
+          stats.remaps += 1;
+        }
+      }
+    }
     // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.
     // Разбор того дня упёрся в бисект хопов только потому, что снимка заголовков не
     // было: тело оказалось невиновно, а виноват content-length. Пишем и входящую
@@ -3791,6 +3898,79 @@ if (process.argv[2] === 'selftest') {
   const clSrc = fs.readFileSync(__filename, 'utf8');
   assert.ok(/delete hdrs\['transfer-encoding'\]/.test(clSrc),
     'при выставлении content-length chunked не снимается — вернётся HPE_INVALID_CONTENT_LENGTH');
+
+  // ── Поддельные подписи thinking-блоков (21.09) ────────────────────────────
+  // Форма взята из боевых тел: подпись — UUID, блоки лежат вперемешку с text и
+  // tool_use, последний ассистентский ход несёт thinking + tool_use.
+  assert.ok(fakeSignature('8445635e-7434-4ebe-ba00-6f2113768f60'), 'UUID — поддельная подпись');
+  assert.ok(fakeSignature(''), 'пустая подпись — поддельная');
+  assert.ok(fakeSignature(undefined), 'подписи нет вовсе — поддельная');
+  assert.ok(!fakeSignature('E'.repeat(200)), 'длинная base64-подпись — настоящая, не трогаем');
+  assert.ok(fakeSignature('E'.repeat(63)), 'короче порога — поддельная');
+
+  const sigBody = () => Buffer.from(JSON.stringify({
+    model: 'claude-opus-5',
+    messages: [
+      { role: 'user', content: 'раз' },
+      { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'ф', signature: '8445635e-7434-4ebe-ba00-6f2113768f60' },
+        { type: 'text', text: 'два' },
+      ] },
+      { role: 'user', content: 'три' },
+      { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'ф', signature: 'E'.repeat(200) },
+        { type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: {} },
+      ] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+    ],
+  }), 'utf8');
+
+  const soft = stripFakeThinking(sigBody(), false);
+  assert.ok(soft && soft.cut === 1, 'обычный путь режет ровно поддельный блок');
+  const softMsgs = JSON.parse(soft.body.toString('utf8')).messages;
+  assert.deepStrictEqual(softMsgs[1].content.map((b) => b.type), ['text'],
+    'поддельный thinking срезан, text на месте');
+  assert.deepStrictEqual(softMsgs[3].content.map((b) => b.type), ['thinking', 'tool_use'],
+    'настоящая подпись не тронута — её апстрим принимает');
+  assert.deepStrictEqual(softMsgs[4].content.map((b) => b.type), ['tool_result'],
+    'tool_result не трогаем никогда — иначе модель переиграет выполненную команду');
+
+  const hard = stripFakeThinking(sigBody(), true);
+  assert.ok(hard && hard.cut === 2, 'лечение режет ВСЕ блоки, включая настоящую чужую подпись');
+  const hardMsgs = JSON.parse(hard.body.toString('utf8')).messages;
+  assert.deepStrictEqual(hardMsgs[3].content.map((b) => b.type), ['tool_use'],
+    'у последнего хода остаётся tool_use — проба 21.09 показала, что шлюз это принимает (200)');
+
+  // Ход, который после чистки остался бы ПУСТЫМ, не трогаем: пустой content
+  // апстрим отвергает, а выкинуть сообщение нельзя — роли обязаны чередоваться.
+  const onlyThink = Buffer.from(JSON.stringify({
+    messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'ф', signature: 'x' }] }],
+  }), 'utf8');
+  assert.strictEqual(stripFakeThinking(onlyThink, true), null,
+    'ход только из thinking остаётся как есть — пустой content хуже поддельной подписи');
+  assert.strictEqual(stripFakeThinking(Buffer.from('не json', 'utf8'), false), null, 'не-JSON тело — null');
+  assert.strictEqual(stripFakeThinking(Buffer.from(JSON.stringify({ messages: [] }), 'utf8'), false), null,
+    'резать нечего — null, тело не пересобираем');
+
+  assert.ok(SIG_ERR_RE.test('***.***.content.0: Invalid `signature` in `thinking` block [trace_id=d042]'),
+    'боевой текст отказа ловится регуляркой лечения');
+  assert.ok(!SIG_ERR_RE.test('Antilopay callback: invalid signature'),
+    'чужое «invalid signature» (колбэк кассы) за наш класс не принимаем');
+
+  // Сторож на проводку: обе точки должны стоять в коде, иначе функции живут зря.
+  const thSrc = fs.readFileSync(__filename, 'utf8');
+  assert.ok(/if \(THINK_STRIP\) \{[\s\S]{0,400}?if \(\/\^claude\[-_\]\/i\.test\(outModel2\)\) \{\s*\n\s*const th = stripFakeThinking\(reqBody, false\);/.test(thSrc),
+    'упреждающая срезка не подключена к пути запроса либо потеряла гейт по цели');
+  assert.ok(/if \(!thinkStripTried && \/\^claude\[-_\]\/i\.test\(curModel\) && SIG_ERR_RE\.test\(buf\.toString\('utf8'\)\)\)/.test(thSrc),
+    'лечение на 400 не подключено к ветке постоянных ошибок либо потеряло гейт по цели');
+  // 🪤 Гейт по цели — не украшение. Проба сразу после первой выкатки (21.09, до правки)
+  // показала: на сервере рассуждений та же чистка даёт ОТКАЗ ровно противоположного
+  // смысла - `The content[].thinking in the thinking mode must be passed back to the API`.
+  // Он обязан быть рядом с обоими вызовами; вырезан — тест краснеет.
+  // Считаем по коду ДО блока selftest: иначе в счёт попадают строки самих проверок.
+  const liveCode = thSrc.split("if (process.argv[2] === 'selftest')")[0];
+  const callSites = liveCode.split('stripFakeThinking(reqBody').length - 1;
+  assert.strictEqual(callSites, 2, 'вызовов stripFakeThinking на пути запроса должно быть ровно два');
 
   // ВОССТАНОВЛЕНИЕ — строго последним: любой applyPatch выше пишет в CONFIG_FILE,
   // и если восстановить раньше, прогон затрёт живую настройку дашборда.

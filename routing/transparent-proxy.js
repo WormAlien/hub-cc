@@ -1403,15 +1403,35 @@ function handleRoutesModels(req, res) {
         rq.on('error', () => cb([], {}));
     };
 
-    // Снимок с диска. Хост берём из реестра денежных шлюзов (`MONEY_GW`, ключ там —
-    // короткий тег, поэтому ищем по `tag`), у остальных — из таблицы модуля.
-    const fromSnapshot = () => {
+    // Хост шлюза: из реестра денежных шлюзов (`MONEY_GW`, ключ там - короткий тег,
+    // поэтому ищем по `tag`), у остальных - из таблицы модуля. Нужен и снимку, и панели.
+    const gatewayHost = () => {
         const g = Object.values(MONEY_GW).find(x => x && x.tag === provider);
-        const host = (g && g.host) || routesCatalogLib.EXTRA_HOSTS[provider] || '';
-        const snap = routesCatalogLib.snapshotFor(host);
+        return (g && g.host) || routesCatalogLib.EXTRA_HOSTS[provider] || '';
+    };
+
+    // Каталог панели (`/api/pricing`) - ступень МЕЖДУ пулом и снимком. Панельная ручка
+    // жива там, где `/v1/models` молчит: у aikeysapi живой ключ получает 403, а панель
+    // отдаёт пять claude-моделей, тогда как снимок от 12.09 держит три `gpt-5.6-*`,
+    // которых на площадке уже нет. Не ответила - молча уступаем снимку.
+    const fromPricing = (next) => {
+        routesCatalogLib.pricingFor(gatewayHost(), { fetch })
+            .then((p) => {
+                if (p && p.models.length) {
+                    return done(p.models, 'pricing',
+                        `каталог панели${p.cached ? ', из кеша' : ''}`, { staleDays: 0 });
+                }
+                next();
+            })
+            .catch(() => next());
+    };
+
+    // Снимок с диска.
+    const fromSnapshot = () => {
+        const snap = routesCatalogLib.snapshotFor(gatewayHost());
         if (!snap) {
             return done([], 'none',
-                'каталога нет ни живьём, ни в снимке — в списке только значения тир-карты');
+                'каталога нет ни живьём, ни в панели, ни в снимке: в списке только значения тир-карты');
         }
         return done(snap.models, 'snapshot',
             `снимок каталога от ${new Date(snap.ts || 0).toISOString().slice(0, 10)}`,
@@ -1420,7 +1440,7 @@ function handleRoutesModels(req, res) {
 
     const fallThrough = (models, j, source) => {
         if (models.length) return done(models, source, j.note, { cached: !!j.cached });
-        return fromSnapshot();
+        return fromPricing(fromSnapshot);
     };
 
     // Не `isRealKey`: тот требует префикс `sk-`, а у части шлюзов ключи иного вида —
@@ -1440,12 +1460,12 @@ function handleRoutesModels(req, res) {
             let j = {};
             try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
             const key = routesCatalogLib.pickAccountKey(j.sessions);
-            if (!key) return fromSnapshot();
+            if (!key) return fromPricing(fromSnapshot);
             askGateway(key, (m, jj) => fallThrough(m, jj, 'accounts'));
         });
     });
     rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
-    rq.on('error', () => fromSnapshot());
+    rq.on('error', () => fromPricing(fromSnapshot));
 }
 
 function handleRoutes(res) {

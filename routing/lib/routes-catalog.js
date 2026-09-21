@@ -35,11 +35,12 @@ const EXTRA_HOSTS = { rumeng: 'api.rumeng-ai.com', aikeysapi: 'www.aikeysapi.com
 // Медиа, эмбеддинги, озвучка и модерация целью тира быть не могут. Границы слова —
 // разделитель или край строки, чтобы `gpt-image-2` отсеялся, а `imaging-pro` тоже.
 //
-// 🪤 Последние две — известные СЕМЬИ медиа, которые по имени себя не выдают: в снимке
+// 🪤 Последние - известные СЕМЬИ медиа, которые по имени себя не выдают: в снимке
 // aikeysapi рядом с тремя текстовыми GPT лежат `omni_flash_10s` (видео) и
-// `omni_flash_abra_edit` (правка картинок), и ни то, ни другое в имени не признаётся.
-// Список пополняемый: новая семья — новая строка здесь и проверка в регрессе.
-const NON_TEXT = /(^|[/_.\-])(image|img|video|embed|embedding|rerank|whisper|tts|audio|speech|moderation|flux|dall|sd\d|omni_flash)([/_.:\-]|$)/i;
+// `omni_flash_abra_edit` (правка картинок), а в живом каталоге budsin - `nano-banana-2`,
+// `krea-2-medium` и `seedream-5`; ни одна из них в имени не признаётся. Список
+// пополняемый: новая семья - новая строка здесь и проверка в регрессе.
+const NON_TEXT = /(^|[/_.\-])(image|img|video|embed|embedding|rerank|whisper|tts|audio|speech|moderation|flux|dall|sd\d|omni_flash|nano-banana|krea|seedream)([/_.:\-]|$)/i;
 
 // Одна модель каталога текстовáя? Пустой или отсутствующий список типов — это «нет
 // данных», а НЕ «медиа»: у odyssey он пуст у всех одиннадцати, и старый фильтр выбрасывал
@@ -107,4 +108,64 @@ function snapshotFor(host, opts) {
     };
 }
 
-module.exports = { EXTRA_HOSTS, CACHE_FILE, isTextModel, textOnly, pickAccountKey, readSnapshot, snapshotFor };
+// ── Каталог панели (`/api/pricing`) ──────────────────────────────────────────
+// Панели New API держат заявленный список моделей за логином, но у части площадок ручка
+// `GET /api/pricing` ПУБЛИЧНАЯ, и она живая там, где `/v1/models` уже нет. Замер 21.09:
+// активный ключ aikeysapi получает 403, `/v1/models` по ключу из пула отдаёт только
+// медиа, а `/api/pricing` отдаёт пять текстовых claude-моделей. Снимок при этом лежал
+// от 12.09 и показывал три `gpt-5.6-*`, которых на площадке больше нет: селект тира
+// предлагал владельцу несуществующее.
+//
+// Ступень стоит между ключом из пула и снимком: живой ответ всегда точнее панельного
+// каталога (ключ знает свою группу), а панельный точнее нашего снимка с диска.
+//
+// 🪤 `data` приходит ДВУМЯ формами: списком (`[{model_name,…}]`) и картой групп
+// (`{"Claude-Opus-系列":[…]}`). Обе встречены на живых панелях, разбор общий.
+const PRICING_TTL_MS = 10 * 60 * 1000;
+const PRICING_TIMEOUT_MS = 8000;
+const pricingCache = new Map();               // host → { models, ts }
+
+// Разбор ответа `/api/pricing` в список имён: `model_name` (панельная форма), `id`
+// (совместимая), дедуп и тот же фильтр медиа, что у живого каталога.
+function pricingModels(json) {
+    const data = json && json.data;
+    const rows = [];
+    if (Array.isArray(data)) rows.push(...data);
+    else if (data && typeof data === 'object') {
+        for (const v of Object.values(data)) if (Array.isArray(v)) rows.push(...v);
+    }
+    return textOnly(rows.map(r => (r && typeof r === 'object')
+        ? { id: r.model_name || r.id || r.model, supported_endpoint_types: r.supported_endpoint_types }
+        : r));
+}
+
+// Каталог панели с кешем. Возвращает `{ models, cached, ts }` или `null` - «источник не
+// ответил». Ничего не бросает: панель без `/api/pricing` (401 у закрытых площадок,
+// Cloudflare 403 у gorouter и tabi) обязана молча уступать снимку, а не ронять вкладку.
+//
+// `opts.fetch` - точка подмены для регресса (сети он не касается); в бою это глобальный
+// `fetch` из обработчика.
+async function pricingFor(host, opts) {
+    const o = opts || {};
+    if (!host) return null;
+    const ttl = o.ttlMs === undefined ? PRICING_TTL_MS : o.ttlMs;
+    const now = typeof o.now === 'number' ? o.now : Date.now();
+    const hit = pricingCache.get(host);
+    if (hit && ttl > 0 && now - hit.ts < ttl) return { models: hit.models, cached: true, ts: hit.ts };
+    const impl = o.fetch || (typeof fetch === 'function' ? fetch : null);
+    if (!impl) return null;
+    const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+    const timer = setTimeout(() => { if (ctl) ctl.abort(); }, o.timeoutMs || PRICING_TIMEOUT_MS);
+    try {
+        const r = await impl(`https://${host}/api/pricing`, ctl ? { signal: ctl.signal } : {});
+        if (!r || !r.ok) return null;
+        const models = pricingModels(await r.json());
+        if (!models.length) return null;
+        pricingCache.set(host, { models, ts: now });
+        return { models, cached: false, ts: now };
+    } catch { return null; }
+    finally { clearTimeout(timer); }
+}
+
+module.exports = { EXTRA_HOSTS, CACHE_FILE, isTextModel, textOnly, pickAccountKey, readSnapshot, snapshotFor,
+    PRICING_TTL_MS, pricingModels, pricingFor };

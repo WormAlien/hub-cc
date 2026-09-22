@@ -50,9 +50,13 @@ const body = cutFn(src, 'function newapiApplyBalance(');
 // Песочница: ровно те свободные имена, что функция берёт снаружи. Если появится новое —
 // тест упадёт на ReferenceError, и это правильно: оно тоже окажется undefined в бою.
 function makeWorld() {
-    const world = { logs: [], ops: [] };
+    const world = { logs: [], ops: [], notes: [] };
     const deps = {
         logLine: (m) => world.logs.push(String(m)),
+        // Журнал сбора на вкладке AgentRouter: та же строка уезжает и туда (см. arNote в
+        // transparent-proxy.js). Собираем отдельно - по нему проверяем, что налив виден
+        // владельцу, а не только в общем логе, который тонет в keepalive.
+        arNote: (kind, text) => world.notes.push({ kind, text }),
         financeLog: (o) => world.ops.push(o),
         moneyKickOnZero: () => {},
         newapiLkOpenedAt: (label) => {
@@ -64,7 +68,7 @@ function makeWorld() {
         AR_LOGIN_KINDS: ['login_dead', 'login_expired'],
     };
     const factory = new Function('deps', `
-        const { logLine, financeLog, moneyKickOnZero, newapiLkOpenedAt, AR_CHECKIN_MIN_USD,
+        const { logLine, arNote, financeLog, moneyKickOnZero, newapiLkOpenedAt, AR_CHECKIN_MIN_USD,
                 AR_CHECKIN_OBSERVE_MAX_MS, AR_LOGIN_KINDS } = deps;
         ${body}
         return newapiApplyBalance;
@@ -145,6 +149,10 @@ console.log('\n3. таймер подарка не двигается, когд�
         check(!!t.checkinAt, 'свежее наблюдение: подарок отмечен');
         check(t.checkinFrom === 'self', 'и именно по росту выдачи');
         check(t.grantedSelf === 200, 'база сдвинута на новую выдачу');
+        // Налив виден и в журнале сбора на вкладке: владелец 21.09 просил «логи на вкладке,
+        // чтобы видно было чё происходит», а деньги - первое, что там нужно видеть.
+        check(w.notes.some(n => n.kind === 'grant' && /выдача/.test(n.text)),
+            'налив уезжает в журнал вкладки, а не только в общий лог');
     }
 
     // 3б. 🔴 Цифра стояла 60 часов — рост копил несколько дней, к «сейчас» его не привязать.

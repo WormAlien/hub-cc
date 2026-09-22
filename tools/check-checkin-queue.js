@@ -128,8 +128,15 @@ console.log('\n6. поведение: полосы не держат друг д
         check(false, 'блок очереди найден в исходнике');
     } else {
         const block = PROXY.slice(from, to);
-        const build = new Function('deps', `
-            const { arLkPids, arRunKind, arPidAlive, AR_AUTO_CHECKIN, logLine, arSpawnSession, arPoolGate } = deps;
+        // 🪤 С 21.09 в этом же регионе живёт снимок очереди на диск (durable-подъём после
+        // рестарта). Песочнице он не нужен, но имена обязаны существовать: насос зовёт
+        // arNote/arQueueSave на каждом шаге, а объявления AR_QUEUE_FILE/... исполняются при
+        // сборке блока. Пустые заглушки здесь честнее, чем вырезание куска исходника:
+        // регресс про порядок в полосах не должен краснеть от чужой подсистемы.
+        const build = new Function('deps', 'fs', 'path', '__dirname', `
+            const { arLkPids, arRunKind, arPidAlive, AR_AUTO_CHECKIN, logLine, arSpawnSession, arPoolGate,
+                    arNote, durableWriteJson, arLoad, arSaveMerge,
+                    arCheckinWindowStartMs, arReadCheckinCfg, CHECKIN_LOG_RE } = deps;
             ${block}
             return { AR_CHECKIN_QUEUE, AR_CHECKIN_GAP_MS, arCheckinLastStart,
                      arLaneOf, arCheckinBusy, arCheckinWaitMs, arQueueSpot, arQueueEta, arCheckinPump };
@@ -142,6 +149,12 @@ console.log('\n6. поведение: полосы не держат друг д
             const started = [];
             const deps = {
                 arLkPids, arRunKind, AR_AUTO_CHECKIN: new Map(), logLine: () => {},
+                // Заглушки подсистемы снимка очереди (см. комментарий к сборке блока):
+                // в этом регрессе проверяются полосы, а не долговечность.
+                arNote: () => {},
+                durableWriteJson: () => {}, arLoad: () => [], arSaveMerge: () => {},
+                arCheckinWindowStartMs: () => 0, arReadCheckinCfg: () => ({ resetHhmmMsk: '20:30' }),
+                CHECKIN_LOG_RE: /^ar-checkin-[\w.-]+\.log$/,
                 arPidAlive: (pid) => alive.has(pid),
                 // Отстой адресов проверяется отдельно (check-proxy-ledger, check-checkin-proxy):
                 // здесь песочнице нужен только ответ «адреса есть», иначе насос встал бы на
@@ -159,7 +172,7 @@ console.log('\n6. поведение: полосы не держат друг д
                     q.arCheckinLastStart[job.wantAuto ? 'auto' : 'manual'] = Date.now();
                 },
             };
-            const q = build(deps);
+            const q = build(deps, require('fs'), require('path'), __dirname);
             // Пауза после прошлого старта уже прошла: проверяем именно занятость полос.
             q.arCheckinLastStart.auto = 0;
             q.arCheckinLastStart.manual = 0;

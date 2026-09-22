@@ -123,6 +123,15 @@ function makeCapture({ label, moduleDir, poolFile }) {
         return true;
     }
 
+    // Что уже лежит в ОБЩЕМ снимке под этим id. Нужно, чтобы не переписывать файл на каждом
+    // замере, но и не пропустить случай «копия профиля свежая, а снимка нет».
+    function sharedUserSession(ghId) {
+        try {
+            const j = JSON.parse(fs.readFileSync(path.join(sharedDir, ghId + '.json'), 'utf8'));
+            return userSessionOf(j.cookies);
+        } catch { return null; }
+    }
+
 // Под каким id ложится общий снимок. Привязка `gh_…` в пуле — прямой ответ; маркер
     // `personal` и пустая привязка — через логин из живых кук. Если логин не сошёлся ни
     // с одной записью хранилища (или сошёлся с двумя), снимок не пишем вообще: пусть
@@ -165,7 +174,18 @@ function makeCapture({ label, moduleDir, poolFile }) {
         if (live === savedUserSession()) {
             const login = ((cookies || []).find(c => c.name === 'dotcom_user') || {}).value || null;
             const ghId = resolveGhId(login);
-            if (ghId) reviveIfDead(ghId);
+            if (ghId) {
+                // Копия профиля уже свежая — но это про ЭТОТ шлюз. Общий снимок мог не
+                // записаться вовсе: запись привязалась к GitHub позже, файл снесли, логин
+                // разошёлся. Тогда следующие шлюзы засеют старьё, хотя живая сессия лежит
+                // прямо здесь, — ровно это владелец назвал 21.09 «нет сохранения гитхаба
+                // для других провайдеров». Досылаем, только если снимка/сессии там нет.
+                if (sharedUserSession(ghId) !== live) {
+                    if (!quiet) console.log(`🐙 общий снимок ${ghId} был не от этой сессии — досылаю`);
+                    await writeShared(context, ghId, cookies);
+                }
+                reviveIfDead(ghId);
+            }
             return false;
         }
         try {
@@ -188,9 +208,26 @@ function makeCapture({ label, moduleDir, poolFile }) {
     // Замена `await new Promise(() => {})`: так же держит скрипт до закрытия окна,
     // но по дороге забирает ручной вход. Промис не резолвится — закрытие контекста
     // роняет процесс сам, как и раньше.
+    //
+    // Замер идёт ДВУМЯ путями, и второй обязателен. Таймер раз в POLL_MS ловит вход,
+    // случившийся в открытом окне; но вход через GitHub заканчивается редиректом
+    // OAuth-колбэка, и человек закрывает окно через секунды после «Вход выполнен» —
+    // замер 21.09: логин в 21:47:27, выход в 21:47:29, тик в это окно не попал, сессия
+    // не сохранилась ни в копию, ни в общий снимок. Поэтому второй путь — навигация
+    // страницы: к моменту колбэка новая кука уже в контексте, и замер успевает.
+    // busy не даёт наложениям замеров писать файлы одновременно.
     function holdOpen(context) {
         return new Promise(() => {
-            const timer = setInterval(() => { captureOnce(context).catch(() => {}); }, POLL_MS);
+            let busy = false;
+            const ping = () => {
+                if (busy) return;
+                busy = true;
+                captureOnce(context).catch(() => {}).finally(() => { busy = false; });
+            };
+            const timer = setInterval(ping, POLL_MS);
+            const watch = p => { try { p.on('framenavigated', ping); } catch { /* страница уже мертва */ } };
+            for (const p of context.pages()) watch(p);
+            context.on('page', watch);
             context.on('close', () => clearInterval(timer));
         });
     }

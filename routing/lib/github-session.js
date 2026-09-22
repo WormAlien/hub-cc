@@ -51,6 +51,18 @@ const PROFILE_ROOTS = [
     // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
     // GitHub-сессии отвечало бы «неизвестный хост».
     { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
+    // SeekAi, Fxqidian, BudsAI, Nova, AIPM - вкладки, у которых в дашборде есть свой 🐙
+    // «заселить GitHub-сессией». Строка обязана совпадать с полем `host` в таблице
+    // заселения (`NEWAPI_SEED_PROV` в routing/proxy-dashboard.html) БАЙТ В БАЙТ, и тег -
+    // с ключом в `GH_POOL_LOADERS`: по нему ищется запись в пуле этой вкладки.
+    // 🪤 Разъезд молчит у вкладки и виден только в модалке: пикер открывается, а ручка
+    // `/gh/available` отвечает `500 неизвестный хост`. Так и прожили до 21.09.2026 все
+    // пять сразу; стык сторожит `tools/check-gh-seed-hosts.js`.
+    { tag: 'sk', dir: path.join(ROOT, 'seekai', 'profiles'), host: 'seekai.cc' },
+    { tag: 'fx', dir: path.join(ROOT, 'fxqidian', 'profiles'), host: 'fxqidian.de5.net' },
+    { tag: 'bd', dir: path.join(ROOT, 'budsin', 'profiles'), host: 'apichat.budsin.dev' },
+    { tag: 'nv', dir: path.join(ROOT, 'nova', 'profiles'), host: 'nova.vcrauo.com' },
+    { tag: 'ap', dir: path.join(ROOT, 'aipm', 'profiles'), host: 'emtf.aipm9527.online' },
 ];
 
 const SESSIONS_DIR = path.join(ROOT, 'github', 'sessions');

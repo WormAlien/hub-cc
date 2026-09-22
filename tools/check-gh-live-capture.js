@@ -77,6 +77,31 @@ async function main() {
         await new Promise(r => setTimeout(r, POLL_MS + 2500));
         ok(savedSession(cap.backupFile).value === 'SESSION-C', `holdOpen подхватил вход сам за ${(POLL_MS / 1000) | 0}+ с`);
 
+        // 🎯 Досылка общего снимка. Копия профиля свежая - и этого мало: снимок
+        // `github/sessions/<ghId>.json` мог не записаться (запись привязалась к GitHub
+        // позже, файл снесли, логин разошёлся), и тогда ДРУГИЕ шлюзы этой сессии не увидят
+        // никогда - ровно слова владельца 21.09 «нет сохранения гитхаба для других
+        // провайдеров». Замер всё ещё не пишет копию профиля: перезаписи быть не должно.
+        fs.rmSync(shared, { force: true });
+        ok(await cap.captureOnce(context, { quiet: true }) === false, 'копия профиля не менялась - перезаписи нет');
+        ok(fs.existsSync(shared), 'общий снимок дослан, хотя копия профиля не менялась');
+        const resent = fs.existsSync(shared) ? JSON.parse(fs.readFileSync(shared, 'utf8')) : { cookies: [] };
+        ok(resent.cookies.some(c => c.name === 'user_session' && c.value === 'SESSION-C'),
+            'в досланном снимке именно живая сессия, а не старьё');
+
+        // 🎯 Вход ловится НА НАВИГАЦИИ, а не только тиком раз в 5 с. Вход через GitHub
+        // заканчивается редиректом OAuth-колбэка, а окно закрывают через секунды после
+        // «Вход выполнен» (замер 21.09: логин 21:47:27, выход 21:47:29). Свой ярлык -
+        // чтобы таймерный holdOpen выше в этот файл не писал и замер был честным.
+        const capNav = makeCapture({ label: 'acct_nav_1', moduleDir, poolFile });
+        capNav.holdOpen(context).catch(() => {});
+        await context.addCookies(ghCookies('SESSION-NAV'));
+        const navPage = context.pages()[0] || await context.newPage();
+        await navPage.goto('about:blank').catch(() => {});
+        await new Promise(r => setTimeout(r, 1500));
+        ok(fs.existsSync(capNav.backupFile) && savedSession(capNav.backupFile).value === 'SESSION-NAV',
+            `вход пойман навигацией быстрее тика ${(POLL_MS / 1000) | 0} с`);
+
         // Личный аккаунт владельца: в пуле маркер `personal`, своя запись в хранилище есть.
         // Снимок обязан лечь под её id, а маркер в пуле — остаться нетронутым.
         const accountsFile = path.join(root, 'routing', 'github-accounts.json');

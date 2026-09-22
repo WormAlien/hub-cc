@@ -233,6 +233,29 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    fxqidian: {
+        label: 'Fxqidian',
+        base_url: 'http://localhost:20175',
+        api_key: 'dummy',           // real key keepalive reads from fxqidian-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20175) → fxqidian.de5.net (БЕЗ /v1).
+        // Активация через handleFxActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в fxqidian-active-key.txt и инжектится прокси на каждый запрос.
+        // Мост нужен как у остальных: ремап тира по карте, срезка [1m], паузы thinking.
+    },
+    lsapi: {
+        label: 'Lingshu',
+        base_url: 'http://localhost:20174',
+        api_key: 'dummy',           // real key keepalive reads from lsapi-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20174) → lsapi.cloud (БЕЗ /v1).
+        // Активация через handleLsActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в lsapi-active-key.txt и инжектится прокси на каждый запрос.
+        // Без моста не обойтись: он снимает [1m]-суффиксы и держит SSE-паузы
+        // thinking-моделей, то есть тот же резон, что у остальных Claude-шлюзов.
+    },
     budsin: {
         label: 'BudsAI',
         base_url: 'http://localhost:20173',
@@ -500,6 +523,8 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    fxqidian: 'fxqidian',
+    lsapi: 'lsapi',
     budsin: 'budsin',
     nova: 'nova',
     odyssey: 'odyssey',
@@ -781,7 +806,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 // route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
 const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
@@ -958,7 +983,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -1939,6 +1964,8 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveFx = makeKeepaliveHandlers(Number(process.env.FX_KEEPALIVE_PORT || 20175));
+const keepaliveLs = makeKeepaliveHandlers(Number(process.env.LS_KEEPALIVE_PORT || 20174));
 const keepaliveBd = makeKeepaliveHandlers(Number(process.env.BD_KEEPALIVE_PORT || 20173));
 const keepaliveNv = makeKeepaliveHandlers(Number(process.env.NV_KEEPALIVE_PORT || 20172));
 const keepaliveOd = makeKeepaliveHandlers(Number(process.env.OD_KEEPALIVE_PORT || 20170));
@@ -4905,6 +4932,8 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Fxqidian',  port: Number(process.env.FX_KEEPALIVE_PORT || 20175), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Lingshu',  port: Number(process.env.LS_KEEPALIVE_PORT || 20174), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive BudsAI',  port: Number(process.env.BD_KEEPALIVE_PORT || 20173), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Nova',  port: Number(process.env.NV_KEEPALIVE_PORT || 20172), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Odyssey',  port: Number(process.env.OD_KEEPALIVE_PORT || 20170), path: '/__keepalive/api/status', keepalive: true },
@@ -6900,7 +6929,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, bd: bdLkPids, nv: nvLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -7012,12 +7041,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -7480,6 +7509,9 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleFxAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'fxqidian', host: 'fxqidian.de5.net', prefix: 'fx_', load: fxLoad, save: fxSave, sessionsDir: FX_SESSIONS_DIR });
 }
 function handleBdAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'budsin', host: 'apichat.budsin.dev', prefix: 'bd_', load: bdLoad, save: bdSave, sessionsDir: BD_SESSIONS_DIR });
@@ -8845,6 +8877,8 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'fxqidian.de5.net':      path.join(__dirname, '..', 'fxqidian', 'profiles'),
+    'lsapi.cloud':      path.join(__dirname, '..', 'lsapi', 'profiles'),
     'apichat.budsin.dev':      path.join(__dirname, '..', 'budsin', 'profiles'),
     'nova.vcrauo.com':      path.join(__dirname, '..', 'nova', 'profiles'),
     'odysseyapi.tech':      path.join(__dirname, '..', 'odyssey', 'profiles'),
@@ -8996,7 +9030,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -9711,6 +9745,7 @@ function newapiApplyBalance(target, bal, opts) {
             target.checkinAt = new Date().toISOString();
             target.checkinFrom = 'self';
             logLine(`agentrouter чек-ин: ***${String(target.api_key || '').slice(-6)} выдача $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)}`);
+            arNote('grant', `налив: ${target.name || target.email || '?'} выдача $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)}`);
         } else if (grew) {
             logLine(`agentrouter чек-ин: выдача выросла $${prevGranted.toFixed(2)} → $${nextGranted.toFixed(2)},`
                 + ` но цифра не обновлялась ${Math.round(gapMs / 3600_000)} ч — таймер не двигаю: к одному моменту рост не привязать`);
@@ -12761,6 +12796,9 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleFxMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'fxqidian', host: 'fxqidian.de5.net', load: fxLoad, save: fxSave });
+}
 function handleBdMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'budsin', host: 'apichat.budsin.dev', load: bdLoad, save: bdSave });
 }
@@ -12840,6 +12878,9 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleFxSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'fxqidian', load: fxLoad, save: fxSave });
 }
 function handleBdSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'budsin', load: bdLoad, save: bdSave });
@@ -13019,6 +13060,27 @@ function arPidAlive(pid) {
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// ───── Журнал сбора: что происходит, видно на вкладке ─────────────────────
+// Владелец 21.09: «нужны логи на вкладке чтобы видно было чё происходит». До этого правду
+// о пачке можно было собрать только из общего лога, а тот тонет в keepalive (он логирует
+// каждый пинг): на вопрос «почему встало» ответа в интерфейсе не было вовсе.
+//
+// Кольцо живёт в памяти, как и вся очередь, но у события есть НОМЕР: фронт просит «дай всё
+// после N» и не перерисовывает увиденное. Рестарт `:8200` кольцо чистит - поэтому первым
+// событием после подъёма идёт boot, и по нему видно границу (см. arQueueRestore).
+const AR_EVENTS = [];
+const AR_EVENTS_MAX = 400;
+let arEventSeq = 0;
+// Одно место на строку: и в общий лог, и в кольцо для вкладки. Виды - для подсветки на
+// фронте: boot | batch | take | addr | ok | fail | stop | grant | restore.
+function arNote(kind, text) {
+    const ev = { seq: ++arEventSeq, t: new Date().toISOString(), kind, text };
+    AR_EVENTS.push(ev);
+    if (AR_EVENTS.length > AR_EVENTS_MAX) AR_EVENTS.shift();
+    logLine(`agentrouter ${text}`);
+    return ev;
+}
+
 // ───── Автоподарок: состояние прогона для фронта ──────────────────────────
 // POST отвечает сразу после спавна, а работа идёт 20–60 с (разлогин, GitHub-вход в
 // попапе, закрытие браузера, точный баланс). Очередей и SSE в проекте нет — прогресс
@@ -13098,6 +13160,7 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
             st.message = 'прогон прибит вручную (⏹ Стоп) — аккаунт мог остаться разлогиненным,'
                 + ' проверь входом 🌐 или повтори ⚡';
             logLine(`agentrouter ${tag} [${label}]: прибит вручную по стопу`);
+            arNote('stop', `${st.name || label}: прогон прибит вручную (⏹ Стоп) - аккаунт мог остаться разлогиненным`);
             return;
         }
         if (code !== 0) {
@@ -13129,6 +13192,9 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
             const who = (code === 3 || code === 5 || code === 9) ? arGhNameFor(id) : null;
             if (who) st.message = `${who}: ${st.message}`;
             logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
+            // Отказ в журнал вкладки - с именем аккаунта и кодом: «не вышло» без причины
+            // владелец читает как поломку дашборда, а не как слово шлюза.
+            arNote('fail', `${st.name || label}: не вышло (код ${code}) - ${st.message}`);
             return;
         }
         // Chromium flushes profile cookies asynchronously during close.
@@ -13183,10 +13249,12 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
             : checkedIn === false ? 'вошёл, но чек-ин не зачтён — суточное окно ещё не сменилось'
             : `вошёл, на счету $${(st.balance ?? 0).toFixed(2)}${where}`;
         logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
+        arNote(checkedIn === true ? 'ok' : 'fail', `${st.name || label}: ${st.message}`);
     } catch (e) {
         st.state = 'error';
         st.message = e.message;
         logLine(`agentrouter ${tag} [${label}] ERR: ${e.message}`);
+        arNote('fail', `${st.name || label}: ${e.message}`);
     } finally {
         AR_AUTO_CHECKIN.set(label, st);
     }
@@ -13329,6 +13397,7 @@ const AR_CHECKIN_QUEUE = [];
 const AR_CHECKIN_GAP_MS = 25_000;   // пауза между прогонами: залп ловит рейт-лимит
 const arCheckinLastStart = { auto: 0, manual: 0 };
 let arCheckinPumpTimer = null;
+let arGateNotedAt = 0;              // когда журнал последний раз говорил «ждём адрес»
 
 function arLaneOf(job) { return job.wantAuto ? 'auto' : 'manual'; }
 
@@ -13375,19 +13444,21 @@ function arCheckinPump() {
         const wall = AR_CHECKIN_BATCH.total > 0 && AR_CHECKIN_BATCH.ok === 0 && AR_CHECKIN_BATCH.failed > 0;
         if (wall || AR_COLLECT_BATCHES >= AR_COLLECT_MAX) {
             AR_COLLECT_ALL = false;
-            logLine(`agentrouter чек-ин: добор остановлен - ${wall
+            arNote('stop', `чек-ин: добор остановлен - ${wall
                 ? 'пачка ушла в стену без единого успеха'
                 : `набрано ${AR_COLLECT_BATCHES} пачек, дальше не гоню`}`);
+            arQueueSave();
         } else {
             const next = arBuildBatch(AR_CHECKIN_BATCH_MAX);
             if (next.jobs.length) {
                 AR_COLLECT_BATCHES++;
                 arEnqueueBatch(next.jobs);
-                logLine(`agentrouter чек-ин: добор, пачка ${AR_COLLECT_BATCHES} -`
+                arNote('batch', `чек-ин: добор, пачка ${AR_COLLECT_BATCHES} -`
                     + ` ${next.jobs.length} аккаунт(ов), готовых было ${next.ready}`);
             } else {
                 AR_COLLECT_ALL = false;
-                logLine('agentrouter чек-ин: добор закончен - готовых подарков больше нет');
+                arNote('stop', 'чек-ин: добор закончен - готовых подарков больше нет');
+                arQueueSave();
                 return;
             }
         }
@@ -13408,6 +13479,12 @@ function arCheckinPump() {
                 AR_AUTO_CHECKIN.set(job.label, st);
             }
             logLine(`agentrouter чек-ин: все адреса в отстое, ждём ~${secs}с`);
+            // В журнал вкладки - не чаще раза в две минуты: насос просыпается каждые 5 с,
+            // и без порога одно и то же ожидание залило бы весь журнал.
+            if (Date.now() - arGateNotedAt > 120_000) {
+                arGateNotedAt = Date.now();
+                arNote('stop', `чек-ин: очередь ждёт адрес - все в отстое, ближайший через ~${secs}с`);
+            }
             arCheckinPumpTimer = setTimeout(arCheckinPump, waitMs);
             if (arCheckinPumpTimer.unref) arCheckinPumpTimer.unref();
             return;
@@ -13419,9 +13496,53 @@ function arCheckinPump() {
     for (;;) {
         const at = AR_CHECKIN_QUEUE.findIndex(j => arCheckinWaitMs(arLaneOf(j)) === 0);
         if (at < 0) break;
-        const job = AR_CHECKIN_QUEUE.splice(at, 1)[0];
-        logLine(`agentrouter чек-ин: беру из очереди ${job.dispName}`
-            + ` (полоса ${arLaneOf(job)}, осталось ${AR_CHECKIN_QUEUE.length})`);
+        const job = AR_CHECKIN_QUEUE[at];
+        // 🪤 Прогон из восстановленной пачки мог догнать сам, пока дашборд лежал: браузер
+        // detached, рестарт родителя он переживает, а отметить подарок в пуле было некому.
+        // Проверяем ДО старта и по его же файлу прогона - иначе мы бы погасили живой логин
+        // и забрали тот же подарок второй раз.
+        if (job.restored) {
+            const v = arRunLogVerdict(job.label, job.restoredSince || 0);
+            if (v && v.verdict === 'ok') {
+                AR_CHECKIN_QUEUE.splice(at, 1);
+                AR_CHECKIN_BATCH.labels.delete(job.label);
+                const s = (() => { try { return arLoad().find(x => x.id === job.id); } catch { return null; } })();
+                if (s) {
+                    try { s.checkinAt = new Date(v.at).toISOString(); s.checkinFrom = 'auto'; arSaveMerge(s); }
+                    catch (e) { logLine(`agentrouter восстановление отметки [${job.label}] не удалось: ${e.message}`); }
+                }
+                AR_AUTO_CHECKIN.delete(job.label);
+                arNote('restore', `${job.dispName}: догнал сам, пока нас не было - чек-ин зачтён, отметка по логу ${v.file}`);
+                arQueueSave();
+                continue;
+            }
+            // Файл прогона пишется прямо сейчас: ребёнок ещё работает. Второе окно на тот же
+            // профиль поднимать нельзя (два Chromium на один SQLite), поэтому ждём - задание
+            // остаётся в очереди, а насос вернётся к нему через минуту.
+            if (v && v.verdict === 'busy') {
+                AR_CHECKIN_QUEUE.splice(at, 1);
+                AR_AUTO_CHECKIN.set(job.label, {
+                    id: job.id, label: job.label, name: job.dispName, state: 'queued',
+                    message: 'прогон ещё идёт (пережил перезапуск) - жду его закрытия, потом проверю отметку',
+                    startedAt: new Date().toISOString(), finishedAt: null,
+                });
+                logLine(`agentrouter чек-ин: ${job.dispName} - прогон пережил перезапуск и ещё идёт, жду ${Math.round(AR_QUEUE_BUSY_HOLD_MS / 1000)}с`);
+                const hold = setTimeout(() => {
+                    AR_CHECKIN_QUEUE.push(job);
+                    arCheckinPump();
+                }, AR_QUEUE_BUSY_HOLD_MS);
+                if (hold.unref) hold.unref();
+                arQueueSave();
+                return;
+            }
+            delete job.restored;
+        }
+        AR_CHECKIN_QUEUE.splice(at, 1)[0];
+        arNote('take', `чек-ин: беру из очереди ${job.dispName}`
+            + ` (полоса ${arLaneOf(job)}, осталось ${AR_CHECKIN_QUEUE.length})`
+            + (job.interrupted ? ' - прогон был прерван на середине' : ''));
+        delete job.interrupted;
+        arQueueSave();
         try { arSpawnSession(job); } catch (e) {
             arSpawnFailed(job, e);
         }
@@ -13496,8 +13617,9 @@ function arCheckinCancel({ lane = null, reason = 'отменено', killRunning
         }
     }
     if (dropped.length || killed.length) {
-        logLine(`agentrouter чек-ин: стоп — снято с очереди ${dropped.length}`
+        arNote('stop', `чек-ин: стоп - снято с очереди ${dropped.length}`
             + (killed.length ? `, прибито прогонов ${killed.length}` : '') + ` (${reason})`);
+        arQueueSave();
     }
     return { dropped: dropped.map(j => j.label), killed };
 }
@@ -13531,6 +13653,202 @@ let AR_COLLECT_ALL = false;
 let AR_COLLECT_BATCHES = 0;          // сколько пачек набрал сам насос в текущем доборе
 const AR_COLLECT_MAX = 20;           // потолок добора: 20 пачек по 6 - это 120 подарков за раз
 
+// Кого уже взяли в ЭТОМ заходе «забрать у всех». Второй раз за один добор не берём никого.
+//
+// 🪤 Прежний отбор смотрел только на живой pid и на очередь - и оба признака к моменту
+// добора уже мертвы. Обработчик 'exit' снимает pid ДО насоса (`arLkPids.delete(label)`
+// строкой выше), а отметку в пул ставит `arAutoCheckinFinish`, которая асинхронна и
+// доезжает через ~11 с: 2 с на флаш кук плюс чек баланса. Замер 21.09: `faithfulpho`
+// забран в 18:52:02, окно закрылось в 18:52:21, добор набрал пачку в 18:52:21 - и тот же
+// аккаунт поехал второй раз в 18:52:46 (отметка легла только в 18:52:32).
+//
+// Вторая беда того же отбора: отказ (код 3 - мёртвая GitHub-сессия, например) не мешает
+// аккаунту снова попасть в готовые, и добор гонял бы его пачка за пачкой до потолка
+// AR_COLLECT_MAX, пока в пачке есть хоть один успех. Теперь отказ виден как «уже брали».
+const AR_COLLECT_SEEN = new Set();
+
+// ───── Очередь переживает рестарт: снимок на диск и подъём после падения ────
+//
+// Владелец 21.09: «нажимал забрать все забрались не все». Причина - рестарт `:8200`
+// посреди пачки: 21.09 21:48 поставили 6 из 48 готовых с добором до конца, к 21:55
+// отработали 10, в 21:55:51 дашборд поднялся заново - очередь жила в памяти и исчезла
+// молча, вместе с 2 заданиями и ~38 готовыми аккаунтами. Ни строки, ни плашки.
+//
+// Решение владельца (21.09): очередь ПЕРЕЖИВАЕТ рестарт, но сама не стартует - карточка
+// говорит «пачка прервана перезапуском: N ждут» и ждёт кнопки. Молча возобновлять чужую
+// волю нельзя: рестарт бывает и намеренным (правки, «стоп всё»).
+//
+// 🪤 Прогон, который был в полёте в момент падения, мог дойти САМ: браузер спавнится
+// detached и рестарт дашборда переживает. Тогда вход состоялся, а отметку ставить было
+// некому (её пишет родитель). Такой прогон не перезапускаем, а признаём по его же файлу
+// `logs/ar-checkin-<label>-<stamp>.log` - см. arRunLogVerdict.
+const AR_QUEUE_FILE = path.join(__dirname, 'runtime', 'ar-checkin-queue.json');
+const AR_QUEUE_MAX_AGE_MS = 6 * 3600_000;   // снимок старше - не восстанавливаем вовсе
+// Насколько назад смотреть в файлы прогонов при подъёме. Прогон стартует раньше снимка на
+// десятки секунд, поэтому снимок минус запас; но и не «вообще все логи по метке» - иначе
+// удачный прогон недельной давности был бы принят за «догнал сам» и задание выпало бы
+// из очереди, а подарок в этот день остался бы не забран.
+const AR_QUEUE_LOG_SLACK_MS = 10 * 60_000;
+// Сколько ждать прогон, который по виду ещё идёт (файл пишется прямо сейчас).
+const AR_QUEUE_BUSY_HOLD_MS = 60_000;
+let AR_QUEUE_RESTORED = null;               // { at, jobs, interrupted, taken } - для фронта
+
+function arQueueDiskSnapshot() {
+    const b = AR_CHECKIN_BATCH;
+    const running = [];
+    for (const [label, kind] of arRunKind) {
+        if (kind !== 'auto' && kind !== 'manual') continue;
+        if (!arPidAlive(arLkPids.get(label))) continue;
+        const st = AR_AUTO_CHECKIN.get(label) || {};
+        running.push({
+            id: st.id || null, label, dispName: st.name || label,
+            mode: kind === 'auto' ? 'autocheckin' : 'checkin',
+            wantCheckin: true, wantAuto: kind === 'auto', batch: true,
+            startedAt: st.startedAt || null,
+        });
+    }
+    return {
+        at: new Date().toISOString(),
+        collectAll: AR_COLLECT_ALL,
+        batches: AR_COLLECT_BATCHES,
+        seen: [...AR_COLLECT_SEEN],
+        batch: {
+            total: b.total, done: b.done, ok: b.ok, failed: b.failed,
+            cancelled: b.cancelled, startedAt: b.startedAt,
+        },
+        queue: AR_CHECKIN_QUEUE.map(j => ({
+            id: j.id, label: j.label, dispName: j.dispName, mode: j.mode,
+            wantCheckin: !!j.wantCheckin, wantAuto: !!j.wantAuto, batch: !!j.batch,
+            interrupted: !!j.interrupted, restored: !!j.restored,
+        })),
+        running,
+    };
+}
+
+function arQueueSave() {
+    try { durableWriteJson(AR_QUEUE_FILE, arQueueDiskSnapshot()); }
+    catch (e) { logLine(`agentrouter очередь: снимок на диск не записан (${e.message})`); }
+}
+
+// Вердикт по файлу прогона: догнал ли он до конца без нас. Возвращает 'ok' (шлюз зачёл
+// чек-ин), 'done' (прогон отработал, но чек-ин не зачтён), 'busy' (файл пишется прямо
+// сейчас) или null (прогона не было).
+//
+// 🪤 Именно файл, а не pid: после рестарта мы не знаем ни одного pid'а, а файл прогона
+// ребёнок ведёт сам и переживает и нас, и рестарт.
+function arRunLogVerdict(label, sinceMs) {
+    try {
+        const dir = path.join(__dirname, '..', 'logs');
+        if (!fs.existsSync(dir)) return null;
+        const mine = fs.readdirSync(dir)
+            .filter(n => n.startsWith(`ar-checkin-${label}-`) && CHECKIN_LOG_RE.test(n))
+            .map(n => {
+                const p = path.join(dir, n);
+                const st = fs.statSync(p);
+                // Имя файла: ar-checkin-<label>-2026-09-21T22-27-43.log (двоеточия заменены
+                // дефисами - Windows). Восстанавливаем их, иначе Date.parse вернёт NaN.
+                const m = /(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})\.log$/.exec(n);
+                const stamp = m ? Date.parse(`${m[1]}:${m[2]}:${m[3]}Z`) : 0;
+                return { p, mtime: st.mtimeMs, stamp: isFinite(stamp) ? stamp : 0 };
+            })
+            .filter(f => !sinceMs || f.stamp >= sinceMs || f.mtime >= sinceMs)
+            .sort((a, b) => b.mtime - a.mtime);
+        if (!mine.length) return null;
+        const f = mine[0];
+        const tail = fs.readFileSync(f.p, 'utf8');
+        if (/AUTOCHECKIN_RESULT\s+\{"checkedIn":true/.test(tail)) return { verdict: 'ok', at: f.mtime, file: path.basename(f.p) };
+        if (/AUTOCHECKIN_RESULT/.test(tail)) return { verdict: 'done', at: f.mtime, file: path.basename(f.p) };
+        if (Date.now() - f.mtime < 120_000) return { verdict: 'busy', at: f.mtime, file: path.basename(f.p) };
+        return null;
+    } catch { return null; }
+}
+
+// Подъём очереди после старта. Заполняет AR_CHECKIN_QUEUE и состояние пачки, но НЕ
+// запускает насос: старт - за кнопкой «▶ Продолжить» (решение владельца 21.09).
+function arQueueRestore() {
+    let doc = null;
+    try {
+        if (!fs.existsSync(AR_QUEUE_FILE)) return null;
+        doc = JSON.parse(fs.readFileSync(AR_QUEUE_FILE, 'utf8'));
+    } catch (e) {
+        arNote('boot', `снимок очереди не прочитан (${e.message}) - начинаю с пустой`);
+        return null;
+    }
+    const at = Date.parse((doc && doc.at) || '') || 0;
+    // `running` - те, у кого в момент падения было открыто окно. Их отдельно проверяем на
+    // «догнал без нас»: браузер спавнится detached и рестарт дашборда переживает.
+    const queuedJobs = (doc && Array.isArray(doc.queue) ? doc.queue : []).map(j => ({ ...j, _running: false }));
+    const runJobs = (doc && Array.isArray(doc.running) ? doc.running : []).map(j => ({ ...j, _running: true }));
+    const jobs = queuedJobs.concat(runJobs);
+    if (!jobs.length) return null;
+    if (!at || Date.now() - at > AR_QUEUE_MAX_AGE_MS) {
+        arNote('restore', `снимок очереди от ${new Date(at).toLocaleString('ru-RU', { hour12: false })} старше ${Math.round(AR_QUEUE_MAX_AGE_MS / 3600_000)} ч - не восстанавливаю`);
+        return null;
+    }
+    // Что уже забрано, пока нас не было: отметка в пуле внутри текущего суточного окна.
+    // И то же для прогонов, которые в момент падения были в полёте: они могли дойти сами.
+    let winStart = 0;
+    try { winStart = arCheckinWindowStartMs(arReadCheckinCfg().resetHhmmMsk); } catch { winStart = 0; }
+    const sessions = (() => { try { return arLoad(); } catch { return []; } })();
+    const restored = [];
+    let taken = 0, interrupted = 0, settled = 0;
+    for (const j of jobs) {
+        const s = sessions.find(x => x.id === j.id) || sessions.find(x => 'acct_' + x.id === j.label);
+        const marked = s && s.checkinAt ? Date.parse(s.checkinAt) : 0;
+        if (marked && marked >= winStart) { taken++; continue; }
+        const wasRunning = !!j._running;
+        if (wasRunning) {
+            interrupted++;
+            // Догнал без нас: шлюз зачёл чек-ин - отмечаем по факту и в очередь не берём.
+            const v = arRunLogVerdict(j.label, at - AR_QUEUE_LOG_SLACK_MS);
+            if (v && v.verdict === 'ok') {
+                if (s) {
+                    try {
+                        s.checkinAt = new Date(v.at).toISOString();
+                        s.checkinFrom = 'auto';
+                        arSaveMerge(s);
+                    } catch (e) { logLine(`agentrouter восстановление отметки [${j.label}] не удалось: ${e.message}`); }
+                }
+                arNote('restore', `${j.dispName}: прогон дошёл без нас - шлюз зачёл чек-ин, отметка восстановлена по логу ${v.file}`);
+                settled++;
+                continue;
+            }
+            restored.push({ ...j, restored: true, interrupted: true, restoredSince: at - AR_QUEUE_LOG_SLACK_MS });
+            continue;
+        }
+        restored.push({ ...j, restored: true, interrupted: false, restoredSince: at - AR_QUEUE_LOG_SLACK_MS });
+    }
+    for (const j of restored) AR_CHECKIN_QUEUE.push(j);
+    for (const l of (doc.seen || [])) AR_COLLECT_SEEN.add(l);
+    for (const j of restored) AR_COLLECT_SEEN.add(j.label);
+    AR_COLLECT_BATCHES = Number(doc.batches) || 0;
+    const b = AR_CHECKIN_BATCH;
+    b.total = restored.length;
+    b.done = 0; b.ok = 0; b.failed = 0; b.cancelled = 0;
+    b.consecFail = 0; b.reason = null; b.finishedAt = null;
+    b.startedAt = (doc.batch && doc.batch.startedAt) || doc.at;
+    b.labels = new Set(restored.map(j => j.label));
+    for (const j of restored) {
+        AR_AUTO_CHECKIN.set(j.label, {
+            id: j.id, label: j.label, name: j.dispName, state: 'queued',
+            message: j.interrupted
+                ? 'пачка прервана перезапуском - прогон стоял на середине, жми ▶ Продолжить'
+                : 'пачка прервана перезапуском - ждёт ▶ Продолжить',
+            startedAt: new Date().toISOString(), finishedAt: null,
+        });
+    }
+    AR_QUEUE_RESTORED = {
+        at: doc.at, jobs: restored.length, interrupted, taken, settled,
+        wasDone: (doc.batch && doc.batch.done) || 0,
+    };
+    arNote('restore', `пачка прервана перезапуском: ждут ${restored.length}`
+        + (interrupted ? `, из них ${interrupted} стояли на середине` : '')
+        + (taken ? `, ${taken} уже забраны пока нас не было` : '')
+        + (settled ? `, ${settled} догнали сами` : '')
+        + ` · прошлый заход отработал ${(doc.batch && doc.batch.done) || 0} из ${(doc.batch && doc.batch.total) || 0}`);
+    return AR_QUEUE_RESTORED;
+}
+
 // Запуск прогона провалился до того, как появился процесс. Вынесено из насоса, потому что
 // с асинхронным arSpawnSession отказ приходит двумя путями: синхронным throw и отказом
 // промиса. Обработчик обязан быть один — иначе второй путь молча терял бы задание.
@@ -13544,6 +13862,7 @@ function arSpawnFailed(job, e) {
         startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     });
     logLine(`agentrouter чек-ин: запуск ${job.dispName} не удался — ${msg}`);
+    arNote('fail', `чек-ин: запуск ${job.dispName} не удался - ${msg}`);
     // 🪤 Не забыть про пачку. Задание из очереди уже вынуто, а 'exit' по нему не
     // придёт никогда — без этой строки label навсегда остался бы в labels, и
     // прогресс замер бы на «4 из 6» с активной кнопкой «Стоп».
@@ -13582,7 +13901,7 @@ function arBatchNote(label, code) {
         b.cancelled += b.labels.size;
         b.labels.clear();
         arCheckinCancel({ lane: 'auto', reason: `пачка ⚡ ${b.reason}` });
-        logLine(`agentrouter чек-ин: пачка ⚡ ${b.reason}`);
+        arNote('stop', `чек-ин: пачка ⚡ ${b.reason}`);
     }
     if (!b.labels.size && !b.finishedAt) b.finishedAt = new Date().toISOString();
 }
@@ -13605,6 +13924,9 @@ function arBatchSnapshot() {
         // Идёт ли добор до конца: кнопка «получить все» обещает все подарки, а не первую
         // шестёрку, и карточка обязана показывать, что работа продолжается.
         collectAll: AR_COLLECT_ALL, batches: AR_COLLECT_BATCHES,
+        // Пачка, поднятая с диска после рестарта: она ЖДЁТ кнопки, а не идёт сама.
+        // Без этого поля карточка показывала бы «0 идёт, 0 в очереди» при полной очереди.
+        restored: AR_QUEUE_RESTORED,
     };
 }
 
@@ -13621,15 +13943,25 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
         arDropSeed(label);
         throw new Error(addr.error || 'нет свободного адреса под прогон');
     }
-    if (addr.proxy) logLine(`agentrouter чек-ин: ${label} идёт через ${addr.proxy.id} (${addr.tier})`);
+    if (addr.proxy) arNote('addr', `чек-ин: ${label} идёт через ${addr.proxy.id} (${addr.tier})`);
 
     const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
     // Чек-ину stdout нужен только для слова шлюза о суточном бонусе. Баланс браузер
     // не вычисляет: после закрытия parent запускает обычный cookie/raw-auth чек.
     let outTail = '';
+    // Этапы прогона - в журнал вкладки. Из всего потока ребёнка берём три вехи: выход из
+    // аккаунта, попап GitHub и слово шлюза о зачёте. Между «вхожу через GitHub» и итогом
+    // проход молчит 17 секунд - ровно то, что владелец читает как «лога нет».
+    // Отказы сюда НЕ берём: их ребёнок печатает в stderr, а итог с причиной приезжает
+    // отдельным событием из arAutoCheckinFinish - иначе одна беда встала бы дважды.
+    const arStage = (s) => {
+        if (/🚪 вышел через меню профиля/.test(s)) arNote('stage', `${dispName}: вышел из аккаунта, вхожу через GitHub…`);
+        else if (/🪟 попап GitHub-входа открылся|🔄 GitHub-часть/.test(s)) arNote('stage', `${dispName}: попап GitHub-входа, жду колбэк…`);
+        else if (/🔑 шлюз принял GitHub-вход/.test(s)) arNote('stage', `${dispName}: шлюз принял вход, суточный чек-ин зачтён`);
+    };
     proc.stdout.on('data', d => {
         const s = String(d);
-        if (wantCheckin) outTail = (outTail + s).slice(-4000);
+        if (wantCheckin) { outTail = (outTail + s).slice(-4000); arStage(s); }
         logLine(`agentrouter session/open [${label}]: ${s.trim()}`);
     });
     proc.stderr.on('data', d => logLine(`agentrouter session/open ERR [${label}]: ${String(d).trim()}`));
@@ -13650,6 +13982,10 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
         // выпустить следующего в ту же стену рейт-лимита ещё до того, как счётчик отказов
         // подрос бы на единицу.
         if (wantCheckin) arBatchNote(label, code);
+        // Снимок очереди на диск: окно закрылось, но отметка в пул ещё не доехала.
+        // Если нас не станет ровно сейчас, восстановление увидит аккаунт готовым и просто
+        // возьмёт его заново - это дешевле, чем потерять всю оставшуюся пачку.
+        arQueueSave();
         // Окно закрылось — можно брать следующего из очереди (с паузой, см. arCheckinWaitMs).
         // Пауза отсчитывается от закрытия и только ВНУТРИ своей полосы; визит 🌐 очередь
         // не задерживает — раньше он молча стоил ей 25 секунд.
@@ -13667,6 +14003,10 @@ function arSpawnSession({ id, label, dispName, mode, wantCheckin, wantAuto }) {
             startedAt: new Date().toISOString(), finishedAt: null,
         });
     }
+    // Снимок очереди: теперь этот прогон числится «в полёте». Без строки рестарт посреди
+    // прогона оставил бы на диске снимок, где задания нет ни в очереди, ни в работе, -
+    // и подъём не вернул бы его в пачку вовсе.
+    arQueueSave();
     return proc;
 }
 
@@ -13723,6 +14063,16 @@ function arBuildBatch(limit) {
         // этот профиль (два Chromium на один профиль пишут в один SQLite).
         if (arQueueSpot(label)) { skipped.push(`${dispName}: уже в очереди`); continue; }
         if (arPidAlive(arLkPids.get(label))) { skipped.push(`${dispName}: браузер уже открыт`); continue; }
+        // Кого уже брали в этом заходе (успешно ИЛИ с отказом) - второй раз не берём.
+        // См. AR_COLLECT_SEEN: pid к этому моменту снят, а отметка в пул ещё не доехала,
+        // поэтому оба прежних признака занятости здесь слепы.
+        if (AR_COLLECT_SEEN.has(label)) { skipped.push(`${dispName}: уже брали в этом заходе`); continue; }
+        // Прогон в полёте или ждёт своей очереди. Ловит и одиночный ⚡, поставленный в
+        // полосу автоподарка руками: PID'а может не быть, запись о прогоне - есть.
+        const runSt = AR_AUTO_CHECKIN.get(label);
+        if (runSt && (runSt.state === 'running' || runSt.state === 'queued')) {
+            skipped.push(`${dispName}: прогон уже идёт`); continue;
+        }
         if (jobs.length >= limit) { skipped.push(`${dispName}: сверх предела пачки (${limit})`); continue; }
         jobs.push({ id: s.id, label, dispName, mode: 'autocheckin', wantCheckin: true, wantAuto: true, batch: true });
     }
@@ -13743,6 +14093,7 @@ function arEnqueueBatch(jobs) {
     AR_CHECKIN_BATCH.startedAt = new Date().toISOString();
     AR_CHECKIN_BATCH.labels = new Set(jobs.map(j => j.label));
     for (const job of jobs) {
+        AR_COLLECT_SEEN.add(job.label);
         AR_CHECKIN_QUEUE.push(job);
         AR_AUTO_CHECKIN.set(job.label, {
             id: job.id, label: job.label, name: job.dispName, state: 'queued',
@@ -13750,6 +14101,7 @@ function arEnqueueBatch(jobs) {
             startedAt: new Date().toISOString(), finishedAt: null,
         });
     }
+    arQueueSave();
 }
 
 async function handleArCheckinAll(req, res) {
@@ -13759,11 +14111,22 @@ async function handleArCheckinAll(req, res) {
         const limit = Math.min(isFinite(ask) && ask > 0 ? Math.floor(ask) : AR_CHECKIN_BATCH_MAX, AR_CHECKIN_BATCH_MAX);
         // Человек нажал «получить все» - значит просит ВСЁ, а не первую шестёрку. Пачка
         // остаётся по 6 (предохранитель от залпа), но насос теперь добёрет остальное сам.
+        // Восстановленная пачка - то же самое: продолжаем её, а не начинаем вторую поверх.
+        if (AR_QUEUE_RESTORED || AR_CHECKIN_QUEUE.length) {
+            const n = AR_CHECKIN_QUEUE.length;
+            AR_COLLECT_ALL = true;
+            AR_QUEUE_RESTORED = null;
+            arNote('batch', `чек-ин: продолжаю пачку - ${n} заданий ждут (кнопка «забрать у всех» на непустой очереди)`);
+            arCheckinPump();
+            return jsonRes(res, 200, { ok: true, queued: n, resumed: true, batch: arBatchSnapshot() });
+        }
         AR_COLLECT_ALL = true;
         AR_COLLECT_BATCHES = 0;              // новый заход - новый счёт пачек
+        AR_COLLECT_SEEN.clear();             // и новый счёт «кого уже брали»
         const { jobs, skipped, ready } = arBuildBatch(limit);
         if (!jobs.length) {
             AR_COLLECT_ALL = false;
+            arQueueSave();
             return jsonRes(res, 200, {
                 // 🪤 `ready` здесь уже ЧИСЛО (столько готовых), а не список: `.length` от него
                 // даёт undefined, и поле молча выпадает из ответа - фронт показал бы «готовых
@@ -13773,7 +14136,7 @@ async function handleArCheckinAll(req, res) {
             });
         }
         arEnqueueBatch(jobs);
-        logLine(`agentrouter чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready} готовых`
+        arNote('batch', `чек-ин: пачка ⚡ на ${jobs.length} аккаунт(ов) из ${ready} готовых`
             + (skipped.length ? `, пропущено ${skipped.length}` : '') + ' — добор до конца включён');
         arCheckinPump();
         jsonRes(res, 200, {
@@ -15188,6 +15551,54 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const FX_SESSIONS_FILE = path.join(__dirname, 'fxqidian-sessions.json');
+const FX_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'fxqidian-active-key.txt');
+const FX_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'fxqidian-active-model.txt');
+const FX_BASE_URL = 'https://fxqidian.de5.net/v1';
+// SSE keepalive proxy для fxqidian (как у tabi :20155): форвардит напрямую в
+// fxqidian.de5.net, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Кромка Cloudflare у панели ЕСТЬ (замер 21.09: `Server: cloudflare`, заголовки `cf-nel`),
+// в отличие от [[Lingshu]], где её нет вовсе. Поэтому «каждый четвёртый пустой 403 от кромки»
+// из эталона здесь не выдумка - но и НЕ наш замер: у kktoken это проверено на 20 запросах,
+// у fxqidian не мерено ни разу. Хедж и ретраи держим, 403 в `shouldRetryStatus` уже включён.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const FX_UPSTREAM = 'https://fxqidian.de5.net';
+const FX_KEEPALIVE_PORT = 20175;
+const FX_KEEPALIVE_URL = `http://localhost:${FX_KEEPALIVE_PORT}`;
+const FX_MODELMAP_FILE = path.join(__dirname, 'fxqidian-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). Владелец 20.09: «тут дают $15 в баланс» -
+// цифра ЕГО, замером пока не подтверждена (аккаунта в пуле нет, вход только через GitHub).
+// Ставим резерв 15, а не 5, как у шлюзов без гранта: занизить значит показать живому
+// аккаунту ноль и отдать его место пустому. Точная цифра придёт из /api/user/self куками.
+const FX_GRANT_STEP = 5;
+const FX_DEFAULT_GRANT = 15;
+const FX_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const LS_SESSIONS_FILE = path.join(__dirname, 'lsapi-sessions.json');
+const LS_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'lsapi-active-key.txt');
+const LS_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'lsapi-active-model.txt');
+const LS_BASE_URL = 'https://lsapi.cloud/v1';
+// SSE keepalive proxy для lsapi (как у tabi :20155): форвардит напрямую в
+// lsapi.cloud, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 UPSTREAM строго БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню
+// (см. keepalive-proxy.js:427). /v1 нужен ТОЛЬКО листингу моделей (LS_BASE_URL).
+// Кромки Cloudflare у панели НЕТ (замер 21.09: `Server: Caddy`), поэтому 403 в ответе —
+// это всегда ответ самой панели (например «额度不足» на пустом балансе), а не сетевая нога.
+const LS_UPSTREAM = 'https://lsapi.cloud';
+const LS_KEEPALIVE_PORT = 20174;
+const LS_KEEPALIVE_URL = `http://localhost:${LS_KEEPALIVE_PORT}`;
+const LS_MODELMAP_FILE = path.join(__dirname, 'lsapi-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У lsapi гранта нет: панель платная, и
+// приглашённому за регистрацию не дают ничего — деньги капают НА ОСНОВНОЙ аккаунт
+// ($2 за каждого приведённого плюс 10% с его пополнений, замер владельца 21.09).
+// Значит у аккаунтов пула баланс нулевой, пока владелец не переведёт туда деньги,
+// и резерв просто округляет расход вверх до $5, честно светясь бейджем `~` — врать
+// про $70, как шлюзы с грантом, нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const LS_GRANT_STEP = 5;
+const LS_DEFAULT_GRANT = 5;
+const LS_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const BD_SESSIONS_FILE = path.join(__dirname, 'budsin-sessions.json');
 const BD_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'budsin-active-key.txt');
 const BD_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'budsin-active-model.txt');
@@ -15321,6 +15732,20 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const FX_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const LS_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const BD_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -15439,6 +15864,58 @@ function kkLoad() {
         return arr;
     } catch { return []; }
 }
+function fxLoad() {
+    try {
+        const raw = fs.readFileSync(FX_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Fxqidian');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'fx_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { fxSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function lsLoad() {
+    try {
+        const raw = fs.readFileSync(LS_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Lingshu');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'ls_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { lsSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
 function bdLoad() {
     try {
         const raw = fs.readFileSync(BD_SESSIONS_FILE, 'utf8');
@@ -15546,6 +16023,12 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function fxSave(arr) {
+    durableWriteJson(FX_SESSIONS_FILE, arr);
+}
+function lsSave(arr) {
+    durableWriteJson(LS_SESSIONS_FILE, arr);
+}
 function bdSave(arr) {
     durableWriteJson(BD_SESSIONS_FILE, arr);
 }
@@ -15560,6 +16043,14 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function fxReadActiveModel() {
+    try { return fs.readFileSync(FX_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function lsReadActiveModel() {
+    try { return fs.readFileSync(LS_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function bdReadActiveModel() {
@@ -15580,6 +16071,14 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function fxReadActiveKey() {
+    try { return fs.readFileSync(FX_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function lsReadActiveKey() {
+    try { return fs.readFileSync(LS_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function bdReadActiveKey() {
@@ -15629,6 +16128,66 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function fxKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(FX_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(FX_KEEPALIVE_PORT),
+                UPSTREAM: FX_UPSTREAM,
+                KEY_FILE: FX_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: FX_SESSIONS_FILE,
+                MODELMAP_FILE: FX_MODELMAP_FILE,
+                ...(process.env.FX_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.FX_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Fxqidian', FX_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`fxqidian keepalive proxy spawn: :${FX_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`fxqidian keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function lsKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(LS_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(LS_KEEPALIVE_PORT),
+                UPSTREAM: LS_UPSTREAM,
+                KEY_FILE: LS_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: LS_SESSIONS_FILE,
+                MODELMAP_FILE: LS_MODELMAP_FILE,
+                ...(process.env.LS_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.LS_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Lingshu', LS_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`lsapi keepalive proxy spawn: :${LS_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`lsapi keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -15808,6 +16367,32 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function fxProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${FX_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...FX_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function lsProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${LS_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...LS_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function bdProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -15874,6 +16459,28 @@ async function kkBalance(target, opts = {}) {
         usageUrl: 'https://kktoken.cc/v1/dashboard/billing/usage',
         subUrl: null,
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function fxBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'fxqidian.de5.net',
+        ccHeaders: FX_CC_HEADERS,
+        usageUrl: 'https://fxqidian.de5.net/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(FX_DEFAULT_GRANT, Math.ceil(spent / FX_GRANT_STEP) * FX_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function lsBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'lsapi.cloud',
+        ccHeaders: LS_CC_HEADERS,
+        usageUrl: 'https://lsapi.cloud/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(LS_DEFAULT_GRANT, Math.ceil(spent / LS_GRANT_STEP) * LS_GRANT_STEP),
         force: !!opts.force,
     });
 }
@@ -15998,6 +16605,8 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function fxApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'fxqidian' }); }
+function lsApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'lsapi' }); }
 function bdApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'budsin' }); }
 function nvApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'nova' }); }
 function odApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'odyssey' }); }
@@ -16313,6 +16922,52 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleFxSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = fxLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await fxProbe(s.api_key); }));
+            }
+            fxSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => fxApplyBalance(s, await fxBalance(s))));
+            }
+            fxSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: fxReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleLsSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = lsLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await lsProbe(s.api_key); }));
+            }
+            lsSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => lsApplyBalance(s, await lsBalance(s))));
+            }
+            lsSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: lsReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 async function handleBdSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
     try {
@@ -16418,6 +17073,30 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await fxProbe(api_key);
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; fxSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await lsProbe(api_key);
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; lsSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -16483,6 +17162,50 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = fxLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await fxBalance(target || { api_key }, { force });
+            if (target) { fxApplyBalance(target, bal); fxSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('fx:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = lsLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await lsBalance(target || { api_key }, { force });
+            if (target) { lsApplyBalance(target, bal); lsSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('ls:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -16581,6 +17304,12 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleFxSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'fxqidian', load: fxLoad, save: fxSave, balanceFn: fxBalance, applyFn: fxApplyBalance });
+}
+function handleLsSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'lsapi', load: lsLoad, save: lsSave, balanceFn: lsBalance, applyFn: lsApplyBalance });
+}
 function handleBdSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'budsin', load: bdLoad, save: bdSave, balanceFn: bdBalance, applyFn: bdApplyBalance });
 }
@@ -16595,11 +17324,21 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const fxLkPids = new Map();
+const lsLkPids = new Map();
 const bdLkPids = new Map();
 const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function fxPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function lsPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -16670,6 +17409,119 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fxLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = fxLkPids.get(label);
+        if (fxPidAlive(prevPid)) {
+            logLine(`fxqidian session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'fxqidian', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('fxqidian.de5.net', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`fxqidian session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`fxqidian session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`fxqidian session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            fxLkPids.delete(label);
+            logLine(`fxqidian session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('fx', id);
+        });
+        proc.unref();
+        fxLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            fxLkPids.delete(label);
+            logLine(`fxqidian session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`fxqidian session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = lsLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = lsLkPids.get(label);
+        if (lsPidAlive(prevPid)) {
+            logLine(`lsapi session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'lsapi', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('lsapi.cloud', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        // Email и пароль уезжают ТОЛЬКО окружением, в argv их нет: скрипт читает
+        // LS_LK_EMAIL/LS_LK_PASS и подставляет их в форму входа — владельцу остаётся
+        // нажать кнопку (логин за него не жмём: панель может спросить код с почты).
+        const proc = spawn(process.execPath, [script, label, mode], {
+            detached: true, stdio: 'pipe', env: {
+                ...process.env, LS_LK_EMAIL: String(target.email || ''), LS_LK_PASS: String(target.password || ''),
+            },
+        });
+        proc.stdout.on('data', d => logLine(`lsapi session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`lsapi session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`lsapi session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            lsLkPids.delete(label);
+            logLine(`lsapi session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('ls', id);
+        });
+        proc.unref();
+        lsLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            lsLkPids.delete(label);
+            logLine(`lsapi session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`lsapi session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -16893,12 +17745,55 @@ async function handleBaiSessionOpen(req, res) {
 // из kktoken/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
 
 const KK_SHARE_SCRIPT = path.join(__dirname, '..', 'kktoken', 'share-session.js');
+const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
+const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const FX_SESSIONS_DIR = path.join(__dirname, '..', 'fxqidian', 'sessions');
+const BD_SHARE_SCRIPT = path.join(__dirname, '..', 'budsin', 'share-session.js');
+const BD_SESSIONS_DIR = path.join(__dirname, '..', 'budsin', 'sessions');
+const NV_SHARE_SCRIPT = path.join(__dirname, '..', 'nova', 'share-session.js');
+const NV_SESSIONS_DIR = path.join(__dirname, '..', 'nova', 'sessions');
+const BAI_SESSIONS_DIR = path.join(__dirname, '..', 'bai', 'sessions');
 
 function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function fxB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fxB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function bdB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function bdB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function nvB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function nvB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function odB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function odB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function baiB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function baiB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -16952,6 +17847,118 @@ async function handleKkShare(req, res) {
         };
         const share = kkB64UrlEncode(JSON.stringify(payload));
         logLine(`kktoken share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = fxLkPids.get(label);
+        if (fxPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(FX_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [FX_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`fxqidian share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'fxqidian',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = fxB64UrlEncode(JSON.stringify(payload));
+        logLine(`fxqidian share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+// Опора share/import вкладки ls.
+//
+// 🪤 Живёт ОТДЕЛЬНО от хендлеров, поэтому клоном хендлера не приезжает. У вкладок budsin,
+// nova и odyssey та же дыра: их `xxB64UrlEncode` / `XX_SESSIONS_DIR` не объявлены нигде, и
+// кнопки передачи аккаунта падают ReferenceError. Точки в спеке есть на хендлер (1.18) и
+// роут (1.9p), а на ОПОРУ — нет, отсюда и дыра. Строка в трекере.
+//
+// Скрипта `share-session.js` здесь нет намеренно: снимок состояния входа кладёт сам
+// авторег (`writeProfileSession` в lsapi/auto-add.js), а вкладка-образец ak обходится
+// ровно этим — читает файл с диска.
+const LS_SESSIONS_DIR = path.join(__dirname, '..', 'lsapi', 'sessions');
+
+function lsB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function lsB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+
+async function handleLsShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = lsLkPids.get(label);
+        if (lsPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `lsapi/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у ls нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(LS_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'lsapi',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = lsB64UrlEncode(JSON.stringify(payload));
+        logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17210,6 +18217,124 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(fxB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'fxqidian' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не fxqidian-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = fxLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'fx_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        fxSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(FX_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(FX_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`fxqidian import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`fxqidian import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(lsB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'lsapi' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не lsapi-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = lsLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ls_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        lsSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(LS_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(LS_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`lsapi import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`lsapi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -17487,6 +18612,70 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = fxLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'fx_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        fxSave(sessions);
+        logLine(`fxqidian add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name, password } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = lsLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ls_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        // 🪤 ghLinkForNew здесь НЕ зовём: GitHub-входа у панели нет вовсе
+        // (`github_oauth=false`), тега `ls` нет в GH_POOL_*, и проставленный ghId никто бы
+        // не прочитал — только сбивал бы с толку (тот же довод, что у hcnsec).
+        // Пароль храним рядом с email: единственный вход в ЛК - почта с паролем, а ЛК нужен
+        // и для ТОЧНОГО баланса, и для кнопки 🌐, которая подставляет его в форму.
+        // Пул закрыт .gitignore, наружу уходит только факт наличия.
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            ...(String(password || '') ? { password: String(password) } : {}),
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+        });
+        lsSave(sessions);
+        logLine(`lsapi add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17655,6 +18844,54 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(FX_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        fxSave(sessions);
+        logLine(`fxqidian set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(LS_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        lsSave(sessions);
+        logLine(`lsapi set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17777,6 +19014,52 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        fxSave(sessions);
+        logLine(`fxqidian rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        lsSave(sessions);
+        logLine(`lsapi rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -17883,6 +19166,38 @@ async function handleKkDelete(req, res) {
             try { fs.rmSync(KK_ACTIVE_MODEL_FILE, { force: true }); } catch {}
         }
         logLine(`kktoken delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.id === idKey);
+        fxSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === fxReadActiveKey()) {
+            try { fs.rmSync(FX_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(FX_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`fxqidian delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.id === idKey);
+        lsSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === lsReadActiveKey()) {
+            try { fs.rmSync(LS_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(LS_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`lsapi delete: ${target ? target.email : '?'}`);
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -18004,6 +19319,112 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFxActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в fxqidian-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = fxLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(FX_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        fxSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-fx');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = FX_KEEPALIVE_URL;   // keepalive :20175 → fxqidian.de5.net напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — fxqidian-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const fxCurModel = fxReadActiveModel() || '';
+            if (fxCurModel) settings.model = fxCurModel;
+            else { delete settings.model; logLine('fxqidian activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из fxqidian-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`fxqidian activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20175, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const fxKa = await keepaliveBring(FX_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!fxKa.ok) logLine(`fxqidian activate: keepalive :${FX_KEEPALIVE_PORT} НЕ поднялся — ${fxKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`fxqidian activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${FX_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: fxKa.ok, port: FX_KEEPALIVE_PORT, error: fxKa.ok ? null : (fxKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в lsapi-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = lsLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(LS_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        lsSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ls');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = LS_KEEPALIVE_URL;   // keepalive :20174 → lsapi.cloud напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — lsapi-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const lsCurModel = lsReadActiveModel() || '';
+            if (lsCurModel) settings.model = lsCurModel;
+            else { delete settings.model; logLine('lsapi activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из lsapi-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`lsapi activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20174, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const lsKa = await keepaliveBring(LS_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!lsKa.ok) logLine(`lsapi activate: keepalive :${LS_KEEPALIVE_PORT} НЕ поднялся — ${lsKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`lsapi activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${LS_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: lsKa.ok, port: LS_KEEPALIVE_PORT, error: lsKa.ok ? null : (lsKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -18255,6 +19676,74 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleFxModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (FX_MODELS_CACHE.data && Date.now() - FX_MODELS_CACHE.ts < FX_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: FX_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${FX_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...FX_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        FX_MODELS_CACHE.data = models;
+        FX_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (FX_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: FX_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleLsModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (LS_MODELS_CACHE.data && Date.now() - LS_MODELS_CACHE.ts < LS_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: LS_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${LS_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...LS_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        LS_MODELS_CACHE.data = models;
+        LS_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (LS_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: LS_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleBdModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -18425,6 +19914,70 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(FX_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-fx-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = FX_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`fxqidian set-model: settings.json FAILED: ${e.message}`);
+        }
+        const fxKaM = await keepaliveBring(FX_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!fxKaM.ok) logLine(`fxqidian set-model: keepalive :${FX_KEEPALIVE_PORT} НЕ поднялся — ${fxKaM.error || '?'}`);
+        logLine(`fxqidian set-model: ${m} (base ${FX_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: FX_ACTIVE_MODEL_FILE, base: FX_KEEPALIVE_URL, needRestart: true, keepalive: { up: fxKaM.ok, port: FX_KEEPALIVE_PORT, error: fxKaM.ok ? null : (fxKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(LS_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ls-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = LS_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`lsapi set-model: settings.json FAILED: ${e.message}`);
+        }
+        const lsKaM = await keepaliveBring(LS_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!lsKaM.ok) logLine(`lsapi set-model: keepalive :${LS_KEEPALIVE_PORT} НЕ поднялся — ${lsKaM.error || '?'}`);
+        logLine(`lsapi set-model: ${m} (base ${LS_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: LS_ACTIVE_MODEL_FILE, base: LS_KEEPALIVE_URL, needRestart: true, keepalive: { up: lsKaM.ok, port: LS_KEEPALIVE_PORT, error: lsKaM.ok ? null : (lsKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -18568,6 +20121,30 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFxModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(FX_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`fxqidian modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleLsModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(LS_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`lsapi modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleBdModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -18620,6 +20197,18 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function fxReadModelMap() {
+    try {
+        const raw = fs.readFileSync(FX_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function lsReadModelMap() {
+    try {
+        const raw = fs.readFileSync(LS_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -21179,6 +22768,526 @@ function akFindProxySwitchPool(host) {
     fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
     return true;
 }
+
+// ─────────────────── Lingshu: авторега и пул прокси под неё ───────────────────
+//
+// Клон машинерии вкладки `ak` (ZhiFlow) под lsapi.cloud. Скопировано ОДНИМ куском из
+// живого кода ak и переименовано: akAutoreg->lsAutoreg, akFindProxy->lsFindProxy,
+// akRefill->lsRefill, AK_->LS_, /__switch/api/ak/->/__switch/api/ls/.
+//
+// 🪤 Общая вкладка «Свои прокси» (proxy-admin) в копию НЕ вошла намеренно: она
+// обслуживает все шлюзы сразу и живёт отдельно, у неё путь без префикса панели.
+//
+// 🔴 Отличие от ak по существу ровно одно, и оно в auto-add.js: за регистрацию
+// приглашённому не дают ничего (`quota = 0`), деньги капают на ОСНОВНОЙ аккаунт
+// владельца. Механика прогона, прокси и индикатора от этого не меняется.
+const lsAutoreg = {
+    proc: null,
+    pid: null,
+    running: false,
+    startedAt: null,
+    count: 0,
+    stdout: [],
+    stderr: [],
+    stage: null,
+    result: null,
+    exitCode: null,
+    signal: null,
+    useProxy: true,
+};
+
+function lsAutoregPublic() {
+    return {
+        running: lsAutoreg.running,
+        pid: lsAutoreg.pid,
+        startedAt: lsAutoreg.startedAt,
+        count: lsAutoreg.count,
+        useProxy: lsAutoreg.useProxy,
+        stdout: lsAutoreg.stdout.slice(-40),
+        stderr: lsAutoreg.stderr.slice(-20),
+        stage: lsAutoreg.stage,
+        result: lsAutoreg.result,
+        exitCode: lsAutoreg.exitCode,
+        signal: lsAutoreg.signal,
+    };
+}
+
+async function handleLsAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        if (lsAutoreg.running && lsAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторег Lingshu уже идёт', ...lsAutoregPublic() });
+        }
+        const script = path.join(__dirname, '..', 'lsapi', 'auto-add.js');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'lsapi/auto-add.js не найден' });
+
+        // Пул прокси — переключатель, а не приговор. Когда в пуле пусто или все адреса
+        // мертвы, авторег обязан уметь пройти с домашнего IP по явному выбору владельца;
+        // раньше это было только флагом CLI, и вкладка такой возможности не давала.
+        const useProxy = body.useProxy !== false;
+        const args = [script, String(count)];
+        if (!useProxy) args.push('--no-proxy');
+
+        const proc = spawn(process.execPath, args, {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: process.env,
+        });
+        Object.assign(lsAutoreg, {
+            proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(), count,
+            useProxy, stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
+        });
+        const pushLines = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                // 🪤 Этап берём ТОЛЬКО из машиночитаемого маркера. Человекочитаемые строки
+                // («✓ код …», «✓ зарегистрирован») меняются при любой правке формулировки,
+                // и регулярка по ним однажды молча покажет не тот шаг — индикатор,
+                // который врёт, хуже отсутствующего.
+                //
+                // В буфер лога маркер НЕ кладём: он служебный, и в панели владельца от него
+                // только шум — там человек читает обычные строки прогона.
+                if (line.startsWith('LS_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('LS_STAGE '.length));
+                        if (s && typeof s.stage === 'string') {
+                            lsAutoreg.stage = { ...s, at: new Date().toISOString() };
+                        }
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                // 🪤 `LS_AUTOADD_RESULT` — тоже протокол, а не строка для чтения: итог
+                // уезжает отдельным полем и рисуется как «готово 1, в пул 1, ошибок 0».
+                // В панели он выглядел сырым JSON-ом на весь экран — владелец показал его
+                // как «вот ещё такая тема». Разбираем и НЕ показываем.
+                if (line.startsWith('LS_AUTOADD_RESULT ')) {
+                    try { lsAutoreg.result = JSON.parse(line.slice('LS_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
+                }
+                lsAutoreg[which].push(line);
+                if (lsAutoreg[which].length > 100) lsAutoreg[which].shift();
+            }
+        };
+        proc.stdout.on('data', d => pushLines('stdout', d));
+        proc.stderr.on('data', d => pushLines('stderr', d));
+        proc.on('error', e => { lsAutoreg.stderr.push(e.message); });
+        proc.on('exit', (code, signal) => {
+            lsAutoreg.running = false;
+            lsAutoreg.pid = null;
+            lsAutoreg.exitCode = code;
+            lsAutoreg.signal = signal || null;
+            lsAutoreg.proc = null;
+            lsRefillStop('прогон завершён');   // фон живёт ровно столько, сколько прогон
+            logLine(`lsapi autoreg exited: count=${count} code=${code} signal=${signal || '-'}`);
+        });
+        logLine(`lsapi autoreg launched: count=${count} pid=${proc.pid}`);
+        // Докорм только когда прокси реально используются: с --no-proxy прокси не нужны.
+        if (useProxy) lsRefillStart();
+        jsonRes(res, 200, { ok: true, ...lsAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleLsAutoregStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...lsAutoregPublic() });
+}
+
+async function handleLsAutoregStop(_req, res) {
+    const proc = lsAutoreg.proc;
+    if (!lsAutoreg.running || !proc) return jsonRes(res, 200, { ok: true, stopped: false, ...lsAutoregPublic() });
+    try {
+        // Windows: kill the whole Node process tree. Without /T, a future child helper
+        // (browser/mail bridge) could survive while the UI claimed that autoreg stopped.
+        if (process.platform === 'win32') {
+            await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }).catch(() => {});
+        } else {
+            try { proc.kill('SIGTERM'); } catch {}
+        }
+        lsAutoreg.signal = 'STOP';
+        logLine(`lsapi autoreg stop requested: pid=${proc.pid}`);
+        return jsonRes(res, 200, { ok: true, stopped: true, ...lsAutoregPublic() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// Публичные прокси из открытых списков живут минуты, поэтому список для авторега
+// пересобирается ПЕРЕД прогоном. Ходим в CLI валидатора (`find_for_host`) — он умеет
+// скрап источников, отсев нетуннелирующих и проверку реального HTTPS до панели,
+// и останавливается, как только набрано нужное число.
+//
+// 🪤 Результат кладём в ОТДЕЛЬНЫЙ файл (`live-for-host.txt`) и переключаем на него
+// `proxy-pool.json`. Писать в `stable.txt` нельзя: это вывод трёхпроходной проверки,
+// и затирать его коротким списком значит терять результат долгого прогона.
+const LS_LIVE_PROXY_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.txt');
+// Валидатор пишет сюда, а не в рабочий файл: список пула ДОЛИВАЕТСЯ, а не заменяется.
+const LS_PROXY_TMP_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.new.txt');
+const LS_PROXY_CAP = 60;          // предел файла пула: свежие впереди, хвост отрезается
+const LS_VALIDATOR_DIR = path.join(__dirname, '..', 'tools', 'proxy-validator');
+
+// ─────────────────── долив списка прокси вместо замены ───────────────────
+//
+// 🔴 Заменять файл нельзя. Привязка прокси к аккаунту липкая, и `forAccount()` на
+// исчезнувший из пула адрес отвечает `needsReassign` — «другой подставлять не буду».
+// Перезапись списка осиротила бы привязки ВСЕХ уже начатых аккаунтов разом.
+//
+// 🪤 Но и просто склеивать нельзя. Публичные прокси мрут минутами; за прогон в 25 минут
+// файл распух бы до сотен заведомо мёртвых строк, `leastLoaded` выбирал бы из них, и новые
+// аккаунты садились бы на трупы. Поэтому свежие идут ПЕРВЫМИ, а список обрезается: хвост —
+// это то, что проверено давно, и оно уходит первым.
+function lsReadProxyLines(file) {
+    try {
+        return fs.readFileSync(file, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    } catch { return []; }
+}
+
+function lsMergeProxyLines(fresh, old, cap = LS_PROXY_CAP) {
+    const seen = new Set();
+    const out = [];
+    for (const line of [...fresh, ...old]) {
+        if (seen.has(line)) continue;
+        seen.add(line);
+        out.push(line);
+        if (out.length >= cap) break;
+    }
+    return out;
+}
+
+// Stop не должен выбрасывать уже проверенные адреса. Валидатор пишет итоговый файл
+// только при нормальном завершении, поэтому при ручном Stop сохраняем найденный префикс
+// отдельной атомарной записью и доливаем его в живой пул.
+function lsCommitPartialProxyLines(lines, liveFile) {
+    const fresh = (lines || []).map(String).map(s => s.trim()).filter(Boolean);
+    if (!fresh.length) return 0;
+    const merged = lsMergeProxyLines(fresh, lsReadProxyLines(liveFile));
+    const tmp = `${liveFile}.partial-${process.pid}.tmp`;
+    fs.writeFileSync(tmp, merged.join('\n') + '\n', 'utf8');
+    fs.renameSync(tmp, liveFile);
+    return fresh.length;
+}
+
+function handleLsProxyPoolLines(req, res) {
+    try {
+        const lines = lsReadProxyLines(LS_LIVE_PROXY_FILE);
+        jsonRes(res, 200, { ok: true, count: lines.length, lines });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ls/proxy-pool — сколько адресов пул реально отдаст автореге.
+//
+// 🪤 Считаем `count` из `describe()`, а НЕ строки файла: пул отбрасывает неразбираемые
+// строки в `bad`, и «в файле 41» при девяти рабочих — это цифра, которая обманывает
+// ровно в тот момент, когда на неё смотрят перед прогоном.
+//
+// 🪤 Число живёт минуты. Публичные прокси мрут на ходу (замер 12.09: из трёх найденных
+// в 10:29 один мёртв к 10:45), поэтому ответ несёт `readAt` и честно означает «столько
+// было при последнем чтении файла», а не «столько есть сейчас».
+function handleLsProxyPool(_req, res) {
+    const lib = proxyPoolLib();
+    if (!lib) return jsonRes(res, 503, { error: 'proxy-pool недоступен' });
+    try {
+        const d = lib.describe();
+        // Список адресов — чтобы «сколько» можно было проверить глазами, а не верить
+        // цифре. `describe()` их не отдаёт (там только count и конфиг), поэтому берём
+        // у самого пула. Секретов тут нет: это публичные прокси из открытого файла.
+        const list = lib.pool().proxies.map(p => p.id);
+        jsonRes(res, 200, {
+            ok: true,
+            enabled: !!d.enabled,
+            enabledForHost: lib.enabledForHost('lsapi.cloud'),
+            count: d.count,
+            bad: d.bad,
+            proxies: list,
+            source: d.source,
+            scheme: d.scheme,
+            hosts: d.hosts,
+            assigned: d.assigned,
+            orphans: d.orphans,
+            fileError: d.fileError || null,
+            readAt: new Date().toISOString(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+const lsFindProxy = {
+    proc: null, running: false, want: 0,
+    found: [], phase: '', checked: 0, total: 0,
+    startedAt: null, stopRequested: false,
+    result: null, error: null, exitCode: null,
+    mode: null,        // 'manual' (кнопка) | 'refill' (фон под прогоном)
+    log: [],           // строки валидатора как есть — владелец просил видеть лог поиска
+};
+
+function lsFindProxyPublic() {
+    return {
+        running: lsFindProxy.running,
+        want: lsFindProxy.want,
+        found: lsFindProxy.found.slice(-60),
+        foundCount: lsFindProxy.found.length,
+        phase: lsFindProxy.phase,
+        checked: lsFindProxy.checked,
+        total: lsFindProxy.total,
+        startedAt: lsFindProxy.startedAt,
+        stopRequested: lsFindProxy.stopRequested,
+        result: lsFindProxy.result,
+        error: lsFindProxy.error,
+        exitCode: lsFindProxy.exitCode,
+        mode: lsFindProxy.mode,
+        log: lsFindProxy.log.slice(-80),
+    };
+}
+
+// Разбор строк валидатора. Формат задан в `find_for_host.py`:
+//   ✓ socks5://host:port  312 мс  (3/20)      — найден живой
+//   … проверено 120/45000, живых 3            — прогресс
+//   собрано кандидатов: N · похожи на прокси (порт): M
+// Фазы человекочитаемые, но их немного и они стабильны; цифры берём ТОЛЬКО из скобок и
+// после «проверено», чтобы не подставлять в счётчик что попало.
+function lsFindProxyLine(line) {
+    const s = String(line || '').trim();
+    if (!s) return;
+    // Сырую строку кладём в лог ДО разбора: владелец просил видеть, что делает поиск,
+    // а не только итоговые цифры. Разбор ниже только уточняет состояние.
+    lsFindProxy.log.push(s);
+    if (lsFindProxy.log.length > 400) lsFindProxy.log.shift();
+    let m = s.match(/^✓\s+(\S+)\s+\d+\s*мс\s+\((\d+)\/(\d+)\)/);
+    if (m) {
+        lsFindProxy.found.push(m[1]);
+        lsFindProxy.checked = Number(m[2]);
+        lsFindProxy.total = Number(m[3]);
+        lsFindProxy.phase = `найдено ${m[2]} из ${m[3]}`;
+        return;
+    }
+    m = s.match(/^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/);
+    if (m) {
+        lsFindProxy.checked = Number(m[1]);
+        lsFindProxy.total = Number(m[2]);
+        lsFindProxy.phase = `проверено ${m[1]} из ${m[2]}`;
+        return;
+    }
+    if (/^скраплю источники/.test(s)) { lsFindProxy.phase = 'скраплю источники'; return; }
+    if (/^собрано кандидатов:/.test(s)) { lsFindProxy.phase = s; return; }
+    if (/^похожи на прокси/.test(s)) { lsFindProxy.phase = s; return; }
+    if (/^набрал /.test(s)) { lsFindProxy.phase = s; return; }
+}
+
+// POST /__switch/api/ls/autoreg/find-proxy — запустить поиск. Отвечает сразу.
+// Запуск поиска. Вынесен из HTTP-обработчика, потому что его зовут ДВОЕ: кнопка на вкладке
+// ('manual') и фоновый докорм под прогоном ('refill').
+function lsFindProxyLaunch({ want, mode = 'manual', host = 'lsapi.cloud' }) {
+    if (lsFindProxy.running) return { ok: false, error: 'поиск прокси уже идёт' };
+    const w = Math.max(1, Math.min(30, parseInt(want, 10) || 3));
+    const py = process.env.PYTHON || 'python';
+
+    const proc = spawn(py, [
+        '-u',   // без буферизации: иначе строки прогресса доедут одним куском в конце
+        '-m', 'proxy_scraper.find_for_host',
+        '--host', host, '--want', String(w), '--json',
+        '--out', LS_PROXY_TMP_FILE,
+    ], {
+        cwd: LS_VALIDATOR_DIR, windowsHide: true,
+        // Консоль Windows по умолчанию cp1252: русская строка в логе валидатора
+        // роняла прогон UnicodeEncodeError ещё до первой проверки.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    Object.assign(lsFindProxy, {
+        proc, running: true, want: w, found: [], phase: 'запуск',
+        checked: 0, total: 0, startedAt: new Date().toISOString(),
+        stopRequested: false, result: null, error: null, exitCode: null,
+        mode, log: [],
+    });
+
+    const t0 = Date.now();
+    let tail = '';
+    let jsonLine = null;      // итог валидатора: последняя строка, начинающаяся с `{`
+    const feed = (chunk) => {
+        const text = tail + String(chunk);
+        const lines = text.split(/\r?\n/);
+        tail = lines.pop();              // последняя может быть неполной
+        for (const l of lines) {
+            const s = l.trim();
+            if (s.startsWith('{')) { jsonLine = s; continue; }
+            lsFindProxyLine(l);
+        }
+    };
+    proc.stdout.on('data', feed);
+    proc.stderr.on('data', feed);
+
+    proc.on('error', e => { lsFindProxy.error = e.message; });
+    proc.on('exit', (code) => {
+        lsFindProxy.running = false;
+        lsFindProxy.proc = null;
+        lsFindProxy.exitCode = code;
+        if (lsFindProxy.stopRequested) {
+            // Обрыв: файл пула валидатор пишет в самом конце, поэтому текущий пул и
+            // конфиг остаются нетронутыми. Ничего не переключаем и не разбираем.
+            lsFindProxy.phase = `остановлено вручную (найдено ${lsFindProxy.found.length})`;
+            try {
+                const committed = lsCommitPartialProxyLines(lsFindProxy.found, LS_LIVE_PROXY_FILE);
+                lsFindProxy.log.push(`частичный долив после Stop: ${committed} найдено, пул сохранён`);
+                logLine(`lsapi find-proxy: после Stop сохранено ${committed} найденных прокси`);
+            } catch (e) { logLine(`lsapi find-proxy: частичный долив не удался — ${e.message}`); }
+            logLine(`lsapi find-proxy: остановлен вручную, найдено ${lsFindProxy.found.length}`);
+            return;
+        }
+        let parsed = null;
+        try { parsed = jsonLine ? JSON.parse(jsonLine) : null; } catch { /* не наш JSON */ }
+        if (parsed && parsed.ok) {
+            // Долив: свежие впереди, старые следом, хвост обрезан. Замена здесь
+            // сломала бы привязки уже начатых аккаунтов (см. lsMergeProxyLines).
+            let merged = null;
+            try {
+                const fresh = lsReadProxyLines(LS_PROXY_TMP_FILE);
+                const old = lsReadProxyLines(LS_LIVE_PROXY_FILE);
+                merged = lsMergeProxyLines(fresh, old);
+                fs.writeFileSync(LS_LIVE_PROXY_FILE, merged.join('\n') + '\n', 'utf8');
+                lsFindProxy.log.push(`долив: свежих ${fresh.length}, в файле стало ${merged.length}`);
+            } catch (e) {
+                lsFindProxy.error = `список найден, но в пул не записан: ${e.message}`;
+                logLine(`lsapi find-proxy: ${lsFindProxy.error}`);
+            }
+            let switched = false;
+            try { switched = lsFindProxySwitchPool(host); }
+            catch (e) { logLine(`lsapi find-proxy: конфиг пула не переключён — ${e.message}`); }
+            lsFindProxy.result = {
+                host, want: w, mode, found: parsed.proxies || [], foundCount: parsed.found || 0,
+                out: parsed.out, switched, ms: Date.now() - t0,
+                poolSize: merged ? merged.length : null,
+            };
+            lsFindProxy.phase = `готово: ${parsed.found || 0} живых`;
+            logLine(`lsapi find-proxy[${mode}]: найдено ${parsed.found}/${w} за ${Math.round((Date.now() - t0) / 1000)}с, в пуле ${merged ? merged.length : '—'}, конфиг ${switched ? 'переключён' : 'не тронут'}`);
+        } else {
+            lsFindProxy.error = parsed ? (parsed.error || 'поиск не удался') : 'валидатор не отдал результат';
+            lsFindProxy.phase = 'ошибка';
+            logLine(`lsapi find-proxy: ${lsFindProxy.error}`);
+        }
+    });
+
+    logLine(`lsapi find-proxy[${mode}]: запущен поиск ${w} живых прокси (pid ${proc.pid})`);
+    return { ok: true, pid: proc.pid };
+}
+
+async function handleLsFindProxyStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const r = lsFindProxyLaunch({
+            want: body.want,
+            mode: body.refill ? 'refill' : 'manual',
+        });
+        if (!r.ok) return jsonRes(res, 409, { error: r.error, ...lsFindProxyPublic() });
+        jsonRes(res, 200, { ok: true, started: true, ...lsFindProxyPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/ls/autoreg/find-proxy — прогресс поиска (фронт опрашивает).
+function handleLsFindProxyStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...lsFindProxyPublic() });
+}
+
+// POST /__switch/api/ls/autoreg/find-proxy/stop — прервать поиск.
+//
+// 🪤 Файл пула пишет САМ валидатор в самом конце, поэтому обрыв не портит текущий пул:
+// старый `live-for-host.txt` и конфиг остаются как были. Конфиг переключается только по
+// успешному JSON-итогу — см. handleLsFindProxyResult.
+function handleLsFindProxyStop(_req, res) {
+    const p = lsFindProxy.proc;
+    if (!lsFindProxy.running || !p) return jsonRes(res, 200, { ok: true, stopped: false, ...lsFindProxyPublic() });
+    lsFindProxy.stopRequested = true;
+    try {
+        if (process.platform === 'win32') {
+            // Только execFileAsync: сырой execFile в модуле не объявлен, и его ReferenceError
+            // молча съедался этим catch — ручка докладывала stopped: true, не убив процесс.
+            // Без await: ответ не ждёт taskkill, уход процесса ловит proc.on('exit').
+            execFileAsync('taskkill.exe', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true })
+                .catch((e) => logLine(`lsapi find-proxy: taskkill не убил pid ${p.pid}: ${e.message}`));
+        } else {
+            p.kill('SIGTERM');
+        }
+    } catch (e) { logLine(`lsapi find-proxy: остановка не удалась (pid ${p.pid}): ${e.message}`); }
+    logLine(`lsapi find-proxy: запрошена остановка (pid ${p.pid})`);
+    jsonRes(res, 200, { ok: true, stopped: true, ...lsFindProxyPublic() });
+}
+
+// ─────────────────── фоновый докорм пула под длинный прогон ───────────────────
+//
+// Прогон 50 аккаунтов — это ~25 минут (один аккаунт ≈ 30 с), а публичные прокси живут
+// минуты. Пул, набранный один раз ПЕРЕД прогоном, к середине пустеет, и дальше аккаунты
+// падают с «живых прокси в пуле не осталось». Фон доливает список на ходу.
+//
+// 🎯 Запас 10 — решение владельца 12.09: держим впереди очереди десять живых, чтобы прогон
+// не вставал на каждой второй регистрации. По его же решению авторега при пустом пуле
+// ЖДЁТ прокси, а не пропускает аккаунт (см. acquireProxyFor в auto-add.js).
+//
+// 🪤 Пул перечитывает файл по штампу mtime, поэтому свежие адреса видны сразу и рестарт для
+// докорма не нужен — в этом вся суть.
+const LS_REFILL_RESERVE = 10;
+const LS_REFILL_TICK_MS = 45_000;
+
+const lsRefill = { timer: null, reason: null, runs: 0, live: null };
+
+function lsRefillStop(why) {
+    if (lsRefill.timer) clearInterval(lsRefill.timer);
+    lsRefill.timer = null;
+    if (why) { lsRefill.reason = why; logLine(`lsapi refill: остановлен (${why})`); }
+}
+
+function lsRefillTick() {
+    if (!lsAutoreg.running) { lsRefillStop('прогон завершён'); return; }
+    if (lsFindProxy.running) { lsRefill.reason = 'поиск уже идёт'; return; }
+    const lib = proxyPoolLib();
+    let live = 0;
+    try { live = lib ? lib.describe().count : 0; } catch { live = 0; }
+    lsRefill.live = live;
+
+    // Сколько аккаунтов ещё пойдёт: текущий (i, счёт с единицы) и все после него.
+    const total = Number(lsAutoreg.count || 0);
+    const done = Number((lsAutoreg.stage && lsAutoreg.stage.i) || 0);
+    const remaining = Math.max(1, total - Math.max(0, done - 1));
+    const need = remaining + LS_REFILL_RESERVE;
+
+    if (live >= need) { lsRefill.reason = `запас есть: живых ${live}, нужно ${need}`; return; }
+
+    const want = Math.max(3, Math.min(30, need - live));
+    lsRefill.runs++;
+    lsRefill.reason = `доливаю ${want}: живых ${live}, нужно ${need}`;
+    logLine(`lsapi refill: ${lsRefill.reason}`);
+    const r = lsFindProxyLaunch({ want, mode: 'refill' });
+    if (!r.ok) lsRefill.reason = `запуск не удался: ${r.error}`;
+}
+
+function lsRefillStart() {
+    if (lsRefill.timer) return;
+    lsRefill.runs = 0;
+    logLine(`lsapi refill: включён (запас ${LS_REFILL_RESERVE})`);
+    lsRefillTick();
+    lsRefill.timer = setInterval(lsRefillTick, LS_REFILL_TICK_MS);
+}
+
+function lsRefillPublic() {
+    return {
+        active: !!lsRefill.timer,
+        reserve: LS_REFILL_RESERVE,
+        reason: lsRefill.reason,
+        runs: lsRefill.runs,
+        live: lsRefill.live,
+    };
+}
+
+// GET /__switch/api/ls/refill — состояние фонового докорма (для UI).
+function handleLsRefillState(_req, res) {
+    jsonRes(res, 200, { ok: true, ...lsRefillPublic() });
+}
+
+// Пул должен читать именно свежий файл. Правку конфига делаем только если пул уже включён
+// на этом хосте: иначе мы бы включили проксирование молча.
+function lsFindProxySwitchPool(host) {
+    const cfgFile = path.join(__dirname, 'proxy-pool.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    if (!(cfg.enabled && Array.isArray(cfg.hosts) && cfg.hosts.includes(host))) return false;
+    cfg.file = LS_LIVE_PROXY_FILE;
+    cfg.scheme = null;   // схема уже в каждой строке
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    return true;
+}
+
 
 async function handleAkPing(req, res) {
     try {
@@ -25328,6 +27437,8 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [FX_KEEPALIVE_PORT]: { name: 'Fxqidian', spawn: fxKeepaliveSpawn },
+        [LS_KEEPALIVE_PORT]: { name: 'Lingshu', spawn: lsKeepaliveSpawn },
         [BD_KEEPALIVE_PORT]: { name: 'BudsAI', spawn: bdKeepaliveSpawn },
         [NV_KEEPALIVE_PORT]: { name: 'Nova', spawn: nvKeepaliveSpawn },
         [OD_KEEPALIVE_PORT]: { name: 'Odyssey', spawn: odKeepaliveSpawn },
@@ -26741,6 +28852,8 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    fx: { tag: 'fxqidian',     label: 'Fxqidian',     host: 'fxqidian.de5.net',     keyFile: FX_ACTIVE_KEY_FILE, load: fxLoad, save: fxSave, balanceFn: fxBalance, applyFn: fxApplyBalance },
+    ls: { tag: 'lsapi',     label: 'Lingshu',     host: 'lsapi.cloud',     keyFile: LS_ACTIVE_KEY_FILE, load: lsLoad, save: lsSave, balanceFn: lsBalance, applyFn: lsApplyBalance },
     bd: { tag: 'budsin',     label: 'BudsAI',     host: 'apichat.budsin.dev',     keyFile: BD_ACTIVE_KEY_FILE, load: bdLoad, save: bdSave, balanceFn: bdBalance, applyFn: bdApplyBalance },
     nv: { tag: 'nova',     label: 'Nova',     host: 'nova.vcrauo.com',     keyFile: NV_ACTIVE_KEY_FILE, load: nvLoad, save: nvSave, balanceFn: nvBalance, applyFn: nvApplyBalance },
     // 🪤 `noProbe` у Odyssey - не оптимизация, а условие работоспособности ротации. Баланс
@@ -27619,6 +29732,26 @@ const server = http.createServer((req, res) => {
         return jsonRes(res, 200, { lines: pick.slice(-Math.max(1, limit)), tags, src });
     }
 
+    // GET /__switch/api/ar/checkin-events?since=N → журнал сбора для вкладки AgentRouter.
+    //
+    // Отдельная ручка, а не /api/logs: общее кольцо (2000 строк) затапливает keepalive -
+    // он логирует каждый пинг, и прогон чек-ина в нём не отыскать. Здесь только события
+    // сбора, с НОМЕРОМ: фронт просит «дай всё после N» и не перерисовывает увиденное.
+    // `restored` едет вместе с ними - по нему карточка рисует плашку «пачка прервана
+    // перезапуском» сразу, не дожидаясь первого опроса статуса.
+    if (req.method === 'GET' && req.url.startsWith('/__switch/api/ar/checkin-events')) {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const ask = parseInt(q.get('since') || '0', 10);
+        const since = isFinite(ask) && ask > 0 ? ask : 0;
+        return jsonRes(res, 200, {
+            seq: arEventSeq,
+            events: AR_EVENTS.filter(e => e.seq > since),
+            restored: AR_QUEUE_RESTORED,
+            batch: arBatchSnapshot(),
+            limit: parseInt(q.get('limit') || '200', 10),
+        });
+    }
+
     // Прогоны автоподарка/чек-ина: каждый пишет свой файл в logs/ (см. RUN_LOG в
     // agentrouter/open-session.js). Отдельная труба нужна именно потому, что общее кольцо
     // затапливает keepalive: файл переживает и это, и рестарт `:8200`.
@@ -28379,6 +30512,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/set-github') return handleFxSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-github') return handleBdSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-github') return handleNvSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ap/set-github') return handleApSetGithub(req, res);
@@ -28438,6 +30572,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/fx/keepalive/state')  return keepaliveFx.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/keepalive/state')  return keepaliveLs.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/keepalive/state')  return keepaliveBd.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/keepalive/state')  return keepaliveNv.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/od/keepalive/state')  return keepaliveOd.state(req, res);
@@ -28445,6 +30581,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/keepalive/config') return keepaliveFx.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/keepalive/config') return keepaliveLs.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/keepalive/config') return keepaliveBd.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/keepalive/config') return keepaliveNv.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/keepalive/config') return keepaliveOd.config(req, res);
@@ -28470,6 +30608,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/keepalive/latency')) return keepaliveFx.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/keepalive/latency')) return keepaliveLs.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/keepalive/latency')) return keepaliveBd.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/keepalive/latency')) return keepaliveNv.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/keepalive/latency')) return keepaliveOd.latency(req, res);
@@ -28521,48 +30661,64 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/sessions')) return handleFxSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/sessions')) return handleLsSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/sessions')) return handleBdSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/sessions')) return handleNvSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/sessions')) return handleOdSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/ping'))     return handleFxPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/ping'))     return handleLsPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/ping'))     return handleBdPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/ping'))     return handleNvPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/ping'))     return handleOdPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/balance'))  return handleFxBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/balance'))  return handleLsBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/balance'))  return handleBdBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/balance'))  return handleNvBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/balance'))  return handleOdBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/models'))   return handleFxModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/models'))   return handleLsModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/models'))   return handleBdModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/nv/models'))   return handleNvModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/od/models'))   return handleOdModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/fx/active-model') return jsonRes(res, 200, { model: fxReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/active-model') return jsonRes(res, 200, { model: lsReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/active-model') return jsonRes(res, 200, { model: bdReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/active-model') return jsonRes(res, 200, { model: nvReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/od/active-model') return jsonRes(res, 200, { model: odReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/fx/modelmap') return jsonRes(res, 200, { ok: true, modelMap: fxReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/modelmap') return jsonRes(res, 200, { ok: true, modelMap: lsReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/modelmap') return jsonRes(res, 200, { ok: true, modelMap: bdReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/nv/modelmap') return jsonRes(res, 200, { ok: true, modelMap: nvReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/od/modelmap') return jsonRes(res, 200, { ok: true, modelMap: odReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/add')       return handleFxAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/add')       return handleLsAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/add')       return handleBdAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/add')       return handleNvAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/add')       return handleOdAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/key')       return handleFxSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/key')       return handleLsSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/key')       return handleBdSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/key')       return handleNvSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/key')       return handleOdSetKey(req, res);
@@ -28570,52 +30726,69 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/rename')    return handleFxRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/rename')    return handleLsRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/rename')    return handleBdRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/rename')    return handleNvRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/rename')    return handleOdRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/delete')    return handleFxDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/delete')    return handleLsDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/delete')    return handleBdDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/delete')    return handleNvDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/delete')    return handleOdDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/activate')  return handleFxActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/activate')  return handleLsActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/activate')  return handleBdActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/activate')  return handleNvActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/activate')  return handleOdActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/set-model') return handleFxSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/set-model') return handleLsSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-model') return handleBdSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-model') return handleNvSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/set-model') return handleOdSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/set-balance') return handleFxSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/set-balance') return handleLsSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-balance') return handleBdSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-balance') return handleNvSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/set-balance') return handleOdSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/map-profiles') return handleFxMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/session/open') return handleFxSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/session/open') return handleLsSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/session/open') return handleBdSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/session/open') return handleNvSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/session/open') return handleOdSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/share')    return handleFxShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/share')    return handleLsShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/share')    return handleBdShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/share')    return handleNvShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/share')    return handleOdShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/import')   return handleFxImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/import')   return handleLsImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/import')   return handleBdImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/import')   return handleNvImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/od/import')   return handleOdImport(req, res);
@@ -28682,6 +30855,16 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/refill') return handleAkRefillState(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-lines') return handleAkProxyPoolLines(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ak/proxy-pool') return handleAkProxyPool(req, res);
+    // — Lingshu: авторега и пул прокси под неё (клон ручек ak).
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/autoreg/status') return handleLsAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/autoreg/start') return handleLsAutoregStart(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/autoreg/stop') return handleLsAutoregStop(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/autoreg/find-proxy') return handleLsFindProxyStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/autoreg/find-proxy') return handleLsFindProxyStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ls/autoreg/find-proxy/stop') return handleLsFindProxyStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/refill') return handleLsRefillState(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/proxy-lines') return handleLsProxyPoolLines(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ls/proxy-pool') return handleLsProxyPool(req, res);
     // Вкладка «Свои прокси». Путь общий, без префикса панели: свой пул обслуживает все
     // шлюзы сразу, в отличие от ak/rm-ручек, которые показывают пул глазами одной панели.
     if (req.method === 'GET'  && req.url === '/__switch/api/proxies/state')     return handleProxiesState(req, res);
@@ -28880,6 +31063,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fx/add-github')       return handleFxAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/add-github')       return handleBdAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/add-github')       return handleNvAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ap/add-github')       return handleApAddGithub(req, res);
@@ -28987,7 +31171,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {
@@ -29765,6 +31949,14 @@ process.on('unhandledRejection', (err) => {
 
 server.listen(LISTEN_PORT, () => {
     console.log(`ABUSE HUB on http://localhost:${LISTEN_PORT}/__switch`);
+    // Подъём очереди чек-инов с диска. Делаем ДО первого запроса: карточка на вкладке
+    // читает уже готовое состояние, а не «пусто, потом появится».
+    // 🪤 Насос отсюда НЕ зовём: восстановленная пачка ждёт кнопки (решение владельца 21.09).
+    try { arQueueRestore(); } catch (e) { logLine(`agentrouter очередь: подъём не удался (${e.message})`); }
+    // Граница журнала сбора: кольцо живёт в памяти, поэтому первым событием после подъёма
+    // идёт boot. По нему на вкладке видно, что «журнал начался заново» - это перезапуск
+    // дашборда, а не потеря подарков.
+    arNote('boot', `дашборд поднялся (pid ${process.pid}) - журнал сбора начат заново`);
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);

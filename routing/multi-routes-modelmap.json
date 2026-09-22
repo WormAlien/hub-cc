@@ -1,7 +1,18 @@
 {
-  "default": {},
+  "default": {
+    "provider": "fxqidian",
+    "model": "deepseek-v4-pro"
+  },
   "opus": {
-    "provider": "agentrouter",
-    "model": ""
+    "provider": "fxqidian",
+    "model": "deepseek-v4-pro"
+  },
+  "sonnet": {
+    "provider": "fxqidian",
+    "model": "deepseek-v4-pro"
+  },
+  "haiku": {
+    "provider": "fxqidian",
+    "model": "deepseek-v4-pro"
   }
 }

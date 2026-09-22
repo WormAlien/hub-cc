@@ -243,6 +243,14 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'fxqidian.de5.net': 'jwt',
+    // lsapi.cloud — classic, замер 21.09 по ЖИВОМУ аккаунту (id 3520, регистрация авторегой).
+    // Инструмент вписал сюда `jwt` копией от kktoken, и это был бы тихий промах: ветка jwt
+    // ищет куку `new_api_refresh`, а панель её не отдаёт вовсе - в jar лежат только
+    // `theme_scale` и `session`. Проверено прямым запросом: `GET /api/user/self` с этой кукой
+    // и заголовком `New-Api-User: 3520` отвечает 200 и отдаёт quota. То есть цифра обязана
+    // идти из /api/user/self, а не из guessGrant.
+    'lsapi.cloud': 'classic',
     'apichat.budsin.dev': 'jwt',
     'nova.vcrauo.com': 'jwt',
     // odysseyapi.tech — НЕ New-API вовсе: свой шлюз на Next.js, вход через Clerk

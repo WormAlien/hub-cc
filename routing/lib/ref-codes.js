@@ -32,6 +32,8 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    fxqidian:     { host: 'fxqidian.de5.net',        path: '/sign-up?aff=',  label: 'Fxqidian' },
+    lsapi:     { host: 'lsapi.cloud',        path: '/sign-up?aff=',  label: 'Lingshu' },
     budsin:     { host: 'apichat.budsin.dev',        path: '/sign-up?aff=',  label: 'BudsAI' },
     nova:     { host: 'nova.vcrauo.com',        path: '/sign-up?aff=',  label: 'Nova' },
     bai:     { host: 'chat.b.ai',        path: '/chat?invite_code=', label: 'B.AI' },   // форма СВОЯ: приглашение в чат, не /sign-up

@@ -437,6 +437,8 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/fxqidian-sessions.json
+routing/lsapi-sessions.json
 routing/budsin-sessions.json
 routing/odyssey-sessions.json
 routing/bai-sessions.json
@@ -620,3 +622,15 @@ _research/collect-gifts-progress.txt
 budsin/profiles/
 budsin/sessions/
 budsin/gh-sessions/
+
+# ── Fxqidian (fxqidian.de5.net) и Lingshu (lsapi.cloud): приватные данные ─────
+# Те же три папки, что у budsin выше, и по той же причине: профили браузера и живые
+# куки GitHub. Замер 22.09: у обоих шлюзов этих строк не было, а папки уже лежали на
+# диске (fxqidian/profiles 56 МБ, lsapi/profiles 44 МБ, плюс сессии) - то есть первый
+# же `git add -A` унёс бы их в публичный репозиторий.
+fxqidian/profiles/
+fxqidian/sessions/
+fxqidian/gh-sessions/
+lsapi/profiles/
+lsapi/sessions/
+lsapi/gh-sessions/

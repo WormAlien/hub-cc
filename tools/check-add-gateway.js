@@ -621,6 +621,57 @@ section('полнота спеки · литеральные списки пре
         `каждый литеральный список префиксов покрыт точкой спеки${uncovered.length ? ' — нет: ' + uncovered.slice(0, 4).join(' | ') : ''}`);
 }
 
+// ── 10. опора share/import: хендлер не зовёт необъявленное ─────────────────────
+section('опора share/import · хендлер зовёт только объявленное');
+{
+    // Класс дефекта, найденный 21.09 на Lingshu и живший у budsin, nova и odyssey: спека
+    // клонирует хендлеры `handle%x%Share` и `handle%x%Import`, а их ОПОРУ — `%p%B64UrlEncode`,
+    // `%P%_SESSIONS_DIR`, `%P%_SHARE_SCRIPT` — нет. Клон ссылается на имена, которых в файле
+    // не существует, кнопка передачи аккаунта падает `ReferenceError`-ом, а снаружи это
+    // выглядит как «кнопка ничего не делает».
+    //
+    // 🪤 Почему это не ловилось: `node --check` пропускает (отсутствующее имя — не
+    // SyntaxError), а `check <шлюз>` проверяет НАЛИЧИЕ хендлера (точка 1.18), а не то, на что
+    // хендлер опирается. Первая версия проверки перечисляла конкретные имена — и развалилась
+    // бы на первом же новом; здесь проверяется сам класс.
+    //
+    // Инструмент обязан ловить это у СЕБЯ, потому что чинится это спекой: точке 1.18 нужна
+    // пара — точка на опору. Обе заведены (1.18a, 1.18b).
+    const text = read(path.join(REPO, 'routing', 'transparent-proxy.js'));
+    if (text) {
+        // Объявленным считаем любое объявление в файле, включая локальное внутри хендлера.
+        const declared = new Set();
+        for (const m of text.matchAll(/(?:^|\s)(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+
+        const bodyOf = (startIdx) => {
+            let depth = 0, i = startIdx;
+            for (; i < text.length; i += 1) {
+                if (text[i] === '{') depth += 1;
+                else if (text[i] === '}') { depth -= 1; if (depth === 0) return text.slice(startIdx, i + 1); }
+            }
+            return text.slice(startIdx);
+        };
+
+        const dangling = [];
+        for (const [name, gw] of Object.entries(config)) {
+            if (name.startsWith('_')) continue;
+            const x = gw.p.charAt(0).toUpperCase() + gw.p.slice(1);
+            for (const kind of ['Share', 'Import']) {
+                const at = text.indexOf(`function handle${x}${kind}(`);
+                if (at < 0) continue;                       // хендлера нет — это дело точки 1.18
+                const body = bodyOf(text.indexOf('{', at));
+                // Имена СВОЕГО префикса: `bdLoad`, `BdXxx`, `BD_CONST`. Регистр после префикса
+                // обязателен — иначе в выборку попадут слова вроде `bdapi` из строк лога.
+                const own = new Set();
+                for (const m of body.matchAll(new RegExp('\\b(' + gw.p + '[A-Z][\\w$]*|' + gw.P + '_[A-Z_]+)\\b', 'g'))) own.add(m[1]);
+                for (const id of own) if (!declared.has(id)) dangling.push(`${name}: handle${x}${kind} зовёт «${id}», а он не объявлен`);
+            }
+        }
+        check(dangling.length === 0,
+            `опора share/import объявлена у каждого шлюза${dangling.length ? ' — нет: ' + dangling.slice(0, 6).join(' | ') : ''}`);
+    }
+}
+
 // ── итог ──────────────────────────────────────────────────────────────────────
 if (warns.length) console.log(`\n! замечаний без провала: ${warns.length} (в вердикт не идут)`);
 console.log(`\ncheck-add-gateway: ${total - fails.length}/${total}`);

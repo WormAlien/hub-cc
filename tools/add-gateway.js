@@ -409,7 +409,7 @@ const C = process.stdout.isTTY
     ? { ok: '\x1b[32m', bad: '\x1b[31m', warn: '\x1b[33m', dim: '\x1b[2m', off: '\x1b[0m', b: '\x1b[1m' }
     : { ok: '', bad: '', warn: '', dim: '', off: '', b: '' };
 
-const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool'];
+const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript'];
 
 /** Конфиг шлюза или выход: без него и check, и plan печатают одно и то же. */
 function gwOrDie(name, config) {
@@ -893,7 +893,18 @@ function runApply(name, spec, config, write) {
     const pairs = tokenPairs(src, dst);
     const files = specFiles(spec);
     const inserts = spec.inserts || {};
-    const items = spec.points.map(pt => applyPoint(pt, inserts[pt.id], src, dst, pairs, files));
+    // 🪤 Источник бывает ПОТОЧЕЧНЫЙ. Вся вкладка клонируется с эталона (kktoken), но
+    // машинерия автореги у эталона отсутствует вовсе — она есть у `aikeysapi`, и точка
+    // с `"source": "aikeysapi"` берёт регион оттуда. Пара «источник → цель» при этом
+    // строится своя: у ak свой префикс, свой хост и свой порт, и общие пары kktoken
+    // оставили бы в скопированном коде чужие имена.
+    const pairsFor = (srcCfg) => (srcCfg === src ? pairs : tokenPairs(srcCfg, dst));
+    const items = spec.points.map(pt => {
+        const ptSrc = pt.source ? config[pt.source] : src;
+        if (!ptSrc) { console.error(`точка ${pt.id}: нет конфига источника «${pt.source}»`); process.exit(2); }
+        if (pt.source && pt.source === name) { console.error(`точка ${pt.id}: источник и цель совпали`); process.exit(2); }
+        return applyPoint(pt, inserts[pt.id], ptSrc, dst, pairsFor(ptSrc), files);
+    });
 
     const tally = { insert: 0, done: 0, skip: 0, manual: 0, bad: 0 };
     for (const it of items) tally[it.status] += 1;

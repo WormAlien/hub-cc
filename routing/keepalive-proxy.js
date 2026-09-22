@@ -1533,6 +1533,8 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'fxqidian.de5.net': 'fx',
+  'lsapi.cloud': 'ls',
   'apichat.budsin.dev': 'bd',
   'nova.vcrauo.com': 'nv',
   'odysseyapi.tech': 'od',

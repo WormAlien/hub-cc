@@ -1901,8 +1901,17 @@ async function main() {
   try {
     const brdSrc = HTML.slice(HTML.indexOf('// ── Склейка доски'),
       HTML.indexOf('// Ряды соседей выравниваем ПО КЛЮЧАМ'));
+    // 🪤 `lgRows` зовёт `lgSort`, а тот объявлен НИЖЕ выреза (html:37252): с 18.09.2026 чекер
+    // падал на `ReferenceError: lgSort is not defined`, и доска не проверялась вовсе.
+    // Расширять границы выреза нельзя: вверх по файлу идёт НАСТОЯЩАЯ `function lgTotal`
+    // (html:36976), и объявление внутри тела перекрыло бы подставленный чекером параметр,
+    // утащив за собой `LG_M` и всю витрину. Поэтому берём только `lgSort`, а `lgRankable`
+    // подставляем предикатом на параметре - для фикстур доски порядок тот же.
+    const sortSrc = HTML.slice(HTML.indexOf('function lgSort(rows)'),
+      HTML.indexOf('// Место в списке.'));
+    const rankSrc = 'const lgRankable = p => lgTotal(p) !== null;' + '\n';
     brd = new Function('LG', 'LGC', 'lgTotal',
-      `${brdSrc}\nreturn { lgRows, lgLabels, lgFace, lgNm };`);
+      `${rankSrc}${sortSrc}\n${brdSrc}\nreturn { lgRows, lgLabels, lgFace, lgNm };`);
   } catch (e) { brdErr = e.message; }
   check('блок склейки доски вырезается и исполняется вне браузера', !!brd, brdErr);
   if (brd) {

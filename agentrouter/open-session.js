@@ -190,7 +190,9 @@ function watchLoginRequests(context) {
 // его разбирает бэкенд (маркер AUTOCHECKIN_RESULT), формат там менять незачем.
 const T0 = Date.now();
 const elapsed = () => `[+${((Date.now() - T0) / 1000).toFixed(1)}s]`.padEnd(9);
-const RUN_LOG = (mode === 'checkin' || mode === 'autocheckin') ? (() => {
+// 🔴 Регистрация тоже заводит след: 23.09.2026 прогон у друга умер по таймауту логина, и
+// разбирать было нечем - в логе хаба одна строка, а stdout ребёнка тонет в общем кольце.
+const RUN_LOG = (mode === 'checkin' || mode === 'autocheckin' || mode === 'register') ? (() => {
   try {
     const dir = path.join(__dirname, '..', 'logs');
     fs.mkdirSync(dir, { recursive: true });
@@ -1539,6 +1541,7 @@ async function main() {
     : mode === 'console' ? false
     : fresh;                                   // 'auto': чистый профиль = регистрация
   console.log(`🎯 ${wantRegister ? `регистрация по рефке: ${REGISTER_URL}` : `баланс: ${CONSOLE_URL}`}`);
+  if (RUN_LOG) console.log(`полный след прогона: ${RUN_LOG}`);
 
   try {
     if (appliedSession && !seededGithub) {

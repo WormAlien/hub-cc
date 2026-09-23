@@ -10673,6 +10673,16 @@ const LEAGUE_PEERS_FILE = path.join(__dirname, 'league-peers.json');
 // чтобы у людей, независимо от последних обновлений, график менялся, когда они общаются с
 // сервером»). Кэш рядом с соседями, в git не едет - это состояние, а не код.
 const LEAGUE_CHART_FILE = path.join(__dirname, 'league-chart.json');
+// Что мы последний раз ВЗЯЛИ с ноды по расписанию. Сравнивать с локальным файлом нельзя:
+// владелец правит расписание из панели, и каждые 10 минут его правку затирало бы значением
+// с сервера (нашёл разбор 23.09.2026). Пока сервер не изменил значение, локальное - чьё угодно.
+const LEAGUE_SCHED_FILE = path.join(__dirname, 'league-sched.json');
+function leagueSchedApplied() {
+    try {
+        const d = JSON.parse(fs.readFileSync(LEAGUE_SCHED_FILE, 'utf8'));
+        return (d && d.tz && Array.isArray(d.times)) ? d : null;
+    } catch { return null; }
+}
 function leagueChart() {
     try {
         const doc = JSON.parse(fs.readFileSync(LEAGUE_CHART_FILE, 'utf8'));
@@ -10946,10 +10956,17 @@ async function leagueSync() {
             try {
                 const sc = (JSON.parse(sch.body) || {}).schedule;
                 if (sc && sc.tz && Array.isArray(sc.times) && sc.times.length) {
-                    const cur = arQuotaSchedule();
-                    const same = !!(cur && cur.tz === sc.tz && String(cur.times) === String(sc.times));
+                    const applied = leagueSchedApplied();
+                    const same = !!(applied && applied.tz === sc.tz && String(applied.times) === String(sc.times));
                     if (!same) {
                         const w = arQuotaScheduleSave({ tz: sc.tz, times: sc.times, note: 'с ноды' });
+                        if (w.ok) {
+                            try {
+                                fs.writeFileSync(LEAGUE_SCHED_FILE + '.tmp',
+                                    JSON.stringify({ at: new Date().toISOString(), tz: sc.tz, times: sc.times }));
+                                fs.renameSync(LEAGUE_SCHED_FILE + '.tmp', LEAGUE_SCHED_FILE);
+                            } catch { /* не записалось - применим ещё раз на следующем тике */ }
+                        }
                         logLine(w.ok
                             ? `расписание наливки с ноды: ${sc.tz} ${sc.times.join(', ')}`
                             : `расписание наливки с ноды не принято: ${w.error}`);

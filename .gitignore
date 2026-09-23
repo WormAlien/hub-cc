@@ -518,6 +518,8 @@ routing/league-data/
 routing/league-peers.json
 # Настройки графика, снятые с ноды (см. LEAGUE_CHART_FILE): состояние, а не код.
 routing/league-chart.json
+# Что хаб взял с ноды по расписанию наливки (см. LEAGUE_SCHED_FILE).
+routing/league-sched.json
 routing/league-e2e-key.json
 routing/archive/
 

@@ -48,7 +48,7 @@ if (A < 0 || B <= A) {
 const src = HTML.slice(A, B);
 const build = new Function('LG', 'LG_M', 'LG_TOT', 'LG_R', 'LG_RW', 'lgTok', 'lgSum', 'lgInt', 'lgCumOn',
     `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap, lgComposition,
-             lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice };`);
+             lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice, lgRuns };`);
 
 const LG_M = {
     cc: { lb: 'токены Claude Code', fmt: v => String(v), source: 'cc' },
@@ -300,6 +300,21 @@ ok('определения не складываются и не подменя�
     assert.notStrictEqual(a.lgTotal(fresh, 'd7') + a.lgTotal(old, 'd7'), a.lgTotal(fresh, 'd7'),
         'суммы из двух определений не собираются');
     assert.ok(/прежний/i.test(a.lgDefNote(fresh)) === false, 'у нового участника пояснения про прежний счётчик нет');
+});
+
+// 🔴 Свежая установка 23.09.2026: график «всё время» у друга был пустым, а «за месяц» рисовался.
+// Причина в разбиении ряда на куски: кусок из ОДНОЙ точки отбрасывался (`filter(s => s.length > 1)`),
+// и вся серия не рисовалась вовсе - ни линии, ни точки, ни подписи. У «всё время» на свежей
+// машине день ровно один, у месяца ключей 30 - отсюда разница в поведении.
+ok('одиночная точка - это данные, а не пустой кусок', () => {
+    const a = api('cc', 'd7', {});
+    assert.deepStrictEqual(a.lgRuns([5]), [[0]], 'кусок из одной точки остаётся');
+    assert.deepStrictEqual(a.lgRuns([1, null, 2, 3]), [[0], [2, 3]],
+        'null рвёт ряд, но одиночный кусок перед разрывом не пропадает');
+    assert.deepStrictEqual(a.lgRuns([1, 2, 3]), [[0, 1, 2]], 'обычный ряд - один кусок');
+    assert.deepStrictEqual(a.lgRuns([]), [], 'пустой ряд - ни одного куска');
+    assert.deepStrictEqual(a.lgRuns([1, 2], 2), [[0, 1]], 'minLen=2 одиночку отсекает (пунктир налива)');
+    assert.deepStrictEqual(a.lgRuns([1, 2, null, 3], 2), [[0, 1]], 'и не склеивает куски через разрыв');
 });
 
 finish();

@@ -37223,12 +37223,34 @@ function lgLegacyRun(p, r) {
   return { keys: keys.slice(-n), values: values.slice(-n) };
 }
 
+// Непрерывные куски ряда ПО ИНДЕКСАМ: null/NaN разрывают линию, а не соединяются через них
+// прямой. 🪤 Куски из ОДНОЙ точки не выбрасываются. «Всё время» на свежей установке - это
+// ровно один день, и выброшенный одиночный кусок давал пустое полотно: линии из одной точки
+// не бывает, а точка с подписью не рисовались вовсе (`if (!e.paths.length) return ''` в
+// отрисовке). 23.09.2026 у друга так выглядел только график «всё время» - у месяца ключей 30,
+// и он рисовался. Кому одиночная точка не нужна (пунктир налива), зовёт с minLen = 2.
+function lgRuns(values, minLen = 1) {
+  const runs = []; let cur = [];
+  for (let i = 0; i < values.length; i++) {
+    const x = values[i];
+    if (x === null || x === undefined || !Number.isFinite(Number(x))) {
+      if (cur.length >= minLen) runs.push(cur);
+      cur = [];
+    } else cur.push(i);
+  }
+  if (cur.length >= minLen) runs.push(cur);
+  return runs;
+}
+
 // ── Монотонный кубический сплайн (Fritsch–Carlson) ──────────────────────────
 // Гладко, но без горбов: наклоны ограничены так, чтобы кривая не выходила за пределы
 // соседних точек. Обычный Catmull-Rom этого не делает и придумывает пики между
 // измерениями — на графике расхода это прямое вранье.
 function lgSpline(pts) {
   const n = pts.length;
+  // Одна точка - это не «нет линии», а точка. Вырожденный путь не рисует ничего, но он
+  // непустой: отрисовка по нему пропускает серию дальше и ставит кружок с подписью.
+  if (n === 1) return `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
   if (n < 2) return '';
   const dx = [], dy = [], m = [];
   for (let i = 0; i < n - 1; i++) {
@@ -37302,7 +37324,7 @@ function lgDrawPlot(top) {
   const nice = p => { const e = Math.pow(10, Math.floor(Math.log10(p))), s = p / e;
     return (s <= 1 ? 1 : s <= 2 ? 2 : s <= 4 ? 4 : s <= 5 ? 5 : 10) * e; };
   const yTop = nice(ymax * 1.08);
-  const xs = i => LG_PL + (n === 1 ? 0 : i * (W - LG_PL - LG_PR) / (n - 1));
+  const xs = i => LG_PL + (n === 1 ? (W - LG_PL - LG_PR) / 2 : i * (W - LG_PL - LG_PR) / (n - 1));
   const ys = v => LG_PT + (1 - (Number(v) || 0) / yTop) * (H - LG_PT - LG_PB);
   const U = LG_M[LG.metric].unit || lgTokUnit(yTop);
   // Знаков после запятой не угадываем: если все пять засечек делятся на единицу без
@@ -37336,23 +37358,14 @@ function lgDrawPlot(top) {
   // последние значения могут совпасть, и подписи налезали друг на друга в кашу.
   // Непрерывные куски ряда: неизвестные дни (null) РАЗРЫВАЮТ линию, а не соединяются через
   // них прямой. У прежних метрик null не появляется, поэтому их кривая не меняется.
-  const runOf = (v) => {
-    const segs = []; let cur = [];
-    for (let i = 0; i < v.length; i++) {
-      const x = v[i];
-      if (x === null || x === undefined || !Number.isFinite(Number(x))) { if (cur.length) segs.push(cur); cur = []; }
-      else cur.push([xs(i), ys(x)]);
-    }
-    if (cur.length) segs.push(cur);
-    return segs;
-  };
+  const runOf = (v, minLen = 1) => lgRuns(v, minLen).map(seg => seg.map(i => [xs(i), ys(v[i])]));
   const ends = series.map((v, k) => {
-    const segs = runOf(v).filter(s => s.length > 1);
+    const segs = runOf(v);
     const pts = segs.length ? segs[segs.length - 1] : [];
     return { k, segs, pts, paths: segs.map(s => lgSpline(s)),
       x: pts.length ? pts[pts.length - 1][0] : 0, y: pts.length ? pts[pts.length - 1][1] : 0 };
   });
-  const LBH = 15, order = ends.filter(e => e.pts.length > 1).sort((a, b) => a.y - b.y);
+  const LBH = 15, order = ends.filter(e => e.pts.length >= 1).sort((a, b) => a.y - b.y);
   order.forEach(e => { e.ly = e.y; });
   for (let i = 1; i < order.length; i++)
     if (order[i].ly - order[i - 1].ly < LBH) order[i].ly = order[i - 1].ly + LBH;
@@ -37369,7 +37382,9 @@ function lgDrawPlot(top) {
     const dash = legacy ? ' stroke-dasharray="5 4" opacity=".75"' : '';
     // Заливка — только под последним непрерывным куском: под разрывом она рисовала бы
     // площадь, которой в данных нет.
-    const area = legacy ? '' : `<path d="${e.paths[e.paths.length - 1]} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>`;
+    // Заливка — только под последним непрерывным куском: под разрывом она рисовала бы
+    // площадь, которой в данных нет. У куска из одной точки площади нет вовсе.
+    const area = (legacy || e.pts.length < 2) ? '' : `<path d="${e.paths[e.paths.length - 1]} L${e.x.toFixed(1)},${(H - LG_PB).toFixed(1)} L${e.pts[0][0].toFixed(1)},${(H - LG_PB).toFixed(1)} Z" fill="url(#lgG${k})"/>`;
     return `<linearGradient id="lgG${k}" x1="0" y1="${LG_PT}" x2="0" y2="${H - LG_PB}" gradientUnits="userSpaceOnUse">
         <stop offset="0" stop-color="${col}" stop-opacity=".28"/>
         <stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient>
@@ -37385,7 +37400,7 @@ function lgDrawPlot(top) {
   // Пунктирные ряды парной величины: без заливки, без точки и без подписи на конце —
   // подписи бы удвоились, а участника уже называет цвет. Начертание отвечает на «что».
   const body2 = !pair ? '' : pair.map((v, k) => {
-    const segs = runOf(v).filter(s => s.length > 1);
+    const segs = runOf(v, 2);   // пунктиру одиночная точка не нужна: у него нет ни точки, ни подписи
     if (!segs.length) return '';
     return segs.map(s => `<path class="lgserie lgpair" d="${lgSpline(s)}" stroke="${LG_SER[k % LG_SER.length]}"/>`).join('');
   }).join('');

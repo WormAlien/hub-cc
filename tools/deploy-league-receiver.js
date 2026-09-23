@@ -32,7 +32,35 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
-const ARGV = process.argv.slice(2);
+// Форму `--alias de` (через пробел) склеиваем в `--alias=de`: раньше она молча не попадала в
+// разбор, брался дефолт, и выкат уходил НЕ туда, рапортуя успех (23.09.2026 - два выката в
+// заброшенную швейцарскую копию). Незнакомый аргумент теперь тоже отказ, а не тишина: опечатка
+// вроде `--healt-port=2083` больше не выглядит как «всё хорошо».
+const VALUE_KEYS = ['host', 'port', 'user', 'key', 'alias', 'remote', 'data', 'backups',
+    'unit', 'health-port', 'conf-name', 'src', 'conf', 'backup'];
+let ARGV = process.argv.slice(2);
+{
+    const norm = [];
+    for (let i = 0; i < ARGV.length; i++) {
+        const a = ARGV[i];
+        const bare = a.startsWith('--') ? a.slice(2) : '';
+        if (bare && VALUE_KEYS.includes(bare) && i + 1 < ARGV.length && !ARGV[i + 1].startsWith('--')) {
+            norm.push('--' + bare + '=' + ARGV[++i]);
+        } else norm.push(a);
+    }
+    ARGV = norm;
+}
+const KNOWN_FLAGS = ['dry-run', 'rollback', 'help', 'h', 'migrate', 'no-restart',
+    'force-alias', 'force-layout', 'rollback-data'];
+const unknownArgs = ARGV.filter(a => a.startsWith('--')
+    && !KNOWN_FLAGS.includes(a.slice(2))
+    && !VALUE_KEYS.some(k => a.startsWith('--' + k + '=')));
+if (unknownArgs.length) {
+    console.error('незнакомый аргумент: ' + unknownArgs.join(', '));
+    console.error('   Что принимается: --' + KNOWN_FLAGS.join(', --') + ', а также --'
+        + VALUE_KEYS.join('=, --') + '=');
+    process.exit(1);
+}
 const has = n => ARGV.includes('--' + n);
 const opt = (n, d) => {
   const p = `--${n}=`;
@@ -40,6 +68,8 @@ const opt = (n, d) => {
   return hit === undefined ? d : hit.slice(p.length);
 };
 
+// Погашенная копия: сюда выкатывать нечего, и сказать это надо ДО первого изменения на ноде.
+const PENSIONED_ALIASES = { ch: 'снята с автозапуска 10.09.2026, срезы не приходят с 09.09; боевой приёмник на de' };
 const ROOT = path.join(__dirname, '..');
 const DRY = has('dry-run');
 const ROLLBACK = has('rollback');
@@ -64,17 +94,26 @@ const C = {
   port: opt('port', '333'),
   user: opt('user', 'root'),
   key: opt('key', path.join(os.homedir(), '.ssh', process.env.LEAGUE_SSH_KEY || 'id_ed25519')),
-  alias: opt('alias', 'ch'),                 // ssh ch — без -i/-p, адрес в ~/.ssh/config
+  // Дефолт был 'ch' - ШВЕЙЦАРСКАЯ копия, снятая с автозапуска 10.09.2026: лигу она не
+  // обслуживает с 9 сентября, а выкат на неё рапортовал успех (дважды 23.09.2026). Боевой
+  // приёмник живёт на DE. Если цель действительно 'ch' - только явным `--force-alias`.
+  alias: opt('alias', 'de'),
   remote: opt('remote', '/opt/league/league-receiver.js'),
   data: opt('data', '/opt/league/data'),     // сверяется с живым юнитом
   backups: opt('backups', '/opt/league/backup'),
   unit: opt('unit', 'league-receiver'),
-  healthPort: opt('health-port', '8420'),
+  healthPort: opt('health-port', ''),      // '' = взять порт из живого юнита (restartAndAccept)
   confName: opt('conf-name', 'league-chat.conf'),
   src: opt('src', path.join(ROOT, 'routing', 'league-receiver.js')),
   conf: opt('conf', ''),
   backup: opt('backup', ''),
 };
+if (PENSIONED_ALIASES[C.alias] && !has('force-alias')) {
+  console.error('алиас «' + C.alias + '» - погашенная копия: ' + PENSIONED_ALIASES[C.alias]);
+  console.error('   Боевой выкат: node tools/deploy-league-receiver.js --alias=de');
+  console.error('   Осознанно на эту копию: --force-alias');
+  process.exit(1);
+}
 if (has('help') || has('h')) {
   console.log(`выкат приёмника лиги на ноду
 
@@ -120,8 +159,18 @@ const step = m => console.log(`\n[${++stepNo}] ${m}`);
 const say = m => console.log('    ' + m);
 const okk = m => console.log('    ✅ ' + m);
 const warn = m => console.log('    ⚠️  ' + m);
+// Меняли ли мы уже ноду этим прогоном. Нужен, чтобы отказ говорил ПРАВДУ: 23.09.2026 скрипт
+// упал на проверке здоровья ПОСЛЕ подстановки файла и перезапуска службы, а напечатал «нода не
+// менялась» - на этом разборе потерялся не один десяток минут.
+let nodaChanged = [];
 function stop(msg) {
   console.log('\n⛔ ' + msg);
+  if (nodaChanged.length) {
+    console.log('   ⚠ на ноде уже есть изменения: ' + nodaChanged.join('; ') + '.');
+    console.log('   Это НЕ значит, что выкат не состоялся - состоялся. Не подтверждена работа.');
+    console.log('   Откат (обратим): node tools/deploy-league-receiver.js --rollback');
+    process.exit(2);
+  }
   console.log('   Дальше этого шага нода не менялась. Разбирайся и запускай снова.');
   process.exit(1);
 }
@@ -140,6 +189,9 @@ for (const [k, v] of [['remote', C.remote], ['data', C.data], ['backups', C.back
 }
 for (const [k, v] of [['unit', C.unit], ['conf-name', C.confName], ['port', C.port],
   ['health-port', C.healthPort], ['user', C.user]]) {
+  // Пустой `--health-port` значит «взять порт из живого юнита» (см. restartAndAccept),
+  // и это законное значение: у DE юнит слушает 2083, а константа 8420 врала в приёмке.
+  if (k === 'health-port' && v === '') continue;
   if (!NAME_RE.test(v)) stop(`--${k}=${v} — недопустимое значение`);
 }
 if (C.backup && !NAME_RE.test(C.backup)) stop(`--backup=${C.backup} — только имя файла, без путей`);
@@ -402,7 +454,15 @@ function unitFacts() {
     const after = args.slice(args.findIndex(a => a.endsWith('.js')) + 1);
     data = after.find(a => a.startsWith('/')) || '';
   }
-  return { exec, data: data.replace(/\/+$/, ''), raw: out };
+  // Порт приёмки берём отсюда же: у DE юнит слушает 2083, а константа проверки была 8420 -
+  // из-за этого выкат «падал» на живом сервисе и врал, что нода не менялась (23.09.2026).
+  let port = (/^Environment=.*?\bPORT=("?)(\d+)\1/m.exec(out) || [])[2] || '';
+  if (!port) {
+    const args2 = exec.trim().split(/\s+/).filter(Boolean);
+    const after2 = args2.slice(args2.findIndex(a => a.endsWith('.js')) + 1);
+    port = after2.find(a => /^\d{2,5}$/.test(a)) || '';
+  }
+  return { exec, data: data.replace(/\/+$/, ''), port, raw: out };
 }
 // В какой раскладке данные на ноде. Одна проба, только чтение, три факта:
 //   members.json     — личность участника заведена (переход был);
@@ -433,10 +493,24 @@ function healthOnce() {
   const body = r.out.trim();
   return { ok: /"ok"\s*:\s*true/.test(body) || /\b200\s*$/.test(body), text: body };
 }
+let UNIT_FACTS_CACHE = null;
+function unitFactsCached() {
+  if (!UNIT_FACTS_CACHE) UNIT_FACTS_CACHE = unitFacts();
+  return UNIT_FACTS_CACHE;
+}
 function restartAndAccept() {
+  // Порт приёмки - из ЖИВОГО юнита, а не из константы. Значение из юнита - чужой вывод,
+  // поэтому проверяем форму так же, как DATA, и падаем на дефолт с явным предупреждением.
+  if (!C.healthPort) {
+    const u = unitFactsCached();
+    C.healthPort = /^\d{1,5}$/.test(String(u.port)) ? String(u.port) : '8420';
+    say(u.port ? `порт приёмки: из юнита, ${C.healthPort}`
+      : `порт в юните не найден, беру ${C.healthPort} - приёмка может соврать`);
+  }
   run('daemon-reload', 'systemctl daemon-reload');
   okk('systemctl daemon-reload прошёл');
   const r = sshRaw(`systemctl restart ${C.unit} 2>&1`);
+  nodaChanged.push(`${C.unit} перезапущен`);
   if (r.code !== 0) {
     console.log(sshRaw(`journalctl -u ${C.unit} -n 30 --no-pager`).out);
     stop(`restart ${C.unit} не прошёл (код ${r.code}): ${(r.out + r.err).trim()}`);
@@ -562,6 +636,7 @@ function deploy() {
   }
   okk(`md5 на ноде совпал с локальным: ${newMd5}`);
   run('подстановка файла', `mv ${TMP_JS} ${C.remote} && chmod ${mode} ${C.remote}`);
+  nodaChanged.push(`файл ${C.remote} обновлён (${newMd5})`);
   const finalMd5 = remoteMd5(C.remote);
   if (finalMd5 !== js.md5) stop(`после mv md5 стал ${finalMd5} — так не бывает, разбирайся руками`);
   okk(`${C.remote} обновлён, режим ${mode} сохранён`);
@@ -789,6 +864,7 @@ function rollback() {
   const t = remoteMd5(TMP_JS);
   if (t !== bakMd5) { sshRaw(`rm -f ${TMP_JS}`); stop(`времянка получилась с md5 ${t} вместо ${bakMd5}`); }
   run('подстановка', `mv ${TMP_JS} ${C.remote} && chmod ${mode} ${C.remote}`);
+  nodaChanged.push(`файл ${C.remote} возвращён из бэкапа`);
   const fin = remoteMd5(C.remote);
   if (fin !== bakMd5) stop(`после mv md5 стал ${fin}, ожидался ${bakMd5}`);
   okk(`${C.remote} = ${pick}`);

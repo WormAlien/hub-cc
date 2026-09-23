@@ -260,7 +260,13 @@ async function main() {
   const at = new Date().toISOString();
   fs.writeFileSync(path.join(IDENT, 'members.json'), JSON.stringify({
     [MID]: { memberId: MID, tokenHash: sha256(TOKEN), installId: me.installId, nick: me.nick,
-      groups: [G1, G2], status: 'active', createdAt: at },
+      groups: [G1, G2], status: 'active', createdAt: at,
+      // 🔴 11.09.2026 приёмник стал требовать АДМИНА на выдаче приглашения
+      // (`league-receiver.js:2471`, решение владельца 09.09). Фикстура писалась 06.09 и роль не
+      // ставила, поэтому первая же проверка раздела получала 403, и семь следующих падали
+      // каскадом на пустоте - восемь «упало» из одной причины, без единой регрессии продукта.
+      // Роль здесь та же, что у соседей: `check-league-chat.js:2168`, `check-league-receiver.js:1459`.
+      role: 'admin', canUpload: true },
     [MID2]: { memberId: MID2, tokenHash: sha256('другой токен'), installId: 'f'.repeat(16),
       nick: 'сосед', groups: [G3], status: 'active', createdAt: at },
   }, null, 2));

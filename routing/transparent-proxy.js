@@ -6592,6 +6592,16 @@ const SESSION_OPEN_PROBE_MS = 2000;
 // Частые причины падения — с готовым рецептом вместо стектрейса playwright.
 function describeSessionOpenFailure(stderr, code) {
     const text = String(stderr || '').trim();
+    // 🔴 ЭТА ветка обязана стоять ВЫШЕ проверки на `playwright install`: Playwright на
+    // отсутствие системного Chrome отвечает «Chromium distribution 'chrome' is not found at …
+    // Run "npx playwright install chrome"» - хвост с командой ловится общим regex, и человек
+    // получал совет поставить КОМПЛЕКТНЫЙ chromium, который у него уже стоит. Окно не
+    // открывается, совет не помогает, человек уходит в петлю (разбор 23.09.2026).
+    if (/Chromium distribution 'chrome' is not found/i.test(text)) {
+        return 'системный Google Chrome не найден, а окно аккаунта просит именно его. '
+            + 'Поставь Google Chrome или выполни `npx playwright install chrome` - '
+            + 'комплектный chromium тут не замена (расширения и капча работают только в Chrome)';
+    }
     if (/Executable doesn'?t exist|playwright install/i.test(text)) {
         return 'Chromium для playwright не установлен: выполни в корне репо `npx playwright install chromium`';
     }

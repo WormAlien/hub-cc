@@ -174,6 +174,18 @@ else
   npx playwright install chromium && ok "chromium готов"
 fi
 
+# 5б. Системный Google Chrome - окна аккаунтов просят именно его (`channel: 'chrome'`):
+# расширения Web Store и проход капчи/Cloudflare работают только в нём. Шаг выше ставит
+# браузеры Playwright, поэтому на чистой машине Chrome может не оказаться. Не валим
+# установку, а говорим прямо: иначе человек прочитает ошибку Playwright как «поставь chromium».
+step "Системный Google Chrome (для окон аккаунтов)"
+if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+  ok "Chrome на месте"
+else
+  warn "системного Google Chrome не видно — кнопки «Открыть» окно НЕ поднимут."
+  warn "  Поставь Google Chrome (или Brave) и повтори: комплектный chromium тут не замена."
+fi
+
 # 6. Claude Code
 #
 # `npm install -g` на маке падает с EACCES, когда npm-префикс — системный

@@ -141,6 +141,25 @@ npx playwright install chromium chromium-headless-shell \
   || { warn "chromium-headless-shell не поддерживается этой версией — ставлю только chromium"; \
        npx playwright install chromium && ok "chromium установлен"; }
 
+# ── 5б. Системный Google Chrome ─────────────────────────────────────────────
+# Окна аккаунтов просят ИМЕННО системный Chrome (`channel: 'chrome'` в open-session.js):
+# только в него ставятся расширения из Chrome Web Store, и только он проходит капчу и
+# проверки Cloudflare. Шаг 5 ставит браузеры Playwright, то есть на чистой машине Chrome
+# может не оказаться - и кнопка «Открыть» ответит ошибкой Playwright, которую человек
+# прочитает как «поставь chromium» (он и так стоит). Поэтому говорим прямо и заранее.
+step "5б. Системный Google Chrome (для окон аккаунтов)"
+CHROME_FOUND=""
+for _c in "${LOCALAPPDATA:-}/Google/Chrome/Application/chrome.exe"           "/c/Program Files/Google/Chrome/Application/chrome.exe"           "/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"           "${LOCALAPPDATA:-}/BraveSoftware/Brave-Browser/Application/brave.exe"; do
+  if [ -n "$_c" ] && [ -f "$_c" ]; then CHROME_FOUND="$_c"; break; fi
+done
+if [ -n "$CHROME_FOUND" ]; then
+  ok "Chrome на месте: $CHROME_FOUND"
+else
+  warn "системного Google Chrome не видно — кнопки «Открыть» окно НЕ поднимут:"
+  warn "  комплектный chromium тут не замена (расширения и капча работают только в Chrome)."
+  warn "  Поставь Google Chrome и повтори - установка от этого не ломается."
+fi
+
 # ── 6. Claude Code ──────────────────────────────────────────────────────────
 # Раньше здесь был жёсткий пин 2.1.153 с npm uninstall: считалось, что версии новее
 # ломают apiKeyHelper. Это не подтвердилось — ротация ключей на лету работает на всех

@@ -48,7 +48,8 @@ if (A < 0 || B <= A) {
 const src = HTML.slice(A, B);
 const build = new Function('LG', 'LG_M', 'LG_TOT', 'LG_R', 'LG_RW', 'lgTok', 'lgSum', 'lgInt', 'lgCumOn',
     `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap, lgComposition,
-             lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice, lgRuns };`);
+             lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice, lgRuns,
+             lgWindowKeys };`);
 
 const LG_M = {
     cc: { lb: 'токены Claude Code', fmt: v => String(v), source: 'cc' },
@@ -315,6 +316,24 @@ ok('одиночная точка - это данные, а не пустой к
     assert.deepStrictEqual(a.lgRuns([]), [], 'пустой ряд - ни одного куска');
     assert.deepStrictEqual(a.lgRuns([1, 2], 2), [[0, 1]], 'minLen=2 одиночку отсекает (пунктир налива)');
     assert.deepStrictEqual(a.lgRuns([1, 2, null, 3], 2), [[0, 1]], 'и не склеивает куски через разрыв');
+});
+
+// 🔴 Свежая установка 23.09.2026, второй заход: график «всё время» у друга рисовался, но ось
+// была из ОДНОГО дня - его собственной истории. Соседи сжимались в один столбец (подписи
+// налезали, у соседа «за сутки» 1 М против 47 млрд за всё время), и доска отдавала первое
+// место свежей машине. Окно «всё время» обязано собираться из всех, кого рисуем.
+ok('ось «всё время» собирается из всех участников, а не из своей истории', () => {
+    const a = api('cc', 'all', {});
+    const mine = me({ ccStats: envelope() });                                    // дни 09-14…09-16
+    const peer = stranger({ ccStats: envelope({
+        days: { keys: ['2026-08-01', '2026-09-16'], values: [5, 6] } }) });
+    assert.deepStrictEqual(a.lgWindowKeys(mine, [mine, peer], 'all'),
+        ['2026-08-01', '2026-09-14', '2026-09-15', '2026-09-16'],
+        'объединение ключей всех участников, по возрастанию и без дублей');
+    assert.deepStrictEqual(a.lgWindowKeys(mine, [peer], 'd30'), a.lgKeys(mine, 'd30'),
+        'у суток, недели и месяца ось по-прежнему своя - они фиксированной длины');
+    assert.deepStrictEqual(a.lgWindowKeys(mine, [], 'all'), a.lgKeys(mine, 'all'),
+        'без соседей ось не меняется');
 });
 
 finish();

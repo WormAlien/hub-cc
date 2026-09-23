@@ -285,17 +285,37 @@ else
       fi
 
       if tg_venv_ok && [ ! -f tools/telegram-portable/Telegram/Telegram.exe ]; then
-        if ask "  Портативного Telegram нет — скачать с telegram.org (~70 МБ)? (нужен для ✈ Открыть)" Y; then
+        # 🔴 В авто-режиме (обновление) этот шаг НЕ качает ничего сам. 23.09.2026 у друга
+        # обновление «висело» именно здесь: `ask` в AUTO отвечает «да» за человека, а curl
+        # уходил за 70 МБ с telegram.org без единого таймаута - медленный маршрут висел
+        # минутами, файла на диске не появлялось, и на следующем обновлении всё повторялось.
+        # Обновление не место для тихой закачки 70 МБ: оно либо обновляет код, либо
+        # останавливается и говорит, что сделать руками.
+        if [ "$AUTO" = "1" ]; then
+          warn "портативного Telegram нет (нужен для ✈ Открыть) — обновление его не качает."
+          warn "поставить: bash install.sh  ·  либо зип с https://desktop.telegram.org (Portable)"
+          warn "  → распаковать в tools/telegram-portable/ так, чтобы был Telegram/Telegram.exe"
+        elif ask "  Портативного Telegram нет — скачать с telegram.org (~70 МБ)? (нужен для ✈ Открыть)" Y; then
           TG_ZIP="${TEMP:-/tmp}/tportable.zip"
-          # официальная ссылка-редирект на свежий tportable-x64.*.zip; распаковывается в Telegram/Telegram.exe
-          if curl -fL -o "$TG_ZIP" https://telegram.org/dl/desktop/win64_portable && \
+          # Официальная ссылка-редирект на свежий tportable-x64.*.zip; распаковывается в
+          # Telegram/Telegram.exe.
+          # 🪤 Таймауты обязательны: без них curl ждёт замершую TCP-сессию бесконечно
+          # (`--max-time` - потолок на всю закачку, `--speed-limit/--speed-time` - «ползёт
+          # медленнее 10 КБ/с дольше двух минут = рвём»). 70 МБ в потолок 20 минут
+          # укладываются при 60 КБ/с, а зависший маршрут отваливается за две минуты.
+          echo "  качаю ~70 МБ (не дольше 20 минут)..."
+          if curl -fL --connect-timeout 15 --max-time 1200 --speed-limit 10240 --speed-time 120 \
+               -o "$TG_ZIP" https://telegram.org/dl/desktop/win64_portable && \
              mkdir -p tools/telegram-portable && \
              unzip -o -q "$TG_ZIP" -d tools/telegram-portable && \
              [ -f tools/telegram-portable/Telegram/Telegram.exe ]; then
             ok "портативный Telegram установлен (tools/telegram-portable/Telegram)"
             rm -f "$TG_ZIP"
           else
-            err "не скачался/не распаковался — положи вручную: зип с https://desktop.telegram.org (Portable) → tools/telegram-portable/"
+            rm -f "$TG_ZIP"
+            err "не скачался/не распаковался (медленный маршрут или нет сети) — это НЕ ломает"
+            err "  установку: положи зип с https://desktop.telegram.org (Portable) вручную,"
+            err "  распакуй в tools/telegram-portable/ так, чтобы был Telegram/Telegram.exe"
           fi
         else
           warn "Для ✈ Открыть ещё нужен портативный Telegram в tools/telegram-portable/Telegram/Telegram.exe"

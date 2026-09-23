@@ -35,6 +35,14 @@
 //    node tools/league-admin.js <DATA> --chart-top=5           # сколько лидеров линиями (1..12)
 //    node tools/league-admin.js <DATA> --chart-self=on|off     # рисовать ли смотрящего
 //
+//  Расписание наливки AgentRouter (владелец 23.09.2026: «часы наливки на сервере, а не в
+//  обновлении»). Хаб забирает его на тике и пишет в локальный файл расписания, откуда его
+//  берут все читатели сразу: проба квоты, планировщик партии, статуслайн, вкладка.
+//
+//    node tools/league-admin.js <DATA> --ar-schedule                        # показать
+//    node tools/league-admin.js <DATA> --ar-schedule-tz=Asia/Shanghai
+//    node tools/league-admin.js <DATA> --ar-schedule-times=10:00,19:00
+//
 //  Каталог данных — тот, что стоит в живом юните (`Environment=DATA=…`), обычно
 //  `/opt/league/data`. Токенов скрипт не печатает и не создаёт: в файле лежат
 //  только их хеши, и восстановить токен из хеша нельзя — это свойство, а не помеха.
@@ -53,6 +61,8 @@ const opt = (n) => {
 };
 const DATA = (ARGV.find(a => !a.startsWith('--')) || '').replace(/[/\\]+$/, '');
 const CHART = path.join(DATA, 'chart.json');
+// Расписание наливки лежит рядом: см. `schedClean` в league-receiver.js.
+const ARSCHED = path.join(DATA, 'ar-schedule.json');
 
 // Значения по умолчанию повторяют приёмник (`CHART_DEFAULT` в league-receiver.js): если файла
 // нет, показывать и писать одно и то же - иначе «--chart» врал бы про фактическую отрисовку.
@@ -63,6 +73,23 @@ function chartRead() {
     const d = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     return Object.assign({}, CHART_DEFAULT, d);
   } catch { return Object.assign({}, CHART_DEFAULT); }
+}
+function arSchedRead() {
+  try {
+    const raw = fs.readFileSync(ARSCHED, 'utf8');
+    const d = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    return { tz: String((d && d.tz) || ''), times: Array.isArray(d && d.times) ? d.times : [], note: String((d && d.note) || '') };
+  } catch { return { tz: '', times: [], note: '' }; }
+}
+function writeArSched(obj) {
+  const tmp = ARSCHED + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, ARSCHED);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* и времянки нет - тем лучше */ }
+    stop(`запись ${ARSCHED} не удалась: ${e.message} (${e.code || 'без кода'})`);
+  }
 }
 function writeChart(obj) {
   const tmp = CHART + '.tmp';
@@ -218,6 +245,24 @@ if (demote !== null) {
   process.exit(0);
 }
 
+const schTz = opt('ar-schedule-tz');
+const schTimes = opt('ar-schedule-times');
+if (has('ar-schedule') || schTz !== null || schTimes !== null) {
+  const cur = arSchedRead();
+  if (schTz !== null) cur.tz = String(schTz).trim();
+  if (schTimes !== null) {
+    cur.times = String(schTimes).split(',').map(x => x.trim()).filter(Boolean);
+    if (!cur.times.length) stop('--ar-schedule-times пусто: назови времена через запятую, например 10:00,19:00');
+  }
+  if (schTz !== null || schTimes !== null) {
+    writeArSched(cur);
+    okk(`расписание наливки записано: ${ARSCHED}`);
+  }
+  say(`  зона: ${cur.tz || '(не задана)'}   времена партий: ${cur.times.join(', ') || '(нет)'}`);
+  say('  приёмник прочитает на ближайшем запросе, хабы подтянут на своём тике (раз в 10 минут).');
+  process.exit(0);
+}
+
 const chTop = opt('chart-top');
 const chSelf = opt('chart-self');
 if (has('chart') || chTop !== null || chSelf !== null) {
@@ -247,4 +292,4 @@ if (grant !== null) { setField(map, grant, { canUpload: true }, 'файлы и �
 const revoke = opt('revoke');
 if (revoke !== null) { setField(map, revoke, { canUpload: false }, 'файлы и звук запрещены'); process.exit(0); }
 
-stop('не назван ни один режим. Что можно: --list, --bootstrap, --promote=, --demote=, --grant=, --revoke=, --chart, --chart-top=, --chart-self=');
+stop('не назван ни один режим. Что можно: --list, --bootstrap, --promote=, --demote=, --grant=, --revoke=, --chart, --chart-top=, --chart-self=, --ar-schedule, --ar-schedule-tz=, --ar-schedule-times=');

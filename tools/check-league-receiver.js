@@ -2017,6 +2017,24 @@ const bye = await iq('DELETE', '/me', undefined, AJ_TOKEN);
   fs.writeFileSync(path.join(IDDATA, 'chart.json'), '{это не json');
   check('битый файл ручку не роняет', (await iq('GET', '/config')).st === 200);
 
+  // ── Расписание наливки: тоже файлом на ноде ─────────────────────────────────
+  // Владелец 23.09.2026: «часы наливки должны лежать на сервере, а не приезжать обновлением».
+  // Хаб забирает их на тике и пишет в КАНОНИЧЕСКИЙ локальный файл расписания - оттуда их берут
+  // все читатели сразу (проба квоты, планировщик партии, статуслайн, вкладка), и обновлять
+  // их не нужно вовсе.
+  const schOf = async (key) => (await iq('GET', '/schedule', undefined, key)).j.schedule;
+  const schFile = path.join(IDDATA, 'ar-schedule.json');
+  check('расписание наливки: без файла null - хаб оставит своё', (await schOf()) === null, await schOf());
+  fs.writeFileSync(schFile, JSON.stringify({ tz: 'Asia/Shanghai', times: ['10:00', '19:00'] }));
+  check('расписание с ноды доезжает как есть',
+    JSON.stringify(await schOf()) === JSON.stringify({ tz: 'Asia/Shanghai', times: ['10:00', '19:00'], note: '' }),
+    await schOf());
+  fs.writeFileSync(schFile, JSON.stringify({ tz: 'Мусорная зона!', times: ['25:99', 'не время'] }));
+  check('мусор в расписании отсекается на сервере', (await schOf()) === null, await schOf());
+  fs.writeFileSync(schFile, '{сломано');
+  check('битый файл расписания ручку не роняет', (await iq('GET', '/schedule')).st === 200);
+  try { fs.rmSync(schFile); } catch { /* не создался - и хорошо */ }
+
   idchild.kill();
 
   child.kill();

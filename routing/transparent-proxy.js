@@ -10936,6 +10936,27 @@ async function leagueSync() {
         const tmp = LEAGUE_PEERS_FILE + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({ updated: doc.updated || new Date().toISOString(), peers }));
         fs.renameSync(tmp, LEAGUE_PEERS_FILE);
+        // Расписание наливки с ноды (владелец 23.09.2026: «часы наливки должны лежать на
+        // сервере, а не приезжать обновлением»). Пишем в КАНОНИЧЕСКИЙ локальный файл
+        // (`arQuotaScheduleSave`), поэтому его подхватывают ВСЕ читатели сразу - проба квоты,
+        // планировщик партии, статуслайн и вкладка. Обновлять их не нужно вовсе, а плохое
+        // значение от приёмника функция просто не примет и оставит прежнее.
+        const sch = await leagueReq(c, '/schedule', 'GET').catch(() => null);
+        if (sch && sch.status === 200) {
+            try {
+                const sc = (JSON.parse(sch.body) || {}).schedule;
+                if (sc && sc.tz && Array.isArray(sc.times) && sc.times.length) {
+                    const cur = arQuotaSchedule();
+                    const same = !!(cur && cur.tz === sc.tz && String(cur.times) === String(sc.times));
+                    if (!same) {
+                        const w = arQuotaScheduleSave({ tz: sc.tz, times: sc.times, note: 'с ноды' });
+                        logLine(w.ok
+                            ? `расписание наливки с ноды: ${sc.tz} ${sc.times.join(', ')}`
+                            : `расписание наливки с ноды не принято: ${w.error}`);
+                    }
+                }
+            } catch { /* мусор от приёмника - не повод ронять обмен */ }
+        }
         // Настройки графика с ноды. Отдельным запросом и НЕ критично: приёмник старой сборки
         // ручки не знает - тогда остаются прежние значения с диска, обмен не страдает.
         const cf = await leagueReq(c, '/config', 'GET').catch(() => null);

@@ -1997,6 +1997,26 @@ const bye = await iq('DELETE', '/me', undefined, AJ_TOKEN);
     bye.st === 200 && bye.j.status === 'left'
     && (await iq('GET', '/me', undefined, AJ_TOKEN)).st === 401, bye.j);
   check('токен ушедшего не мелькнул в журнале ноды', !idout.includes(AJ_TOKEN));
+  // ── Настройки графика: файлом в каталоге данных ──────────────────────────────
+  // Владелец 23.09.2026: «настройки графика живут на ноде». Их отдаёт приёмник, хаб лишь
+  // передаёт странице - значит проверять надо и умолчания, и ГРАНИЦЫ: мусор в файле не имеет
+  // права доехать до чужой отрисовки, а сам файл читается на каждом запросе (рестарта нет).
+  const chartOf = async (key) => (await iq('GET', '/config', undefined, key)).j.chart;
+  check('настройки графика: без файла - значения по умолчанию',
+    JSON.stringify(await chartOf()) === JSON.stringify({ top: 5, self: true }), await chartOf());
+  // Публичная, как `/peers`: свежая установка берёт настройки ДО появления ключа, а секрета
+  // в них нет - это форма отрисовки. Проверяем именно это, а не «закрыто».
+  check('настройки графика читаются без ключа (как /peers)',
+    (await iq('GET', '/config', undefined, null)).st === 200);
+  fs.writeFileSync(path.join(IDDATA, 'chart.json'), JSON.stringify({ top: 3, self: false }));
+  check('значения из файла доезжают как есть',
+    JSON.stringify(await chartOf()) === JSON.stringify({ top: 3, self: false }), await chartOf());
+  fs.writeFileSync(path.join(IDDATA, 'chart.json'), JSON.stringify({ top: 99, self: 'нет', мусор: 1 }));
+  check('выход за границы и мусор отсекаются на сервере',
+    JSON.stringify(await chartOf()) === JSON.stringify({ top: 12, self: true }), await chartOf());
+  fs.writeFileSync(path.join(IDDATA, 'chart.json'), '{это не json');
+  check('битый файл ручку не роняет', (await iq('GET', '/config')).st === 200);
+
   idchild.kill();
 
   child.kill();

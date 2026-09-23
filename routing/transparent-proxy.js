@@ -10659,6 +10659,16 @@ function hubBuild() {
 // этом проекте уже был XSS через подстановку чужого значения, и обязан проверять тот,
 // кто отдаёт. Цена — декодирование до 27 КБ base64 на соседа при сборке ответа.
 const LEAGUE_PEERS_FILE = path.join(__dirname, 'league-peers.json');
+// Настройки графика, снятые с ноды (владелец 23.09.2026: «настройки графика живут на ноде,
+// чтобы у людей, независимо от последних обновлений, график менялся, когда они общаются с
+// сервером»). Кэш рядом с соседями, в git не едет - это состояние, а не код.
+const LEAGUE_CHART_FILE = path.join(__dirname, 'league-chart.json');
+function leagueChart() {
+    try {
+        const doc = JSON.parse(fs.readFileSync(LEAGUE_CHART_FILE, 'utf8'));
+        return (doc && doc.chart) || null;   // нет файла - страница возьмёт свои значения по умолчанию
+    } catch { return null; }
+}
 function leaguePeers() {
     try {
         const raw = fs.readFileSync(LEAGUE_PEERS_FILE, 'utf8');
@@ -10916,6 +10926,19 @@ async function leagueSync() {
         const tmp = LEAGUE_PEERS_FILE + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({ updated: doc.updated || new Date().toISOString(), peers }));
         fs.renameSync(tmp, LEAGUE_PEERS_FILE);
+        // Настройки графика с ноды. Отдельным запросом и НЕ критично: приёмник старой сборки
+        // ручки не знает - тогда остаются прежние значения с диска, обмен не страдает.
+        const cf = await leagueReq(c, '/config', 'GET').catch(() => null);
+        if (cf && cf.status === 200) {
+            try {
+                const chart = (JSON.parse(cf.body) || {}).chart;
+                if (chart) {
+                    const ct = LEAGUE_CHART_FILE + '.tmp';
+                    fs.writeFileSync(ct, JSON.stringify({ at: new Date().toISOString(), chart }));
+                    fs.renameSync(ct, LEAGUE_CHART_FILE);
+                }
+            } catch { /* мусор от приёмника - не повод ронять обмен */ }
+        }
         LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: true, error: null, peers: peers.length };
         return { ok: true, peers: peers.length };
     } catch (e) {
@@ -10958,6 +10981,8 @@ async function handleLeague(req, res) {
         const c = leagueConfig();
         jsonRes(res, 200, {
             me, peers: nb.peers, peersUpdated: nb.updated,
+            // Настройки отрисовки: их держит нода, хаб лишь передаёт (см. LEAGUE_CHART_FILE).
+            chart: leagueChart(),
             // Секрет не отдаём никогда; адрес — можно, его вписал сам владелец.
             receiver: {
                 configured: !!(c.enabled && c.url && c.key),

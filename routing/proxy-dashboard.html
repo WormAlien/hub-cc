@@ -4628,6 +4628,7 @@ window.finNavCount = async () => {
         --lg-azure:var(--color-azure,#4a9eff); --lg-amber:var(--color-amber,#ff8a3d);
         --lg-emerald:var(--color-emerald,#3ddc91); --lg-rose:var(--color-crimson,#ff6b6b);
         --lg-s1:var(--lg-azure); --lg-s2:var(--lg-amber); --lg-s3:var(--lg-emerald);
+        --lg-s4:var(--lg-rose); --lg-s5:var(--color-violet,#b18cff);
         --lg-spring:cubic-bezier(.22,1,.36,1);
       }
       #leagueTab .lgnum{font-family:var(--lg-mono);font-variant-numeric:tabular-nums}
@@ -36842,7 +36843,12 @@ const LG_TOT = { sp:  { h24: 'spD',  d7: 'spW',  d30: 'spM',  all: 'spA'  },
 // Окно словами «за что», а не «какое»: нужно только накопительной метрике, где окно
 // означает прирост. У остальных окно и так стоит рядом через LG_R[r].lb.
 const LG_RW = { h24: 'за сутки', d7: 'за неделю', d30: 'за месяц', all: 'всего' };
-const LG_SER = ['var(--lg-s1)', 'var(--lg-s2)', 'var(--lg-s3)'];
+const LG_SER = ['var(--lg-s1)', 'var(--lg-s2)', 'var(--lg-s3)', 'var(--lg-s4)', 'var(--lg-s5)'];
+// Своя линия рисуется НЕ цветом палитры, а «чернилами»: её надо узнавать сразу, и она не
+// должна спорить с цветом лидера, когда я сам в лидерах. Цвет берётся по строке, а не по
+// индексу, - иначе одна и та же линия красилась бы по-разному в графике, легенде и подсказке.
+const LG_SER_SELF = 'var(--lg-ink)';
+const lgSerColor = (p, k) => ((p && p.isMe) ? LG_SER_SELF : LG_SER[k % LG_SER.length]);
 
 const lgInt = v => Math.round(v).toLocaleString('ru-RU');
 // Токены приходят штуками. «15 293 000 000» глазом не берётся, поэтому от миллиарда
@@ -37224,6 +37230,23 @@ const lgDefNote = p => (lgCcOpen(p)
 // В сравнение идут только те, у кого итог полный: с неполным сравнивать нечего - его цифра
 // нижняя граница, а не сумма.
 const lgRankable = p => lgDef(p) === 'cc' && !lgCcOpen(p);
+// ── Кого рисуем линиями ──────────────────────────────────────────────────────
+// Значения приходят С НОДЫ (`LG.data.chart`, см. `league-receiver.js` и хабовый
+// `league-chart.json`): владелец 23.09.2026 захотел менять график всем сразу, не дожидаясь
+// ничьих обновлений. Границы проверяем и здесь: мусор в файле не должен ломать отрисовку.
+// Жёсткая тройка до этого не давала участнику на 5-6 месте увидеть свою кривую вовсе
+// («почему меня нет на графике»), поэтому смотрящий добавляется ВСЕГДА - если он не в лидерах.
+function lgTopCfg(chart) {
+  const d = Object.assign({ top: 5, self: true }, chart || {});
+  const top = Number(d.top);
+  return { n: Number.isFinite(top) ? Math.max(1, Math.min(12, Math.trunc(top))) : 5,
+    self: d.self !== false };
+}
+function lgTopRows(rows, cfg) {
+  const head = rows.slice(0, cfg.n);
+  const mine = rows.find(p => p.isMe);
+  return (cfg.self && mine && !head.includes(mine)) ? head.concat([mine]) : head;
+}
 // Порядок доски: сначала все, кого можно сравнивать, потом остальные. Внутри группы - по
 // убыванию своей цифры; «нет данных» уезжает в конец, а не притворяется нулём.
 function lgSort(rows) {
@@ -37386,7 +37409,10 @@ function lgDrawPlot(top) {
     : `${U.name} на точку`;
   if (tEl) tEl.innerHTML = `${LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}`
     + `<span>${LG_R[LG.range].ttl} · ${perPoint}`
-    + `${top.length > 1 ? ' · тройка лидеров' : ''}</span>`;
+    // Сколько линий и чьи они. «Тройка лидеров» была константой и врала, как только нода
+    // поменяла число лидеров (владелец 23.09.2026: настройки графика живут на ноде).
+    + `${top.length > 1 ? ` · ${top.filter(p => !p.isMe).length} лидеров`
+        + (top.some(p => p.isMe) ? ' и ты' : '') : ''}</span>`;
 
   const grid = [0, .25, .5, .75, 1].map(f => {
     const v = yTop * f, y = ys(v);
@@ -37418,7 +37444,7 @@ function lgDrawPlot(top) {
 
   const body = ends.map(e => {
     if (!e.paths.length) return '';
-    const k = e.k, col = LG_SER[k % LG_SER.length];
+    const k = e.k, col = lgSerColor(top[k], k);
     // Ряд участника на прежнем счётчике: без заливки и штриховой линией, с меткой у
     // подписи. Рисуется так же (человеку нужны его числа), но не выглядит тем же
     // измерением, что соседний: это другой счётчик.
@@ -37438,7 +37464,7 @@ function lgDrawPlot(top) {
         stroke="var(--lg-surface)" stroke-width="2.5"/>
       ${Math.abs(e.ly - e.y) > 2 ? `<path d="M${(e.x + 5).toFixed(1)},${e.y.toFixed(1)} L${(e.x + 9).toFixed(1)},${e.ly.toFixed(1)}" stroke="${col}" stroke-width="1.2" fill="none" opacity=".55"/>` : ''}
       <text class="lgend" x="${(e.x + 12).toFixed(1)}" y="${(e.ly + 4.2).toFixed(1)}"
-        fill="${col}">${lgEsc(lgNm(top[k]).slice(0, 12))}${lgDefMark(top[k])}</text>`;
+        fill="${col}">${lgEsc(lgNm(top[k]).slice(0, 12))}${lgDefMark(top[k])}${top[k].isMe ? ' (ты)' : ''}</text>`;
   }).join('');
 
   // Пунктирные ряды парной величины: без заливки, без точки и без подписи на конце —
@@ -37446,7 +37472,7 @@ function lgDrawPlot(top) {
   const body2 = !pair ? '' : pair.map((v, k) => {
     const segs = runOf(v, 2);   // пунктиру одиночная точка не нужна: у него нет ни точки, ни подписи
     if (!segs.length) return '';
-    return segs.map(s => `<path class="lgserie lgpair" d="${lgSpline(s)}" stroke="${LG_SER[k % LG_SER.length]}"/>`).join('');
+    return segs.map(s => `<path class="lgserie lgpair" d="${lgSpline(s)}" stroke="${lgSerColor(top[k], k)}"/>`).join('');
   }).join('');
 
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" id="lg-svg" role="img"
@@ -37484,10 +37510,10 @@ function lgHookHover() {
       cross.setAttribute('x1', xs(i)); cross.setAttribute('x2', xs(i));
       hits.innerHTML = series.map((v, k) => v[i] === undefined ? ''
         : `<circle class="lghit" cx="${xs(i).toFixed(1)}" cy="${ys(v[i]).toFixed(1)}" r="5"
-            fill="${LG_SER[k % LG_SER.length]}" stroke="var(--lg-surface)" stroke-width="2.5"/>`).join('')
+            fill="${lgSerColor(top[k], k)}" stroke="var(--lg-surface)" stroke-width="2.5"/>`).join('')
         + (!pair ? '' : pair.map((v, k) => v[i] === undefined ? ''
           : `<circle class="lghit" cx="${xs(i).toFixed(1)}" cy="${ys(v[i]).toFixed(1)}" r="4"
-              fill="var(--lg-surface)" stroke="${LG_SER[k % LG_SER.length]}" stroke-width="2"/>`).join(''));
+              fill="var(--lg-surface)" stroke="${lgSerColor(top[k], k)}" stroke-width="2"/>`).join(''));
       // При двух величинах подсказка называет обе явно: цвет уже сказал «кто», а вот
       // «сожжено» и «налито» отличаются только начертанием линии — в тексте это надо
       // проговорить словами, иначе две цифры рядом невозможно развести.
@@ -37497,9 +37523,9 @@ function lgHookHover() {
       const cell = x => (x === null || x === undefined || !Number.isFinite(Number(x)))
         ? '—' : LG_M[LG.metric].fmt(Number(x));
       tip.innerHTML = `<div class="th">${lgEsc(lgLab(keys[i] || ''))}</div>`
-        + series.map((v, k) => `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
+        + series.map((v, k) => `<div class="tr"><i style="background:${lgSerColor(top[k], k)}"></i>
             ${nameOf(k)}${pair ? ' · ' + lgEsc(LG_M[LG.metric].selfLb) : ''}<b>${cell(v[i])}</b></div>`
-          + (pair && pair[k] ? `<div class="tr"><i style="background:${LG_SER[k % LG_SER.length]};opacity:.45"></i>
+          + (pair && pair[k] ? `<div class="tr"><i style="background:${lgSerColor(top[k], k)};opacity:.45"></i>
             ${nameOf(k)} · ${lgEsc(LG_M[LG.metric].pairLb)}<b>${cell(pair[k][i])}</b></div>` : '')).join('');
       tw = tip.offsetWidth; th = tip.offsetHeight;
     }
@@ -37967,7 +37993,14 @@ function lgRender() {
   const _rh = LG.metric + '|' + LG.range + '|' + LG.cum + '|' + (me.stamp || 0) + '|' + rows.length + '|' + (me.nick || '') + '|' + (me.avatar || '');
   if (_rh === LG._lastHash) return;
   LG._lastHash = _rh;
-  const top = rows.slice(0, 3), solo = rows.length < 2;
+  // Линиями рисуем лидеров (сколько - решает нода, см. `LG_CHART`) и ВСЕГДА смотрящего.
+  // Раньше была жёсткая тройка, и участник на 5-6 месте своей кривой не видел вовсе -
+  // «почему меня нет на графике» (владелец 23.09.2026). Пьедестал остаётся тройкой: там
+  // места 1/2/3, и подменять их нельзя.
+  const LG_TOPCFG = lgTopCfg(LG.data && LG.data.chart);
+  const LG_TOP_N = LG_TOPCFG.n;
+  const podium = rows.slice(0, 3), solo = rows.length < 2;
+  const top = lgTopRows(rows, LG_TOPCFG);
   const mi = rows.findIndex(p => p.isMe);
   const cumBtn = document.getElementById('lg-cum');
   if (cumBtn) {
@@ -37979,7 +38012,7 @@ function lgRender() {
     ? `Гонка во времени, а не в моменте. Пока в лиге <b class="text-ink">только эта установка</b>:
        ${rcv.long}. Кривая своя, и она настоящая — окно переключается от суток по часам
        до всего времени.`
-    : `Гонка во времени, а не в моменте: тройка лидеров линиями, все участники —
+    : `Гонка во времени, а не в моменте: ${LG_TOP_N} лидеров и ты линиями, все участники —
        списком ниже. Окно переключается от суток по часам до всего времени.`;
   // Состав итога отдельной строкой: «59,7 млрд» без этого не проверить, а расхождение с
   // `/stats` не объяснить. Показываем только когда источников больше одного.
@@ -37996,8 +38029,8 @@ function lgRender() {
   const pr = LG_M[LG.metric].pair ? LG_M[LG.metric] : null;
   const pairOn = !!pr && lgPairOn();
   document.getElementById('lg-legend').innerHTML = top.map((p, k) =>
-    `<span title="${lgEsc(lgDefNote(p))}"><i style="background:${LG_SER[k % LG_SER.length]}"></i>
-      <b>${lgEsc(lgNm(p))}${lgDefMark(p)}</b><u>${lgShow(p)}</u></span>`).join('')
+    `<span title="${lgEsc(lgDefNote(p))}"><i style="background:${lgSerColor(p, k)}"></i>
+      <b>${lgEsc(lgNm(p))}${lgDefMark(p)}</b>${p.isMe ? '<i style="font-style:normal;color:var(--lg-azure);font-size:11px"> ты</i>' : ''}<u>${lgShow(p)}</u></span>`).join('')
     // Начертание — второй признак, и он обязан быть назван словами: иначе пунктир
     // читается как «та же линия, только бледнее», а это другая величина.
     + (!pr ? '' : `<span class="lgcap" style="margin-left:2px">${pairOn
@@ -38019,7 +38052,7 @@ function lgRender() {
           <div style="min-width:0"><div class="lgcap">моё · ${LG_R[rk].lb}</div>
             <div class="who">${lgEsc(me.nick)}</div></div>
           ${bigOf(me, rk)}</div>`).join('')
-    : top.map((p, k) => `
+    : podium.map((p, k) => `
         <div class="lgmat lgtile lgt${k + 1}"${lgDefNote(p) ? ` title="${lgEsc(lgDefNote(p))}"` : ''}>${lgAv(p.nick, 38, p.avatar)}
           <div style="min-width:0"><div class="lgcap">${k + 1} место${lgDefMark(p) ? ' · прежний счётчик' : ''}</div>
             <div class="who">${lgEsc(lgNm(p))}${lgDefMark(p)}${p.isMe ? ' <span style="color:var(--lg-azure);font-size:12px">это ты</span>' : ''}</div></div>

@@ -49,7 +49,7 @@ const src = HTML.slice(A, B);
 const build = new Function('LG', 'LG_M', 'LG_TOT', 'LG_R', 'LG_RW', 'lgTok', 'lgSum', 'lgInt', 'lgCumOn',
     `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap, lgComposition,
              lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice, lgRuns,
-             lgWindowKeys, lgCcOpen };`);
+             lgWindowKeys, lgCcOpen, lgTopCfg, lgTopRows };`);
 
 const LG_M = {
     cc: { lb: 'токены Claude Code', fmt: v => String(v), source: 'cc' },
@@ -371,6 +371,30 @@ ok('неполный итог нового счётчика: своя цифра
     const rows = a.lgSort([fresh, full, old]);
     assert.strictEqual(rows[0].nick, 'старый', 'сравниваемый впереди: у него итог полный');
     assert.notStrictEqual(rows[0].nick, 'новичок', 'свежая машина больше не первая на доске');
+});
+
+// 🔴 Владелец 23.09.2026: «надо, чтобы настройки графика жили на ноде, чтобы у людей
+// независимо от последних обновлений график менялся». Значит значения приходят с сервера,
+// а клиент только исполняет - и обязан пережить и мусор в них, и свои границы.
+ok('линиями - лидеры (сколько скажет нода) и всегда смотрящий', () => {
+    const a = api('cc', 'd7', {});
+    const rows = [1, 2, 3, 4, 5, 6, 7].map(i => ({ nick: 'u' + i, isMe: i === 6 }));
+
+    assert.strictEqual(a.lgTopCfg({}).n, 5, 'по умолчанию пятёрка');
+    assert.strictEqual(a.lgTopCfg({}).self, true, 'и смотрящий включён');
+    assert.strictEqual(a.lgTopCfg({ top: 99 }).n, 12, 'потолок 12 - выше молча не пускаем');
+    assert.strictEqual(a.lgTopCfg({ top: 0 }).n, 1, 'снизу тоже граница');
+    assert.strictEqual(a.lgTopCfg({ top: 'мусор' }).n, 5, 'мусор - значения по умолчанию');
+    assert.strictEqual(a.lgTopCfg({ self: 'нет' }).self, true, 'строка вместо булева не выключает');
+
+    assert.deepStrictEqual(a.lgTopRows(rows, a.lgTopCfg({})).map(r => r.nick),
+        ['u1', 'u2', 'u3', 'u4', 'u5', 'u6'], 'пятёрка лидеров плюс смотрящий шестым');
+    assert.deepStrictEqual(a.lgTopRows(rows, a.lgTopCfg({ top: 3 })).map(r => r.nick),
+        ['u1', 'u2', 'u3', 'u6'], 'нода сказала три - рисуем три и себя');
+    assert.deepStrictEqual(a.lgTopRows(rows, a.lgTopCfg({ top: 3, self: false })).map(r => r.nick),
+        ['u1', 'u2', 'u3'], 'смотрящего можно выключить с ноды');
+    assert.deepStrictEqual(a.lgTopRows(rows, a.lgTopCfg({ top: 9 })).map(r => r.nick),
+        rows.map(r => r.nick), 'себя в лидерах дважды не рисуем');
 });
 
 finish();

@@ -1876,6 +1876,32 @@ function handleSlice(req, res, raw, me) {
 // ⚠️ Ветвления «свой/чужой» внутри публичной ручки нет НАМЕРЕННО: такое ветвление и есть
 // забытый фильтр. Форму ответа выбирает РАСКЛАДКА ДАННЫХ (наследуемая или личности), а
 // не спрашивающий, и в режиме личности она одна на всех.
+// ── Настройки графика: живут ФАЙЛОМ на ноде ──────────────────────────────────
+// Владелец 23.09.2026: «надо, чтобы настройки графика жили на ноде, чтобы у людей независимо
+// от последних обновлений график менялся, когда они общаются с сервером». Поэтому значения
+// лежат в `<DATA>/chart.json` и правятся ОФЛАЙН тем же входом, что и роли
+// (`tools/league-admin.js <DATA> --chart-top=…`) - по сети админ не пишется, это принцип.
+// Хаб забирает их на своём тике (раз в 10 минут) и отдаёт странице: менять график всем сразу
+// можно, не дожидаясь ничьих обновлений. Границы проверяются ЗДЕСЬ: клиент обязан получить
+// уже пригодное значение, а мусор в файле не должен ломать отрисовку у двенадцати установок.
+const CHART_DEFAULT = { top: 5, self: true };
+const CHART_TOP_MAX = 12;
+function chartClean(d) {
+    const out = Object.assign({}, CHART_DEFAULT);
+    if (d && typeof d === 'object' && !Array.isArray(d)) {
+        const top = Number(d.top);
+        if (Number.isFinite(top)) out.top = Math.max(1, Math.min(CHART_TOP_MAX, Math.trunc(top)));
+        if (typeof d.self === 'boolean') out.self = d.self;
+    }
+    return out;
+}
+function chartCfg() {
+    try {
+        const raw = fs.readFileSync(path.join(DATA, 'chart.json'), 'utf8');
+        return chartClean(JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw));
+    } catch { return Object.assign({}, CHART_DEFAULT); }   // файла нет - значения по умолчанию
+}
+
 const PEER_PUBLIC = ['nick', 'recvAt', 'keys', 'tok', 'sp', 'tu', 'act', 'acc', 'tot', 'ccStats', 'legacyHeld'];
 function peerPublic(s) {
     const out = { rid: ridOf(s.installId) };
@@ -3185,6 +3211,12 @@ function handler(req, res) {
     // его собственную строку. ФОРМА ответа при этом одна на всех и не ветвится: ветвление
     // «свой/чужой» по ПОЛЯМ и есть забытый фильтр, а «какие строки» приёмник фильтрует на
     // сервере с самого начала — именно поэтому этот фильтр и работает.
+    // Настройки графика: отдаём только проверенное `chartClean` (см. блок выше). Ручка
+    // ПУБЛИЧНАЯ, как и `/peers`: свежая установка берёт форму отрисовки до появления ключа,
+    // а секрета в ней нет - это числа линий и «рисовать ли смотрящего».
+    if (req.method === 'GET' && u.pathname === '/config') {
+        return json(res, 200, { chart: chartCfg(), updatedAt: new Date().toISOString() });
+    }
     if (req.method === 'GET' && u.pathname === '/peers') {
         return handlePeers(req, res, u, authOf(req), true);
     }

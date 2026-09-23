@@ -27,6 +27,14 @@
 //    node tools/league-admin.js <DATA> --grant=<memberId>     # разрешить файлы и звук
 //    node tools/league-admin.js <DATA> --revoke=<memberId>    # запретить их же
 //
+//  Настройки графика (владелец 23.09.2026: «настройки графика живут на ноде»). Их читает
+//  приёмник и отдаёт хабам, хабы - странице: менять график можно всем сразу, не дожидаясь
+//  ничьих обновлений. Хранилище - `<DATA>/chart.json`, тот же офлайн-вход, что и роли.
+//
+//    node tools/league-admin.js <DATA> --chart                 # показать
+//    node tools/league-admin.js <DATA> --chart-top=5           # сколько лидеров линиями (1..12)
+//    node tools/league-admin.js <DATA> --chart-self=on|off     # рисовать ли смотрящего
+//
 //  Каталог данных — тот, что стоит в живом юните (`Environment=DATA=…`), обычно
 //  `/opt/league/data`. Токенов скрипт не печатает и не создаёт: в файле лежат
 //  только их хеши, и восстановить токен из хеша нельзя — это свойство, а не помеха.
@@ -44,6 +52,28 @@ const opt = (n) => {
   return hit === undefined ? null : hit.slice(p.length);
 };
 const DATA = (ARGV.find(a => !a.startsWith('--')) || '').replace(/[/\\]+$/, '');
+const CHART = path.join(DATA, 'chart.json');
+
+// Значения по умолчанию повторяют приёмник (`CHART_DEFAULT` в league-receiver.js): если файла
+// нет, показывать и писать одно и то же - иначе «--chart» врал бы про фактическую отрисовку.
+const CHART_DEFAULT = { top: 5, self: true };
+function chartRead() {
+  try {
+    const raw = fs.readFileSync(CHART, 'utf8');
+    const d = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    return Object.assign({}, CHART_DEFAULT, d);
+  } catch { return Object.assign({}, CHART_DEFAULT); }
+}
+function writeChart(obj) {
+  const tmp = CHART + '.tmp';
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, CHART);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* и времянки нет - тем лучше */ }
+    stop(`запись ${CHART} не удалась: ${e.message} (${e.code || 'без кода'})`);
+  }
+}
 
 const say = s => console.log(s);
 const okk = s => console.log('  ✅ ' + s);
@@ -188,10 +218,33 @@ if (demote !== null) {
   process.exit(0);
 }
 
+const chTop = opt('chart-top');
+const chSelf = opt('chart-self');
+if (has('chart') || chTop !== null || chSelf !== null) {
+  const cur = chartRead();
+  if (chTop !== null) {
+    const n = Number(chTop);
+    if (!Number.isFinite(n) || n < 1 || n > 12) stop(`--chart-top принимает 1..12, получено «${chTop}»`);
+    cur.top = Math.trunc(n);
+  }
+  if (chSelf !== null) {
+    const v = String(chSelf).trim().toLowerCase();
+    if (!['on', 'off', '1', '0', 'да', 'нет'].includes(v)) stop(`--chart-self принимает on|off, получено «${chSelf}»`);
+    cur.self = ['on', '1', 'да'].includes(v);
+  }
+  if (chTop !== null || chSelf !== null) {
+    writeChart(cur);
+    okk(`настройки графика записаны: ${CHART}`);
+  }
+  say(`  лидеров линиями: ${cur.top}   смотрящий: ${cur.self ? 'да, всегда' : 'нет'}`);
+  say('  приёмник прочитает на ближайшем запросе, хабы подтянут на своём тике (раз в 10 минут).');
+  process.exit(0);
+}
+
 const grant = opt('grant');
 if (grant !== null) { setField(map, grant, { canUpload: true }, 'файлы и звук разрешены'); process.exit(0); }
 
 const revoke = opt('revoke');
 if (revoke !== null) { setField(map, revoke, { canUpload: false }, 'файлы и звук запрещены'); process.exit(0); }
 
-stop('не назван ни один режим. Что можно: --list, --bootstrap, --promote=, --demote=, --grant=, --revoke=');
+stop('не назван ни один режим. Что можно: --list, --bootstrap, --promote=, --demote=, --grant=, --revoke=, --chart, --chart-top=, --chart-self=');

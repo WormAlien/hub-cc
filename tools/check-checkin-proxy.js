@@ -108,8 +108,14 @@ check(/arPoolGate\(\)/.test(pump) && /gate\.cooling/.test(pump), 'насос п�
 check(/ждём адрес/.test(pump), 'в статусе видно, что очередь ждёт адрес');
 
 console.log('\n6. окно очереди не лезет вперёд, окно 🎁 - лезет');
-check(/const silentWindow = !\['checkin', 'console'\]\.includes\(mode\)/.test(sessionSrc),
-    'тихий режим включён для автоматических прогонов и выключен для ручных');
+check(/let silentWindow = !\['checkin', 'console', 'register'\]\.includes\(mode\)/.test(sessionSrc),
+    'тихий режим - только у автоматических прогонов; ручные (🎁, ЛК) и регистрация идут с окном');
+// 🔴 Регистрация с окном - не вкус, а условие работоспособности: скрипт ждёт GitHub-логина
+// до 10 минут, а в headless логиниться некуда. Свежая установка 23.09: окно спрятали, прогон
+// умер по таймауту, и в дашборде это выглядело как «браузер не появляется». Тот же случай -
+// 'auto' на чистом профиле (он и есть регистрация): режим обязан выйти из тихого.
+check(/if \(mode === 'auto' && fresh\) silentWindow = true/.test(sessionSrc),
+    'первый вход на чистом профиле тоже выходит из тихого режима - человеку нужно окно');
 const raiseIdx = sessionSrc.indexOf('raiseBrowserWindow();');
 const guardIdx = sessionSrc.lastIndexOf('if (!silentWindow) {', raiseIdx);
 check(raiseIdx > 0 && guardIdx > 0 && raiseIdx - guardIdx < 200,

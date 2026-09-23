@@ -45,6 +45,13 @@ function fsyncDir(dir) {
 }
 
 function writeAtomic(target, text) {
+    // Каталог цели может отсутствовать - и на свежей установке отсутствует. Пустые каталоги
+    // git не хранит, а `routing/runtime/` в него не попадает вовсе, поэтому первый же
+    // писатель (снимок очереди чек-ина, дампы отказов) получал ENOENT и молча терял запись:
+    // 23.09 у друга в логе стояло `снимок на диск не записан (ENOENT ... ar-checkin-queue
+    // .json.tmp-2520)`, то есть durable-очередь была выключена целиком. Своя папка стоит
+    // один syscall и снимает весь класс.
+    try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch (e) { /* ниже откажет честнее */ }
     const tmp = target + TMP_SUFFIX();
     let fd = null;
     try {

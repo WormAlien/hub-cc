@@ -56,6 +56,18 @@ if (durable) {
   const leftovers = fs.readdirSync(dir).filter(f => f !== 'pool.json');
   check(leftovers.length === 0, `в каталоге не осталось временных файлов (найдено: ${leftovers.join(', ') || 'нет'})`);
 
+  // ── 3б. Каталог цели может отсутствовать ──
+  // Свежая установка 23.09 (друг): `routing/runtime/` в git не едет (пустые каталоги git
+  // не хранит), а пишет туда очередь чек-ина. Первая же запись падала ENOENT, и в логе
+  // стояло `снимок на диск не записан (ENOENT ... ar-checkin-queue.json.tmp-2520)` - то
+  // есть durable-очередь была выключена молча, а «очередь переживает рестарт» - неправдой.
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'durable-fresh-'));
+  const deep = path.join(freshDir, 'runtime', 'nested', 'queue.json');
+  durable.writeJsonSync(deep, { ok: true });
+  let deepBack = null;
+  try { deepBack = JSON.parse(fs.readFileSync(deep, 'utf8')); } catch (e) { /* ниже */ }
+  check(deepBack && deepBack.ok === true, 'запись создаёт отсутствующий каталог (свежая установка)');
+
   // ── 4. Перезапись сохраняет СТАРОЕ содержимое, если процесс упал до rename ──
   // Пишем «хорошее» значение, затем запускаем потомка, который пишет «плохое» и
   // убивает себя ДО переименования. На диске обязан остаться хороший JSON.

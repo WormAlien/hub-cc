@@ -49,7 +49,7 @@ const src = HTML.slice(A, B);
 const build = new Function('LG', 'LG_M', 'LG_TOT', 'LG_R', 'LG_RW', 'lgTok', 'lgSum', 'lgInt', 'lgCumOn',
     `${src}\nreturn { lgCc, lgCcRun, lgCcTotal, lgStreak, lgTotal, lgAligned, lgKeys, lgShow, lgMetricGap, lgComposition,
              lgDef, lgDefMark, lgDefNote, lgRankable, lgPlace, lgSort, lgLegacyTotal, lgDefNotice, lgRuns,
-             lgWindowKeys };`);
+             lgWindowKeys, lgCcOpen };`);
 
 const LG_M = {
     cc: { lb: 'токены Claude Code', fmt: v => String(v), source: 'cc' },
@@ -334,6 +334,33 @@ ok('ось «всё время» собирается из всех участн
         'у суток, недели и месяца ось по-прежнему своя - они фиксированной длины');
     assert.deepStrictEqual(a.lgWindowKeys(mine, [], 'all'), a.lgKeys(mine, 'all'),
         'без соседей ось не меняется');
+});
+
+// 🔴 Свежая установка 23.09.2026, третье: у друга нет кэша Claude Code, поэтому общий итог
+// приходит пустым, а нижняя граница (`lifetimeLower`) есть. UI брал в этом случае цифру
+// ПРЕЖНЕГО счётчика - участник «на новом счётчике» показывал чужое определение (1 М против
+// 47 млрд) и при этом шёл первым, потому что считался сравнимым. Оба конца одной ошибки.
+ok('неполный итог нового счётчика: своя цифра, метка «≥» и вне сравнения', () => {
+    const a = api('cc', 'all', {});
+    const fresh = me({ nick: 'новичок', ccStats: envelope({ lifetime: null, lifetimeLower: 7_000_000, complete: false }) });
+    const full = me({ nick: 'старый', ccStats: envelope() });
+    const old = stranger({ nick: 'прежний' });
+
+    assert.strictEqual(a.lgCcOpen(fresh), true, 'итог неполный - это видно');
+    assert.strictEqual(a.lgTotal(fresh, 'all'), 7_000_000, 'цифра берётся из своего же счётчика, а не из прежнего');
+    assert.notStrictEqual(a.lgTotal(fresh, 'all'), a.lgLegacyTotal(fresh, 'all'), 'прежнее определение не подставлено');
+    assert.strictEqual(a.lgShow(fresh, 'all'), '≥ 7000000', 'и помечена как нижняя граница');
+    assert.strictEqual(a.lgRankable(fresh), false, 'в общий рейтинг не идёт: сравнивать нечего');
+    assert.strictEqual(a.lgTotal(fresh, 'd30'), 48_000_000_000, 'окна при этом считаются как обычно');
+
+    assert.strictEqual(a.lgCcOpen(full), false, 'у полного итога метки нет');
+    assert.strictEqual(a.lgShow(full, 'all'), '59000000000', 'и цифра без «≥»');
+    assert.strictEqual(a.lgRankable(full), true, 'полный итог - идёт в сравнение');
+    assert.strictEqual(a.lgRankable(old), false, 'прежний счётчик - в свою группу, как и раньше');
+
+    const rows = a.lgSort([fresh, full, old]);
+    assert.strictEqual(rows[0].nick, 'старый', 'сравниваемый впереди: у него итог полный');
+    assert.notStrictEqual(rows[0].nick, 'новичок', 'свежая машина больше не первая на доске');
 });
 
 finish();

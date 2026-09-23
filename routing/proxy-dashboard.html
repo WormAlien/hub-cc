@@ -36905,6 +36905,17 @@ const lgCcNum = v => (v === null || v === undefined || v === '' || typeof v === 
   ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
 const lgCcPack = o => (o && Array.isArray(o.keys) && Array.isArray(o.values) && o.keys.length === o.values.length)
   ? o : null;
+// 🪤 Свежая установка: кэша Claude Code ещё нет, а дни уже есть. Тогда общий итог НЕИЗВЕСТЕН,
+// известна только нижняя граница (`lifetimeLower`): чересчур смело называть сумму уцелевших
+// дней итогом - кэш мог бы знать и о вычищенном. Такой участник не «прежний», он на новом
+// счётчике, но с неполным итогом: показываем нижнюю границу с меткой «≥» и НЕ пускаем его в
+// сравнение (правило дизайна 18.09: «участник с неполным итогом не идёт в общий рейтинг»).
+// 🔴 До 23.09.2026 UI брал в этом случае цифру ПРЕЖНЕГО счётчика, и участник «на новом»
+// показывал чужое определение: у друга так вышло первое место с 1 М против 47 млрд.
+const lgCcOpen = p => {
+  const cc = lgCc(p);
+  return !!(cc && lgCcNum(cc.lifetime) === null && lgCcNum(cc.lifetimeLower) !== null);
+};
 // Ряд для окна: у суток - часовые корзины, у остальных - хвост дневного ряда.
 function lgCcRun(p, r) {
   const cc = lgCc(p);
@@ -36922,7 +36933,13 @@ function lgCcRun(p, r) {
 function lgCcTotal(p, r) {
   const cc = lgCc(p);
   if (!cc) return null;
-  if (r === 'all') return lgCcNum(cc.lifetime);
+  if (r === 'all') {
+    // Неполный итог (свежая машина) - это НЕ повод брать прежний счётчик: цифра обязана
+    // остаться того же определения, что и её метка. Значит, нижняя граница. `lgShow` ставит
+    // перед ней «≥», а `lgRankable` держит такого участника вне сравнения.
+    const full = lgCcNum(cc.lifetime);
+    return full !== null ? full : lgCcNum(cc.lifetimeLower);
+  }
   return lgCcNum((cc.totals || {})[r]);
 }
 // Строка состава: кто именно набрал итог. Без неё «59,7 млрд» не проверить, а расхождение
@@ -37033,9 +37050,12 @@ function lgPairTotal(p, r) {
 // прочерк ещё и у соседа на старой версии - см. lgMetricGap.
 const lgShow = (p, r) => {
   if (lgMetricGap(p)) return '—';
+  const range = r === undefined ? LG.range : r;
   const v = lgTotal(p, r === undefined ? LG.range : r);
   if (v === null) return '—';
-  return LG_M[LG.metric].fmt(v);
+  // Нижняя граница помечается здесь, а не у ника: «≥» относится к цифре, и только к ней.
+  const open = range === 'all' && lgCcOpen(p) && (LG_M[LG.metric] || {}).source === 'cc';
+  return (open ? '≥ ' : '') + LG_M[LG.metric].fmt(v);
 };
 // То же для парной величины: нет полей - прочерк, а не ноль.
 const lgShowPair = (p, r) => lgPairOn() ? LG_M[LG.metric].fmt(lgPairTotal(p, r)) : '—';
@@ -37192,12 +37212,18 @@ function lgDef(p) {
   return (lgLegacyTotal(p, 'd7') !== null || lgLegacyTotal(p, 'all') !== null) ? 'legacy' : 'none';
 }
 const lgDefMark = p => (lgDef(p) === 'legacy' ? '~' : '');
-const lgDefNote = p => (lgDef(p) === 'legacy'
+const lgDefNote = p => (lgCcOpen(p)
+  ? 'счётчик Claude Code неполный: кэша ещё нет (свежая установка), цифра — нижняя граница'
+    + ' уцелевшей истории, поэтому помечена «≥» и в общий рейтинг не идёт. Итог появится,'
+    + ' когда Claude Code обновит свой кэш статистики'
+  : lgDef(p) === 'legacy'
   ? 'прежний счётчик: журнал front-door, вход + выход (до 26.08 — дневной ряд кеша).'
     + ' Место в списке есть, но считается по своему порядку: с новым счётчиком эта цифра'
     + ' как одна величина не сравнивается'
   : '');
-const lgRankable = p => lgDef(p) === 'cc';
+// В сравнение идут только те, у кого итог полный: с неполным сравнивать нечего - его цифра
+// нижняя граница, а не сумма.
+const lgRankable = p => lgDef(p) === 'cc' && !lgCcOpen(p);
 // Порядок доски: сначала все, кого можно сравнивать, потом остальные. Внутри группы - по
 // убыванию своей цифры; «нет данных» уезжает в конец, а не притворяется нулём.
 function lgSort(rows) {

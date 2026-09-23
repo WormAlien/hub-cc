@@ -386,6 +386,28 @@ if (fs.existsSync(MOD)) {
         assert.strictEqual(e.activity, null);
     });
 
+    // 🔴 Свежая установка 23.09 (друг): на машине нет ни кэша Claude Code, ни транскриптов,
+    // и `snapshotFrom` отдаёт фигуру «нет источников» - БЕЗ `hourly`, `daily` и `activity`.
+    // `envelopeFrom` разыменовывал `snap.hourly.h24` и валил `leagueSync` целиком
+    // (`Cannot read properties of undefined (reading 'h24')` в логе хаба): участник молча
+    // не отправлял свой срез, а выглядело это как «приёмник не отвечает».
+    ok('срез «нет источников» не роняет обмен и едет как «нет данных»', () => {
+        const noSources = {
+            accountingVersion: 1, available: false, reason: 'no-sources',
+            lifetimeCC: null, lifetimeLowerBound: null, completeLifetime: false,
+            totals: { d7: null, d30: null }, daily: { keys: [], known: {}, basis: {} },
+            activity: { activeDays: 0, sessions: 0, messages: 0, streak: { current: 0, longest: 0 }, lastDate: null, hours: {} },
+            source: { cache: null, cacheVersion: null, dailyVersion: null, watermark: null, firstSession: null },
+            coverage: { unknownDays: 0 }, truncatedFiles: 0,
+        };
+        const e = A.envelopeFrom(noSources, '2026-09-16T12:00:00.000Z');
+        assert.strictEqual(e.available, false, 'это «нет данных», а не нули');
+        assert.strictEqual(e.reason, 'no-sources', 'причина названа своя, а не no-snapshot');
+        assert.strictEqual(e.totals.h24, null);
+        assert.deepStrictEqual(e.hours.keys, [], 'часовой ряд пуст, а не бросает');
+        assert.strictEqual(e.activity, null);
+    });
+
     ok('срез без кеша отдаёт нижнюю границу и запрет на полное сравнение', () => {
         const files = { [ROOT + '/projects/p1/s1.jsonl']: main({ ts: '2026-09-16T09:00:00.000Z', u: usage(42, 0, 0, 0) }) };
         const s = A.computeCcStats({ fs: makeFs(files), root: ROOT, now: NOON });

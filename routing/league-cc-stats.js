@@ -591,9 +591,16 @@ function createStatsCache(deps) {
 // короткие коды причин. `v` - версия ОПРЕДЕЛЕНИЯ счёта: по ней рейтинг решает, можно ли
 // сравнивать двух участников, и её же требует приёмник.
 function envelopeFrom(snap, at) {
-    if (!snap) {
+    // Пустой срез отдаём в ДВУХ случаях: снимка нет вовсе и снимок есть, но он «нет
+    // источников». Второй - это машина без кэша Claude Code и без транскриптов: `snapshotFrom`
+    // возвращает фигуру без `hourly`, `daily` и `activity` (см. ветку `no-sources`), а
+    // разыменование `snap.hourly.h24` ниже валило `leagueSync` целиком - сообщением
+    // `Cannot read properties of undefined (reading 'h24')` в логе хаба. Участник при этом
+    // молча не отправлял свой срез. Свежая установка 23.09 (друг) - ровно этот случай.
+    if (!snap || !snap.hourly || !snap.daily || !snap.totals || !snap.activity) {
         return {
-            v: ACCOUNTING_VERSION, available: false, reason: 'no-snapshot',
+            v: ACCOUNTING_VERSION, available: false,
+            reason: (snap && snap.reason) || 'no-snapshot',
             lifetime: null, lifetimeLower: null, complete: false, stale: false, asOf: at || null,
             totals: { h24: null, d7: null, d30: null },
             days: { keys: [], values: [] }, hours: { keys: [], values: [] },

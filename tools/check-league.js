@@ -280,5 +280,20 @@ check('обрезается до 20', api.leagueNickClean('a'.repeat(40)).length
 check('кириллица живёт', api.leagueNickClean('Витя') === 'Витя');
 check('разметка вычищается', api.leagueNickClean('<b>hack</b>') === 'bhackb');
 
+// 🔴 23.09.2026: вкладка теряла ПРИЧИНУ отказа ручки - показывала «ручка ответила 500» и всё.
+// Тело ответа не читалось на не-ok код, хотя сервер кладёт причину в `{ error }` (та же
+// конвенция, что у остальных ручек). Из-за этого разбор свежей установки шёл вслепую.
+{
+  const dash = fs.readFileSync(path.join(ROUTING, 'proxy-dashboard.html'), 'utf8');
+  const at = dash.indexOf('async function lgLoad(');
+  const fn = at < 0 ? '' : dash.slice(at, at + 1200);
+  const bodyAt = fn.indexOf('r.json()');
+  const okAt = fn.indexOf('if (!r.ok)');
+  check('Лига: тело ошибки читается ДО проверки ok', bodyAt > 0 && okAt > 0 && bodyAt < okAt,
+    'тело на позиции ' + bodyAt + ', проверка ok на ' + okAt);
+  check('Лига: причина из тела доезжает до текста ошибки',
+    fn.indexOf('j && j.error ? ') > 0, 'в throw подставляется j.error');
+}
+
 console.log(`\nитог: ${ok} прошло, ${bad} упало`);
 process.exit(bad ? 1 : 0);

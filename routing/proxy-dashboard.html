@@ -40274,8 +40274,12 @@ async function lgLoad(force = false) {
   LG.loading = true;
   try {
     const r = await fetch('/__switch/api/league');
-    if (!r.ok) throw new Error('ручка ответила ' + r.status);
-    const j = await r.json();
+    // Тело читаем ДО проверки `ok`: сервер кладёт причину в `{ error }` (та же конвенция,
+    // что у остальных ручек, см. `jsonRes`), и без этого на экране оставалось только
+    // «ручка ответила 500». 23.09.2026 из-за этого разбор свежей установки шёл вслепую:
+    // причина лежала в теле, а вкладка её выбрасывала.
+    const j = await r.json().catch(() => null);
+    if (!r.ok) throw new Error('ручка ответила ' + r.status + (j && j.error ? ': ' + j.error : ''));
     if (!j || !j.me) throw new Error('в ответе нет своего среза');
     LG.data = j; LG.err = null;
     // Список групп хаб может отдать и здесь, вместе со срезом. Берём, если он есть: это

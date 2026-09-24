@@ -173,31 +173,76 @@ def mark_bad_address(label, why):
 
 # ── прокси из общего пула ─────────────────────────────────────────────────────
 
+async def _bridge_json(args):
+    """Один вызов моста пула, разобранный до словаря.
+
+    Общий и для выдачи прокси по ярусу, и для закреплённого адреса: две копии этого разбора
+    разъехались бы ровно так же, как разъезжались прочие дубли в этом репозитории.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    raw, err = await proc.communicate()
+    text = (raw or b"").decode("utf-8", "replace").strip()
+    lines = [l for l in text.splitlines() if l.strip().startswith("{")]
+    if not lines:
+        detail = flat((text or (err or b"").decode("utf-8", "replace")), 200)
+        raise RuntimeError(f"мост пула не ответил JSON (код {proc.returncode}): {detail}")
+    return json.loads(lines[-1])
+
+
 async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGHT_PATH, pin=None,
                         exclude=None):
     """Прокси из ОБЩЕГО пула через мост на Node. Своей копии правил пула тут нет.
 
-    `pin` - конкретная строка прокси (`http://user:pass@ip:port`). Нужна не для красоты:
-    требовательность Turnstile зависит от IP выхода (замер 16.09 - один тест-прокси
-    проходит молча, другой требует интерактивного клика), и чтобы проверить это
-    утверждение, а не поверить в него, нужен способ закрепить адрес. При `pin` пул
-    не спрашивается вовсе - привязки не трогаем.
+    `pin` - конкретная строка прокси (`http://user:pass@ip:port` или голый
+    `http://ip:port`). Нужна не для красоты: требовательность Turnstile зависит от IP выхода
+    (замер 16.09 - один тест-прокси проходит молча, другой требует интерактивного клика), и
+    чтобы проверить это утверждение, а не поверить в него, нужен способ закрепить адрес.
+    При `pin` пул не ВЫБИРАЕТ прокси и привязок не трогает.
+
+    🪤 Но при голом `label` пул всё-таки спрашивается - за кредами. Сам `label` их не
+    содержит, и браузер, собранный из одной строки, шёл на адрес анонимно (407 на CONNECT,
+    разбор - ниже в ветке `pin`).
 
     Контракт пула соблюдаем буквально: `ok:false` - «НЕ ХОДИТЬ ВООБЩЕ». Молча уйти
     напрямую - это ровно тот тихий провал, из-за которого автореги когда-то
     регистрировались с домашнего IP и никто об этом не знал.
     """
     if pin:
-        parts = pin
         m = re.match(r"^(?P<scheme>\w+)://(?:(?P<user>[^:@/]+):(?P<pass>[^@/]*)@)?(?P<host>[^:/]+):(?P<port>\d+)$", pin)
         if not m:
             raise RuntimeError(f"--proxy не разобран: {pin}")
-        cfg = {"server": f"{m.group('scheme')}://{m.group('host')}:{m.group('port')}"}
+        # Креды прямо в строке - это ручной заход (`--proxy socks5://user:pass@ip:port`);
+        # пул такого адреса может и не знать, поэтому разбираем локально, как было.
         if m.group("user"):
+            cfg = {"server": f"{m.group('scheme')}://{m.group('host')}:{m.group('port')}"}
             cfg["username"] = m.group("user")
             cfg["password"] = m.group("pass") or ""
-        LAST_PROXY["label"] = cfg["server"]
-        log("ПРОКСИ", f"{cfg['server']} · закреплён вручную (--proxy), пул не спрашивал")
+            LAST_PROXY["label"] = cfg["server"]
+            log("ПРОКСИ", f"{cfg['server']} · закреплён вручную (--proxy), пул не спрашивал")
+            return cfg
+
+        # 🔴 Голый `scheme://host:port` - это форма `label`, и кредов в ней НЕТ намеренно
+        # (`proxy-pool.js` держит их вне label, потому что label уходит в UI и логи). Значит
+        # логин с паролем знает только пул - и спрашиваем его МЫ, а не браузер.
+        #
+        # Замер 22.09: проба кладёт в `candidates.json` один label, драйвер собирал из него
+        # прокси браузера, и все три кандидата отвечали `407 Proxy Authentication Required`
+        # на CONNECT. Firefox показывал это как `NS_ERROR_PROXY_CONNECTION_REFUSED`, а до
+        # площадки не доходил ни один пакет - при том, что проба те же адреса проходила: она
+        # ходит через объект пула, где креды есть.
+        ans = await _bridge_json(["node", str(BRIDGE), "--pin", pin])
+        if not ans.get("ok"):
+            raise RuntimeError(flat(ans.get("error"), 140))
+        cfg = ans.get("browser") or {}
+        if not cfg.get("username"):
+            # Адрес пул знает, а кредов у него нет - идём анонимно. Это законно (публичный
+            # адрес скрапера), но именно так выглядит и наш нодовый инбаунд без пароля,
+            # поэтому говорим вслух, а не молчим.
+            log("ПРОКСИ", f"⚠️ у {ans.get('label')} кредов в пуле нет - иду анонимно")
+        LAST_PROXY["label"] = ans.get("label") or pin
+        log("ПРОКСИ", f"{ans.get('label')} · закреплён (--proxy) · ярус {ans.get('tier')} · "
+                      f"креды из пула")
         return cfg
 
     if tier == "none":
@@ -216,16 +261,7 @@ async def acquire_proxy(tier, key, log, host=POOL_HOST, probe_path=POOL_PREFLIGH
     # единственный выход - следующий прокси из того же яруса.
     if exclude:
         cmd += ["--exclude", ",".join(exclude)]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    raw, err = await proc.communicate()
-    text = (raw or b"").decode("utf-8", "replace").strip()
-    lines = [l for l in text.splitlines() if l.strip().startswith("{")]
-    if not lines:
-        detail = flat((text or (err or b"").decode("utf-8", "replace")), 200)
-        raise RuntimeError(f"мост пула не ответил JSON (код {proc.returncode}): {detail}")
-
-    ans = json.loads(lines[-1])
+    ans = await _bridge_json(cmd)
     if not ans.get("ok"):
         raise RuntimeError(f"пул отказал в прокси: {ans.get('error')}")
     if ans.get("direct"):

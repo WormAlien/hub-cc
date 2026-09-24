@@ -13,11 +13,14 @@
 // Использование:
 //   node routing/lib/proxy-for.js --key odyssey:mail@example.com --host odysseyapi.tech \
 //        --path /api/auth/altcha/challenge --tier scraper
+//   node routing/lib/proxy-for.js --pin http://1.2.3.4:10808      # адрес задан, нужны креды
 //
 // Ответ (одна строка JSON):
 //   {"ok":true,"direct":true,"reason":"…"}                       — идти без прокси
 //   {"ok":true,"tier":"scraped","label":"http://1.2.3.4:8080",
 //    "browser":{"server":"http://1.2.3.4:8080"}}                 — идти через него
+//   {"ok":true,"pinned":true,"label":"http://1.2.3.4:10808",
+//    "browser":{"server":"…","username":"…","password":"…"}}     — закреплённый адрес с кредами
 //   {"ok":false,"error":"…"}                                     — НЕ ходить вообще
 //
 // 🪤 Ярус выбирается ДО первого обращения к пулу: `config()` читает env и мемоизирует,
@@ -62,6 +65,19 @@ const skipAsn = String(val('--skip-asn', '')).split(',').map(s => s.trim()).filt
 // проверка кэшируется на 10 минут, а публичный адрес умирает за минуты - прогон поднимал
 // окно и получал `NS_ERROR_CONNECTION_REFUSED` на живой, по мнению пула, прокси.
 const forceCheck = argv.includes('--force');
+// `--pin <label>` - адрес выбран ВЛАДЕЛЬЦЕМ (список пробы), а пул только отдаёт его креды.
+//
+// 🔴 Зачем отдельный режим, а не `--exclude`/`--tier`. Проба кладёт в `candidates.json` один
+// `label` - `scheme://host:port`, БЕЗ логина и пароля: `label` их не содержит намеренно
+// (`proxy-pool.js`, `parseProxy`), потому что он уходит в UI и логи. Драйвер получал эту
+// строку как `--proxy` и собирал прокси браузера из неё одной - то есть шёл на свой же
+// нодовый инбаунд `:10808` без пароля. Замер 22.09: все три кандидата отвечали
+// `407 Proxy Authentication Required` на CONNECT, Firefox показывал это как
+// `NS_ERROR_PROXY_CONNECTION_REFUSED`, и ни один пакет до площадки не доходил. Проба при
+// этом проходила: она ходит через ОБЪЕКТ пула, где креды есть.
+//
+// Режим не трогает привязки и не выбирает ярус: адрес задан, вопрос только в кредах.
+const pin = val('--pin');
 
 const out = (obj) => { process.stdout.write(JSON.stringify(obj) + '\n'); };
 const log_line = (m) => process.stderr.write(`[proxy-for] ${m}\n`);
@@ -112,6 +128,25 @@ async function dropSpentNetworks(list) {
 }
 
 (async () => {
+    // Режим закрепления: адрес задан, пул его не выбирает и привязок не трогает - отдаём
+    // конфиг браузера с КРЕДАМИ ИЗ ПУЛА. Стоит ВЫШЕ изоляции яруса: список пробы смешанный,
+    // и адрес из `own-proxies.txt` обязан находиться независимо от `--tier`.
+    if (pin) {
+        let pp;
+        try { pp = require('./proxy-pool.js'); }
+        catch (e) { return out({ ok: false, error: `пул не загрузился: ${e.message}` }); }
+        const p = pp.pool().proxies.find(x => x.label === pin || x.id === pin);
+        // Отказ, а не «пойду анонимно»: молчаливый уход без кредов - ровно тот тихий провал,
+        // ради которого пул и заведён. Вызывающий сам решит, что делать (взять следующий адрес).
+        if (!p) return out({ ok: false, notFound: true, error: `адрес «${pin}» в пуле не найден` });
+        let tierName = null;
+        try { tierName = pp.tierOf(p.id); } catch { /* не критично */ }
+        return out({
+            ok: true, direct: false, pinned: true,
+            tier: tierName, label: p.label, browser: browserProxy(p),
+        });
+    }
+
     // Режим привязки: ничего не выдаём, только связываем ключ с прокси.
     if (bindKey && bindLabel) {
         let pp;

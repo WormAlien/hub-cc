@@ -111,14 +111,24 @@ function pidAlive(pid) {
 // 🪤 Хост Google в белом списке пула может отсутствовать - тогда `enabled` = false, и это
 // видно владельцу прямо в карточке. Молча показать пустой селектор значило бы соврать про
 // «прокси нет».
+//
+// 🔴 Скрапленные адреса в список НЕ попадают (решение владельца 25.09: «скрапер прокси не
+// нужен для гуглов»). Это не прихоть: скрапленный пул - чужие датацентровые адреса без
+// авторизации, на них Google выдаёт челлендж почти всегда, а вход под челленджем тратит
+// единственную сессию аккаунта. Селектор, где 62 мёртвых варианта из 66, ещё и прячет
+// рабочее: выбирать из шести своих проще, чем из шестидесяти восьми чужих.
 function poolById(id) {
     if (!id) return null;
     try { return proxyPool.pool().byId.get(String(id)) || null; } catch { return null; }
 }
 
+// Ярусы, годные под Google. `own` - свои адреса из own-proxies.txt; `scraped` отсекается.
+const GOOGLE_TIERS = ['own'];
+
 function poolView() {
-    let proxies = [];
+    let all = [];
     let enabled = false;
+    let error = null;
     try {
         const p = proxyPool.pool();
         enabled = proxyPool.enabledForHost(GOOGLE_HOST);
@@ -126,7 +136,7 @@ function poolView() {
         for (const v of Object.values(proxyPool.assignments() || {})) {
             if (v && v.proxy) load[v.proxy] = (load[v.proxy] || 0) + 1;
         }
-        proxies = p.proxies.map(x => {
+        all = p.proxies.map(x => {
             // Вердикт берём из кеша проверок пула, если он там есть: «не проверяли» и
             // «проверяли и провалился» - разные вещи, и второе владельцу важно.
             const v = proxyPool.healthCacheGet(x.id, GOOGLE_HOST);
@@ -139,9 +149,10 @@ function poolView() {
             };
         });
     } catch (e) {
-        return { host: GOOGLE_HOST, enabled: false, proxies: [], error: e.message };
+        return { host: GOOGLE_HOST, enabled: false, proxies: [], skipped: 0, error: e.message };
     }
-    return { host: GOOGLE_HOST, enabled, proxies };
+    const proxies = all.filter(x => GOOGLE_TIERS.includes(x.tier));
+    return { host: GOOGLE_HOST, enabled, proxies, skipped: all.length - proxies.length, error };
 }
 
 function proxiesWithLabel(e) {
@@ -259,12 +270,14 @@ async function dispatch(req, res, route, query) {
         const view = poolView();
         return json(res, 200, {
             ...view,
-            // Сколько всего адресов: владельцу важно видеть, пуст пул или просто закрыт хост.
             total: view.proxies.length,
             // Ярусы - ТОЛЬКО имена. `proxyPool.tierOrder()` отдаёт записи целиком, а в записи
             // лежит `raw` с логином и паролем прокси: наружу они не уходят никогда, креды
             // не покидают proxy-admin.js.
             tiers: [...new Set(view.proxies.map(p => p.tier).filter(Boolean))],
+            // Какие ярусы вообще бывают и какие из них годны под Google: фронт по этому
+            // объясняет, почему в списке мало адресов.
+            acceptedTiers: GOOGLE_TIERS,
         });
     }
 

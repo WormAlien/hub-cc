@@ -171,6 +171,12 @@ const TOTP = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
         'в списке адресов нет ни raw, ни пароля: креды прокси не покидают свой модуль');
     check(!/"raw"|:\/\/[^/"]+:[^/"]*@/.test(proxies.raw),
         'ни одна строка ответа не содержит кредов прокси');
+    // 🔴 Скрапленные адреса под Google не годятся (решение владельца 25.09): они не должны
+    // попадать ни в список, ни в селектор - там только свои.
+    check(proxies.json.proxies.every(p => proxies.json.acceptedTiers.includes(p.tier)),
+        `в списке только годные ярусы (${proxies.json.acceptedTiers.join(', ')}): ${proxies.json.proxies.length} адресов, скрапленных отсеяно ${proxies.json.skipped}`);
+    check(proxies.json.skipped > 0 || proxies.json.proxies.length === 0 || !proxies.raw.includes('socks5://'),
+        'скрапленные адреса (порт 1080 без авторизации) в список не просочились');
 
     section('5. Ручки: правки и защита от подмены');
     const dup = await call('POST', '/__switch/api/google/add', { email: 'ACC.one@gmail.com', password: 'x' });

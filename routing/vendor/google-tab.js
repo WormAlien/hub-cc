@@ -228,7 +228,7 @@
       const p = await api('proxies');
       S.pool = {
         host: p.host || '', enabled: !!p.enabled, proxies: p.proxies || [],
-        total: p.total || 0, tiers: p.tiers || [],
+        total: p.total || 0, skipped: p.skipped || 0, tiers: p.tiers || [],
       };
     } catch (e) {
       S.pool = { host: '', enabled: false, proxies: [], total: 0, tiers: [], error: e.message };
@@ -298,18 +298,21 @@
 
   // Селектор прокси: адрес берётся ИЗ ПУЛА, вписать строку руками нельзя. В списке - метка
   // (без кредов), ярус и сколько аккаунтов на этот адрес уже село.
+  //
+  // 🪤 В списке только свои адреса: скрапленные под Google не годятся (решение владельца
+  // 25.09). Привязка, которой в списке нет - скрапленная или пропавшая из пула, - остаётся
+  // отдельным вариантом: молча сбросить её на «не привязан» значило бы потерять работу.
   function proxyOptions(selected) {
     const list = S.pool.proxies;
-    if (!selected && !list.length) return '<option value="">пул прокси пуст</option>';
-    const head = `<option value="" ${selected ? '' : 'selected'}>— не привязан —</option>`;
+    if (!selected && !list.length) return `<option value="">${S.pool.skipped ? 'своих адресов нет (скрапленные не годятся)' : 'в пуле нет адресов'}</option>`;
+    const head = `<option value="" ${selected ? '' : 'selected'}>- не привязан -</option>`;
     const body = list.map(p => {
       const marks = [p.tier, p.accounts ? `занят ${p.accounts}` : null, p.verdict === 'bad' ? 'не отвечает' : null]
         .filter(Boolean).join(' · ');
       return `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? 'selected' : ''}>${esc(p.label)}${marks ? ` (${esc(marks)})` : ''}</option>`;
     }).join('');
-    // Привязка могла остаться от прежнего пула: показываем её, а не молча сбрасываем на «не привязан».
     const orphan = selected && !list.some(p => String(p.id) === String(selected))
-      ? `<option value="${esc(selected)}" selected>${esc(selected)} - адреса нет в пуле</option>` : '';
+      ? `<option value="${esc(selected)}" selected>${esc(selected)} - не годится под Google</option>` : '';
     return head + orphan + body;
   }
 
@@ -334,16 +337,18 @@
     </header>`;
   }
 
-  // Предупреждение о пуле прокси: под Google годятся только резидентские адреса, и хост
-  // может быть не в белом списке пула - тогда селектор покажет адреса, но врать про
-  // «привязано» нельзя.
+  // Предупреждение о пуле прокси. Под Google годятся только свои резидентские адреса,
+  // скрапленные в список не попадают вообще, а хост может быть не в белом списке пула - и
+  // про каждое из этого вкладка говорит вслух, а не показывает молча пустой селектор.
   function poolNoteHtml() {
     if (!S.pool.host) return '';
-    if (!S.pool.total) return '<div class="gg-hint gg-hint-warn">Пул прокси пуст: привязывать нечего. Заведи адреса на вкладке «Свои прокси».</div>';
+    const own = `в списке только свои адреса${S.pool.skipped ? `, скрапленных отсеяно ${S.pool.skipped}` : ''}`;
+    if (!S.pool.total && !S.pool.skipped) return '<div class="gg-hint gg-hint-warn">Пул прокси пуст: привязывать нечего. Заведи адреса на вкладке «Свои прокси».</div>';
+    if (!S.pool.total) return `<div class="gg-hint gg-hint-warn">Своих адресов в пуле нет (${S.pool.skipped} скрапленных отсеяно: под Google они не годятся). Добавь резидентский адрес на вкладке «Свои прокси».</div>`;
     if (!S.pool.enabled) {
-      return `<div class="gg-hint gg-hint-warn">Пул прокси не обслуживает <code>${esc(S.pool.host)}</code>: хост не в его белом списке (адресов в пуле ${S.pool.total}). Выбрать адрес можно, но в бою он на этот хост не пойдёт - сначала добавь хост в пул на вкладке «Свои прокси».</div>`;
+      return `<div class="gg-hint gg-hint-warn">Пул прокси не обслуживает <code>${esc(S.pool.host)}</code>: хост не в его белом списке (${own}). Выбрать адрес можно, но в бою он на этот хост не пойдёт - сначала добавь хост в пул на вкладке «Свои прокси».</div>`;
     }
-    return `<div class="gg-hint">Пул прокси обслуживает <code>${esc(S.pool.host)}</code>, адресов ${S.pool.total}${S.pool.tiers.length ? ` (ярусы: ${esc(S.pool.tiers.join(', '))})` : ''}.</div>`;
+    return `<div class="gg-hint">Пул обслуживает <code>${esc(S.pool.host)}</code>, ${own}${S.pool.tiers.length ? ` (ярусы: ${esc(S.pool.tiers.join(', '))})` : ''}.</div>`;
   }
 
   // ── Панели: добавление и импорт ───────────────────────────────────────────

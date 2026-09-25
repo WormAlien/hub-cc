@@ -224,6 +224,17 @@ check(saved[0].id === view.id, 'safeView сохраняет id записи');
 check(view.kind === 'burner' && view.status === 'unknown', 'класс и статус по умолчанию - burner и unknown');
 check(Array.isArray(view.usedOn) && view.usedOn.length === 0, 'usedOn - массив (поле живёт под будущие flow и antigravity)');
 
+// 🪤 Идентификатор ищется по ТЕКУЩЕМУ пулу, а не по часам. На пустом массиве две записи,
+// заведённые в одну миллисекунду, получили бы один id - а с ним один профиль на диске.
+{
+    const acc = [];
+    acc.push(pool.normalize({ email: 'id.one@gmail.com', password: PASS }, acc));
+    acc.push(pool.normalize({ email: 'id.two@gmail.com', password: PASS }, acc));
+    check(new Set(acc.map(e => e.id)).size === 2, 'две записи подряд получают разные id (массив пула растущий)');
+    // Обратную сторону тут проверять НЕЛЬЗЯ: на пустом массиве обе записи получают один id,
+    // и это верное поведение функции - отличать их обязан вызывающий (ручки так и делают).
+}
+
 // ── 7. .gitignore - спрашиваем у самого git ───────────────────────────────────
 section('7. Публичный репозиторий');
 const inGit = (p) => {

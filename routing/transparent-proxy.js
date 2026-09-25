@@ -7570,6 +7570,14 @@ function handleTsAddGithub(req, res) {
 // переменными среды (см. handleOlOpen).
 const olPool = require('./lib/outlook-pool');
 
+// ── Вкладка Google: пул аккаунтов под подписку AI Pro ────────────────────────
+// Модуль несёт весь HTTP вкладки (ручки под `/__switch/api/google/`), а отсюда получает
+// ДВЕ боевые функции ИНЪЕКЦИЕЙ: `logLine` (иначе его операции не попадут в лог дашборда) и
+// `sessionOpenEarlyFailure` (пробник «окно не поднялось»). Копий не заводим - второй
+// экземпляр рано или поздно разъедется с первым (тот же довод, что у lib/pooldrop.js).
+const googleRoutes = require('./lib/google-routes');
+googleRoutes.setHub({ log: logLine, earlyFailure: sessionOpenEarlyFailure });
+
 const OL_OPEN_SCRIPT = path.join(__dirname, '..', 'outlook', 'open-session.js');
 const OL_CODE_SCRIPT = path.join(__dirname, '..', 'outlook', 'read-code.js');
 const OL_CODE_TIMEOUT_MS = 90_000;
@@ -29645,6 +29653,12 @@ const server = http.createServer((req, res) => {
     // на чужие возвращает false — на это стоит проверка в tools/check-media.js.
     if (require('./lib/media-routes').handle(req, res)) return;
 
+    // ── Вкладка Google (пул аккаунтов): весь её HTTP живёт в модуле ───────────
+    // У вкладок аккаунтов ручки разбросаны по этой лестнице и сравнивают `req.url`
+    // ЦЕЛИКОМ - любой `?query` мимо них пролетает и вкладка получает 404. Здесь один
+    // вход: модуль берёт всё под `/__switch/api/google/`, на чужие пути возвращает false.
+    if (googleRoutes.handle(req, res)) return;
+
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
             current: currentTarget(),
@@ -31814,7 +31828,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
             // вкладкой «Свои прокси»: её `proxies-tab.js` и `.css` попали в исключение не
             // сразу, и сделанное в них было не проверить перезагрузкой. Дописывая вкладку
             // с внешними файлами - дописывай сюда её префикс.
-            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab'];
+            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab', 'google-tab'];
             const name = parts[parts.length - 1];
             const fresh = FRESH_PREFIXES.some(p => name.startsWith(p));
             res.writeHead(200, {

@@ -99,6 +99,9 @@
 <link rel="stylesheet" href="/vendor/models-tab.css">
 <link rel="stylesheet" href="/vendor/media-tab.css">
 <link rel="stylesheet" href="/vendor/proxies-tab.css">
+<!-- Вкладка Google (пул аккаунтов под подписку AI Pro). Пара файлов в /vendor, как у MEDIA
+     и «Моделей»: разметка рисуется из JS, поэтому классы здесь свои (gg-*), а не Tailwind. -->
+<link rel="stylesheet" href="/vendor/google-tab.css">
 <!-- 🪤 Анти-FOUC: Tailwind собирается В БРАУЗЕРЕ, и это гонка с первой отрисовкой.
      Замер 10.09 в Chrome: CSS готов на 173 мс, первая отрисовка на 236 мс — запас всего
      63 мс. Zen (Firefox) на холодном кеше эту гонку ПРОИГРЫВАЕТ: страница успевает
@@ -860,6 +863,11 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">📧</span>
         <span class="flex-1">Outlook-почты</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-outlook" title="живых / всего ящиков">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="google" title="Пул Google-аккаунтов под подписку AI Pro: логин и пароль с копированием, живой 2FA-код, профиль браузера на аккаунт, прокси. Кредиты Flow и Antigravity - следующими шагами">
+        <span class="w-5 text-center text-[14px]">🔵</span>
+        <span class="flex-1">Google аккаунты</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-google" title="живых / всего в пуле">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="telegram">
         <span class="w-5 text-center text-[14px]">📱</span>
@@ -5903,6 +5911,13 @@ window.finNavCount = async () => {
     </div>
 
     <!-- ═════════ TAB: OmniRoute Pool ═════════ -->
+    <!-- ═════════ TAB: Google (пул аккаунтов) ═════════ -->
+    <!-- Скелет пустой намеренно: всю разметку строит /vendor/google-tab.js (неймспейс
+         window.GOOGLE), как у MEDIA и «Моделей». Секретов в статике нет и быть не должно. -->
+    <div data-tab-content="google">
+      <div id="google-root"></div>
+    </div>
+
     <!-- ═════════ TAB: MEDIA ═════════ -->
     <!-- Скелет пустой намеренно: всю разметку строит /vendor/media-tab.js
          (неймспейс window.MEDIA), как это сделано у вкладки «Модели».
@@ -10449,6 +10464,9 @@ function showTab(name) {
   // причине, что у Grok ниже: код вкладки во внешнем /vendor/media-tab.js, подключённом
   // в конце body, а восстановление вкладки на F5 зовёт showTab из более раннего блока.
   if (name === 'media' && !state.loaded.media) { state.loaded.media = true; if (typeof MEDIA !== 'undefined') MEDIA.load(); }
+  // Google: гвард по typeof обязателен по той же причине - код в /vendor/google-tab.js,
+  // подключённом в конце body, а восстановление вкладки на F5 зовёт showTab раньше.
+  if (name === 'google' && !state.loaded.google) { state.loaded.google = true; if (typeof GOOGLE !== 'undefined') GOOGLE.load(); }
   // Гвард по typeof — та же причина, что у лиги ниже: `grokRenderSaved` живёт в последнем
   // блоке скриптов, а восстановление вкладки на F5 зовёт `showTab` из блока 5. С открытой
   // вкладкой Grok летел `grokRenderSaved is not defined`, и исключение съедало всё, что
@@ -34555,7 +34573,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -34892,6 +34910,7 @@ function autoRefreshTick() {
       case 'helpcoder':     loadHelpcoderSessions(false); break;
       case 'media':         if (typeof MEDIA !== 'undefined') MEDIA.refresh(); break;
       case 'github':        loadGhKeys(); break;
+      case 'google':        if (typeof GOOGLE !== 'undefined') GOOGLE.refresh(); break;
       case 'outlook':       loadOlList(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
       // Гвард по typeof — код вкладки во внешнем /vendor/models-tab.js, тик может
@@ -34981,6 +35000,9 @@ const NAV_COUNT_JOBS = [
   { tab: 'svrtr',       fn: () => loadSvrtrSessions(false) },
   { tab: 'helpcoder',   fn: () => loadHelpcoderSessions(false) },
   { tab: 'media',       fn: () => (typeof MEDIA !== 'undefined') && MEDIA.load(), mark: 'media' },
+  // Google: `mark` — та же причина, что у media. Задача заполняет цифру в сайдбаре и
+  // рисует вкладку; список секретов не несёт (пароль приходит отдельной ручкой).
+  { tab: 'google',      fn: () => (typeof GOOGLE !== 'undefined') && GOOGLE.load(), mark: 'google' },
   // Свои прокси: ТОЛЬКО цифра, без рендера вкладки. Так же, как cun/ot/vyceai ниже, и по
   // той же причине - цена.
   //
@@ -41656,6 +41678,7 @@ setTimeout(() => { ladProbeRole(); }, 2500);
 <!-- Вкладка «MEDIA» — тем же приёмом: весь код (window.MEDIA) во внешней паре файлов.
      Разбор — docs/MEDIA-TAB-SEAM.md, регресс — tools/check-media.js. -->
 <script src="/vendor/media-tab.js"></script>
+<script src="/vendor/google-tab.js"></script>
 
 <!-- Вкладка «Свои прокси» — тем же приёмом: код (window.PROXIES) во внешней паре файлов.
      Регресс — tools/check-proxy-mapping.js (логика пула) и tools/check-proxy-admin.js. -->

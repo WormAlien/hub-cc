@@ -995,7 +995,9 @@ t('дефолтный набор вкладок дашборда — как на
     // (генерация картинок/видео) и 'routes' (шпаргалка префиксного роутинга).
     // 12.09: добавилась 'aikeysapi' (AIKeysAPI/ZhiFlow, New API без GitHub-входа) —
     // сразу за 'hcnsec', рядом со своим поколением панели.
-    const want = ['fin', 'league', 'github', 'outlook', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+    // 25.09: добавилась 'google' (пул Google-аккаунтов под подписку AI Pro) — сразу за
+    // 'outlook', рядом с прочими менеджерами аккаунтов.
+    const want = ['fin', 'league', 'github', 'outlook', 'google', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

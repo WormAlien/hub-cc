@@ -38,5 +38,9 @@
   "AS62610 Zenlayer Inc": "socks5://69.17.8.19:3128 (2026-09-19 06:35)",
   "AS211273 Cloud Software - FZCO": "socks5://95.182.95.129:1080 (2026-09-19 06:35)",
   "AS211507 Julian Achter": "socks5://45.141.119.231:1080 (2026-09-19 07:07)",
-  "AS134926 Micro Hosting Private Limited": "socks5://178.92.72.205:1080 (2026-09-19 07:24)"
+  "AS134926 Micro Hosting Private Limited": "socks5://178.92.72.205:1080 (2026-09-19 07:24)",
+  "AS51852 Private Layer INC": "выход CH-ноды (2026-09-25 16:47)",
+  "AS395839 HOSTKEY": "выход US-ноды (2026-09-25 16:49)",
+  "AS201988 VPSPay ASN": "наш инбаунд из own-proxies (2026-09-25 16:54)",
+  "AS36352 HostPapa": "socks5://204.152.218.103:10809 (2026-09-25 17:09)"
 }

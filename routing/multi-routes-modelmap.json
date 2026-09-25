@@ -1,18 +1,18 @@
 {
   "default": {
-    "provider": "fxqidian",
-    "model": "deepseek-v4-pro"
+    "provider": "justwoker",
+    "model": "claude-opus-4-8"
   },
   "opus": {
-    "provider": "fxqidian",
-    "model": "deepseek-v4-pro"
+    "provider": "justwoker",
+    "model": "claude-opus-4-8"
   },
   "sonnet": {
-    "provider": "fxqidian",
-    "model": "deepseek-v4-pro"
+    "provider": "justwoker",
+    "model": "claude-opus-4-8"
   },
   "haiku": {
-    "provider": "fxqidian",
-    "model": "deepseek-v4-pro"
+    "provider": "agentrouter",
+    "model": "deepseek-v4-flash"
   }
 }

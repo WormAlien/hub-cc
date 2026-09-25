@@ -1,6 +1,6 @@
 {
-  "opus": "claude-opus-5",
-  "sonnet": "claude-opus-5",
-  "haiku": "claude-opus-5",
+  "opus": "gpt-6-astra",
+  "sonnet": "gpt-6-astra",
+  "haiku": "gpt-6-astra",
   "gpt": "gpt-6-astra"
 }

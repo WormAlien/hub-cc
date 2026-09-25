@@ -236,6 +236,26 @@ function nodeTotp(secret, at = Date.now()) {
 
         check(consoleBad.length === 0, `консоль чистая${consoleBad.length ? `: ${consoleBad.slice(0, 3).join(' | ')}` : ''}`);
 
+        // ── 8. Широкий экран ────────────────────────────────────────────────
+        // 🪤 Панель формы не имеет права растягиваться на всю ширину монитора: на 2К строка
+        // ввода выходит под 1900 px, и это ровно то, на что владелец сказал «чё криво».
+        console.log('\n── 8. Широкий экран ──');
+        await page.setViewportSize({ width: 1920, height: 1000 });
+        await page.locator('button:has-text("Импорт")').click();
+        await page.waitForSelector('.gg-panel-imp textarea');
+        const wide = await page.evaluate(() => {
+            const box = (el) => el.getBoundingClientRect();
+            const panel = box(document.querySelector('.gg-panel-imp'));
+            const area = box(document.querySelector('.gg-panel-imp textarea'));
+            const prev = box(document.querySelector('.gg-panel-imp .gg-preview'));
+            return { panel: panel.width, area: area.width, prevX: prev.x, areaRight: area.right, sameRow: Math.abs(prev.y - area.y) < 40 };
+        });
+        check(wide.panel <= 1120, `панель формы ограничена по ширине (${Math.round(wide.panel)} px при окне 1920)`);
+        check(wide.area < 900, `поле ввода не растянуто на всю ширину (${Math.round(wide.area)} px)`);
+        check(wide.sameRow && wide.prevX >= wide.areaRight - 1,
+            'предпросмотр стоит рядом с полем, а не под ним: место справа используется');
+        await page.locator('.gg-panel-imp button:has-text("Отмена")').click();
+
         // Скриншот кладём в системный временный каталог, а не в репозиторий: смотреть на
         // вкладку полезно, а мусорить в рабочем дереве - нет.
         const shot = path.join(require('os').tmpdir(), 'google-tab-render.png');

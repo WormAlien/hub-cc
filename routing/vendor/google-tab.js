@@ -417,9 +417,11 @@
         <code>почта:пароль:почта-восстановления:секрет</code> - порядок хвоста любой, разделитель
         <code>:</code>, <code>|</code>, <code>;</code> или таб. Строки чека без адреса (реклама, рамки, ссылки)
         пропускаются как шум.</div>
-      <textarea id="gg-imp-text" class="gg-area" placeholder="вставь сюда письмо-чек магазина целиком"
-        oninput="GOOGLE.setImpText(this.value)">${esc(S.impText || '')}</textarea>
-      ${preview}
+      <div class="gg-imp-grid">
+        <textarea id="gg-imp-text" class="gg-area" placeholder="вставь сюда письмо-чек магазина целиком"
+          oninput="GOOGLE.setImpText(this.value)">${esc(S.impText || '')}</textarea>
+        ${preview}
+      </div>
       <div class="gg-form-foot">
         <button class="gg-btn gg-btn-imp" ${p && p.parsed ? '' : 'disabled'} onclick="GOOGLE.commitImport()">Импортировать${p && p.parsed ? ` ${p.parsed}` : ''}</button>
         <button class="gg-btn" onclick="GOOGLE.runDry()">Проверить</button>

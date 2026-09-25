@@ -52,7 +52,16 @@
   flex-direction: column;
   gap: 16px;
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  /* 🪤 Внешний файл не имеет права рассчитывать на Tailwind-преflight дашборда. От
+     `box-sizing` зависит вся арифметика ширин: при `content-box` (значение по умолчанию)
+     `max-width: 1100` плюс padding 32 даёт панель 1134, а поле в 100 % ширины вылезает из
+     своей колонки на padding и рамку - ровно так панель импорта и разъехалась на 2К-экране.
+     Преflight в дашборде это чинит, но в стенде его нет, и «работает только в бою» - не
+     свойство файла. Ставим явно, как это делает преflight. */
+  box-sizing: border-box;
 }
+.gg-wrap *, .gg-wrap *::before, .gg-wrap *::after { box-sizing: inherit; }
+.gg-toasts, .gg-toasts * { box-sizing: border-box; }
 
 /* ── Шапка: как у GitHub-вкладки (заголовок слева, действия справа) ─────────── */
 
@@ -224,9 +233,20 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 🪤 Форма не растягивается на всю ширину монитора. У сетки карточек ширина - это хорошо
+     (больше карточек в ряд), а у полей ввода - нет: на 2К-экране строка ввода получается
+     в 1900 px, читать и править её невозможно, а панель выглядит пустой коробкой. Мера
+     ограничена, остальное место занимает предпросмотр (см. .gg-imp-grid). */
+  max-width: 1100px;
 }
 .gg-panel-add { border: 1px solid color-mix(in oklab, var(--color-emerald) 40%, transparent); }
 .gg-panel-imp { border: 1px solid color-mix(in oklab, var(--color-azure) 40%, transparent); }
+
+/* Импорт: на широком экране текст и предпросмотр стоят рядом, а не друг под другом. */
+.gg-imp-grid { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) {
+  .gg-imp-grid { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+}
 
 .gg-form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .gg-form .gg-lbl { flex: 1 1 160px; }

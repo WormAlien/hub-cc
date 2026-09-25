@@ -37,7 +37,7 @@ const GOOGLE_HOST = 'accounts.google.com';
 
 // Что можно править снаружи. Список закрытый: `id`, `addedAt` и `usedOn` меняет сервер, а не
 // форма, и «прими любое поле» здесь означало бы, что фронт правит идентификатор записи.
-const EDITABLE = ['status', 'kind', 'note', 'nickname', 'phone', 'recoveryEmail', 'proxy', 'password', 'totpSecret'];
+const EDITABLE = ['status', 'kind', 'note', 'nickname', 'phone', 'recoveryEmail', 'proxy', 'password', 'totpSecret', 'appPassword'];
 // ── Подключение к хабу ───────────────────────────────────────────────────────
 // Лог (`logLine`) и ранний пробник окна живут в `transparent-proxy.js` и передаются сюда
 // ИНЪЕКЦИЕЙ, а не копируются: копия рано или поздно разъедется с боевой (тот же довод, что
@@ -262,6 +262,7 @@ async function dispatch(req, res, route, query) {
             email: String(rec.email || ''),
             password: String(rec.password || ''),
             totpSecret: String(rec.totpSecret || ''),
+            appPassword: String(rec.appPassword || ''),
         });
     }
 

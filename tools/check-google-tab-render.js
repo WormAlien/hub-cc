@@ -98,14 +98,14 @@ function nodeTotp(secret, at = Date.now()) {
         check((await page.locator('.gg-sub').innerText()).includes('google/accounts.json'),
             'в подзаголовке виден путь пула');
         const note = await page.locator('.gg-note').first().innerText();
-        check(/аккаунтов\s*2/.test(note) && /с 2FA\s*1/.test(note) && /о расходе/.test(note),
+        check(/аккаунтов\s*3/.test(note) && /с 2FA\s*1/.test(note) && /о расходе/.test(note),
             `строка сводки посчитана (${note.replace(/\n/g, ' ').slice(0, 60)}…)`);
         const chips = await page.locator('.gg-chip').allInnerTexts();
         check(chips.some(t => /не проверен/.test(t)) && chips.some(t => /живой/.test(t)),
             `грядка чипов по статусу (${chips.slice(0, 3).join(' / ')}…)`);
         check(chips.some(t => /расходник/.test(t)) && chips.some(t => /личный/.test(t)),
             'вторая грядка чипов - по классу аккаунта (как две грядки у GitHub)');
-        check(await page.locator('.gg-card').count() === 2, 'две карточки по демо-пулу');
+        check(await page.locator('.gg-card').count() === 3, 'три карточки по демо-пулу');
 
         // ── 1б. Прокси: селектор из пула, а не вписывание строкой ────────────
         console.log('\n── 1б. Прокси из пула ──');
@@ -128,6 +128,22 @@ function nodeTotp(secret, at = Date.now()) {
         check((await page.locator('.gg-secs').first().innerText()).endsWith('s'), 'счётчик до перевала окна идёт');
         const noTotp = await page.locator('.gg-card').nth(1).locator('.gg-code-none').first().innerText();
         check(/секрета нет/.test(noTotp), 'карточка без секрета говорит об этом словами');
+
+        // ── 2б. Пароль приложения: отдельный хвост строки магазина ───────────
+        console.log('\n── 2б. Пароль приложения ──');
+        const appCard = page.locator('.gg-card').nth(2);
+        // 🪤 Подписи полей в CSS идут `text-transform: uppercase`, поэтому innerText отдаёт
+        // их капсом - сравниваем без учёта регистра, иначе проба ломается на оформлении.
+        const appLabels = (await appCard.locator('.gg-label').allInnerTexts()).join(' | ').toLowerCase();
+        check(appLabels.includes('пароль приложения'), `у третьего демо-аккаунта блок пароля приложения (${appLabels})`);
+        const appMasked = await appCard.locator('.gg-val').last().innerText();
+        check(!/cmsk/.test(appMasked), `пароль приложения закрыт точками (${appMasked})`);
+        await appCard.locator('[title="Показать/скрыть пароль приложения"]').click();
+        await page.waitForTimeout(400);
+        check((await appCard.locator('.gg-val').last().innerText()) === 'cmskdp4zkeikkncq',
+            'глаз открывает пароль приложения (в нём нет ни пробелов, ни смены регистра)');
+        const totpOnApp = await appCard.locator('.gg-code').count();
+        check(totpOnApp === 0, 'из пароля приложения НЕ собирается живой код 2FA: блок кода у него пуст');
 
         // ── 3. Секреты по нажатию ────────────────────────────────────────────
         console.log('\n── 3. Секреты ──');
@@ -190,10 +206,10 @@ function nodeTotp(secret, at = Date.now()) {
         const preview = await page.locator('.gg-panel-imp .gg-preview').innerText();
         check(/разобрано записей: 2/.test(preview), 'предпросмотр разобрал две записи из пяти строк');
         check(/строк с ошибкой: 1/.test(preview) && /broken@gmail\.com/.test(preview), 'строка без пароля показана ошибкой с адресом');
-        check(await page.locator('.gg-card').count() === 2, 'до записи число карточек не изменилось');
+        check(await page.locator('.gg-card').count() === 3, 'до записи число карточек не изменилось');
         await page.locator('.gg-panel-imp button:has-text("Импортировать")').click();
         await page.waitForTimeout(900);
-        check(await page.locator('.gg-card').count() === 4, 'запись пачки добавила две карточки');
+        check(await page.locator('.gg-card').count() === 5, 'запись пачки добавила две карточки');
 
         // ── 7. Меню и вид ────────────────────────────────────────────────────
         console.log('\n── 7. Меню и вид ──');

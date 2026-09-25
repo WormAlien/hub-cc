@@ -115,6 +115,37 @@ check(/на месте пароля/.test(pool.parseLine(`some.user@gmail.com:${
     'секрет на месте пароля - ошибка, а не молчаливая запись с секретом вместо пароля');
 check(pool.parseLine('').error === 'пустая строка', 'пустая строка - ошибка');
 
+// ── 2б. Формат магазина: третий хвост, пароль приложения против секрета 2FA ────
+// 🪤 Самая дорогая путаница этого модуля. Оба хвоста выглядят одинаково (буквы с цифрами
+// группами по четыре), но означают разное: секрет 2FA даёт живой код, пароль приложения
+// вводят в почтовый клиент. Примешь пароль за секрет - карточка покажет код, который
+// никогда не подойдёт; примешь секрет за пароль - вход по 2FA останется без кода.
+section('2б. Пароль приложения против секрета 2FA');
+const appOf = (line) => pool.parseLine(line).appPassword;
+const totpOf = (line) => pool.parseLine(line).totpSecret;
+const APP16 = 'cmsk dp4z keik kncq';
+const APP16_NOSPACE = 'cmskdp4zkeikkncq';
+// Формат, которым продают на самом деле: разделитель `|`, третий хвост - строчными.
+const SELLER_32 = 'cmsk dp4z keik kncq zak7 dsjt nfx2 53ej';
+
+check(appOf(`a@gmail.com|Pass#Word%|${APP16}`) === APP16_NOSPACE,
+    'пароль приложения (16 знаков строчными группами по 4) идёт в своё поле');
+check(totpOf(`a@gmail.com|Pass#Word%|${APP16}`) === '',
+    'и НЕ попадает в секрет 2FA: живой код из него не собирается');
+check(appOf('a@gmail.com|P#1|abcd 1234 efgh 5678') === 'abcd1234efgh5678',
+    'цифры 0/1/8/9 в base32 невозможны - значит это пароль приложения');
+check(totpOf(`a@gmail.com|Pass#Word%|${SELLER_32}`) !== '',
+    '32 знака строчными - это СЕКРЕТ 2FA: пароль приложения длиннее 16 не бывает');
+check(appOf(`a@gmail.com|Pass#Word%|${SELLER_32}`) === '',
+    'и паролем приложения он при этом не считается');
+check(totpOf(`a@gmail.com|P#1|JBSWY3DPEHPK3PXP`) !== '', 'секрет 2FA заглавными (16) остаётся секретом');
+const both = pool.parseLine(`a@gmail.com|P#1|reserve@mail.ru|JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP|${APP16}`);
+check(both.recoveryEmail === 'reserve@mail.ru' && both.totpSecret && both.appPassword,
+    'оба хвоста вместе разошлись по своим полям, порядок любой');
+check(pool.parseLine(`a@gmail.com|P#1|${APP16}`).note === '', 'пароль приложения не оседает в заметке как мусор');
+check(pool.looksLikeAppPass(APP16) && !pool.looksLikeAppPass('JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP'),
+    'различитель отвечает верно на оба вида');
+
 // ── 3. Пачка ──────────────────────────────────────────────────────────────────
 section('3. Пачка');
 const receipt = [
@@ -215,6 +246,7 @@ const view = pool.safeView(pool.load()[0]);
 const viewText = JSON.stringify(view);
 check(!('password' in view), 'в safeView нет поля password');
 check(!('totpSecret' in view), 'в safeView нет поля totpSecret');
+check(!('appPassword' in view), 'в safeView нет поля appPassword');
 check(!viewText.includes(PASS), 'пароль не встречается в ответе списка');
 check(!viewText.includes(TOTP), '2FA-секрет не встречается в ответе списка');
 check(view.hasPassword === true && view.hasTotp === true, 'вместо самих секретов - признаки hasPassword и hasTotp');

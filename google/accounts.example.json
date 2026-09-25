@@ -4,6 +4,7 @@
     "email": "example.account@gmail.com",
     "password": "пароль-от-аккаунта",
     "totpSecret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+    "appPassword": "cmskdp4zkeikkncq",
     "phone": "+7 900 000-00-00",
     "recoveryEmail": "reserve.example@mail.ru",
     "proxy": "",

@@ -156,6 +156,8 @@ const TOTP = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
     const keys = await call('GET', `/__switch/api/google/keys?id=${encodeURIComponent(id)}`);
     check(keys.code === 200 && keys.json.password === PASS && keys.json.totpSecret === TOTP,
         'keys отдаёт пароль и секрет по явному запросу');
+    check('appPassword' in keys.json && keys.json.appPassword === '',
+        'keys отдаёт и пароль приложения (пустой, если его в записи нет)');
     const keysNoId = await call('GET', '/__switch/api/google/keys');
     check(keysNoId.code === 400, 'keys без id - 400, а не «отдай всё»');
     const keysBadId = await call('GET', '/__switch/api/google/keys?id=нет-такого');

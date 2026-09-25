@@ -51,6 +51,12 @@ const DEMO = [
         email: 'demo.burner@gmail.com', password: 'demo-pass-burner', totpSecret: '',
         kind: 'burner', status: 'unknown', nickname: 'demo.burner',
     },
+    {
+        // Третий - под формат, которым продают на самом деле: `почта|пароль|16 знаков строчными`
+        // (пароль приложения, он же уезжает в блок «Пароль приложения»).
+        email: 'demo.apppass@gmail.com', password: 'demo-pass-app', appPassword: 'cmskdp4zkeikkncq',
+        kind: 'burner', status: 'unknown', nickname: 'demo.apppass',
+    },
 ];
 {
     // 🪤 Массив растущий: `normalize` ищет свободный id по нему, и на пустом массиве оба

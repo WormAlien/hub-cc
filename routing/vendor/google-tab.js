@@ -39,8 +39,9 @@
   const S = {
     accounts: [], byStatus: {}, byKind: {}, statuses: [], kinds: [],
     pool: { host: '', enabled: false, proxies: [], total: 0, tiers: [] },   // пул прокси для селектора
-    secrets: {},        // id → { password, totpSecret } - только по нажатию глаза
+    secrets: {},        // id → { password, totpSecret, appPassword } - только по запросу
     reveal: {},         // id → true, пароль показан
+    revealApp: {},      // id → true, пароль приложения показан
     codes: {}, fail: {},// id → код этого окна / метка «в этом окне не собрался»
     menuOpen: null,
     search: '', statusFilter: '', kindFilter: '',
@@ -368,6 +369,9 @@
         <label class="gg-lbl">2FA-секрет (если есть)
           <input class="gg-in gg-in-mono" ${draftAttr('totpSecret')} placeholder="JBSWY3DPEHPK3PXP…">
         </label>
+        <label class="gg-lbl">пароль приложения (если есть)
+          <input class="gg-in gg-in-mono" ${draftAttr('appPassword')} placeholder="cmsk dp4z keik kncq">
+        </label>
         <label class="gg-lbl">телефон
           <input class="gg-in" ${draftAttr('phone')} placeholder="+7 …">
         </label>
@@ -439,6 +443,24 @@
     if (!uses.length) return '<div class="gg-badges" title="Записей о расходе нет: ветки подписки (Flow, Antigravity) ещё не подключены"><span class="gg-tag">нигде не занят</span></div>';
     return `<div class="gg-badges" title="Где этот аккаунт уже израсходован">${uses
       .map(u => `<span class="${USE_TAGS[u.tag] || 'gg-tag'}">${esc(u.tag || '?')}</span>`).join('')}</div>`;
+  }
+
+  // Пароль приложения (16 знаков) - отдельный хвост строки магазина, его вводят в почтовый
+  // клиент руками. Показывается только если он в записи есть: у большинства аккаунтов его нет.
+  function appPassBlock(a) {
+    if (!a.hasAppPassword) return '';
+    const rev = !!S.revealApp[a.id];
+    const val = (S.secrets[a.id] || {}).appPassword;
+    return `<div class="gg-field">
+      <div class="gg-label">Пароль приложения</div>
+      <div class="gg-row">
+        <span class="gg-val">${val ? (rev ? esc(val) : '•••• •••• •••• ••••') : 'скрыт до запроса'}</span>
+        <span style="display:flex">
+          <button class="gg-ico" title="Показать/скрыть пароль приложения" onclick="GOOGLE.toggleApp('${esc(a.id)}')">${rev ? '🙈' : '👁'}</button>
+          <button class="gg-ico" title="Скопировать пароль приложения" onclick="GOOGLE.copyApp('${esc(a.id)}')">📋</button>
+        </span>
+      </div>
+    </div>`;
   }
 
   function totpBlock(a) {
@@ -553,6 +575,7 @@
           </div>
         </div>
         ${totpBlock(a)}
+        ${appPassBlock(a)}
         ${a.phone ? `<div class="gg-field">
           <div class="gg-label">Телефон</div>
           <div class="gg-row">
@@ -662,7 +685,11 @@
   async function ensureSecret(id) {
     if (S.secrets[id] && S.secrets[id].password) return S.secrets[id];
     const k = await api('keys?id=' + encodeURIComponent(id));
-    S.secrets[id] = { password: k.password || '', totpSecret: k.totpSecret || '' };
+    S.secrets[id] = {
+      password: k.password || '',
+      totpSecret: k.totpSecret || '',
+      appPassword: k.appPassword || '',
+    };
     return S.secrets[id];
   }
 
@@ -694,6 +721,23 @@
       } catch (e) { toast(`пароль не получить: ${e.message}`, 'bad'); }
     },
 
+    async toggleApp(id) {
+      try {
+        if (!S.revealApp[id]) await ensureSecret(id);
+        S.revealApp[id] = !S.revealApp[id];
+        S.menuOpen = null;
+        render();
+      } catch (e) { toast(`пароль приложения не получить: ${e.message}`, 'bad'); }
+    },
+
+    async copyApp(id) {
+      try {
+        const s = await ensureSecret(id);
+        if (!s.appPassword) return toast('пароля приложения в записи нет', 'bad');
+        await copyText(s.appPassword, 'пароль приложения');
+      } catch (e) { toast(`не получить: ${e.message}`, 'bad'); }
+    },
+
     async copyLogin(id) { const a = find(id); await copyText(a && a.email, 'логин'); },
     async copyPhone(id) { const a = find(id); await copyText(a && a.phone, 'телефон'); },
     async copyRecovery(id) { const a = find(id); await copyText(a && a.recoveryEmail, 'почта восстановления'); },
@@ -717,6 +761,7 @@
         const parts = [a.email, s.password];
         if (s.totpSecret) parts.push(s.totpSecret);
         if (a.recoveryEmail) parts.push(a.recoveryEmail);
+        if (s.appPassword) parts.push(s.appPassword);
         await copyText(parts.join(':'), 'строка аккаунта');
       } catch (e) { toast(`не собрать строку: ${e.message}`, 'bad'); }
     },
@@ -772,6 +817,7 @@
       try {
         await post('add', {
           email: d.email, password: d.password, totpSecret: d.totpSecret || '',
+          appPassword: d.appPassword || '',
           phone: d.phone || '', recoveryEmail: d.recoveryEmail || '', proxy: d.proxy || '',
           nickname: d.nickname || '', kind: d.kind || 'burner', note: d.note || '',
         });

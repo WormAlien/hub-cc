@@ -120,6 +120,29 @@ function looksLikeTotp(s) {
     return /^[A-Z2-7]{16,}$/i.test(v);
 }
 
+// 🪤 Пароль приложения, а не секрет 2FA. Продавцы кладут его третьим хвостом в той же
+// строке (`почта|пароль|app-password`), и по виду он на секрет похож: те же буквы с цифрами
+// группами по четыре. Отличаем по трём признакам, и порядок их важен:
+//
+//   1. цифры 0, 1, 8, 9 - в base32 их НЕ БЫВАЕТ, значит секретом это быть не может;
+//   2. РОВНО 16 знаков и всё строчными - это ровно пароль приложения: у Google он всегда
+//      16 знаков и выдаётся строчным (`cmsk dp4z keik kncq`), а секрет 2FA продавцы пишут
+//      заглавными (`JBSWY3DPEHPK3PXP`);
+//   3. всё остальное, что похоже на base32 и длиной от 16, - секрет 2FA, включая строчные
+//      32 знака: 32 знака это стандартная длина секрета (160 бит), а пароль приложения
+//      длиннее 16 не бывает никогда.
+//
+// Ошибка в эту сторону стоит дорого в обе стороны: примем пароль за секрет - на карточке
+// будет живой код, который никогда не подойдёт; примем секрет за пароль - вход по 2FA
+// останется без кода. Поэтому у записи ОБА поля, и парсер заполняет то, что узнал.
+function looksLikeAppPass(s) {
+    const v = String(s || '').replace(/[\s-]+/g, '');
+    if (!v || v.length < 8) return false;
+    if (/[0189]/.test(v)) return v.length <= 20;           // в base32 таких цифр нет
+    if (v.length === 16 && /[a-z]/.test(v) && !/[A-Z]/.test(v)) return true;
+    return false;
+}
+
 // Разделитель ищем по строке, а не задаём: магазины отдают `:`, `;`, `|` и табы.
 // 🪤 Табы проверяются первыми: в файлах магазина таб - разделитель ПОЛЕЙ, а `:` внутри
 // поля (в том числе внутри пароля). Обратная сторона: у строки `почта\tпароль:секрет`
@@ -165,10 +188,14 @@ function parseLine(line) {
     const password = glued.password;
     let totpSecret = glued.totpSecret;
     let recoveryEmail = '';
+    let appPassword = '';
     const tail = [];
     for (const f of rest.slice(1)) {
         if (!f) continue;
         if (!recoveryEmail && isEmail(f)) { recoveryEmail = f.toLowerCase(); continue; }
+        // 🪤 Порядок проверок важен: пароль приложения похож на секрет 2FA, и проверка
+        // секрета первой съела бы его.
+        if (!appPassword && looksLikeAppPass(f)) { appPassword = f.replace(/[\s-]+/g, ''); continue; }
         if (!totpSecret && looksLikeTotp(f)) { totpSecret = f.replace(/[\s-]+/g, '').toUpperCase(); continue; }
         tail.push(f);
     }
@@ -176,6 +203,7 @@ function parseLine(line) {
         email,
         password,
         totpSecret,
+        appPassword,
         recoveryEmail,
         kind: 'burner',
         note: tail.length ? tail.join(' · ') : '',
@@ -221,6 +249,9 @@ function normalize(raw, arr, now = Date.now()) {
         email,
         password,
         totpSecret: String(raw.totpSecret || '').replace(/[\s-]+/g, '').toUpperCase(),
+        // Пароль приложения: пробелы выкидываем, регистр НЕ трогаем - его вводят в почтовый
+        // клиент как есть, и приведённый к верхнему он там не подойдёт.
+        appPassword: String(raw.appPassword || '').replace(/[\s-]+/g, ''),
         phone: String(raw.phone || '').trim(),
         recoveryEmail: String(raw.recoveryEmail || '').trim().toLowerCase(),
         proxy: String(raw.proxy || '').trim(),
@@ -240,12 +271,17 @@ function normalize(raw, arr, now = Date.now()) {
 // фронт идёт отдельным запросом, и только когда человек нажал «глаз» или «скопировать».
 function safeView(e) {
     const o = normalize(e, null, Date.now());
-    const { password, totpSecret, ...rest } = o;
-    return { ...rest, hasPassword: !!password.length, hasTotp: !!totpSecret.length };
+    const { password, totpSecret, appPassword, ...rest } = o;
+    return {
+        ...rest,
+        hasPassword: !!password.length,
+        hasTotp: !!totpSecret.length,
+        hasAppPassword: !!appPassword.length,
+    };
 }
 
 module.exports = {
     DIR, FILE, PROFILES_DIR, SESSIONS_DIR, STATUSES, KINDS,
-    load, save, isEmail, looksLikeTotp, profileLabel, newId,
+    load, save, isEmail, looksLikeTotp, looksLikeAppPass, profileLabel, newId,
     splitFields, splitGluedTotp, parseLine, parseBulk, findById, normalize, safeView,
 };

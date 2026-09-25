@@ -55,6 +55,14 @@ SCRAPER = DIR.parent / "routing" / "lib" / "proxy-refeed.js"
 SCRAPE_WANT = 12        # сколько живых адресов просим у скрапера за один долив
 SCRAPE_MAX = 4000       # сколько кандидатов он смеет проверить, добиваясь этой цифры
 CANDIDATES = DIR / "candidates.json"
+# 🔴 Адрес для Odyssey берётся ТОЛЬКО из скрапера (решение владельца 25.09: «одисей только из
+# прокси скрапера, свой (наш) пул там не должен быть»). Свои выходы - это хостинги (Private
+# Layer, HOSTKEY, VPSPay), подарок $5 по ним давно разобран чужими клиентами, и прогон на таком
+# адресе стоит созданного и выброшенного аккаунта: замер 25.09 - три $0 из четырёх попыток.
+# Перекрываем источник переменной окружения, а НЕ правкой `proxy-pool.json`: переменная читается
+# выше файла конфига (`proxy-pool.js`), поэтому остальная система, у которой там стоит
+# `source: "own"`, этим не задевается.
+POOL_ENV = {"PROXY_POOL_SOURCE": "scraped"}
 # Эмодзи в консоли cp866 роняют вывод целиком (замер 16.09) - кодировку задаём явно.
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -79,7 +87,7 @@ def parse(argv):
     # каждый пятый-шестой адрес, и с двумя параллельными аккаунт выходил за 8-10 минут.
     # Машина держит три попытки (около 700 МБ каждая при 6-8 ГБ свободных), это ~1 аккаунт
     # за 5-6 минут.
-    tier, attempts, count, mail, parallel = "own", None, 1, "22do", 3
+    tier, attempts, count, mail, parallel = "scraper", None, 1, "22do", 3
     for i, a in enumerate(argv):
         if a.startswith("--tier"):
             tier = (a.split("=", 1)[1] if "=" in a
@@ -166,7 +174,7 @@ async def refresh_candidates(log, want=3):
             node, str(PROBE), "6", str(want),
             cwd=str(DIR.parent), stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", **POOL_ENV})
     except Exception as e:
         log("проба", f"проба не запустилась: {e}")
         return None
@@ -268,7 +276,7 @@ def marker_of(text):
 async def run_attempt(args, log):
     proc = await asyncio.create_subprocess_exec(
         *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-        cwd=str(DIR.parent), env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        cwd=str(DIR.parent), env={**os.environ, "PYTHONIOENCODING": "utf-8", **POOL_ENV})
     out = []
     while True:
         line = await proc.stdout.readline()

@@ -158,14 +158,25 @@ async function probeOne(p) {
     // `isp` из ответа ip-api нужен для признака «датацентр» - вместе с ASN он и решает очередь.
     const fresh = [];
     const spent = [];
+    let skippedOwn = 0;
     for (const p of all) {
+        // 🔴 СВОИ адреса в Odyssey не берём вовсе - решение владельца 25.09: «одисей только из
+        // прокси скрапера, свой (наш) пул там не должен быть». И это не вкусовщина: выходы наших
+        // нод - это хостинги (Private Layer, HOSTKEY, VPSPay), по ним подарок $5 давно разобран
+        // чужими клиентами, и прогон на таком адресе стоит созданного и выброшенного аккаунта.
+        // Замер 25.09 16:44-16:54: три адреса из четырёх дали $0, четвёртый встал на капче.
+        // Ярус при этом и есть тот признак, по которому пул отличает свои от скрапера, - берём
+        // его тут же, а не отдельным списком адресов, который рано или поздно разъедется.
+        let tier = null;
+        try { tier = pp.tierOf(p.id); } catch { /* ярус не критичен */ }
+        if (tier === 'own') { skippedOwn += 1; continue; }
         const info = asn[p.hostname] || {};
         const key = String(info.as || '').trim();
         if (bad[p.label]) continue;   // адрес уже проваливался по нашей вине - не пробуем
         const rec = { p, key, country: info.country || '?', isp: info.isp || '' };
         (key && used[key] ? spent : fresh).push(rec);
     }
-    console.log(`в пуле ${all.length} · сетей трачено ${Object.keys(used).length} · ` +
+    console.log(`в пуле ${all.length} · своих отсеяно ${skippedOwn} · сетей трачено ${Object.keys(used).length} · ` +
                 `свежих кандидатов ${fresh.length} · отсеяно как траченые ${spent.length}`);
 
     const out = [];

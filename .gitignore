@@ -647,3 +647,13 @@ fxqidian/gh-sessions/
 lsapi/profiles/
 lsapi/sessions/
 lsapi/gh-sessions/
+
+# ── Google (вкладка `google`): пул аккаунтов под AI Pro ───────────────────────
+# Папку закрываем ДО первого импорта, а не после: в пуле живые пароли и 2FA-секреты,
+# в профилях - куки залогированного Google. Репозиторий публичный, и у budsin,
+# fxqidian и lsapi эту же строку однажды уже забыли при лежащих на диске папках.
+# `*.tmp*` - временный файл durable-записи (`durable-write.js` метит его PID-ом).
+google/accounts.json
+google/accounts.json.tmp*
+google/profiles/
+google/sessions/

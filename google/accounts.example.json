@@ -1,0 +1,36 @@
+[
+  {
+    "id": "gg_1787000000000_0",
+    "email": "example.account@gmail.com",
+    "password": "пароль-от-аккаунта",
+    "totpSecret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
+    "phone": "+7 900 000-00-00",
+    "recoveryEmail": "reserve.example@mail.ru",
+    "proxy": "",
+    "kind": "personal",
+    "nickname": "example.account",
+    "status": "unknown",
+    "note": "всё, что магазин дал сверх пары: дата покупки, продавец, хвосты строки",
+    "addedAt": "2026-09-25T00:00:00.000Z",
+    "sessionAt": null,
+    "lastCheck": null,
+    "usedOn": []
+  },
+  {
+    "id": "gg_1787000000000_1",
+    "email": "burner.account@gmail.com",
+    "password": "пароль-расходника",
+    "totpSecret": "",
+    "phone": "",
+    "recoveryEmail": "",
+    "proxy": "residential-fi-01",
+    "kind": "burner",
+    "nickname": "burner.account",
+    "status": "live",
+    "note": "",
+    "addedAt": "2026-09-25T00:00:00.000Z",
+    "sessionAt": "2026-09-25T01:00:00.000Z",
+    "lastCheck": null,
+    "usedOn": [{ "tag": "flow", "at": "2026-09-25T01:05:00.000Z" }]
+  }
+]

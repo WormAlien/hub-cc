@@ -9674,7 +9674,14 @@ async function handleArSessions(req, res) {
         }
         // Конфиг чек-ина отдаём вместе с пулом: фронту он нужен для расчёта таймера
         // ещё на boot (счётчик 🎁N в сайдваре), а второй запрос там был бы лишним.
-        jsonRes(res, 200, { sessions, activeModel: arReadActiveModel(), checkin: arReadCheckinCfg() });
+        // Вердикт по метке отказа считаем ЗДЕСЬ, а не на фронте: свежесть GitHub-снимка -
+        // знание бэкенда, и второй реализации той же логики на фронте быть не должно.
+        // Текст причины готовим тоже здесь: он одинаков на строке аккаунта и в пропуске пачки.
+        const withBlock = sessions.map(s => {
+            const block = arCheckinBlockActive(s);
+            return block ? { ...s, checkinBlock: { ...block, why: arCheckinBlockWhy(block) } } : s;
+        });
+        jsonRes(res, 200, { sessions: withBlock, activeModel: arReadActiveModel(), checkin: arReadCheckinCfg() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -13206,7 +13213,16 @@ function arGhNameFor(id) {
         if (ghId === 'personal') return '🐙 личный GitHub';
         const acct = ghLoad().find(g => g.id === ghId);
         const nick = acct ? (acct.nickname || acct.login || ghId) : ghId;
-        const h = ghSnapHealth(ghSessionLib(), ghId);
+        // 🪤 Запись, а не строка: `ghSnapHealth` читает `account.id`, `account.login` и
+        // `account.nickname`. Со строкой это были `undefined` - `readCache(undefined)` не
+        // находил файла, и в каждую ошибку кодов 3/5/9 дописывалось «(общего снимка нет)»
+        // ВСЕГДА, даже когда снимок лежал на диске (замер 24.09: у всех шести аккаунтов
+        // пачки `hasSnap: true`). Ложь в ту же сторону, что и правда, - но всё равно ложь.
+        const h = ghSnapHealth(ghSessionLib(), {
+            id: ghId,
+            login: acct && acct.login,
+            nickname: acct && acct.nickname,
+        });
         const age = h.hasSnap && h.snapAgeDays !== null
             ? ` (снимок ${h.snapAgeDays} дн${h.snapStale ? ', старше TTL' : ''})`
             : h.hasSnap === false ? ' (общего снимка нет)' : '';
@@ -13272,6 +13288,27 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
             // о состоянии постоянно, а тост должен назвать виновника в момент отказа.
             const who = (code === 3 || code === 5 || code === 9) ? arGhNameFor(id) : null;
             if (who) st.message = `${who}: ${st.message}`;
+            // Метку отказа пишем в ПУЛ, а не только в память и лог: строка должна объяснять
+            // себя и после рестарта, и через десять минут (TTL записи прогона). Полную
+            // запись берём из пула целиком: arSaveMerge по частичному объекту вычистил бы
+            // ей `selfError`/`granted` (см. BALANCE_CLEARABLE).
+            const kind = arCheckinFailKind(code);
+            if (kind) {
+                try {
+                    const rec = arLoad().find(s => s.id === id);
+                    if (rec) {
+                        rec.checkinFailKind = kind;
+                        rec.checkinFailCode = code;
+                        rec.checkinFailAt = new Date().toISOString();
+                        rec.checkinFailMsg = st.message;
+                        arSaveMerge(rec);
+                    }
+                } catch (e) {
+                    // Пул битый - не роняем хвост прогона из-за метки: она нужна строке, а
+                    // не отчёту о подарке. Вслух скажет arSaveMerge своим же текстом.
+                    logLine(`agentrouter ${tag} [${label}]: метка отказа не записана - ${e.message}`);
+                }
+            }
             logLine(`agentrouter ${tag} [${label}]: ${st.message}`);
             // Отказ в журнал вкладки - с именем аккаунта и кодом: «не вышло» без причины
             // владелец читает как поломку дашборда, а не как слово шлюза.
@@ -13283,6 +13320,11 @@ async function arAutoCheckinFinish(id, label, code, marker, auto = true) {
         const sessions = arLoad();
         const target = sessions.find(s => s.id === id);
         if (!target) { st.state = 'error'; st.message = 'аккаунт исчез из пула'; return; }
+
+        // Прогон дошёл до конца - вход состоялся, значит прошлая метка отказа мертва.
+        // Снимаем её на любом коде 0, а не только на `checkedIn === true`: `false` значит
+        // «вошёл, но суточное окно ещё не сменилось» - вход-то есть.
+        if (arCheckinFailClear(id)) logLine(`agentrouter ${tag} [${label}]: метка отказа снята - прогон прошёл`);
 
         // Отметку ставим по слову шлюза. checkedIn === false → бонуса не было (окно не
         // сменилось) — врать «забрано» нельзя. null (маркер не поймали или ручной режим)
@@ -14133,6 +14175,69 @@ async function handleArCheckinCancel(req, res) {
 // одиннадцати кликов не темпом, а тем, что её видно и можно остановить.
 // Сбор пачки ⚡: кто готов, кто ещё не в очереди и не открыт. Вынесено из обработчика кнопки,
 // потому что теперь её зовёт и насос (добор до конца) - две копии этого отбора разъехались бы.
+// ───── Отказ подарка: метка в пуле, а не строка в логе ────────────────────
+//
+// Заявка владельца 24.09: «аккаунт с мертвым входом не помечается в дашборде, только в лог
+// пишет». До этого факт отказа жил в AR_AUTO_CHECKIN (память, TTL 10 минут) и в кольце
+// журнала (стирается рестартом) - то есть после перезапуска строка выглядела здоровой
+// (`status: live`, баланс на месте, `selfFailureKind` пуст), а причину можно было найти
+// только в файле лога. Теперь отказ пишется в саму запись пула, и по ней же строится
+// вердикт для таблицы.
+//
+// Сбор закрывают ТОЛЬКО причины про GitHub-вход: 3 и 5 (браузер не вошёл) и 9 (прогон не
+// начат, сессия мертва ещё до выхода). Автоматика пароль и 2FA не вводит - значит повтор
+// без человека бессмысленен. 6 (рейт-лимит) и 8 (край молчит) сюда НЕ входят: они лечатся
+// временем, и у 6 свой повтор через кулдаун.
+const AR_CHECKIN_FAIL_KIND = { 3: 'gh_dead', 5: 'gh_dead', 9: 'gh_dead' };
+const AR_CHECKIN_FAIL_FIELDS = ['checkinFailKind', 'checkinFailCode', 'checkinFailAt', 'checkinFailMsg'];
+
+function arCheckinFailKind(code) {
+    return AR_CHECKIN_FAIL_KIND[Number(code)] || null;
+}
+
+// Жива ли метка. Снимают её два доказательства: удачный прогон (его снимает сам чек-ин) и
+// ЖИВАЯ GitHub-сессия, снятая ПОСЛЕ отказа - владелец перелогинился в менеджере, снимок
+// обновился, значит вход снова есть. Одной свежести файла для этого мало: harvest
+// перезаписывает снимок теми же куками, и мёртвая сессия выглядела бы свежей.
+function arCheckinBlockActive(s) {
+    if (!s || !s.checkinFailKind) return null;
+    const at = Date.parse(s.checkinFailAt || 0) || 0;
+    try {
+        const gsl = ghSessionLib();
+        const snap = gsl && s.ghId ? gsl.readCache(s.ghId) : null;
+        if (snap && gsl.cacheLive(snap) && (Date.parse(snap.harvestedAt || 0) || 0) > at) return null;
+    } catch { /* нет библиотеки снимков - считаем метку живой: молча снимать её нельзя */ }
+    return { kind: s.checkinFailKind, code: s.checkinFailCode, at: s.checkinFailAt, msg: s.checkinFailMsg };
+}
+
+// Одна фраза на два потребителя - на причину пропуска в пачке и на подсказку в строке.
+// Текст готовится здесь, а не на фронте: второй реализации той же логики быть не должно.
+function arCheckinBlockWhy(block) {
+    if (!block) return '';
+    const when = block.at
+        ? new Date(block.at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '';
+    const code = block.code ? ` (код ${block.code}${when ? `, ${when}` : ''})` : '';
+    return block.kind === 'gh_dead'
+        ? `вход в GitHub мёртв${code}: автоматика пароль и 2FA не вводит, нужен новый 🐙 «готовый GitHub»`
+        : `сбор закрыт${code}`;
+}
+
+// Снятие метки. arSaveMerge для этого не годится: `Object.assign` отсутствующего поля не
+// удаляет - ровно поэтому рядом живёт BALANCE_CLEARABLE. Пишем по тому же образцу
+// (загрузка, правка, запись) и так же отказываемся писать поверх битого пула.
+function arCheckinFailClear(id) {
+    let list;
+    try { list = arLoad(); }
+    catch (e) { logLine(`🔴 arCheckinFailClear: пул не прочитан (${e.message}) - метка не снята`); return false; }
+    const rec = list.find(s => s.id === id);
+    if (!rec) return false;
+    let had = false;
+    for (const k of AR_CHECKIN_FAIL_FIELDS) if (k in rec) { delete rec[k]; had = true; }
+    if (had) arSave(list);
+    return had;
+}
+
 function arBuildBatch(limit) {
     const ready = arCheckinReadyList(arLoad());
     const jobs = [];
@@ -14148,6 +14253,12 @@ function arBuildBatch(limit) {
         // См. AR_COLLECT_SEEN: pid к этому моменту снят, а отметка в пул ещё не доехала,
         // поэтому оба прежних признака занятости здесь слепы.
         if (AR_COLLECT_SEEN.has(label)) { skipped.push(`${dispName}: уже брали в этом заходе`); continue; }
+        // Помеченный отказ (коды 3/5/9): вход в GitHub мёртв, автоматика пароль и 2FA не
+        // вводит - прогон повторит тот же отказ. Метка живёт в пуле и снимается сама, когда
+        // владелец перелогинит GitHub в менеджере (см. arCheckinBlockActive). Это про
+        // ПАЧКУ: одиночный ⚡ по строке остаётся - им владелец и проверяет, ожил ли вход.
+        const block = arCheckinBlockActive(s);
+        if (block) { skipped.push(`${dispName}: ${arCheckinBlockWhy(block)}`); continue; }
         // Прогон в полёте или ждёт своей очереди. Ловит и одиночный ⚡, поставленный в
         // полосу автоподарка руками: PID'а может не быть, запись о прогоне - есть.
         const runSt = AR_AUTO_CHECKIN.get(label);
@@ -24362,7 +24473,11 @@ async function handleOdAutoregStart(req, res) {
         const script = path.join(__dirname, '..', 'odyssey', 'auto-add-loop.py');
         if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'odyssey/auto-add-loop.py не найден' });
 
-        const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'own';
+        // 🔴 Ярус по умолчанию - СКРАПЕР, а не свои (владелец 25.09: «одисей только из прокси
+        // скрапера, свой (наш) пул там не должен быть»). Выходы наших нод - это хостинги, по
+        // которым подарок $5 давно разобран чужими клиентами: живой прогон 25.09 16:44-16:54
+        // дал три нулевых баланса из четырёх попыток и ни одного аккаунта в пул.
+        const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'scraper';
         // Сколько аккаунтов завести за запуск. Раньше прогон вставал на первом успехе, и
         // «завести три» означало три нажатия кнопки с ротацией адресов между ними.
         const count = Math.max(1, Math.min(30, parseInt(body.count, 10) || 1));
@@ -24382,7 +24497,10 @@ async function handleOdAutoregStart(req, res) {
             cwd: path.join(__dirname, '..'),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            // Источник пула перекрываем ТОЛЬКО этому прогону: переменная читается выше файла
+            // `proxy-pool.json`, где сейчас стоит `source: "own"`, а остальная система от неё
+            // зависеть не должна.
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8', PROXY_POOL_SOURCE: 'scraped' },
         });
         Object.assign(odAutoreg, {
             proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),

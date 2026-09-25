@@ -161,6 +161,17 @@ const TOTP = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
     const keysBadId = await call('GET', '/__switch/api/google/keys?id=нет-такого');
     check(keysBadId.code === 404, 'keys по чужому id - 404');
 
+    // ── Ручка пула прокси: адрес выбирают из пула, а не вписывают строкой ─────
+    const proxies = await call('GET', '/__switch/api/google/proxies');
+    check(proxies.code === 200 && typeof proxies.json.host === 'string' && proxies.json.host.includes('google'),
+        `ручка proxies отдаёт список для своего хоста (${proxies.json.host})`);
+    check(Array.isArray(proxies.json.proxies) && typeof proxies.json.enabled === 'boolean',
+        `список адресов и признак «хост обслуживается» (адресов ${proxies.json.total})`);
+    check(proxies.json.proxies.every(p => p.id && p.label && !('raw' in p) && !('pass' in p)),
+        'в списке адресов нет ни raw, ни пароля: креды прокси не покидают свой модуль');
+    check(!/"raw"|:\/\/[^/"]+:[^/"]*@/.test(proxies.raw),
+        'ни одна строка ответа не содержит кредов прокси');
+
     section('5. Ручки: правки и защита от подмены');
     const dup = await call('POST', '/__switch/api/google/add', { email: 'ACC.one@gmail.com', password: 'x' });
     check(dup.code === 409, 'повторный адрес не заводится вторым аккаунтом');

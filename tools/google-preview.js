@@ -80,18 +80,26 @@ const MIME = {
     '.png': 'image/png',
 };
 
-// Токены — те же имена, что дашборд навешивает на <html>; значения из его `@theme`.
-// Шрифты подключаются его же файлом: иначе стенд показывал бы вкладку в чужой
-// гарнитуре и «не как в дашборде» - а сравнивают именно с ним.
+// Токены — ТЕ ЖЕ значения, что дашборд объявляет в своём `@theme` (oklch, как у него), а не
+// подобранные на глаз hex: стенд обязан показывать вкладку в её родной среде. Шрифты
+// подключаются его же файлом.
+//
+// 🪤 Это ДЕФОЛТНАЯ тёмная тема. У дашборда их 22, и он навешивает оверрайды инлайном на
+// <html> - если владелец сидит на другой, стенд покажет иначе, чем живой :8200. Живая
+// вкладка берёт токены окружения, поэтому расхождение стенда и дашборда - это тема, а не
+// разъехавшаяся форма.
 const PAGE = `<!doctype html>
 <html lang="ru" style="
   --font-sans:'Geist',ui-sans-serif,system-ui,sans-serif;
   --font-mono:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --color-bg:#0b0e13; --color-surface:#131922; --color-elevated:#1a212b;
-  --color-line:#2c3339; --color-line-soft:#1e242c;
-  --color-ink:#e8ebee; --color-muted:#c9d1d9; --color-dim:#8b949e;
-  --color-emerald:#3ddc91; --color-amber:#ff8a3d; --color-azure:#58a6ff;
-  --color-crimson:#f85149; --color-violet:#a78bfa;">
+  --color-bg:oklch(0.135 0.012 245); --color-surface:oklch(0.175 0.012 245);
+  --color-elevated:oklch(0.215 0.013 245); --color-line:oklch(0.30 0.014 245);
+  --color-line-soft:oklch(0.24 0.014 245);
+  --color-ink:oklch(0.96 0.005 245); --color-muted:oklch(0.66 0.013 245);
+  --color-dim:oklch(0.48 0.014 245); --color-faint:oklch(0.36 0.014 245);
+  --color-emerald:oklch(0.78 0.17 155); --color-amber:oklch(0.82 0.17 80);
+  --color-azure:oklch(0.72 0.16 240); --color-violet:oklch(0.74 0.17 295);
+  --color-crimson:oklch(0.70 0.20 22); --color-rose:oklch(0.72 0.18 12);">
 <head>
 <meta charset="utf-8">
 <title>Google — стенд</title>
@@ -105,7 +113,7 @@ const PAGE = `<!doctype html>
 </style>
 </head>
 <body>
-<div class="hint">Стенд вкладки Google. Ручки настоящие (свой демо-пул), дашборд не запущен.</div>
+<div class="hint">Стенд вкладки Google. Ручки настоящие (свой демо-пул аккаунтов, пул прокси - общий с дашбордом и только на чтение), дашборд не запущен. Тема - дефолтная тёмная: живая вкладка берёт вашу.</div>
 <div id="google-root"></div>
 <script src="/vendor/google-tab.js"></script>
 <script>GOOGLE.load();</script>

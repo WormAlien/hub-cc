@@ -98,9 +98,24 @@ function nodeTotp(secret, at = Date.now()) {
         check((await page.locator('.gg-sub').innerText()).includes('google/accounts.json'),
             'в подзаголовке виден путь пула');
         const note = await page.locator('.gg-note').first().innerText();
-        check(/всего\s*2/.test(note) && /с 2FA\s*1/.test(note), `строка сводки посчитана (${note.replace(/\n/g, ' ').slice(0, 60)}…)`);
-        check(await page.locator('.gg-chip').count() === 5, 'пять чипов статуса (все + четыре вердикта)');
+        check(/аккаунтов\s*2/.test(note) && /с 2FA\s*1/.test(note) && /о расходе/.test(note),
+            `строка сводки посчитана (${note.replace(/\n/g, ' ').slice(0, 60)}…)`);
+        const chips = await page.locator('.gg-chip').allInnerTexts();
+        check(chips.some(t => /не проверен/.test(t)) && chips.some(t => /живой/.test(t)),
+            `грядка чипов по статусу (${chips.slice(0, 3).join(' / ')}…)`);
+        check(chips.some(t => /расходник/.test(t)) && chips.some(t => /личный/.test(t)),
+            'вторая грядка чипов - по классу аккаунта (как две грядки у GitHub)');
         check(await page.locator('.gg-card').count() === 2, 'две карточки по демо-пулу');
+
+        // ── 1б. Прокси: селектор из пула, а не вписывание строкой ────────────
+        console.log('\n── 1б. Прокси из пула ──');
+        const sel = page.locator('.gg-card select').first();
+        const opts = await sel.locator('option').allInnerTexts();
+        check(await sel.count() === 1 && opts.length > 5,
+            `в карточке селектор адресов, а не поле ввода (${opts.length} вариантов)`);
+        check(/не привязан/.test(opts[0]), 'первый вариант - «не привязан»');
+        const poolNote = await page.locator('.gg-hint-warn').first().innerText();
+        check(/не обслуживает|пуст/.test(poolNote), `про хост сказано честно: ${poolNote.slice(0, 70)}…`);
 
         // ── 2. Код 2FA ───────────────────────────────────────────────────────
         console.log('\n── 2. Код 2FA ──');
@@ -182,6 +197,26 @@ function nodeTotp(secret, at = Date.now()) {
 
         // ── 7. Меню и вид ────────────────────────────────────────────────────
         console.log('\n── 7. Меню и вид ──');
+        // Привязку прокси проверяем делом: выбираем НАСТОЯЩИЙ адрес из пула и смотрим, что он
+        // лёг в запись, а селектор после перерисовки показывает именно его.
+        //
+        // 🪤 Берём адрес по виду пула (`http://…`), а не по номеру варианта: демо-аккаунт
+        // приходит с привязкой `res-fi-01`, которой в пуле нет, - она рисуется отдельным
+        // вариантом «адреса нет в пуле», и выбор «второго по счёту» проверял бы сам себя.
+        const values = await sel.locator('option').evaluateAll(os => os.map(o => o.value));
+        const orphan = values.find(v => v && !/^https?:\/\//.test(v));
+        const fromPool = values.find(v => /^https?:\/\//.test(v));
+        check(!!orphan, `привязка, которой нет в пуле, показана честно (${orphan})`);
+        check(!!fromPool, 'в селекторе есть настоящие адреса пула');
+        await sel.selectOption(fromPool);
+        await page.waitForTimeout(900);
+        const stored = await page.evaluate(() => document.querySelector('.gg-card select').value);
+        check(stored === fromPool, `выбранный из пула адрес лёг в запись (${fromPool.slice(0, 34)}…)`);
+        await page.locator('.gg-card select').first().selectOption('');
+        await page.waitForTimeout(600);
+        check(await page.evaluate(() => document.querySelector('.gg-card select').value) === '',
+            'привязка снимается обратно на «не привязан»');
+
         await card(0).locator('button[title="Действия (статус, класс, пароль, заметка, удалить)"]').click();
         await page.waitForSelector('.gg-menu');
         const items = await page.locator('.gg-menu button').allInnerTexts();

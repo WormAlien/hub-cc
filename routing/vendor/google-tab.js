@@ -38,11 +38,12 @@
 
   const S = {
     accounts: [], byStatus: {}, byKind: {}, statuses: [], kinds: [],
+    pool: { host: '', enabled: false, proxies: [], total: 0, tiers: [] },   // пул прокси для селектора
     secrets: {},        // id → { password, totpSecret } - только по нажатию глаза
     reveal: {},         // id → true, пароль показан
     codes: {}, fail: {},// id → код этого окна / метка «в этом окне не собрался»
     menuOpen: null,
-    search: '', statusFilter: '',
+    search: '', statusFilter: '', kindFilter: '',
     loading: false, err: null, loadedOnce: false,
     panel: null,        // null | 'add' | 'import'
     draft: {},          // поля формы добавления
@@ -212,11 +213,26 @@
     } finally {
       S.loading = false;
     }
+    // Пул прокси нужен для селектора: он меняется редко, поэтому берём его один раз и
+    // обновляем только когда выбор сделан или вкладку открыли заново.
+    if (!S.pool.host) await loadPool();
     // 🪤 Открытое меню карточки перерисовка закрывает, а опрос идёт каждые 15 секунд.
     // Пока человек выбирает в меню, разметку не трогаем: данные уже в S.
     if (!S.menuOpen) render();
     await hydrateSecrets();
     if (force) toast('пул перечитан', 'ok');
+  }
+
+  async function loadPool() {
+    try {
+      const p = await api('proxies');
+      S.pool = {
+        host: p.host || '', enabled: !!p.enabled, proxies: p.proxies || [],
+        total: p.total || 0, tiers: p.tiers || [],
+      };
+    } catch (e) {
+      S.pool = { host: '', enabled: false, proxies: [], total: 0, tiers: [], error: e.message };
+    }
   }
 
   // Секреты тянем ТОЛЬКО для карточек с 2FA: без секрета кода не собрать, а это и есть
@@ -236,14 +252,20 @@
 
   function summaryHtml() {
     const t = S.totals;
+    // Расход по веткам подписки считаем из тех же `usedOn`, что рисуют плашки на карточках:
+    // в v1 он нулевой, но строка уже на месте - иначе её появление потом читалось бы как
+    // новая сущность, а не как «вот эти записи».
+    const uses = {};
+    for (const a of S.accounts) for (const u of (a.usedOn || [])) uses[u.tag] = (uses[u.tag] || 0) + 1;
+    const useStr = ['flow', 'antigravity'].map(tag => `${tag} ${uses[tag] || 0}`).join(' · ');
     const bits = [
-      `всего <b>${t.total}</b>`,
+      `аккаунтов <b>${t.total}</b>`,
       `живых <b>${S.byStatus.live || 0}</b>`,
       `с 2FA <b>${t.withTotp}</b>`,
       `со снимком сессии <b>${t.withSession}</b>`,
     ];
     if (t.openWindows) bits.push(`окон открыто <b>${t.openWindows}</b>`);
-    return bits.join(' · ');
+    return `${bits.join(' · ')} · записей о расходе: ${useStr}`;
   }
 
   function chipsHtml() {
@@ -253,7 +275,42 @@
       const n = S.byStatus[s] || 0;
       return `<button class="gg-chip ${S.statusFilter === s ? 'gg-chip-on' : ''}" title="${esc(m.hint)}" onclick="GOOGLE.setFilter('${s}')">${esc(m.label)}${n ? ` · ${n}` : ''}</button>`;
     }).join('');
-    return `<span class="gg-chips">${all}${rest}</span>`;
+    // Вторая грядка - по классу аккаунта. У GitHub-вкладки так же две: статус и запись в
+    // пулах; здесь вторая ось - личный против расходника, и её тоже видно счётчиком.
+    const kall = `<button class="gg-chip ${S.kindFilter ? '' : 'gg-chip-on'}" onclick="GOOGLE.setKindFilter('')">все классы</button>`;
+    const krest = (S.kinds.length ? S.kinds : ['personal', 'burner']).map(k => {
+      const m = KIND_META[k] || KIND_META.burner;
+      const n = S.byKind[k] || 0;
+      return `<button class="gg-chip ${S.kindFilter === k ? 'gg-chip-on' : ''}" title="${esc(m.hint)}" onclick="GOOGLE.setKindFilter('${k}')">${esc(m.label)}${n ? ` · ${n}` : ''}</button>`;
+    }).join('');
+    return `<span class="gg-chips">${all}${rest}</span><span class="gg-chips">${kall}${krest}</span>`;
+  }
+
+  // Порядковый номер «в цепочке»: как у GitHub-вкладки, где он означает последовательность
+  // покупки. Считаем по дате добавления, а не по порядку в файле: файл правят руками.
+  function seqMap() {
+    const sorted = [...S.accounts].filter(a => !a.broken)
+      .sort((a, b) => String(a.addedAt || '').localeCompare(String(b.addedAt || '')) || String(a.id).localeCompare(String(b.id)));
+    const m = {};
+    sorted.forEach((a, i) => { m[a.id] = i + 1; });
+    return m;
+  }
+
+  // Селектор прокси: адрес берётся ИЗ ПУЛА, вписать строку руками нельзя. В списке - метка
+  // (без кредов), ярус и сколько аккаунтов на этот адрес уже село.
+  function proxyOptions(selected) {
+    const list = S.pool.proxies;
+    if (!selected && !list.length) return '<option value="">пул прокси пуст</option>';
+    const head = `<option value="" ${selected ? '' : 'selected'}>— не привязан —</option>`;
+    const body = list.map(p => {
+      const marks = [p.tier, p.accounts ? `занят ${p.accounts}` : null, p.verdict === 'bad' ? 'не отвечает' : null]
+        .filter(Boolean).join(' · ');
+      return `<option value="${esc(p.id)}" ${String(selected) === String(p.id) ? 'selected' : ''}>${esc(p.label)}${marks ? ` (${esc(marks)})` : ''}</option>`;
+    }).join('');
+    // Привязка могла остаться от прежнего пула: показываем её, а не молча сбрасываем на «не привязан».
+    const orphan = selected && !list.some(p => String(p.id) === String(selected))
+      ? `<option value="${esc(selected)}" selected>${esc(selected)} - адреса нет в пуле</option>` : '';
+    return head + orphan + body;
   }
 
   function headerHtml() {
@@ -275,6 +332,18 @@
         <button class="gg-btn gg-btn-imp" onclick="GOOGLE.openPanel('import')">📥 Импорт</button>
       </div>
     </header>`;
+  }
+
+  // Предупреждение о пуле прокси: под Google годятся только резидентские адреса, и хост
+  // может быть не в белом списке пула - тогда селектор покажет адреса, но врать про
+  // «привязано» нельзя.
+  function poolNoteHtml() {
+    if (!S.pool.host) return '';
+    if (!S.pool.total) return '<div class="gg-hint gg-hint-warn">Пул прокси пуст: привязывать нечего. Заведи адреса на вкладке «Свои прокси».</div>';
+    if (!S.pool.enabled) {
+      return `<div class="gg-hint gg-hint-warn">Пул прокси не обслуживает <code>${esc(S.pool.host)}</code>: хост не в его белом списке (адресов в пуле ${S.pool.total}). Выбрать адрес можно, но в бою он на этот хост не пойдёт - сначала добавь хост в пул на вкладке «Свои прокси».</div>`;
+    }
+    return `<div class="gg-hint">Пул прокси обслуживает <code>${esc(S.pool.host)}</code>, адресов ${S.pool.total}${S.pool.tiers.length ? ` (ярусы: ${esc(S.pool.tiers.join(', '))})` : ''}.</div>`;
   }
 
   // ── Панели: добавление и импорт ───────────────────────────────────────────
@@ -300,8 +369,8 @@
         <label class="gg-lbl">почта восстановления
           <input class="gg-in gg-in-mono" ${draftAttr('recoveryEmail')} placeholder="reserve@mail.ru">
         </label>
-        <label class="gg-lbl">прокси (резидентский)
-          <input class="gg-in gg-in-mono" ${draftAttr('proxy')} placeholder="не обязателен">
+        <label class="gg-lbl gg-wide">прокси (из пула)
+          <select class="gg-in gg-in-mono" onchange="GOOGLE.draft('proxy', this.value)">${proxyOptions(D('proxy'))}</select>
         </label>
         <label class="gg-lbl">ник для карточки
           <input class="gg-in" ${draftAttr('nickname')} placeholder="пусто - возьмём из адреса">
@@ -358,7 +427,9 @@
 
   function usesBadges(a) {
     const uses = Array.isArray(a.usedOn) ? a.usedOn : [];
-    if (!uses.length) return '';
+    // Пустая грядка не исчезает, а говорит словами: у GitHub на этом месте стоят метки пулов,
+    // и «пусто» там читается как «нигде не занят». Молчание в v1 выглядело бы как недоделка.
+    if (!uses.length) return '<div class="gg-badges" title="Записей о расходе нет: ветки подписки (Flow, Antigravity) ещё не подключены"><span class="gg-tag">нигде не занят</span></div>';
     return `<div class="gg-badges" title="Где этот аккаунт уже израсходован">${uses
       .map(u => `<span class="${USE_TAGS[u.tag] || 'gg-tag'}">${esc(u.tag || '?')}</span>`).join('')}</div>`;
   }
@@ -437,7 +508,7 @@
       ${S.menuOpen === a.id ? menuHtml(a) : ''}
       <div class="gg-body">
         <div class="gg-top">
-          <div class="gg-ava">🔵</div>
+          <div class="gg-ava gg-ava-${esc(a.status || 'unknown')}">🔵</div>
           <div class="gg-id">
             <div class="gg-name" title="${esc(a.nickname)}">${esc(a.nickname || '—')}</div>
             <div class="gg-mail" title="${esc(a.email)}">${esc(a.email)}</div>
@@ -446,14 +517,15 @@
         <div class="gg-badges">
           <span class="${st.cls}" title="${esc(st.hint)}">${esc(st.label)}</span>
           <span class="${kd.cls}" title="${esc(kd.hint)}">${esc(kd.label)}</span>
+          <span class="gg-tag" title="${a.sessionFileAt ? 'Снимок storageState: по нему видно, что вход был' : 'Снимка нет: аккаунт ещё не входили через вкладку'}">${esc(sess)}</span>
           ${a.hasProfile
             ? '<span class="gg-tag" title="Профиль браузера на диске: вход в него переживает рестарт">профиль есть</span>'
             : '<span class="gg-tag" title="Профиля ещё нет - открой сессию один раз">профиля нет</span>'}
           ${a.openPid ? `<span class="gg-tag gg-tag-warn" title="Окно профиля сейчас открыто (pid ${a.openPid})">окно открыто</span>` : ''}
         </div>
         <div class="gg-meta">
+          <span title="Порядок добавления в пул (последовательность покупки)">№${seqMap()[a.id] || '—'} в цепочке</span>
           <span>добавлен ${fmtDate(a.addedAt)}</span>
-          <span>${esc(sess)}</span>
         </div>
         ${usesBadges(a)}
         <div class="gg-field">
@@ -491,8 +563,8 @@
         <div class="gg-field">
           <div class="gg-label">Прокси</div>
           <div class="gg-row">
-            <span class="gg-val" title="${a.proxy ? esc(a.proxy) : 'Под Google годятся только резидентские адреса: датацентровые он режет челленджем'}">${a.proxy ? esc(a.proxy) : '<span class="gg-code-none">не привязан</span>'}</span>
-            <button class="gg-ico" title="Задать прокси" onclick="GOOGLE.askProxy('${esc(a.id)}')">✎</button>
+            <select class="gg-in gg-in-sm gg-in-mono" title="Адрес берётся из пула прокси. Под Google годятся резидентские: датацентровые он режет челленджем"
+              onchange="GOOGLE.setProxy('${esc(a.id)}', this.value)">${proxyOptions(a.proxy)}</select>
           </div>
         </div>
         ${a.note ? `<div class="gg-hint">${esc(a.note)}</div>` : ''}
@@ -525,6 +597,7 @@
     const q = S.search.trim().toLowerCase();
     return S.accounts.filter(a => {
       if (S.statusFilter && a.status !== S.statusFilter) return false;
+      if (S.kindFilter && a.kind !== S.kindFilter) return false;
       if (!q) return true;
       const hay = [a.email, a.nickname, a.note, a.recoveryEmail, a.proxy].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
@@ -550,6 +623,7 @@
     root.innerHTML = `<div class="gg-wrap">
       ${headerHtml()}
       ${alert}
+      ${poolNoteHtml()}
       ${S.panel === 'add' ? addPanelHtml() : ''}
       ${S.panel === 'import' ? importPanelHtml() : ''}
       <div class="gg-grid">${empty}</div>
@@ -591,6 +665,7 @@
 
     setSearch(v) { S.search = v; render(); },
     setFilter(v) { S.statusFilter = v; render(); },
+    setKindFilter(v) { S.kindFilter = v; render(); },
     menu(id) { S.menuOpen = S.menuOpen === id ? null : id; render(); },
 
     openPanel(which) {
@@ -660,12 +735,12 @@
       catch (e) { toast(e.message, 'bad'); }
     },
 
-    async askProxy(id) {
-      const a = find(id);
-      const proxy = prompt('Прокси аккаунта (резидентский: под Google датацентровые не годятся)', (a && a.proxy) || '');
-      if (proxy === null) return;
-      try { await post('update', { id, patch: { proxy } }); await load(); }
-      catch (e) { toast(e.message, 'bad'); }
+    async setProxy(id, proxyId) {
+      try {
+        await post('update', { id, patch: { proxy: proxyId || '' } });
+        toast(proxyId ? 'прокси привязан' : 'привязка снята', 'ok');
+        await load();
+      } catch (e) { toast(e.message, 'bad'); await load(); }
     },
 
     async openSession(id) {

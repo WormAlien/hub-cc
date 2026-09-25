@@ -186,6 +186,9 @@
 .gg-in:focus { border-color: color-mix(in oklab, var(--color-emerald) 60%, transparent); }
 .gg-in-mono { font-family: var(--font-mono), ui-monospace, Menlo, monospace; }
 
+/* Поле внутри карточки: селектор прокси стоит в один ряд с подписью, поэтому компактнее. */
+.gg-in-sm { padding: 4px 8px; font-size: 11px; }
+
 .gg-area {
   font-size: 12px;
   font-family: var(--font-mono), ui-monospace, Menlo, monospace;
@@ -315,8 +318,14 @@
   display: flex; align-items: center; justify-content: center;
   font-size: 18px;
   background: var(--color-elevated);
-  border: 1px solid color-mix(in oklab, var(--color-azure) 50%, transparent);
+  border: 1px solid var(--color-line-soft);
 }
+/* Плитка красится по статусу аккаунта - как у GitHub-вкладки, где по ней видно состояние
+   до чтения подписей. Цвет здесь не единственный сигнал: рядом стоит бейдж со знаком. */
+.gg-ava-live { border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent); }
+.gg-ava-dead { border-color: color-mix(in oklab, var(--color-crimson) 50%, transparent); }
+.gg-ava-locked { border-color: color-mix(in oklab, var(--color-amber) 50%, transparent); }
+.gg-ava-unknown { border-color: var(--color-line); }
 
 .gg-id { min-width: 0; flex: 1; }
 

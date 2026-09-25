@@ -24,17 +24,20 @@ const { URL } = require('url');
 
 const durable = require('./durable-write');
 const pool = require('./google-pool');
+const proxyPool = require('./proxy-pool');
 
 const ROUTING = path.join(__dirname, '..');
 const REPO = path.join(ROUTING, '..');
 const OPEN_SCRIPT = path.join(REPO, 'google', 'open-session.js');
 const PIDS_FILE = path.join(pool.DIR, 'pids.json');
 const PREFIX = '/__switch/api/google/';
+// Хост, под которым аккаунт ходит в Google. Нужен, чтобы спросить пул прокси, обслуживает
+// ли он этот хост, и показать это владельцу честно, а не молча предложить пустой список.
+const GOOGLE_HOST = 'accounts.google.com';
 
 // Что можно править снаружи. Список закрытый: `id`, `addedAt` и `usedOn` меняет сервер, а не
 // форма, и «прими любое поле» здесь означало бы, что фронт правит идентификатор записи.
 const EDITABLE = ['status', 'kind', 'note', 'nickname', 'phone', 'recoveryEmail', 'proxy', 'password', 'totpSecret'];
-
 // ── Подключение к хабу ───────────────────────────────────────────────────────
 // Лог (`logLine`) и ранний пробник окна живут в `transparent-proxy.js` и передаются сюда
 // ИНЪЕКЦИЕЙ, а не копируются: копия рано или поздно разъедется с боевой (тот же довод, что
@@ -100,6 +103,54 @@ function pidAlive(pid) {
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+// ── Пул прокси ───────────────────────────────────────────────────────────────
+// Прокси выбирают из ПУЛА, а не вписывают строкой: адрес, набранный руками, ни с чем не
+// сверяется и живёт своей жизнью. Наружу отдаём только `id` и метку (`label`): креды
+// прокси не покидают `proxy-admin.js`, и здесь их нет.
+//
+// 🪤 Хост Google в белом списке пула может отсутствовать - тогда `enabled` = false, и это
+// видно владельцу прямо в карточке. Молча показать пустой селектор значило бы соврать про
+// «прокси нет».
+function poolById(id) {
+    if (!id) return null;
+    try { return proxyPool.pool().byId.get(String(id)) || null; } catch { return null; }
+}
+
+function poolView() {
+    let proxies = [];
+    let enabled = false;
+    try {
+        const p = proxyPool.pool();
+        enabled = proxyPool.enabledForHost(GOOGLE_HOST);
+        const load = {};
+        for (const v of Object.values(proxyPool.assignments() || {})) {
+            if (v && v.proxy) load[v.proxy] = (load[v.proxy] || 0) + 1;
+        }
+        proxies = p.proxies.map(x => {
+            // Вердикт берём из кеша проверок пула, если он там есть: «не проверяли» и
+            // «проверяли и провалился» - разные вещи, и второе владельцу важно.
+            const v = proxyPool.healthCacheGet(x.id, GOOGLE_HOST);
+            return {
+                id: x.id,
+                label: x.label,
+                tier: proxyPool.tierOf(x.id) || null,
+                verdict: v ? (v.ok ? 'ok' : 'bad') : 'unknown',
+                accounts: load[x.id] || 0,
+            };
+        });
+    } catch (e) {
+        return { host: GOOGLE_HOST, enabled: false, proxies: [], error: e.message };
+    }
+    return { host: GOOGLE_HOST, enabled, proxies };
+}
+
+function proxiesWithLabel(e) {
+    const p = poolView();
+    if (!e.proxy) return { proxy: '', label: null, known: true };
+    const hit = p.proxies.find(x => x.id === e.proxy);
+    return { proxy: e.proxy, label: hit ? hit.label : null, known: !!hit };
+}
+
 // ── Факты о сессии ───────────────────────────────────────────────────────────
 
 const profileDir = id => path.join(pool.PROFILES_DIR, pool.profileLabel(id));
@@ -117,6 +168,7 @@ function cardView(e, pids) {
     const pid = pids[e.id];
     return {
         ...view,
+        ...proxiesWithLabel(e),
         hasProfile: fs.existsSync(profileDir(e.id)),
         sessionFileAt: st ? new Date(st.mtimeMs).toISOString() : null,
         openPid: pidAlive(pid) ? pid : null,
@@ -199,6 +251,20 @@ async function dispatch(req, res, route, query) {
             email: String(rec.email || ''),
             password: String(rec.password || ''),
             totpSecret: String(rec.totpSecret || ''),
+        });
+    }
+
+    // GET proxies - что можно выбрать в поле «Прокси». Пул отдаёт только id и метку.
+    if (req.method === 'GET' && route === 'proxies') {
+        const view = poolView();
+        return json(res, 200, {
+            ...view,
+            // Сколько всего адресов: владельцу важно видеть, пуст пул или просто закрыт хост.
+            total: view.proxies.length,
+            // Ярусы - ТОЛЬКО имена. `proxyPool.tierOrder()` отдаёт записи целиком, а в записи
+            // лежит `raw` с логином и паролем прокси: наружу они не уходят никогда, креды
+            // не покидают proxy-admin.js.
+            tiers: [...new Set(view.proxies.map(p => p.tier).filter(Boolean))],
         });
     }
 

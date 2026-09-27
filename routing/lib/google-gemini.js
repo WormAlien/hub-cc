@@ -37,6 +37,11 @@ const PKG_ENTRY = process.env.GEMINI_ENTRY
 
 const homeDir = id => path.join(DIR, `acct_${id}`, 'home');
 const launcherFile = id => path.join(DIR, `acct_${id}`, 'gemini.cmd');
+const BIN_DIR = path.join(pool.DIR, 'bin');
+// Короткая обёртка для панели Orca: `orca account` знает только Claude и Codex, поэтому
+// аккаунт для панели подставляется командой. Имя короткое, чтобы его печатать руками.
+const wrapperFile = (rec) => path.join(BIN_DIR, `gemini-${pool.slug(rec)}.cmd`);
+const wrapperCommand = (rec) => wrapperFile(rec);
 const credsFile = id => path.join(homeDir(id), '.gemini', 'oauth_creds.json');
 const accountsFile = id => path.join(homeDir(id), '.gemini', 'google_accounts.json');
 
@@ -70,6 +75,9 @@ function states() {
         if (!fs.existsSync(homeDir(e.id))) continue;
         const s = state(e.id);
         s.accountEmail = e.email;
+        // Команда для панели Orca: обёртку пишем сразу, чтобы её можно было вставить, не
+        // заходя никуда ещё.
+        try { s.orcaCommand = wrapper(e); } catch { s.orcaCommand = null; }
         out.push(s);
     }
     return out;
@@ -91,6 +99,29 @@ function launcher(id) {
         'echo Gemini CLI, account profile. Sign in below.',
         `"${EXE}"`,
         'pause',
+    ];
+    fs.writeFileSync(file, lines.join('\r\n') + '\r\n', 'utf8');
+    return file;
+}
+
+/**
+ * Обёртка для панели: ставит дом и флаг файлового входа, дальше передаёт аргументы CLI.
+ * 🪤 Без `pause` (в отличие от лончера): она запускается из панели, а не двойным щелчком, и
+ * ждать нажатия клавиши там некому. Аргументы идут через `%*`, поэтому `--yolo` из панели
+ * доезжает до CLI.
+ */
+function wrapper(rec) {
+    ensureHome(rec.id);
+    const file = wrapperFile(rec);
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+    const home = homeDir(rec.id);
+    const lines = [
+        '@echo off',
+        `REM Gemini CLI as ${pool.slug(rec)}. Written by routing/lib/google-gemini.js.`,
+        `set "USERPROFILE=${home}"`,
+        `set "HOME=${home}"`,
+        'set "GEMINI_FORCE_FILE_STORAGE=true"',
+        `"${process.execPath}" "${PKG_ENTRY}" %*`,
     ];
     fs.writeFileSync(file, lines.join('\r\n') + '\r\n', 'utf8');
     return file;
@@ -126,6 +157,6 @@ function run(id, prompt, { model = null, timeoutMs = 180000, extraArgs = [] } = 
 }
 
 module.exports = {
-    DIR, EXE, PKG_ENTRY, launcherFile, homeDir, credsFile, accountsFile,
-    installed, ensureHome, launcher, state, states, run,
+    DIR, EXE, PKG_ENTRY, BIN_DIR, launcherFile, homeDir, credsFile, accountsFile,
+    installed, ensureHome, launcher, wrapper, wrapperFile, wrapperCommand, state, states, run,
 };

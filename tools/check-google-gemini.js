@@ -86,9 +86,26 @@ section('4. Прогон');
     check(noEntry.ok === false && /JS-входа/.test(noEntry.error || ''),
         'без JS-входа прогон отказывает, а не идёт через .cmd (там аргументы склеиваются в строку)');
 
-    section('5. Публичный репозиторий');
+    section('5. Обёртка для панели Orca');
+    // 🪤 Orca своей системы аккаунтов для Gemini не имеет (`orca account` знает только Claude
+    // и Codex), поэтому аккаунт подставляется в панель командой. Обёртка должна ставить дом и
+    // флаг файлового входа, передавать аргументы дальше и НЕ ждать нажатия клавиши.
+    const wrapper = gem.wrapper(recA);
+    const wtext = fs.readFileSync(wrapper, 'utf8');
+    check(/^gemini-/.test(path.basename(wrapper)) && path.dirname(wrapper).endsWith('bin'),
+        `обёртка названа по аккаунту и лежит рядом с другими (${path.basename(wrapper)})`);
+    check(/set "USERPROFILE=/.test(wtext) && /set "HOME=/.test(wtext), 'обёртка ставит дом аккаунта');
+    check(/set "GEMINI_FORCE_FILE_STORAGE=true"/.test(wtext), 'и запрещает системную ключницу');
+    check(/%\*/.test(wtext), 'аргументы передаются дальше: `--yolo` из панели доедет до CLI');
+    check(!/pause/i.test(wtext), 'без pause: она для панели, а не для двойного щелчка');
+    check(!/[^\x00-\x7F]/.test(wtext), 'обёртка в ASCII');
+    check(gem.states().some(s => s.id === recA.id && s.orcaCommand === wrapper),
+        'состояние аккаунта отдаёт команду для панели - её можно скопировать из вкладки');
+
+    section('6. Публичный репозиторий');
     const inGit = (p) => spawnSync('git', ['-C', REPO, 'check-ignore', '-q', p], { encoding: 'utf8' }).status === 0;
     check(inGit('google/gemini/acct_gg_1/home/.gemini/oauth_creds.json'), 'вход закрыт .gitignore');
+    check(inGit('google/bin/gemini-test.cmd'), 'обёртки для панелей закрыты .gitignore (в них пути машины)');
     check(!inGit('routing/lib/google-gemini.js'), 'код модуля едет в коммит');
 
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* временный каталог */ }

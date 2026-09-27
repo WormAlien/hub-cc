@@ -93,6 +93,15 @@ function save(arr) {
 const isEmail = s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(s || '').trim());
 const profileLabel = id => 'acct_' + id;
 
+// Короткое имя аккаунта для имён файлов и команд: `vijay70811563`, `demo.personal`.
+// 🪤 Только `[a-z0-9._-]`: имя уезжает в имя файла и в командную строку панели, а там пробелы,
+// кавычки и кириллица ломают всё разом (cmd.exe печатает cp866, Windows путает разделители).
+function slug(rec, max = 24) {
+    const raw = String((rec && (rec.nickname || rec.email)) || rec || '').split('@')[0].toLowerCase();
+    const clean = raw.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    return (clean || 'acct').slice(0, max);
+}
+
 // Идентификатор записи. Формат как у соседей (`ol_`, `gh_`): метка времени плюс счётчик,
 // чтобы две записи, заведённые в одну миллисекунду, не слились.
 // 🪤 `arr` — это ТЕКУЩИЙ пул, и он нужен не для красоты: свободный идентификатор ищется
@@ -282,6 +291,6 @@ function safeView(e) {
 
 module.exports = {
     DIR, FILE, PROFILES_DIR, SESSIONS_DIR, STATUSES, KINDS,
-    load, save, isEmail, looksLikeTotp, looksLikeAppPass, profileLabel, newId,
+    load, save, isEmail, looksLikeTotp, looksLikeAppPass, profileLabel, newId, slug,
     splitFields, splitGluedTotp, parseLine, parseBulk, findById, normalize, safeView,
 };

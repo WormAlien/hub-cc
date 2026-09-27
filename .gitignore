@@ -664,3 +664,6 @@ google/agy/
 # Gemini CLI: дом на аккаунт (`USERPROFILE`), внутри `.gemini` с настройками и входом
 # (oauth_creds.json, google_accounts.json). Вход тоже живой - в репозиторий не едет.
 google/gemini/
+# Короткие обёртки для панелей Orca (`gemini-<slug>.cmd`): в них пути этой машины и дом
+# конкретного аккаунта. Пишутся модулем, в репозиторий не едут.
+google/bin/

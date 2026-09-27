@@ -595,6 +595,12 @@
     if (has) badges.push('<span class="gg-tag" title="Каталог на аккаунт: параллельные прогоны друг другу не мешают">свой дом</span>');
     const buttons = [`<button class="gg-btn" title="Открыть окно входа под домом этого аккаунта" onclick="GOOGLE.gemLogin('${esc(a.id)}')">${has ? 'Переоткрыть' : 'Войти'}</button>`];
     if (has) buttons.push(`<button class="gg-btn gg-btn-go" title="Спросить модель одним словом: проверка, что вход живой" onclick="GOOGLE.gemCheck('${esc(a.id)}')">Проверить</button>`);
+    // 🪤 Команда для панели Orca. Своей системы аккаунтов у Orca для Gemini нет (`orca account`
+    // знает только Claude и Codex), поэтому аккаунт в панель подставляется этой обёрткой:
+    // она ставит дом и флаг файлового входа, а дальше передаёт аргументы CLI.
+    const orca = st && st.orcaCommand ? `<div class="gg-hint" style="margin-top:6px">в панели Orca:
+      <span class="gg-val" title="${esc(st.orcaCommand)}">${esc(st.orcaCommand.split('\\').pop())}</span>
+      <button class="gg-ico" title="Скопировать команду для Orca (с --yolo)" onclick="GOOGLE.copyOrca('${esc(a.id)}')">📋</button></div>` : '';
     return `<div class="gg-field">
       <div class="gg-label">Gemini CLI</div>
       <div class="gg-row">
@@ -602,6 +608,7 @@
         <span style="display:flex;gap:6px">${buttons.join('')}</span>
       </div>
       ${badges.length ? `<div class="gg-badges" style="margin-top:6px">${badges.join('')}</div>` : ''}
+      ${orca}
     </div>`;
   }
 
@@ -910,6 +917,12 @@
     },
 
     // ── Gemini CLI ──────────────────────────────────────────────────────────
+    async copyOrca(id) {
+      const st = (S.gem.accounts || []).find(x => String(x.id) === String(id));
+      if (!st || !st.orcaCommand) return toast('обёртка для Orca ещё не написана: нажми «Войти»', 'bad');
+      await copyText(`"${st.orcaCommand}" --yolo`, 'команда для Orca');
+    },
+
     async gemLogin(id) {
       try {
         await post('gemini/login', { id });
@@ -917,8 +930,7 @@
       } catch (e) { toast(e.message, 'bad'); }
     },
 
-    async gemCheck(id) {
-      toast('спрашиваю модель…');
+    async gemCheck(id) {      toast('спрашиваю модель…');
       try {
         const r = await post('gemini/run', { id, prompt: 'Ответь ровно одним словом: работает', timeoutMs: 120000 });
         const answer = String(r.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '(пустой ответ)';

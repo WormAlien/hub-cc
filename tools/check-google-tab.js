@@ -251,7 +251,21 @@ const TOTP = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
     check(restored.code === 200, 'после восстановления файла список снова читается');
 
     // ── 7. Файлы вкладки ──────────────────────────────────────────────────────
-    section('7. Файлы вкладки');
+    section('7. Аргумент скрипта окна');
+    // 🪤 Ярлык профиля (`acct_<id>`) скрипт получает и от маршрута, и руками. При копировании
+    // с `outlook/open-session.js` потерялась строка, снимающая префикс, и он навешивался
+    // второй раз: окно не открывалось, а сообщение врало про «аккаунта нет в пуле»
+    // (`acct_acct_gg_…`). Проверка гоняет скрипт на несуществующем ярлыке: он обязан упасть
+    // ДО запуска браузера и назвать нормальный ярлык.
+    const probeLabel = spawnSync(process.execPath, [path.join(REPO, 'google', 'open-session.js'), 'acct_gg_probe_0'], {
+        encoding: 'utf8', env: { ...process.env, GOOGLE_DIR: TMP },
+    });
+    const probeMsg = String(probeLabel.stderr || '') + String(probeLabel.stdout || '');
+    check(!/acct_acct_/.test(probeMsg), 'ярлык профиля не удваивается (скрипт снимает префикс acct_)');
+    check(probeLabel.status === 3 && /в пуле не найден/.test(probeMsg),
+        'на отсутствующем ярлыке скрипт выходит кодом 3 и говорит словами');
+
+    section('7б. Файлы вкладки');
     check(/window\.GOOGLE = GOOGLE;/.test(tabJs), 'модуль объявляет неймспейс window.GOOGLE');
     check(tabJs.includes("const API = '/__switch/api/google/'"), 'модуль ходит в свой префикс');
     check(tabJs.includes('keys?id='), 'секреты запрашиваются отдельной ручкой, а не приходят со списком');

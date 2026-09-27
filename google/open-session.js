@@ -37,7 +37,14 @@ const fs = require('fs');
 const path = require('path');
 const pool = require('../routing/lib/google-pool.js');
 
-const accountId = String(process.argv[2] || '').trim();
+// 🪤 Аргумент приходит ДВУМЯ видами, и оба законны: маршрут вкладки передаёт готовую метку
+// профиля (`acct_<id>`), а руками скрипт запускают и голым id. Префикс снимаем ПЕРЕД
+// profileLabel: иначе он навесится второй раз, и запись `acct_acct_gg_…` в пуле не найдётся.
+// Ловилось живьём 27.09: окно не открывалось, а сообщение выглядело как «аккаунта нет в
+// пуле» - то есть гнала не та ошибка, которая случилась. У `outlook/open-session.js` та же
+// строка есть; при копировании она потерялась.
+const labelArg = String(process.argv[2] || '').trim();
+const accountId = labelArg.replace(/^acct_/, '');
 const label = pool.profileLabel(accountId);
 const profileDir = path.join(pool.PROFILES_DIR, label);
 

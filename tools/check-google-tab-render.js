@@ -136,14 +136,30 @@ function nodeTotp(secret, at = Date.now()) {
         // их капсом - сравниваем без учёта регистра, иначе проба ломается на оформлении.
         const appLabels = (await appCard.locator('.gg-label').allInnerTexts()).join(' | ').toLowerCase();
         check(appLabels.includes('пароль приложения'), `у третьего демо-аккаунта блок пароля приложения (${appLabels})`);
-        const appMasked = await appCard.locator('.gg-val').last().innerText();
+        // 🪤 Поле ищем ПО ПОДПИСИ, а не «последним на карточке»: ниже появился блок
+        // Antigravity CLI со своим значением, и `*.gg-val последний` указывал бы на него.
+        const appField = appCard.locator('.gg-field').filter({ hasText: 'Пароль приложения' });
+        const appMasked = await appField.locator('.gg-val').innerText();
         check(!/cmsk/.test(appMasked), `пароль приложения закрыт точками (${appMasked})`);
-        await appCard.locator('[title="Показать/скрыть пароль приложения"]').click();
+        await appField.locator('[title="Показать/скрыть пароль приложения"]').click();
         await page.waitForTimeout(400);
-        check((await appCard.locator('.gg-val').last().innerText()) === 'cmskdp4zkeikkncq',
+        check((await appField.locator('.gg-val').innerText()) === 'cmskdp4zkeikkncq',
             'глаз открывает пароль приложения (в нём нет ни пробелов, ни смены регистра)');
         const totpOnApp = await appCard.locator('.gg-code').count();
         check(totpOnApp === 0, 'из пароля приложения НЕ собирается живой код 2FA: блок кода у него пуст');
+
+        // ── 2в. Блок Antigravity CLI ─────────────────────────────────────────
+        console.log('\n── 2в. Antigravity CLI ──');
+        const agyField = appCard.locator('.gg-field').filter({ hasText: 'Antigravity CLI' });
+        check(await agyField.count() === 1, 'на карточке есть блок Antigravity CLI');
+        const agyText = await agyField.innerText();
+        // 🪤 Блок читает НАСТОЯЩЕЕ хранилище Windows (`gemini:antigravity`), то есть его
+        // содержимое зависит от того, кто вошёл в agy на этой машине. Поэтому проверяем не
+        // конкретную почту, а то, что блок честно называет состояние: либо адрес, либо
+        // «никто не вошёл».
+        check(/@|никто не вошёл/.test(agyText),
+            `блок называет, кто сидит в agy (${agyText.replace(/\n/g, ' ').slice(0, 60)}…)`);
+        check(await agyField.locator('button').count() >= 1, 'в блоке есть действие (войти или сохранить вход)');
 
         // ── 3. Секреты по нажатию ────────────────────────────────────────────
         console.log('\n── 3. Секреты ──');

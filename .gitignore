@@ -657,3 +657,7 @@ google/accounts.json
 google/accounts.json.tmp*
 google/profiles/
 google/sessions/
+# Antigravity CLI: слепок входа (base64 от записи `gemini:antigravity` из хранилища Windows),
+# каталог профиля на аккаунт и его лончер. Первое - живой OAuth-токен, второе - история
+# разговоров и настройки. Ни то, ни другое в публичный репозиторий не едет.
+google/agy/

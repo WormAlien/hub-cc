@@ -39,6 +39,7 @@
   const S = {
     accounts: [], byStatus: {}, byKind: {}, statuses: [], kinds: [],
     pool: { host: '', enabled: false, proxies: [], total: 0, tiers: [] },   // пул прокси для селектора
+    agy: { loaded: false, installed: false, current: null, saved: [], running: false, exe: '' },
     secrets: {},        // id → { password, totpSecret, appPassword } - только по запросу
     reveal: {},         // id → true, пароль показан
     revealApp: {},      // id → true, пароль приложения показан
@@ -217,6 +218,7 @@
     // Пул прокси нужен для селектора: он меняется редко, поэтому берём его один раз и
     // обновляем только когда выбор сделан или вкладку открыли заново.
     if (!S.pool.host) await loadPool();
+    if (!S.agy.loaded) await loadAgy();
     // 🪤 Открытое меню карточки перерисовка закрывает, а опрос идёт каждые 15 секунд.
     // Пока человек выбирает в меню, разметку не трогаем: данные уже в S.
     if (!S.menuOpen) render();
@@ -232,7 +234,20 @@
         total: p.total || 0, skipped: p.skipped || 0, tiers: p.tiers || [],
       };
     } catch (e) {
-      S.pool = { host: '', enabled: false, proxies: [], total: 0, tiers: [], error: e.message };
+      S.pool = { host: '', enabled: false, proxies: [], total: 0, skipped: 0, tiers: [], error: e.message };
+    }
+  }
+
+  // Состояние Antigravity CLI: кто в нём сейчас, у кого сохранён вход, запущен ли процесс.
+  async function loadAgy() {
+    try {
+      const a = await api('agy');
+      S.agy = {
+        loaded: true, installed: !!a.installed, exe: a.exe || '',
+        current: a.current || null, saved: a.saved || [], running: !!a.running,
+      };
+    } catch (e) {
+      S.agy = { loaded: true, installed: false, current: null, saved: [], running: false, exe: '', error: e.message };
     }
   }
 
@@ -517,6 +532,38 @@
     </div>`;
   }
 
+  // Блок Antigravity CLI: вход, переключение. Живёт на карточке, потому что вход у CLI
+  // ОДИН на машину - то есть «какой аккаунт сейчас в agy» это свойство машины, а не строки
+  // таблицы, и видеть его надо на каждой карточке.
+  function agyBlock(a) {
+    if (!S.agy.loaded) return '';
+    if (!S.agy.installed) {
+      return `<div class="gg-field"><div class="gg-label">Antigravity CLI</div>
+        <div class="gg-code-none">не установлен на этой машине</div></div>`;
+    }
+    const cur = S.agy.current || {};
+    const isCurrent = !!(cur.email && a.email && cur.email.toLowerCase() === String(a.email).toLowerCase());
+    const isSaved = (S.agy.saved || []).some(x => String(x.id) === String(a.id));
+    const other = cur.email && !isCurrent ? cur.email : null;
+    const badges = [];
+    if (isCurrent) badges.push('<span class="gg-tag gg-tag-live" title="Этот аккаунт сейчас в хранилище входа agy">сейчас в agy</span>');
+    if (isSaved) badges.push('<span class="gg-tag" title="Слепок входа лежит у нас: можно переключить в любой момент">вход сохранён</span>');
+    if (S.agy.running) badges.push('<span class="gg-tag gg-tag-warn" title="Процесс agy запущен: переключение уведёт сессию у живого окна">agy запущен</span>');
+    const buttons = [];
+    if (!isCurrent) buttons.push(`<button class="gg-btn" title="Открыть окно входа под профилем этого аккаунта" onclick="GOOGLE.agyLogin('${esc(a.id)}')">Войти</button>`);
+    if (isCurrent && !isSaved) buttons.push(`<button class="gg-btn gg-btn-add" title="Запомнить текущий вход как вход этого аккаунта" onclick="GOOGLE.agySave('${esc(a.id)}')">Сохранить вход</button>`);
+    if (isSaved && !isCurrent) buttons.push(`<button class="gg-btn gg-btn-primary" ${S.agy.running ? 'disabled' : ''} title="Подложить сохранённый вход в хранилище" onclick="GOOGLE.agySwitch('${esc(a.id)}')">Переключить</button>`);
+    return `<div class="gg-field">
+      <div class="gg-label">Antigravity CLI</div>
+      <div class="gg-row">
+        <span class="gg-val" title="${cur.email ? `сейчас в agy: ${esc(cur.email)}` : 'в agy никто не вошёл'}">${cur.email ? esc(cur.email) : 'никто не вошёл'}</span>
+        <span style="display:flex;gap:6px">${buttons.join('')}</span>
+      </div>
+      ${badges.length ? `<div class="gg-badges" style="margin-top:6px">${badges.join('')}</div>` : ''}
+      ${other ? `<div class="gg-hint" style="margin-top:6px">Вход один на машину: пока в agy сидит ${esc(other)}, этот аккаунт там не активен.</div>` : ''}
+    </div>`;
+  }
+
   function cardHtml(a) {
     if (a.broken) {
       return `<div class="gg-card gg-card-broken"><div class="gg-bar gg-bar-dead"></div>
@@ -598,6 +645,7 @@
           </div>
         </div>
         ${a.note ? `<div class="gg-hint">${esc(a.note)}</div>` : ''}
+        ${agyBlock(a)}
         <div class="gg-spacer"></div>
         <div class="gg-foot">
           <button class="gg-btn gg-btn-go" title="Открыть браузер с профилем этого аккаунта на странице входа Google" onclick="GOOGLE.openSession('${esc(a.id)}')">Открыть сессию</button>
@@ -793,6 +841,30 @@
         toast(proxyId ? 'прокси привязан' : 'привязка снята', 'ok');
         await load();
       } catch (e) { toast(e.message, 'bad'); await load(); }
+    },
+
+    // ── Antigravity CLI ─────────────────────────────────────────────────────
+    async agyLogin(id) {
+      try {
+        await post('agy/login', { id });
+        toast('окно входа agy открыто: войди в нём и жми «Сохранить вход»', 'ok');
+      } catch (e) { toast(e.message, 'bad'); }
+    },
+
+    async agySave(id) {
+      try {
+        const r = await post('agy/save', { id });
+        toast(`вход ${r.email} сохранён`, 'ok');
+        await loadAgy(); render();
+      } catch (e) { toast(e.message, 'bad'); }
+    },
+
+    async agySwitch(id) {
+      try {
+        const r = await post('agy/switch', { id });
+        toast(`agy переключён на ${r.email}`, 'ok');
+        await loadAgy(); render();
+      } catch (e) { toast(e.message, 'bad'); await loadAgy(); render(); }
     },
 
     async openSession(id) {

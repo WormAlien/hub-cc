@@ -19,11 +19,12 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { URL } = require('url');
 
 const durable = require('./durable-write');
 const pool = require('./google-pool');
+const agy = require('./google-agy');
 const proxyPool = require('./proxy-pool');
 
 const ROUTING = path.join(__dirname, '..');
@@ -162,8 +163,29 @@ function proxiesWithLabel(e) {
     return { proxy: e.proxy, label: hit ? hit.label : null, known: !!hit };
 }
 
-// ── Факты о сессии ───────────────────────────────────────────────────────────
+// ── Antigravity CLI: что знает сторона вкладки ───────────────────────────────
 
+// 🪤 Переключение входа - машинное: `agy` держит одну запись на пользователя Windows. Если
+// CLI прямо сейчас запущен (человек в консоли или идёт прогон), подмена записи уводит сессию
+// у живого процесса. Поэтому перед переключением спрашиваем список процессов, а не надеемся
+// на удачу: `tasklist` есть на любой Windows и не требует прав.
+function agyRunning() {
+    try {
+        const r = spawnSync('tasklist', ['/fi', 'imagename eq agy.exe', '/nh'], { encoding: 'utf8', windowsHide: true });
+        return /agy\.exe/i.test(String(r.stdout || ''));
+    } catch { return false; }
+}
+
+// Лончер аккаунта в видимом окне: консоль с подменённым USERPROFILE, в ней человек и входит.
+// `start` открывает своё окно, поэтому процесс не привязан к дашборду.
+function spawnLauncher(id) {
+    const file = agy.launcher(id);
+    const proc = spawn('cmd', ['/c', 'start', '', `"${file}"`], { detached: true, stdio: 'ignore', windowsHide: false });
+    proc.unref();
+    return file;
+}
+
+// ── Факты о сессии ───────────────────────────────────────────────────────────
 const profileDir = id => path.join(pool.PROFILES_DIR, pool.profileLabel(id));
 const sessionFile = id => path.join(pool.SESSIONS_DIR, `${id}.json`);
 
@@ -279,6 +301,86 @@ async function dispatch(req, res, route, query) {
             // Какие ярусы вообще бывают и какие из них годны под Google: фронт по этому
             // объясняет, почему в списке мало адресов.
             acceptedTiers: GOOGLE_TIERS,
+        });
+    }
+
+    // GET agy - состояние Antigravity CLI: кто в нём сидит, у кого вход сохранён, запущен ли
+    if (req.method === 'GET' && route === 'agy') {
+        return json(res, 200, {
+            installed: agy.installed(),
+            exe: agy.EXE,
+            current: await agy.current(),
+            saved: agy.saved(),
+            running: agyRunning(),
+        });
+    }
+
+    // POST agy/login { id } - окно входа под профилем этого аккаунта
+    if (req.method === 'POST' && route === 'agy/login') {
+        const body = await readBody(req);
+        const rec = pool.findById(pool.load(), body.id);
+        if (!rec) return json(res, 404, { error: 'аккаунт не найден' });
+        if (!agy.installed()) return json(res, 500, { error: `нет ${agy.EXE} - поставь Antigravity CLI` });
+        const file = spawnLauncher(rec.id);
+        hub.log(`google agy: открыто окно входа для ${maskEmail(rec.email)}`);
+        return json(res, 200, { ok: true, launcher: file });
+    }
+
+    // POST agy/save { id } - сохранить текущий вход в хранилище как вход этого аккаунта
+    if (req.method === 'POST' && route === 'agy/save') {
+        const body = await readBody(req);
+        const r = await agy.capture(body.id);
+        if (!r.ok) return json(res, 409, { error: r.error });
+        hub.log(`google agy: вход ${maskEmail(r.email)} сохранён (${r.bytes} байт)`);
+        return json(res, 200, { ok: true, email: r.email });
+    }
+
+    // POST agy/forget { id } - забыть сохранённый вход (в хранилище не лезем)
+    if (req.method === 'POST' && route === 'agy/forget') {
+        const body = await readBody(req);
+        return json(res, 200, agy.forget(body.id));
+    }
+
+    // POST agy/switch { id } - переключить agy на этот аккаунт
+    if (req.method === 'POST' && route === 'agy/switch') {
+        const body = await readBody(req);
+        // 🪤 Живой `agy` (человек в консоли или идёт прогон) потеряет сессию под подменой.
+        if (agyRunning()) return json(res, 409, { error: 'agy сейчас запущен - закрой его, иначе подмена уведёт сессию у живого процесса' });
+        const r = await agy.switchTo(body.id);
+        if (!r.ok) return json(res, 409, { error: r.error });
+        hub.log(`google agy: переключён на ${maskEmail(r.email)}`);
+        return json(res, 200, { ok: true, email: r.email });
+    }
+
+    // POST agy/run { id, prompt, model?, timeoutMs? } - прогон промпта этим аккаунтом
+    if (req.method === 'POST' && route === 'agy/run') {
+        const body = await readBody(req);
+        const rec = pool.findById(pool.load(), body.id);
+        if (!rec) return json(res, 404, { error: 'аккаунт не найден' });
+        const prompt = String(body.prompt || '').trim();
+        if (!prompt) return json(res, 400, { error: 'нужен prompt' });
+        if (prompt.length > 8000) return json(res, 400, { error: 'промпт длиннее 8000 символов' });
+        if (agyRunning()) return json(res, 409, { error: 'agy уже запущен в другом окне - закрыть его нельзя, пока идёт прогон' });
+        const cur = await agy.current();
+        let switched = false;
+        if (cur.email && rec.email && cur.email.toLowerCase() === String(rec.email).toLowerCase()) {
+            switched = true;   // этот аккаунт уже в хранилище - переключать нечего
+        } else {
+            const sw = await agy.switchTo(rec.id);
+            if (!sw.ok) return json(res, 409, { error: `не переключиться на этот аккаунт: ${sw.error}` });
+            switched = true;
+        }
+        const args = ['-p', prompt, '--output-format', 'text'];
+        if (body.model) args.push('--model', String(body.model));
+        const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 180000, 5000), 600000);
+        const r = await agy.run(rec.id, args, { timeoutMs });
+        hub.log(`google agy: прогон ${maskEmail(rec.email)}${body.model ? ` (${body.model})` : ''} - `
+            + `${r.ok ? 'ок' : `ошибка ${r.code}`}, ${Math.round(r.ms / 1000)} с`);
+        if (!r.ok && !r.output) return json(res, 502, { error: r.error || `agy вышел с кодом ${r.code}` });
+        return json(res, 200, {
+            ok: r.ok, code: r.code, ms: r.ms, switched,
+            output: String(r.output || '').slice(0, 40000),
+            error: r.error ? String(r.error).slice(0, 2000) : null,
         });
     }
 

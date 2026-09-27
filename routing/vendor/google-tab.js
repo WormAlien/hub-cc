@@ -40,6 +40,7 @@
     accounts: [], byStatus: {}, byKind: {}, statuses: [], kinds: [],
     pool: { host: '', enabled: false, proxies: [], total: 0, tiers: [] },   // пул прокси для селектора
     agy: { loaded: false, installed: false, current: null, saved: [], running: false, exe: '' },
+    gem: { loaded: false, installed: false, accounts: [], exe: '' },
     secrets: {},        // id → { password, totpSecret, appPassword } - только по запросу
     reveal: {},         // id → true, пароль показан
     revealApp: {},      // id → true, пароль приложения показан
@@ -219,6 +220,7 @@
     // обновляем только когда выбор сделан или вкладку открыли заново.
     if (!S.pool.host) await loadPool();
     if (!S.agy.loaded) await loadAgy();
+    if (!S.gem.loaded) await loadGem();
     // 🪤 Открытое меню карточки перерисовка закрывает, а опрос идёт каждые 15 секунд.
     // Пока человек выбирает в меню, разметку не трогаем: данные уже в S.
     if (!S.menuOpen) render();
@@ -262,6 +264,20 @@
       } catch { /* карточка просто покажет честное «недоступен» */ }
     }
     if (need.length) render();
+  }
+
+  // Состояние Gemini CLI. 🟢 В отличие от `agy`, здесь у каждого аккаунта свой каталог с
+  // входом, поэтому «кто сейчас активен» не имеет смысла - все сразу, и параллельно.
+  async function loadGem() {
+    try {
+      const g = await api('gemini');
+      S.gem = {
+        loaded: true, installed: !!g.installed, exe: g.exe || '',
+        entry: g.entry || '', accounts: g.accounts || [],
+      };
+    } catch (e) {
+      S.gem = { loaded: true, installed: false, accounts: [], exe: '', error: e.message };
+    }
   }
 
   // ── Шапка ─────────────────────────────────────────────────────────────────
@@ -564,6 +580,31 @@
     </div>`;
   }
 
+  // Блок Gemini CLI: у каждого аккаунта свой дом и свой вход, поэтому тут нет «сейчас активен» -
+  // есть «вход есть» и кнопка «Проверить», которая честно спрашивает модель одним словом.
+  function gemBlock(a) {
+    if (!S.gem.loaded) return '';
+    if (!S.gem.installed) {
+      return `<div class="gg-field"><div class="gg-label">Gemini CLI</div>
+        <div class="gg-code-none">не установлен на этой машине</div></div>`;
+    }
+    const st = (S.gem.accounts || []).find(x => String(x.id) === String(a.id)) || null;
+    const has = !!(st && st.hasCreds);
+    const badges = [];
+    if (has) badges.push('<span class="gg-tag gg-tag-live" title="Вход лежит в каталоге этого аккаунта, а не в общем хранилище">вход есть</span>');
+    if (has) badges.push('<span class="gg-tag" title="Каталог на аккаунт: параллельные прогоны друг другу не мешают">свой дом</span>');
+    const buttons = [`<button class="gg-btn" title="Открыть окно входа под домом этого аккаунта" onclick="GOOGLE.gemLogin('${esc(a.id)}')">${has ? 'Переоткрыть' : 'Войти'}</button>`];
+    if (has) buttons.push(`<button class="gg-btn gg-btn-go" title="Спросить модель одним словом: проверка, что вход живой" onclick="GOOGLE.gemCheck('${esc(a.id)}')">Проверить</button>`);
+    return `<div class="gg-field">
+      <div class="gg-label">Gemini CLI</div>
+      <div class="gg-row">
+        <span class="gg-val" title="${st && st.home ? esc(st.home) : 'каталог ещё не заведён'}">${has ? esc(st.email || 'вход есть') : 'входа нет'}</span>
+        <span style="display:flex;gap:6px">${buttons.join('')}</span>
+      </div>
+      ${badges.length ? `<div class="gg-badges" style="margin-top:6px">${badges.join('')}</div>` : ''}
+    </div>`;
+  }
+
   function cardHtml(a) {
     if (a.broken) {
       return `<div class="gg-card gg-card-broken"><div class="gg-bar gg-bar-dead"></div>
@@ -646,6 +687,7 @@
         </div>
         ${a.note ? `<div class="gg-hint">${esc(a.note)}</div>` : ''}
         ${agyBlock(a)}
+        ${gemBlock(a)}
         <div class="gg-spacer"></div>
         <div class="gg-foot">
           <button class="gg-btn gg-btn-go" title="Открыть браузер с профилем этого аккаунта на странице входа Google" onclick="GOOGLE.openSession('${esc(a.id)}')">Открыть сессию</button>
@@ -865,6 +907,25 @@
         toast(`agy переключён на ${r.email}`, 'ok');
         await loadAgy(); render();
       } catch (e) { toast(e.message, 'bad'); await loadAgy(); render(); }
+    },
+
+    // ── Gemini CLI ──────────────────────────────────────────────────────────
+    async gemLogin(id) {
+      try {
+        await post('gemini/login', { id });
+        toast('окно Gemini CLI открыто: пройди вход в нём', 'ok');
+      } catch (e) { toast(e.message, 'bad'); }
+    },
+
+    async gemCheck(id) {
+      toast('спрашиваю модель…');
+      try {
+        const r = await post('gemini/run', { id, prompt: 'Ответь ровно одним словом: работает', timeoutMs: 120000 });
+        const answer = String(r.output || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '(пустой ответ)';
+        toast(r.ok ? `ответ: ${answer.slice(0, 80)} (${Math.round(r.ms / 1000)} с)` : `ошибка: ${String(r.error || answer).slice(0, 120)}`,
+          r.ok ? 'ok' : 'bad');
+        await loadGem(); render();
+      } catch (e) { toast(e.message, 'bad'); }
     },
 
     async openSession(id) {

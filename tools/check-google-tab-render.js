@@ -161,6 +161,15 @@ function nodeTotp(secret, at = Date.now()) {
             `блок называет, кто сидит в agy (${agyText.replace(/\n/g, ' ').slice(0, 60)}…)`);
         check(await agyField.locator('button').count() >= 1, 'в блоке есть действие (войти или сохранить вход)');
 
+        // ── 2г. Блок Gemini CLI ──────────────────────────────────────────────
+        console.log('\n── 2г. Gemini CLI ──');
+        const gemField = appCard.locator('.gg-field').filter({ hasText: 'Gemini CLI' });
+        check(await gemField.count() === 1, 'на карточке есть блок Gemini CLI');
+        const gemText = await gemField.innerText();
+        check(/входа нет|вход есть|не установлен/.test(gemText),
+            `блок называет состояние входа (${gemText.replace(/\n/g, ' ').slice(0, 60)}…)`);
+        check(await gemField.locator('button').count() >= 1, 'в блоке есть кнопка входа');
+
         // ── 3. Секреты по нажатию ────────────────────────────────────────────
         console.log('\n── 3. Секреты ──');
         const card = (i) => page.locator('.gg-card').nth(i);

@@ -25,6 +25,7 @@ const { URL } = require('url');
 const durable = require('./durable-write');
 const pool = require('./google-pool');
 const agy = require('./google-agy');
+const gem = require('./google-gemini');
 const proxyPool = require('./proxy-pool');
 
 const ROUTING = path.join(__dirname, '..');
@@ -178,8 +179,7 @@ function agyRunning() {
 
 // Лончер аккаунта в видимом окне: консоль с подменённым USERPROFILE, в ней человек и входит.
 // `start` открывает своё окно, поэтому процесс не привязан к дашборду.
-function spawnLauncher(id) {
-    const file = agy.launcher(id);
+function spawnLauncher(file) {
     const proc = spawn('cmd', ['/c', 'start', '', `"${file}"`], { detached: true, stdio: 'ignore', windowsHide: false });
     proc.unref();
     return file;
@@ -321,7 +321,7 @@ async function dispatch(req, res, route, query) {
         const rec = pool.findById(pool.load(), body.id);
         if (!rec) return json(res, 404, { error: 'аккаунт не найден' });
         if (!agy.installed()) return json(res, 500, { error: `нет ${agy.EXE} - поставь Antigravity CLI` });
-        const file = spawnLauncher(rec.id);
+        const file = spawnLauncher(agy.launcher(rec.id));
         hub.log(`google agy: открыто окно входа для ${maskEmail(rec.email)}`);
         return json(res, 200, { ok: true, launcher: file });
     }
@@ -379,6 +379,53 @@ async function dispatch(req, res, route, query) {
         if (!r.ok && !r.output) return json(res, 502, { error: r.error || `agy вышел с кодом ${r.code}` });
         return json(res, 200, {
             ok: r.ok, code: r.code, ms: r.ms, switched,
+            output: String(r.output || '').slice(0, 40000),
+            error: r.error ? String(r.error).slice(0, 2000) : null,
+        });
+    }
+
+    // ── Gemini CLI: каталог профиля на аккаунт, входа на машину не требует ────
+    // GET gemini - установлен ли CLI и у кого из пула уже заведён каталог с входом.
+    if (req.method === 'GET' && route === 'gemini') {
+        return json(res, 200, {
+            installed: gem.installed(),
+            exe: gem.EXE,
+            entry: gem.PKG_ENTRY,
+            accounts: gem.states(),
+        });
+    }
+
+    // POST gemini/login { id } - окно входа под домом этого аккаунта
+    if (req.method === 'POST' && route === 'gemini/login') {
+        const body = await readBody(req);
+        const rec = pool.findById(pool.load(), body.id);
+        if (!rec) return json(res, 404, { error: 'аккаунт не найден' });
+        if (!gem.installed()) return json(res, 500, { error: `нет ${gem.EXE} - поставь Gemini CLI` });
+        const file = spawnLauncher(gem.launcher(rec.id));
+        hub.log(`google gemini: открыто окно входа для ${maskEmail(rec.email)}`);
+        return json(res, 200, { ok: true, launcher: file });
+    }
+
+    // POST gemini/run { id, prompt, model? } - прогон промпта этим аккаунтом.
+    // 🟢 Здесь, в отличие от agy, ничего переключать не нужно: вход лежит в каталоге аккаунта,
+    // поэтому параллельные прогоны на разных аккаунтах не мешают друг другу.
+    if (req.method === 'POST' && route === 'gemini/run') {
+        const body = await readBody(req);
+        const rec = pool.findById(pool.load(), body.id);
+        if (!rec) return json(res, 404, { error: 'аккаунт не найден' });
+        const prompt = String(body.prompt || '').trim();
+        if (!prompt) return json(res, 400, { error: 'нужен prompt' });
+        if (prompt.length > 8000) return json(res, 400, { error: 'промпт длиннее 8000 символов' });
+        if (!gem.state(rec.id).hasCreds) {
+            return json(res, 409, { error: `у аккаунта нет входа Gemini CLI: нажми «Войти» и пройди вход в окне` });
+        }
+        const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 180000, 5000), 600000);
+        const r = await gem.run(rec.id, prompt, { model: body.model ? String(body.model) : null, timeoutMs });
+        hub.log(`google gemini: прогон ${maskEmail(rec.email)}${body.model ? ` (${body.model})` : ''} - `
+            + `${r.ok ? 'ок' : `ошибка ${r.code}`}, ${Math.round(r.ms / 1000)} с`);
+        if (!r.ok && !r.output) return json(res, 502, { error: r.error || `gemini вышел с кодом ${r.code}` });
+        return json(res, 200, {
+            ok: r.ok, code: r.code, ms: r.ms,
             output: String(r.output || '').slice(0, 40000),
             error: r.error ? String(r.error).slice(0, 2000) : null,
         });

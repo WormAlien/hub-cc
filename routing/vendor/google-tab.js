@@ -249,7 +249,10 @@
         current: a.current || null, saved: a.saved || [], running: !!a.running,
       };
     } catch (e) {
-      S.agy = { loaded: true, installed: false, current: null, saved: [], running: false, exe: '', error: e.message };
+      // 🪤 «Не смогли узнать» и «не установлен» - РАЗНОЕ, и путать их нельзя: модуль мог
+      // появиться в коде позже, чем стартовал дашборд, и тогда ручки отвечают 404. Показать
+      // в этом случае «не установлен» значит соврать про машину (так и случилось 28.09).
+      S.agy = { loaded: true, installed: false, current: null, saved: [], running: false, exe: '', unknown: e.message };
     }
   }
 
@@ -276,7 +279,7 @@
         entry: g.entry || '', accounts: g.accounts || [],
       };
     } catch (e) {
-      S.gem = { loaded: true, installed: false, accounts: [], exe: '', error: e.message };
+      S.gem = { loaded: true, installed: false, accounts: [], exe: '', unknown: e.message };
     }
   }
 
@@ -553,6 +556,10 @@
   // таблицы, и видеть его надо на каждой карточке.
   function agyBlock(a) {
     if (!S.agy.loaded) return '';
+    if (S.agy.unknown) {
+      return `<div class="gg-field"><div class="gg-label">Antigravity CLI</div>
+        <div class="gg-code-none">состояние не получено: ${esc(S.agy.unknown)}. Если модуль появился позже старта дашборда - нужен рестарт.</div></div>`;
+    }
     if (!S.agy.installed) {
       return `<div class="gg-field"><div class="gg-label">Antigravity CLI</div>
         <div class="gg-code-none">не установлен на этой машине</div></div>`;
@@ -584,6 +591,10 @@
   // есть «вход есть» и кнопка «Проверить», которая честно спрашивает модель одним словом.
   function gemBlock(a) {
     if (!S.gem.loaded) return '';
+    if (S.gem.unknown) {
+      return `<div class="gg-field"><div class="gg-label">Gemini CLI</div>
+        <div class="gg-code-none">состояние не получено: ${esc(S.gem.unknown)}. Если модуль появился позже старта дашборда - нужен рестарт.</div></div>`;
+    }
     if (!S.gem.installed) {
       return `<div class="gg-field"><div class="gg-label">Gemini CLI</div>
         <div class="gg-code-none">не установлен на этой машине</div></div>`;

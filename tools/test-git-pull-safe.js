@@ -158,43 +158,99 @@ ok('G: свой коммит на месте', run(work, 'rev-parse', 'HEAD').tr
 ok('G: свой файл цел', fs.existsSync(path.join(work, 'mine.js')));
 ok('G: diverged в структуре ответа', require(path.join(work, 'tools/git-pull-safe.js')).pullSafe().diverged === true);
 
-// H: батники. update.sh/fix.sh при неудачном pull имели последнее средство
-// `git fetch && git reset --hard origin/master` — на разошедшейся истории это
-// молча уничтожало незапушенные коммиты (в update.sh даже с бодрой строчкой
-// «локальные коммиты уйдут в сторону»). Проверяем на живом расхождении из G, что
-// оба скрипта коммит НЕ теряют. Гоняем только блок обновления кода: остальное
-// (kill портов, install.sh) в песочнице не нужно и небезопасно.
-const shell = fs.existsSync('/usr/bin/bash') ? '/usr/bin/bash' : 'bash';
-function updateBlock(file, upto) {
-  const src = fs.readFileSync(path.resolve(__dirname, '..', file), 'utf8');
-  const from = src.indexOf('PULL_RC=0'), cut = src.indexOf(upto);
-  if (from < 0 || cut < 0 || cut < from) {
-    throw new Error(`${file}: не нашёл блок обновления кода — тест устарел вместе со скриптом`);
-  }
-  // Шапку скриптов (cd в свою папку, цвета, kill портов) не берём: в песочнице она
-  // увела бы git не туда. Только ветка PULL_RC + заглушки логгеров и read.
-  return 'b(){ echo "$@"; }; ok(){ echo "$@"; }; warn(){ echo "$@"; }; err(){ echo "$@"; }; '
-       + 'step(){ echo "$@"; }; read(){ :; };\n' + src.slice(from, cut);
+// H: вызывающий не имеет права на грубую починку.
+//
+// 🪤 Раньше здесь гонялись живьём блоки обновления update.sh и fix.sh: у них было
+// последнее средство `git fetch && git reset --hard origin/master`, и на разошедшейся
+// истории оно молча уничтожало незапушенные коммиты. Оба скрипта из репозитория убраны
+// (обновление целиком переехало в hub.js), и тест падал на их отсутствии - то есть
+// блоки I, J и K не выполнялись ВООБЩЕ. Проверяем живого вызывающего: он обязан знать
+// оба кода «не трогать» и не ресетить дерево ни по одному из них.
+const hubSrc = fs.readFileSync(path.resolve(__dirname, '..', 'hub.js'), 'utf8');
+// 🪤 Границы берём вместе со скобкой: `async function doPostUpdate` находит ещё и
+// `doPostUpdateNoGit`, которая объявлена РАНЬШЕ, - срез выходил пустым и три проверки
+// ниже проходили вхолостую (в пустой строке нет ни `code === 5`, ни `нужен интернет`).
+const hFrom = hubSrc.indexOf('async function doUpdate({');
+const hTo = hubSrc.indexOf('async function doPostUpdate({');
+ok('H: тело doUpdate в hub.js нашлось', hFrom > 0 && hTo > hFrom);
+const hubUpdate = hFrom > 0 && hTo > hFrom ? hubSrc.slice(hFrom, hTo) : '';
+ok('H: тело doUpdate непустое', hubUpdate.length > 500);
+ok('H: хаб знает код 4 (свои коммиты)', /code === 4/.test(hubUpdate));
+ok('H: хаб знает код 5 (незавершённая операция)', /code === 5/.test(hubUpdate));
+ok('H: хаб не ресетит дерево в обновлении', !/--hard/.test(hubUpdate));
+// Причина отказа печатается выше самим git-pull-safe, и она бывает ЛОКАЛЬНОЙ. Обещать
+// интернет как единственное объяснение - ровно тот дефект, из-за которого человек две
+// недели не мог обновиться (живой экран 30.09.2026).
+ok('H: хаб не объявляет интернет единственной причиной',
+   !/нужен интернет и доступ к GitHub/.test(hubUpdate));
+
+// ── L / M: репозиторий посреди незавершённой операции ───────────────────────
+//
+// 🔴 Замер на живом git 30.09.2026: одна и та же причина приезжает наружу РАЗНЫМИ
+// словами, смотря по тому, разошлась ли история. При конфликте от `git stash pop` и при
+// брошенном `git rebase -i` это «Pulling is not possible because you have unmerged
+// files», а при слиянии с конфликтом на разошедшихся ветках - «fatal: Not possible to
+// fast-forward». Первые две фразы не подходили ни под один регекс модуля и уходили
+// человеку сырым текстом git'а, третью ловил isDiverged и объяснял расхождением истории.
+// А хаб на любую из них печатал «нужен интернет и доступ к GitHub».
+//
+// Поэтому проверяем ОБА вида состояния: с маркером операции в .git (rebase) и без него
+// (конфликт от stash pop - операции нет, а индекс разъехался).
+function pullFails(cwd) {
+  // Контроль: состояние обязано быть ровно тем, на котором спотыкался человек.
+  try { run(cwd, 'pull', '--ff-only'); return false; } catch { return true; }
 }
-function runBlock(file, upto, stdin) {
-  const script = path.join(root, `block-${file}.sh`);
-  fs.writeFileSync(script, updateBlock(file, upto));
-  try {
-    return { code: 0, out: execFileSync(shell, [script], { cwd: work, encoding: 'utf8', input: stdin || '\n' }) };
-  } catch (e) { return { code: e.status, out: (e.stdout || '') + (e.stderr || '') }; }
-}
-// В песочнице шапка скриптов (cd в свою папку) не нужна — вырезаем всё до блока
-// обновления и подсовываем заглушки; интересует ровно ветка PULL_RC.
-const up = runBlock('update.sh', 'ok "Стало:', 'y\n');
-ok('H: update.sh не выбросил свой коммит', run(work, 'rev-parse', 'HEAD').trim() === head);
-ok('H: update.sh сказал про расхождение', /свои коммиты/.test(up.out));
-// Проверяем не «не упоминал reset» (скрипт как раз ПЕЧАТАЕТ эту команду подсказкой
-// человеку), а что грубая ветка не выполнялась.
-ok('H: update.sh не пошёл в принудительный master', !/забираю master принудительно/.test(up.out));
-const fx = runBlock('fix.sh', 'ok "стало:');
-ok('H: fix.sh не выбросил свой коммит', run(work, 'rev-parse', 'HEAD').trim() === head);
-ok('H: fix.sh сказал про расхождение', /разошлись с master/.test(fx.out));
-ok('H: mine.js цел после обоих', fs.readFileSync(path.join(work, 'mine.js'), 'utf8').includes('my own commit'));
+
+console.log('\nL. брошенный rebase: назван, объяснён, ничего не тронуто');
+const l = sandbox('unfinished-rebase', '*.json text\n');
+fs.writeFileSync(l.map, '{\n  "opus": "MINE"\n}\n');
+run(l.work, 'add', '-A'); run(l.work, 'commit', '-m', 'свой коммит');
+// 🪤 fetch обязателен: work клонирован ДО апстримного коммита, и его origin/master ещё
+// смотрит на init. Без fetch rebase пошёл бы на тот же коммит, конфликта не было бы, и
+// блок L «проходил» бы, ничего не проверяя.
+run(l.work, 'fetch', 'origin');
+let rebaseOn = false;
+try { run(l.work, 'rebase', 'origin/master'); } catch { rebaseOn = true; }
+const lHead = run(l.work, 'rev-parse', 'HEAD').trim();
+ok('L: rebase встал на конфликте', rebaseOn && fs.existsSync(path.join(l.work, '.git/rebase-merge')));
+ok('L: обычный git pull здесь отказывает (контроль)', pullFails(l.work));
+const lRes = cli(l.work);
+ok('L: код выхода 5 (незавершённая операция)', lRes.code === 5);
+ok('L: названа операция', /незавершённый rebase/.test(lRes.out));
+ok('L: назван файл в конфликте', /ar-modelmap\.json/.test(lRes.out));
+ok('L: сказано, что это не сеть', /не сеть и не права/.test(lRes.out));
+ok('L: дан выход через ветку-якорь', /git branch backup\/update-/.test(lRes.out));
+ok('L: подсказана отмена именно rebase', /git rebase --abort/.test(lRes.out));
+ok('L: не сырой текст git', !/Pulling is not possible/.test(lRes.out));
+// Главное: мы ничего не тронули. `reset --hard` здесь выбросил бы работу в rebase.
+ok('L: rebase не отменён за спиной', fs.existsSync(path.join(l.work, '.git/rebase-merge')));
+ok('L: HEAD не сдвинут', run(l.work, 'rev-parse', 'HEAD').trim() === lHead);
+const lmod = require(path.join(l.work, 'tools/git-pull-safe.js'));
+ok('L: в структуре ответа unfinished', lmod.pullSafe().unfinished === true);
+ok('L: pendingOperation увидел маркер', lmod.pendingOperation().marks.some(m => m.name === 'rebase-merge'));
+
+console.log('\nM. конфликт от stash pop: маркеров в .git нет, а pull всё равно отказывает');
+const m = sandbox('unfinished-stash', '*.json text\n');
+fs.writeFileSync(m.map, '{\n  "opus": "USER-STASH"\n}\n');
+run(m.work, 'stash', 'push', '-m', 'работа юзера');
+run(m.work, 'fetch', 'origin');
+run(m.work, 'reset', '--hard', 'origin/master');
+let popConflict = false;
+try { run(m.work, 'stash', 'pop'); } catch { popConflict = true; }
+const mmod = require(path.join(m.work, 'tools/git-pull-safe.js'));
+ok('M: stash pop дал конфликт', popConflict);
+ok('M: маркеров операции в .git НЕТ', mmod.pendingOperation().marks.length === 0);
+ok('M: конфликтный путь виден', mmod.pendingOperation().unmerged.includes('routing/ar-modelmap.json'));
+ok('M: обычный git pull здесь отказывает (контроль)', pullFails(m.work));
+const mRes = cli(m.work);
+ok('M: код выхода 5', mRes.code === 5);
+ok('M: назван конфликт в рабочем дереве', /конфликт в рабочем дереве/.test(mRes.out));
+ok('M: назван файл', /ar-modelmap\.json/.test(mRes.out));
+ok('M: не сырой текст git', !/Pulling is not possible/.test(mRes.out));
+// Запись в стэше при конфликте не сбрасывается - правки юзера целы, и мы об этом молчим
+// зря не пугаем: код 5 про них ничего не утверждает.
+ok('M: правки юзера в стэше целы', /работа юзера/.test(run(m.work, 'stash', 'list')));
+
 
 // ── I / J: файл, грязный ТОЛЬКО переводами строк ─────────────────────────────
 // Расклад с живого репо (Windows, core.autocrlf=true, `*.json text`): дашборд

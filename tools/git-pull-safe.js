@@ -16,12 +16,15 @@
  * Грязный настоящий код не трогаем: возвращаем список файлов, решает человек.
  *
  * Использование:
- *   node tools/git-pull-safe.js          # CLI (update.sh / fix.sh)
+ *   node tools/git-pull-safe.js          # CLI (зовут hub.js и fix-скрипты)
  *   require('../tools/git-pull-safe')    # дашборд, ручка update-pull
  *
- * Коды выхода CLI: 0 — обновлено (или уже актуально), 3 — мешают правки кода,
- * 4 — история разошлась (свои коммиты; грубая починка запрещена), 1 — прочая
- * ошибка git (нет сети, конфликт, не репо).
+ * Коды выхода CLI: 0 - обновлено (или уже актуально), 3 - мешают правки кода,
+ * 4 - история разошлась (свои коммиты), 5 - в репозитории незавершённая операция
+ * (слияние, rebase, cherry-pick), 1 - прочая ошибка git (нет сети, не репо).
+ *
+ * 🔴 По 4 и 5 грубая починка (`reset --hard origin/master`) запрещена: по 4 она
+ * выбросила бы свои коммиты, по 5 - не начиналась бы вовсе.
  */
 'use strict';
 
@@ -69,6 +72,79 @@ function isStateFile(f) {
 
 function git(...args) {
     return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
+}
+
+// ─── Незавершённая операция в репозитории ────────────────────────────────────
+//
+// 🔴 Спрашиваем СОСТОЯНИЕ репозитория, а не текст ошибки git. Замер на живом git
+// 30.09.2026: одна и та же причина - брошенное слияние или rebase - приезжает наружу
+// РАЗНЫМИ словами, смотря по тому, разошлась ли история:
+//
+//   конфликт от `git stash pop`                  -> «Pulling is not possible because you have unmerged files»
+//   брошенный `git rebase -i` с конфликтом       -> та же строка
+//   слияние с конфликтом на разошедшихся ветках  -> «fatal: Not possible to fast-forward»
+//
+// Первые две фразы не подходили ни под один наш регекс и уходили сырым текстом git'а,
+// третью ловил isDiverged - и человеку объясняли расхождение истории, хотя чинится она
+// совсем иначе. Живой случай: второй пользователь две недели не мог обновиться, а хаб
+// на его экране писал «нужен интернет и доступ к GitHub».
+//
+// Файл-маркер в .git отвечает на вопрос прямо и одинаково во всех трёх случаях. Путь к
+// .git берём у самого git (`rev-parse --git-path`): так верно и когда .git - каталог, и
+// когда это файл (worktree, сабмодуль).
+const OP_MARKS = [
+    ['MERGE_HEAD', 'незавершённое слияние (git merge)'],
+    ['rebase-merge', 'незавершённый rebase'],
+    ['rebase-apply', 'незавершённый rebase (git am)'],
+    ['CHERRY_PICK_HEAD', 'незавершённый cherry-pick'],
+    ['REVERT_HEAD', 'незавершённый revert'],
+];
+
+function pendingOperation() {
+    const marks = [];
+    for (const [name, label] of OP_MARKS) {
+        let p = '';
+        try { p = git('rev-parse', '--git-path', name); } catch { continue; }
+        if (p && fs.existsSync(path.resolve(REPO, p))) marks.push({ name, label });
+    }
+    // Пути в конфликте спрашиваем отдельно: при конфликте от `git stash pop` маркеров в
+    // .git НЕТ вовсе - операция не идёт, а индекс уже разъехался, и pull отказывает.
+    let unmerged = [];
+    try {
+        unmerged = git('diff', '--name-only', '--diff-filter=U')
+            .split('\n').map(s => s.trim()).filter(Boolean);
+    } catch { }
+    return { marks, unmerged, any: marks.length > 0 || unmerged.length > 0 };
+}
+
+// Что человеку делать. Решения за него НЕ принимаем: `--abort` вернул бы состояние до
+// операции, а в ней могли быть свои коммиты (у второго пользователя в брошенном rebase
+// их как раз двое). Поэтому называем факты и оба выхода, а выбор оставляем ему.
+function unfinishedMessage(op) {
+    const has = (n) => op.marks.some(m => m.name === n);
+    const abortCmd = has('rebase-merge') || has('rebase-apply') ? 'git rebase --abort'
+        : has('MERGE_HEAD') ? 'git merge --abort'
+        : has('CHERRY_PICK_HEAD') ? 'git cherry-pick --abort'
+        : has('REVERT_HEAD') ? 'git revert --abort'
+        : null;
+    const what = op.marks.length
+        ? op.marks.map(m => m.label).join(', ')
+        : 'конфликт в рабочем дереве (неразрешённый stash pop или слияние)';
+    const list = op.unmerged.slice(0, 6).join(', ')
+        + (op.unmerged.length > 6 ? ` и ещё ${op.unmerged.length - 6}` : '');
+    return [
+        `Обновление не начато: репозиторий стоит посреди незавершённой операции - ${what}.`,
+        op.unmerged.length ? `Файлы в конфликте (${op.unmerged.length}): ${list}` : '',
+        'Это не сеть и не права доступа: git отказывает локально, пока операцию не закончат или не отменят.',
+        '',
+        'Как выпутаться, ничего не потеряв:',
+        '  1) git status                                     - что именно происходит',
+        '  2) git branch backup/update-$(date +%Y%m%d) HEAD   - закрепить текущее состояние веткой',
+        abortCmd
+            ? `  3) ${abortCmd}   - вернуться к состоянию до операции (свои коммиты останутся в ветке из шага 2)`
+            : '  3) разрешить конфликт: правишь файл, затем `git add <файл>` на каждый',
+        '  4) запустить обновление снова',
+    ].filter(Boolean).join('\n');
 }
 
 // Грязь спрашиваем ДВУМЯ командами, потому что одна врёт.
@@ -176,6 +252,13 @@ function pullSafe(opts = {}) {
     const stashBlocking = !!opts.stashBlocking;
     const pull = () => git('pull', '--ff-only', '--no-edit');
     const empty = { ok: false, output: '', preserved: [], blocking: [], stashed: [] };
+    // 🔴 Незавершённую операцию проверяем ДО pull, а не по его ошибке. Иначе причина
+    // приезжает чужими словами (сырой текст git'а или «история разошлась») и человек
+    // чинит не то. Замер и разбор - у `pendingOperation`.
+    const op = pendingOperation();
+    if (op.any) {
+        return { ...empty, unfinished: true, unmerged: op.unmerged, error: unfinishedMessage(op) };
+    }
     try {
         return { ok: true, output: pull(), preserved: [], blocking: [], stashed: [] };
     } catch (e1) {
@@ -383,7 +466,7 @@ function moveTo(sha, opts = {}) {
     return { ok: true, output, preserved, blocking: [], stashed, stashRef, backupRef };
 }
 
-module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe, listCommits, moveTo };
+module.exports = { REPO, LOCAL_STATE_FILES, isStateFile, pullSafe, pendingOperation, listCommits, moveTo };
 
 if (require.main === module) {
     // --stash: правки кода не блокируют, а уходят в git stash. Тот же режим, что
@@ -417,9 +500,9 @@ if (require.main === module) {
         process.exit(3);
     }
     console.error(r.error || 'git pull не удался');
-    // Отдельный код для разошедшихся историй: вызывающим скриптам (update.sh/fix.sh)
-    // нельзя в этом случае доезжать до `reset --hard origin/master` — он выбросит
-    // именно те коммиты, из-за которых pull и не прошёл. По коду 1 они имеют право
-    // на грубую починку (нет сети/конфликт), по 4 — обязаны остановиться.
-    process.exit(r.diverged ? 4 : 1);
+    // Отдельные коды для вызывающих (hub.js, скрипты), которым нельзя доезжать до
+    // `reset --hard origin/master`. По 4 он выбросил бы ровно те свои коммиты, из-за
+    // которых pull и не прошёл; по 5 - не начинался бы вовсе, репозиторий стоит посреди
+    // незавершённой операции. По 1 (нет сети, не репо) грубая починка допустима.
+    process.exit(r.unfinished ? 5 : r.diverged ? 4 : 1);
 }

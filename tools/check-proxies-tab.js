@@ -18,9 +18,16 @@ const SRC = path.join(__dirname, '..', 'routing', 'vendor', 'proxies-tab.js');
 const code = fs.readFileSync(SRC, 'utf8');
 
 // ── Заглушка DOM ────────────────────────────────────────────────────────────
+//
+// 🪤 Заглушка обязана повторять ГЛАВНОЕ свойство браузера, из-за которого дефект 30.09 и
+// жил: `root.innerHTML = ...` УНИЧТОЖАЕТ дочерние узлы вместе с содержимым. Раньше узлы
+// просто мемоизировались и не старели, поэтому набранное «переживало» перерисовку только
+// здесь - а в браузере пустая textarea создавалась заново, и список затирался на каждом
+// тике (15 с), когда расходилась подпись состояния.
+const els = new Map();
 function makeEl(id) {
-    return {
-        id, innerHTML: '', value: '', textContent: '',
+    const node = {
+        id, value: '', textContent: '',
         _cls: new Set(),
         classList: {
             contains: (c) => false,
@@ -28,9 +35,21 @@ function makeEl(id) {
         },
         addEventListener() {},
         querySelectorAll: () => [],
+        setSelectionRange() {},
     };
+    let html = '';
+    Object.defineProperty(node, 'innerHTML', {
+        get: () => html,
+        set: (v) => {
+            html = String(v);
+            // Пересборка корня = новые узлы. Значения прежних обнуляются, как в браузере.
+            if (node === els.get('proxies-root')) {
+                for (const child of els.values()) if (child !== node) child.value = '';
+            }
+        },
+    });
+    return node;
 }
-const els = new Map();
 function el(id) { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); }
 el('proxies-root');
 el('nav-count-proxies');
@@ -272,6 +291,45 @@ const root = el('proxies-root');
     // в списке свежих - тихий дефект: сервер отдаёт новое, а в браузере остаётся старое.
     // Ровно на этом уже потерялось время: правки вкладки не были видны перезагрузкой.
     check(/FRESH_PREFIXES[^;]*proxies-tab/.test(PROXY_SRC), 'файлы вкладки отдаются без immutable-кеша');
+
+    // ── 9. набранное в полях переживает перерисовку по тику ──
+    //
+    // 🔴 С боевой машины 30.09.2026: «список затирается по какому-то тику, если на
+    // скорость между тиками вставлять - то успевает». Причина не в таймере, а в том,
+    // что `render()` пересобирает вкладку целиком, а подпись состояния расходится на
+    // КАЖДОМ опросе, пока в снимке есть `health[].ageMs` - это время считается от
+    // `Date.now()` при каждом запросе. Поэтому рендер шёл каждый тик, и textarea
+    // создавалась заново пустой.
+    console.log('\n9. набранное в полях переживает перерисовку по тику');
+    const LIST = 'socks5://user:pass@1.2.3.4:1080\n154.219.251.60:63848:WpUL16FvW:rYw2GBb2A';
+    el('px-own-text').value = LIST;
+    SAMPLE_STATE.counts = { ...SAMPLE_STATE.counts, own: 7 };   // данные разошлись -> рендер обязан пройти
+    await sandbox.window.PROXIES.load({ silent: true });
+    check(root.innerHTML.includes('Свои прокси'), 'вкладка действительно пересобралась');
+    check(el('px-own-text').value === LIST, 'набранный список на месте после тика');
+
+    // Открытая форма полей - тот же пользовательский ввод, и тик стирал её так же.
+    sandbox.window.PROXIES.openInlineForm();
+    el('px-f-addr').value = '10.0.0.7';
+    el('px-f-port').value = '1080';
+    SAMPLE_STATE.counts = { ...SAMPLE_STATE.counts, own: 8 };
+    await sandbox.window.PROXIES.load({ silent: true });
+    check(root.innerHTML.includes('px-f-addr'), 'форма после перерисовки открыта');
+    check(el('px-f-addr').value === '10.0.0.7' && el('px-f-port').value === '1080',
+        'набранное в полях формы на месте');
+
+    // Контроль в обратную сторону: пустое поле не воскресает. На этом держится сохранение
+    // списка - `saveOwn` чистит поле перед перерисовкой, и старый список не должен
+    // вернуться на место.
+    el('px-own-text').value = '';
+    SAMPLE_STATE.counts = { ...SAMPLE_STATE.counts, own: 9 };
+    await sandbox.window.PROXIES.load({ silent: true });
+    check(el('px-own-text').value === '', 'пустое поле осталось пустым');
+
+    // И форма: закрыли - черновик не хранится, повторное открытие не показывает старый ввод.
+    sandbox.window.PROXIES.openInlineForm();       // закрыть
+    sandbox.window.PROXIES.openInlineForm();       // открыть снова
+    check(el('px-f-addr').value === '', 'после закрытия формы черновик не вернулся');
 
     console.log(fail ? `\n❌ ${fail} провалено` : '\n✅ Вкладка «Свои прокси»: рендер, план, статусы, деградация без модуля.');
     process.exit(fail ? 1 : 0);

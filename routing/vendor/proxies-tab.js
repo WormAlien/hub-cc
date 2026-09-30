@@ -41,6 +41,9 @@
     timer: null,
     saving: false,
     checking: false,
+    // Набранное в полях вкладки. Живёт в модуле, а не в узле, потому что узел при
+    // пересборке уничтожается - разбор у readDraft/restoreDraft.
+    draft: {},
   };
 
   // ── Утилиты ───────────────────────────────────────────────────────────────
@@ -525,9 +528,62 @@
       </section>`;
   }
 
+  // ── Набранное в полях: слепок до пересборки, возврат после ──────────────────
+  //
+  // 🔴 Дефект, который владелец нашёл на второй машине 30.09.2026: список прокси
+  // затирался прямо во время вставки. Успеть можно было только «между тиками».
+  //
+  // Механика: `render()` пересобирает вкладку целиком (`root.innerHTML = ...`), и браузер
+  // уничтожает textarea вместе с содержимым - новый узел всегда пустой. Защитой служила
+  // только подпись состояния (пропускаем перерисовку, если данные не изменились), а она
+  // расходится ВСЕГДА, пока в снимке есть `health[].ageMs`: это время считается от
+  // `Date.now()` на каждом запросе. То есть при непустом кеше здоровья вкладка
+  // пересобиралась на каждом тике (15 с), и поле обнулялось.
+  //
+  // Поэтому слепок снимаем ДО пересборки и возвращаем ПОСЛЕ. Так ввод переживает любую
+  // перерисовку - и эту, и любую будущую, от чего бы подпись ни дёргалась.
+  //
+  // 🪤 Не путать с `updateNotice()`: там тот же принцип, но только для баннера.
+  const DRAFT_ALWAYS = ['px-own-text'];
+  // Поля формы живут, только пока форма открыта: закрыл - черновика нет, иначе
+  // повторное открытие показывало бы старый ввод (включая пароль).
+  const DRAFT_FORM = ['px-f-scheme', 'px-f-addr', 'px-f-port', 'px-f-user', 'px-f-pass'];
+
+  function readDraft() {
+    if (!S.showForm) for (const id of DRAFT_FORM) delete S.draft[id];
+    for (const id of DRAFT_ALWAYS.concat(S.showForm ? DRAFT_FORM : [])) {
+      const node = document.getElementById(id);
+      // Узла нет (вкладка нарисована без формы, или чтение состояния упало) - слепок НЕ
+      // трогаем: он вернётся, когда разметка вернётся.
+      if (!node) continue;
+      // Поле пустое - человек стёр или список уже сохранён. Именно на этом держится
+      // `saveOwn`: он чистит поле ПЕРЕД перерисовкой, чтобы слепок остался пустым.
+      if (!node.value) { delete S.draft[id]; continue; }
+      S.draft[id] = {
+        value: node.value,
+        start: typeof node.selectionStart === 'number' ? node.selectionStart : null,
+        end: typeof node.selectionEnd === 'number' ? node.selectionEnd : null,
+      };
+    }
+  }
+
+  function restoreDraft() {
+    for (const id of Object.keys(S.draft)) {
+      const node = document.getElementById(id);
+      if (!node) continue;
+      node.value = S.draft[id].value;
+      // Каретку возвращаем туда, где человек её оставил. `setSelectionRange` есть не у
+      // всякого поля (у `select` его нет вовсе, на `number` он бросает), поэтому под защитой.
+      if (S.draft[id].start == null || !node.setSelectionRange) continue;
+      try { node.setSelectionRange(S.draft[id].start, S.draft[id].end); } catch { }
+    }
+  }
+
   function render() {
     const root = document.getElementById('proxies-root');
     if (!root) return;
+
+    readDraft();
 
     const d = S.data;
     const noticeText = S.notice ? S.notice.text : null;
@@ -552,6 +608,8 @@
         <h1 class="px-title"><span>🔌</span> Свои прокси</h1>
         ${errBanner || '<div class="px-notice px-notice-ok">читаю состояние пула...</div>'}
       </div>`;
+      // Поля сюда не рисуются - возвращать нечего. Слепок при этом НЕ пропадает: он лежит
+      // в `S.draft` и вернётся вместе с разметкой, когда чтение состояния наладится.
       return;
     }
 
@@ -581,6 +639,8 @@
           от выгрузки скрапера, его не вымывает долив, и он получает приоритет при новых привязках.
         </div>` : ''}
       </div>`;
+
+    restoreDraft();
   }
 
   // Источник прокси: что пул вообще берёт в работу. Это ВЫБОР человека, а не догадка пула -

@@ -102,7 +102,18 @@ async function fetchStub(url, opts) {
     if (p === 'state') payload = SAMPLE_STATE;
     else if (p === 'rebalance') payload = PLAN;
     else if (p === 'check') payload = { ok: true, results: [{ id: 'socks5://node1:10808', host: 'api.rumeng-ai.com', ok: false, error: 'HTTP 404', ms: 9, status: 404, path: '/api/v1/settings/public' }] };
-    else if (p === 'own') payload = { ok: true, saved: 1, bad: ['мусор'], proxies: ['socks5://10.0.0.1:1080'], warning: 'не разобрано строк: 1' };
+    else if (p === 'own') {
+        // Отвечаем тем же контрактом, что ручка: три числа (added / total / bad) и режим.
+        // Так регресс видит, какой режим ЗАПРОСИЛА вкладка, и не даёт вернуть «заменить»
+        // как единственный путь.
+        const body = JSON.parse((opts && opts.body) || '{}');
+        const mode = body.mode === 'replace' ? 'replace' : 'add';
+        payload = {
+            ok: true, mode, saved: 3, added: mode === 'replace' ? 1 : 2, total: mode === 'replace' ? 1 : 3,
+            bad: [], proxies: ['socks5://10.0.0.1:1080'],
+            warning: mode === 'replace' ? 'список заменён, строк 1' : 'добавлено 2, всего в списке 3',
+        };
+    }
     else if (p === 'assign') payload = { ok: true, released: { proxy: 'x' } };
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
 }
@@ -111,6 +122,8 @@ async function fetchStub(url, opts) {
 const sandbox = {
     document, fetch: fetchStub, console,
     setInterval: () => 1, clearInterval: () => {},
+    // Спрашивается только при замене списка; в песочнице отвечаем «да».
+    confirm: () => true,
     setTimeout, JSON, Object, Array, String, Number, Boolean, Date, Math, Error, RegExp, Promise, Set, Map,
 };
 sandbox.window = sandbox;
@@ -330,6 +343,33 @@ const root = el('proxies-root');
     sandbox.window.PROXIES.openInlineForm();       // закрыть
     sandbox.window.PROXIES.openInlineForm();       // открыть снова
     check(el('px-f-addr').value === '', 'после закрытия формы черновик не вернулся');
+
+    // ── 10. сохранение списка: импорт по умолчанию, замена отдельно ──
+    //
+    // 🔴 Дефект 30.09.2026: кнопка называлась «добавить», а сохранение заменяло список
+    // целиком - владелец добавил пять прокси по одному и получил в пуле один. Проверяем,
+    // что вкладка просит у ручки именно импорт, а замена осталась явным действием.
+    console.log('\n10. сохранение списка: импорт по умолчанию, замена отдельным действием');
+    el('px-own-text').value = '1.2.3.4:1080';
+    const lastOwn = () => calls.filter(c => c.url.endsWith('/own')).pop();
+    calls.length = 0;
+    await sandbox.window.PROXIES.saveOwn();          // так зовёт кнопка «Добавить к списку»
+    check(!!lastOwn() && JSON.parse(lastOwn().body).mode === 'add', 'без аргумента ручка получает режим add');
+    // 🪤 Поле перед вторым вызовом заполняем заново: после успешного сохранения вкладка
+    // его чистит, и на пустом поле saveOwn выходит раньше запроса - тест читал бы не режим,
+    // а собственную оплошность.
+    el('px-own-text').value = '5.6.7.8:8080';
+    await sandbox.window.PROXIES.saveOwn('replace');
+    check(!!lastOwn() && JSON.parse(lastOwn().body).mode === 'replace', 'замена просит режим replace');
+    check(el('px-own-text').value === '', 'после сохранения поле очищено - список уже в пуле');
+    check(root.innerHTML.includes('Добавить к списку'), 'кнопка добавления на вкладке есть');
+    check(root.innerHTML.includes('Заменить список целиком'), 'замена осталась отдельной кнопкой');
+    check(root.innerHTML.includes('дописываются'), 'предупреждение говорит, что строки дописываются');
+    // Контроль в обратную сторону: пустое поле не отправляем - это стёрло бы список.
+    el('px-own-text').value = '   ';
+    calls.length = 0;
+    await sandbox.window.PROXIES.saveOwn('replace');
+    check(calls.filter(c => c.url.endsWith('/own')).length === 0, 'пустое поле на сервер не уходит');
 
     console.log(fail ? `\n❌ ${fail} провалено` : '\n✅ Вкладка «Свои прокси»: рендер, план, статусы, деградация без модуля.');
     process.exit(fail ? 1 : 0);

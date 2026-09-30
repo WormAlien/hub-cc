@@ -22621,7 +22621,10 @@ function handleProxiesOwn(req, res) {
         // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
         // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
         const doc = body || {};
-        const out = lib.saveOwn(doc.text);
+        // `mode` без значения = импорт (дописать к сохранённому). Замена списка - только
+        // по явному `'replace'`: кнопка называется «добавить», и человек, вставляющий
+        // список, не ждёт, что прежние прокси при этом исчезнут.
+        const out = lib.saveOwn(doc.text, { mode: doc.mode });
         jsonRes(res, out.ok ? 200 : 400, out);
     }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
 }

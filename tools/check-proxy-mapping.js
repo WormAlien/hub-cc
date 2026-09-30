@@ -280,6 +280,87 @@ check(PROXY.parseProxy('1.2.3.4:99999:u:p', 'socks5') === null, 'битый по
 check(!PROXY.parseProxy('socks5://1.2.3.4:1080', 'socks5').scheme.includes('://'),
     'схема из URL не потерялась в магазинной ветке');
 
+// ── 9b. импорт своих: вставленное ДОПИСЫВАЕТСЯ ──
+//
+// 🔴 Дефект 30.09.2026: кнопка называлась «добавить», а сохранение ЗАМЕНЯЛО список целиком.
+// Владелец добавлял прокси по одному и сохранял после каждого - в пуле остался последний,
+// «1 из 5». Слияние проверяем как чистую функцию: без диска, без сети и без конфига.
+console.log('\n9b. импорт своих: дописывание, повторы, порядок, креды');
+const m1 = PROXY.mergeOwnList(['a:1', 'b:2'], ['c:3', 'd:4']);
+check(m1.list.length === 4 && m1.added.length === 2 && m1.dupes.length === 0,
+    'пять вставок по одной дают пять строк, а не последнюю');
+check(m1.list.join(',') === 'a:1,b:2,c:3,d:4', 'порядок: прежние впереди, новые в конец');
+const m2 = PROXY.mergeOwnList(['a:1'], ['a:1', '  a:1  ', 'b:2']);
+check(m2.list.length === 2 && m2.dupes.length === 2, 'повтор не задваивается, пробелы не мешают');
+const m3 = PROXY.mergeOwnList([], ['a:1']);
+check(m3.list.length === 1 && m3.added.length === 1, 'пустой прежний список принимает первое');
+const m4 = PROXY.mergeOwnList(['a:1'], []);
+check(m4.list.length === 1 && m4.added.length === 0, 'пустая вставка ничего не теряет');
+const m5 = PROXY.mergeOwnList(null, ['x:1']);
+check(m5.list.length === 1, 'отсутствующий прежний список не роняет слияние');
+// 🔴 Сравниваем ДОСЛОВНО, а не по id. id - это `scheme://host:port`, кредов он не несёт,
+// поэтому два прокси с разными логинами на одном адресе - ДВА выхода. Схлопни их по id -
+// и один из паролей исчез бы молча.
+const creds = PROXY.mergeOwnList(['socks5://u1:p1@1.2.3.4:1080'], ['socks5://u2:p2@1.2.3.4:1080']);
+check(creds.list.length === 2, 'два разных логина на одном адресе - две строки, а не схлопывание');
+check(creds.list[0].includes('u1:p1') && creds.list[1].includes('u2:p2'), 'креды обеих строк целы');
+
+// ── 9c. saveOwn сквозь конфиг: импорт дописывает, замена заменяет ──
+//
+// Слияние проверено выше как чистая функция, но сломалась-то ЗАПИСЬ: сколько строк реально
+// ложится в `ownList` и что возвращается вкладке. Гоняем настоящий `proxy-admin.js` в
+// песочнице: копируем модули в свой каталог, чтобы `CONFIG_FILE` (`__dirname/../proxy-pool.json`)
+// указал на временный конфиг, а не на боевой.
+console.log('\n9c. saveOwn: импорт дописывает, замена заменяет, креды целы');
+{
+    // 🪤 Переменные пула убираем ЯВНО: `config()` предпочитает env конфигу, и унаследованный
+    // `PROXY_POOL_OWN` из соседних блоков подменил бы список - тест проверял бы env, а не запись.
+    const KEYS = ['PROXY_POOL_OWN', 'PROXY_POOL_OWN_FILE', 'PROXY_POOL_OWN_FIRST', 'PROXY_POOL_FILE',
+        'PROXY_POOL_LIST', 'PROXY_POOL_HOSTS', 'PROXY_POOL_SOURCE', 'PROXY_POOL_ENABLED', 'PROXY_POOL_PREFLIGHT_TTL'];
+    const savedEnv = {};
+    for (const k of KEYS) { savedEnv[k] = process.env[k]; delete process.env[k]; }
+
+    const SAVE_TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'own-save-check-'));
+    fs.mkdirSync(path.join(SAVE_TMP, 'lib'));
+    for (const f of ['proxy-pool.js', 'proxy-admin.js']) {
+        fs.copyFileSync(path.join(ROOT, 'routing', 'lib', f), path.join(SAVE_TMP, 'lib', f));
+    }
+    const SAVE_CFG = path.join(SAVE_TMP, 'proxy-pool.json');
+    const readOwn = () => JSON.parse(fs.readFileSync(SAVE_CFG, 'utf8')).ownList;
+    fs.writeFileSync(SAVE_CFG, JSON.stringify({ enabled: true, hosts: [HOST], ownList: [], source: 'own' }, null, 2));
+
+    const ADMIN = require(path.join(SAVE_TMP, 'lib', 'proxy-admin.js'));
+    const A = 'http://10.0.0.1:8080';
+    const B = 'http://10.0.0.2:8080';
+    const C = 'socks5://user:pa%40ss@10.0.0.3:1080';   // креды со спецсимволом
+
+    const r1 = ADMIN.saveOwn(A);
+    const r2 = ADMIN.saveOwn(B);      // импорт по умолчанию - так зовёт кнопка «добавить»
+    check(r1.ok && r2.ok, 'оба импорта прошли');
+    check(r2.mode === 'add', 'режим по умолчанию - импорт, а не замена');
+    check(readOwn().length === 2, 'два добавления по одной строке дают ДВЕ строки в конфиге');
+    check(r2.added === 1 && r2.total === 2, 'ответ называет добавленное и всего (а не одно «принято»');
+    check(r2.saved === 2, 'в ярусе после операции две прокси');
+
+    const r3 = ADMIN.saveOwn(A);      // повтор той же строки
+    check(readOwn().length === 2 && r3.added === 0, 'повтор не задваивает список');
+    check(/повторов пропущено: 1/.test(r3.warning || ''), 'про повтор сказано прямо');
+
+    const r4 = ADMIN.saveOwn(C, { mode: 'replace' });
+    check(r4.mode === 'replace' && readOwn().length === 1, 'замена оставляет ровно вставленное');
+    check(readOwn()[0] === C, 'строка с кредами лежит в конфиге ДОСЛОВНО - не через label');
+    check(/pa%40ss/.test(readOwn()[0]), 'пароль со спецсимволом не раскодирован и не потерян');
+
+    const r5 = ADMIN.saveOwn(B);
+    check(readOwn().length === 2 && r5.added === 1, 'после замены импорт снова дописывает к оставшемуся');
+
+    const r6 = ADMIN.saveOwn('   \n  ');
+    check(r6.ok === false && readOwn().length === 2, 'пустое поле отвергнуто и список не тронут');
+
+    try { fs.rmSync(SAVE_TMP, { recursive: true, force: true }); } catch { /* песочница */ }
+    for (const k of KEYS) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
+}
+
 
 // ── 10. хост вне пула не ребалансируется ──
 //

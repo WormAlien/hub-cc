@@ -416,6 +416,34 @@ function readTier(file, list, scheme, optional = false) {
         scheme: loaded.scheme, error: loaded.error };
 }
 
+// Слияние списка своих прокси: вставленное ДОПИСЫВАЕТСЯ к сохранённому.
+//
+// 🔴 Зачем. Кнопка называется «добавить», а сохранение ЗАМЕНЯЛО список целиком. Живой
+// случай 30.09.2026: владелец добавлял прокси по одному и сохранял после каждого - в пуле
+// остался последний, «1 из 5». Поле подписано «заменяет список целиком», но человек,
+// вставляющий список, читает это как «положить в пул», а не «стереть прежнее и положить».
+//
+// Сравниваем ДОСЛОВНО, а не по id: id - это `scheme://host:port`, кредов он не несёт, и
+// две строки с разными логинами на одном адресе обязаны ужиться (разбор - в `saveOwn`).
+// Порядок сохраняем: прежние строки впереди, новые в конец, чтобы список не перетасовывался
+// на каждом импорте, а человек узнавал свой список.
+function mergeOwnList(prev, incoming) {
+    const have = Array.isArray(prev) ? prev : [];
+    const seen = new Set(have);
+    const list = have.slice();
+    const added = [];
+    const dupes = [];
+    for (const raw of (incoming || [])) {
+        const line = String(raw == null ? '' : raw).trim();
+        if (!line) continue;
+        if (seen.has(line)) { dupes.push(line); continue; }
+        seen.add(line);
+        list.push(line);
+        added.push(line);
+    }
+    return { list, added, dupes };
+}
+
 function tiers() {
     const cfg = config();
     const key = JSON.stringify([cfg.file, fileStamp(cfg.file), cfg.list, cfg.scheme,
@@ -1689,7 +1717,7 @@ module.exports = {
     CONFIG_FILE, DEFAULT_ASSIGN_FILE, DEFAULT_OWN_FILE,
     // ярусы и мэппинг «прокси × хост»
     tiers, tierOf, hostLoad, maxPerHostFor, pick, tierOrder,
-    capacity, liveProxiesFor, assignedForHost,
+    capacity, liveProxiesFor, assignedForHost, mergeOwnList,
     // сеть
     tunnel, tunnelKind, httpTunnel, socksTunnel, agentFor, fetchVia,
     preflight, preflightVerdict, health, forgetHealth, healthCacheGet, healthSnapshot,

@@ -191,50 +191,61 @@ function writeConfigAtomic(doc) {
 
 // Текст из textarea → `ownList` конфига. Разбор - через пул (`parseList`), своего
 // парсера здесь нет намеренно: два разборщика одного формата разъедутся.
-function saveOwn(text) {
+//
+// 🔴 По умолчанию это ИМПОРТ - вставленное дописывается к сохранённому. Прежнее поведение
+// (заменить список целиком) осталось, но только по явному `mode: 'replace'`. Причина
+// разбора: владелец добавлял прокси по одному и сохранял после каждого - каждое сохранение
+// стирало предыдущее, и в пуле остался последний. «1 из 5» - это оно, а не парсер.
+function saveOwn(text, opts = {}) {
     const lib = poolLib();
-    if (!lib) return { ...unavailable('saveOwn'), saved: 0, bad: [], proxies: [] };
+    const mode = opts.mode === 'replace' ? 'replace' : 'add';
+    if (!lib) return { ...unavailable('saveOwn'), mode, saved: 0, added: 0, bad: [], proxies: [] };
     const raw = String(text == null ? '' : text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (!raw.length) {
-        return { ok: false, error: 'список пуст — сохранение стёрло бы свои прокси, а это осиротит привязки', saved: 0, bad: [], proxies: [] };
+        return { ok: false, mode, error: 'поле пустое - вставлять нечего', saved: 0, added: 0, bad: [], proxies: [] };
     }
 
     const parsed = lib.parseList(raw, 'socks5');
     // 🪤 `parseList` дедуплицирует по id, а id КРЕДОВ НЕ СОДЕРЖИТ. Два прокси с разными
-    // логином на одном host:port - это два разных выхода, но один id. Предупреждаем
-    // прямо: молча схлопнуть их значит отдать владельцу не тот список, что он вставил.
-    const dupes = [];
-    const seenRaw = new Set();
-    for (const line of parsed.bad) dupes.push(line);
-    const uniqueRaw = [];
-    for (const line of raw) {
-        if (seenRaw.has(line)) continue;
-        seenRaw.add(line);
-        uniqueRaw.push(line);
-    }
+    // логином на одном host:port - это два разных выхода, но один id. Поэтому копим
+    // ДОСЛОВНЫЕ строки: из `label` логин с паролем обратно не восстановить.
 
     const doc = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8') || '{}');
-    const prevCount = Array.isArray(doc.ownList) ? doc.ownList.length : 0;
+    const prev = Array.isArray(doc.ownList) ? doc.ownList : [];
+    const prevCount = prev.length;
+    // Замена - ровно прежнее поведение: список становится тем, что вставили. Импорт -
+    // дописывание с отбрасыванием повторов (слияние живёт в пуле, там же и его регресс).
+    const merged = mode === 'replace' ? lib.mergeOwnList([], raw) : lib.mergeOwnList(prev, raw);
     // Храним ДОСЛОВНО: `label` кредов не несёт, и пересохранение из него стёрло бы пароли.
-    doc.ownList = uniqueRaw;
+    doc.ownList = merged.list;
     // Явно снимаем ownFile: иначе пул читал бы ещё и старый текстовый файл, и в списке
     // оказались бы прокси, которых владелец уже не вводил.
     if (doc.ownFile) doc.ownFile = null;
     if (doc.enabled === undefined) doc.enabled = true;
 
     try { writeConfigAtomic(doc); }
-    catch (e) { return { ok: false, error: `не удалось записать ${CONFIG_FILE}: ${(e && e.message) || e}` , saved: 0, bad: [], proxies: [] }; }
+    catch (e) { return { ok: false, mode, error: `не удалось записать ${CONFIG_FILE}: ${(e && e.message) || e}`, saved: 0, added: 0, bad: [], proxies: [] }; }
 
     lib._reset();
     const t = lib.tiers();
 
     const out = {
         ok: true,
+        mode,
+        // `saved` - сколько прокси в ярусе ПОСЛЕ операции, `added` - сколько дала эта
+        // вставка, `total` - сколько строк лежит в конфиге. Три числа, а не одно: по
+        // «принято 1» невозможно было понять, что список заменился, а не дополнился.
         saved: t.own.length,
+        added: merged.added.length,
+        total: merged.list.length,
         bad: parsed.bad,
         proxies: t.own.map(p => p.label),
     };
-    if (parsed.bad.length) out.warning = `не разобрано строк: ${parsed.bad.length} - они не попали в пул`;
+    const notes = [];
+    notes.push(mode === 'replace' ? `список заменён, строк ${out.total}` : `добавлено ${out.added}, всего в списке ${out.total}`);
+    if (merged.dupes.length) notes.push(`повторов пропущено: ${merged.dupes.length}`);
+    if (parsed.bad.length) notes.push(`не разобрано строк: ${parsed.bad.length} - они не попали в пул`);
+    out.warning = notes.join('; ');
     if (prevCount && !t.own.length) {
         out.warning = 'свой список стал пустым - привязки на свои прокси осиротели, снимите их во вкладке';
     }

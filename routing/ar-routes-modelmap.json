@@ -2,6 +2,6 @@
   "default": "deepseek-v4-flash",
   "opus": "deepseek-v4-flash",
   "sonnet": "deepseek-v4-flash",
-  "haiku": "glm-5.3",
+  "haiku": "deepseek-v4-flash",
   "gpt": ""
 }

@@ -51,6 +51,7 @@ const PROFILE_ROOTS = [
     // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
     // GitHub-сессии отвечало бы «неизвестный хост».
     { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
+    { tag: 'cp', dir: path.join(ROOT, 'cleanapis', 'profiles'), host: 'cleanapis.com' },
     // SeekAi, Fxqidian, BudsAI, Nova, AIPM - вкладки, у которых в дашборде есть свой 🐙
     // «заселить GitHub-сессией». Строка обязана совпадать с полем `host` в таблице
     // заселения (`NEWAPI_SEED_PROV` в routing/proxy-dashboard.html) БАЙТ В БАЙТ, и тег -
@@ -63,6 +64,14 @@ const PROFILE_ROOTS = [
     { tag: 'bd', dir: path.join(ROOT, 'budsin', 'profiles'), host: 'apichat.budsin.dev' },
     { tag: 'nv', dir: path.join(ROOT, 'nova', 'profiles'), host: 'nova.vcrauo.com' },
     { tag: 'ap', dir: path.join(ROOT, 'aipm', 'profiles'), host: 'emtf.aipm9527.online' },
+    // Artbloom (2026-09-28), по образцу kktoken - но шлюз свой, не New API, и с поддоменом
+    // в хосте: двери `api.artbloom.tech` и панель на том же адресе. Строка обязана совпадать
+    // с `host` в `NEWAPI_SEED_PROV` и с ключом в `HOST_AUTH` БАЙТ В БАЙТ, а тег `ab` - с
+    // ключом в `GH_POOL_LOADERS`. Инструмент add-gateway завёл остальные две карты, а эту
+    // пропустил: пикер заселения открывался бы, а ручка `/gh/available` отвечала
+    // `500 неизвестный хост` - молча, видно только в модалке. Стык сторожит
+    // `tools/check-gh-seed-hosts.js`.
+    { tag: 'ab', dir: path.join(ROOT, 'artbloom', 'profiles'), host: 'api.artbloom.tech' },
 ];
 
 const SESSIONS_DIR = path.join(ROOT, 'github', 'sessions');

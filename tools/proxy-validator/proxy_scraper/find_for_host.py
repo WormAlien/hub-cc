@@ -140,9 +140,18 @@ def find(
     # 🔴 Ограничиваем СБОР, а не только проверку. Раньше скрапер тянул все адреса со всех
     # источников (живой замер 17.09: 288 312 кандидатов) и лишь потом обрезал список до
     # `--max`. Держать это в памяти на ровном месте - сотни мегабайт, и 17.09 систему
-    # прибило по нехватке памяти прямо посреди прогона. Берём по 200 адресов с источника:
-    # 70 источников × 200 ≈ 14 тысяч, чего с большим запасом хватает перебору.
-    per_source = 200 if not max_candidates else max(100, min(2000, max_candidates * 4 // max(1, len(services))))
+    # прибило по нехватке памяти прямо посреди прогона.
+    #
+    # 🪤 Но 200 оказалось МАЛО, и это стоило часа разбора 01.10. Замер того вечера:
+    # `find()`, вызванный В ПРОЦЕССЕ, находил 12 живых за считанные секунды, а тот же код
+    # через CLI (`python -m proxy_scraper.find_for_host`) на 1481 проверенном кандидате
+    # давал ноль - и так шесть прогонов подряд, в том числе на `odysseyapi.tech`, где
+    # владелец помнил «работало отлично». Похоже на то, что при частых запросах источники
+    # отдают один и тот же головной кусок списка: прогоны подряд травят себя сами, а редкое
+    # нажатие кнопки попадало в свежую ротацию. 200 строк на источник - это как раз тот
+    # размер, при котором живые адреса остаются за кадром.
+    # 800 × 70 источников ≈ 56k кандидатов: вшестеро меньше порога, на котором случился OOM.
+    per_source = 800 if not max_candidates else max(100, min(2000, max_candidates * 4 // max(1, len(services))))
     scraper = ProxyScraper(
         services,
         threads=workers, timeout=timeout, retries=0, max_per_source=per_source,
@@ -159,7 +168,6 @@ def find(
         ordered = ordered[:max_candidates]
 
     target = _target_for(host, path)
-    checker = DomainProxyChecker(workers=workers, timeout=timeout, retries=0)
 
     found: List[ProxyRecord] = []
     started = time.perf_counter()
@@ -174,26 +182,42 @@ def find(
         # Формат дословный, его читает дашборд. См. PROGRESS_EVERY выше.
         log(f"  … проверено {done}/{total}, живых {len(found)}")
 
-    def collect(done: int, total: int, res) -> None:
+    done_so_far = 0
+
+    def collect(_done_in_chunk: int, _total_in_chunk: int, res) -> None:
+        nonlocal done_so_far
         if res.passed_targets:
             rec = res.proxy
             rec.working = True
             rec.latency_ms = res.latency_ms
             found.append(rec)
             log(f"  ✓ {_safe_uri(rec)}  {res.latency_ms:.0f} мс  ({len(found)}/{want})")
+        done_so_far += 1
         due = (
-            done - progress_state["last_done"] >= PROGRESS_EVERY
+            done_so_far - progress_state["last_done"] >= PROGRESS_EVERY
             or time.monotonic() - progress_state["last_at"] >= PROGRESS_SECONDS
-            or done >= total
         )
         if due:
-            emit_progress(done, total)
+            emit_progress(done_so_far, len(ordered))
 
-    checked = checker.check_many(list(ordered), [target], progress_cb=collect, stop_after=want)
+    # 🔴 Проверяем ПОРЦИЯМИ, и это не оптимизация, а условие работоспособности.
+    # Живой замер 01.10: одна пачка на 15 655 кандидатов дала «живых 0» за 28 минут,
+    # тогда как тот же код на первых 252 адресах находил 10 живых за минуту. В гистограмме
+    # отказов той пачки — 4577 «timed out» из 8379. То есть мерились не мёртвые прокси, а
+    # исчерпание локальных сокетов/портов: тысячи CONNECT подряд подвешивают машину, и
+    # дальше живой адрес получает тот же таймаут, что и труп. Порция со своим чекером
+    # возвращает дескрипторы системе, и чувствительность не теряется.
+    CHUNK = 300
+    for start_i in range(0, len(ordered), CHUNK):
+        if len(found) >= want:
+            break
+        chunk = ordered[start_i:start_i + CHUNK]
+        checker = DomainProxyChecker(workers=workers, timeout=timeout, retries=0)
+        checker.check_many(list(chunk), [target], progress_cb=collect, stop_after=want)
     # Досылаем итоговую строку, если последняя проверка попала между расписаниями:
     # панель иначе замрёт на промежуточной цифре до конца прогона.
-    if len(checked) != progress_state["last_done"]:
-        emit_progress(len(checked), len(ordered))
+    if done_so_far != progress_state["last_done"]:
+        emit_progress(done_so_far, len(ordered))
     if len(found) >= want:
         log(f"набрал {len(found)} за {time.perf_counter() - started:.0f} с — останавливаюсь")
         return found[:want]
@@ -300,7 +324,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # log=progress: под --json предупреждения о пропущенных записях обязаны уйти в
     # stderr, иначе они встанут в stdout рядом с единственной машинной строкой.
-    out = write_pool(found, Path(args.out), log=progress)
+    #
+    # 🔴 Нулевой результат НЕ пишется. Иначе прогон, ничего не нашедший, затирает
+    # боевой файл пула пустотой — а снаружи это выглядит как «прокси кончились», а не
+    # как сломанный измеритель. Живой случай 01.10 20:07: `--out export/live-for-host.txt`
+    # завершился «Записано 0» и обнулил пул, который до этого наполнили 26 живыми
+    # адресами. В дашбордном пути от этого есть защита (валидатор пишет во временный
+    # файл, живой трогается только слиянием) — у CLI её не было.
+    if not found:
+        msg = f"⚠️ живых не найдено — файл {args.out} НЕ тронут (был бы затёрт пустотой)"
+        print(msg, file=sys.stderr) if args.json else print(msg)
+        out = Path(args.out)
+    else:
+        out = write_pool(found, Path(args.out), log=progress)
     if args.json:
         print(json.dumps({
             "ok": True,

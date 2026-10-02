@@ -437,6 +437,9 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/dacall-sessions.json
+routing/cleanapis-sessions.json
+routing/artbloom-sessions.json
 routing/fxqidian-sessions.json
 routing/lsapi-sessions.json
 routing/budsin-sessions.json
@@ -667,3 +670,22 @@ google/gemini/
 # Короткие обёртки для панелей Orca (`gemini-<slug>.cmd`): в них пути этой машины и дом
 # конкретного аккаунта. Пишутся модулем, в репозиторий не едут.
 google/bin/
+# Метка живых процессов сервера вкладки Google: pid'ы этой машины, пересоздаётся на старте.
+google/pids.json
+
+# ── dacall.AI / Clean APIs / Artbloom (вкладки дашборда): приватные данные ─────
+# Три шлюза, заведены 01.10. Папки закрываем ДО коммита: `dacall/profiles/` - профиль
+# браузера с живой сессией, `dacall/artifacts/` - дампы прогонов авторега (почты и ответы
+# форм), `last-mailbox.txt` - рабочая метка. Код авторега (*.js) к аккаунтам не привязан
+# и коммитится; `*-modelmap.json` - безопасный конфиг маппинга, тоже коммитится.
+dacall/profiles/
+dacall/artifacts/
+dacall/sessions/
+dacall/gh-sessions/
+dacall/last-mailbox.txt
+cleanapis/profiles/
+cleanapis/sessions/
+cleanapis/gh-sessions/
+artbloom/profiles/
+artbloom/sessions/
+artbloom/gh-sessions/

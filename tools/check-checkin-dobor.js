@@ -73,9 +73,11 @@ function mkSandbox(buildSrc, sessions) {
     };
     const src = `const { AR_COLLECT_SEEN, AR_AUTO_CHECKIN, arLkPids, arPidAlive, arQueueSpot, arLoad } = deps;\n${buildSrc}\nreturn { arBuildBatch };`;
     // arCheckinReadyList живёт в другом месте файла (и покрыт check-checkin-queue):
-    // здесь он подставной - проверяем отбор, а не готовность.
-    const fn = new Function('deps', 'arCheckinReadyList', src);
-    return { ...fn(deps, () => sessions), deps, alive };
+    // здесь он подставной - проверяем отбор, а не готовность. Так же подставлен и вердикт
+    // по метке отказа (`arCheckinBlockActive`): свой отбор он проверяет в
+    // check-checkin-ghmark, а здесь на аккаунтах меток нет, и подстановка возвращает null.
+    const fn = new Function('deps', 'arCheckinReadyList', 'arCheckinBlockActive', src);
+    return { ...fn(deps, () => sessions, () => null), deps, alive };
 }
 const acc = (id, name) => ({ id, name, api_key: 'sk-x', status: 'live' });
 const race = (sandbox) => {

@@ -233,6 +233,44 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    dacall: {
+        label: 'dacall.AI',
+        base_url: 'http://localhost:20177',
+        api_key: 'dummy',           // real key keepalive reads from dacall-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20177) → api-ru.dacall.ai (БЕЗ /v1).
+        // Активация через handleDcActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в dacall-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у dacall каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    cleanapis: {
+        label: 'Clean APIs',
+        base_url: 'http://localhost:20164',
+        api_key: 'dummy',           // real key keepalive reads from cleanapis-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20164) → cleanapis.com (БЕЗ /v1).
+        // Активация через handleCpActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в cleanapis-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у cleanapis каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    artbloom: {
+        label: 'Artbloom',
+        base_url: 'http://localhost:20176',
+        api_key: 'dummy',           // real key keepalive reads from artbloom-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20176) → api.artbloom.tech (БЕЗ /v1).
+        // Активация через handleAbActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в artbloom-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 «Каждый четвёртый ответ пустой 403» из эталона здесь НЕ подтверждён: замер
+        // 28.09 - 14 ответов из 14 чистые, кромка у artbloom Caddy, а не Cloudflare.
+        // Через keepalive всё равно обязательно: он режет [1m]-суффиксы и держит SSE-паузы,
+        // а ретраи моста остаются страховкой и стоят ноль.
+    },
     fxqidian: {
         label: 'Fxqidian',
         base_url: 'http://localhost:20175',
@@ -523,6 +561,9 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    dacall: 'dacall',
+    cleanapis: 'cleanapis',
+    artbloom: 'artbloom',
     fxqidian: 'fxqidian',
     lsapi: 'lsapi',
     budsin: 'budsin',
@@ -806,7 +847,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 // route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
 const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
@@ -983,7 +1024,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -1964,6 +2005,9 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveDc = makeKeepaliveHandlers(Number(process.env.DC_KEEPALIVE_PORT || 20177));
+const keepaliveCp = makeKeepaliveHandlers(Number(process.env.CP_KEEPALIVE_PORT || 20164));
+const keepaliveAb = makeKeepaliveHandlers(Number(process.env.AB_KEEPALIVE_PORT || 20176));
 const keepaliveFx = makeKeepaliveHandlers(Number(process.env.FX_KEEPALIVE_PORT || 20175));
 const keepaliveLs = makeKeepaliveHandlers(Number(process.env.LS_KEEPALIVE_PORT || 20174));
 const keepaliveBd = makeKeepaliveHandlers(Number(process.env.BD_KEEPALIVE_PORT || 20173));
@@ -4932,6 +4976,9 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive dacall.AI',  port: Number(process.env.DC_KEEPALIVE_PORT || 20177), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Clean APIs',  port: Number(process.env.CP_KEEPALIVE_PORT || 20164), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Artbloom',  port: Number(process.env.AB_KEEPALIVE_PORT || 20176), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Fxqidian',  port: Number(process.env.FX_KEEPALIVE_PORT || 20175), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Lingshu',  port: Number(process.env.LS_KEEPALIVE_PORT || 20174), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive BudsAI',  port: Number(process.env.BD_KEEPALIVE_PORT || 20173), path: '/__keepalive/api/status', keepalive: true },
@@ -6939,7 +6986,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, cp: cpLkPids, ab: abLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -7051,12 +7098,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), cp: () => cpLoad(), ab: () => abLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, cp: () => CP_SESSIONS_FILE, ab: () => AB_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), cp: arr => cpSave(arr), ab: arr => abSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', cp: 'Clean APIs', ab: 'Artbloom', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -7519,6 +7566,12 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleCpAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'cleanapis', host: 'cleanapis.com', prefix: 'cp_', load: cpLoad, save: cpSave, sessionsDir: CP_SESSIONS_DIR });
+}
+function handleAbAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'artbloom', host: 'api.artbloom.tech', prefix: 'ab_', load: abLoad, save: abSave, sessionsDir: AB_SESSIONS_DIR });
 }
 function handleFxAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'fxqidian', host: 'fxqidian.de5.net', prefix: 'fx_', load: fxLoad, save: fxSave, sessionsDir: FX_SESSIONS_DIR });
@@ -8895,6 +8948,9 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'api-ru.dacall.ai':      path.join(__dirname, '..', 'dacall', 'profiles'),
+    'cleanapis.com':      path.join(__dirname, '..', 'cleanapis', 'profiles'),
+    'api.artbloom.tech':      path.join(__dirname, '..', 'artbloom', 'profiles'),
     'fxqidian.de5.net':      path.join(__dirname, '..', 'fxqidian', 'profiles'),
     'lsapi.cloud':      path.join(__dirname, '..', 'lsapi', 'profiles'),
     'apichat.budsin.dev':      path.join(__dirname, '..', 'budsin', 'profiles'),
@@ -9048,7 +9104,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -12884,6 +12940,12 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleCpMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'cleanapis', host: 'cleanapis.com', load: cpLoad, save: cpSave });
+}
+function handleAbMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'artbloom', host: 'api.artbloom.tech', load: abLoad, save: abSave });
+}
 function handleFxMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'fxqidian', host: 'fxqidian.de5.net', load: fxLoad, save: fxSave });
 }
@@ -12966,6 +13028,12 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleCpSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'cleanapis', load: cpLoad, save: cpSave });
+}
+function handleAbSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'artbloom', load: abLoad, save: abSave });
 }
 function handleFxSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'fxqidian', load: fxLoad, save: fxSave });
@@ -15743,6 +15811,89 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const DC_SESSIONS_FILE = path.join(__dirname, 'dacall-sessions.json');
+const DC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'dacall-active-key.txt');
+const DC_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'dacall-active-model.txt');
+const DC_BASE_URL = 'https://api-ru.dacall.ai/v1';
+// SSE keepalive proxy для dacall (как у tabi :20155): форвардит напрямую в
+// api-ru.dacall.ai, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у dacall КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const DC_UPSTREAM = 'https://api-ru.dacall.ai';
+const DC_KEEPALIVE_PORT = 20177;
+const DC_KEEPALIVE_URL = `http://localhost:${DC_KEEPALIVE_PORT}`;
+const DC_MODELMAP_FILE = path.join(__dirname, 'dacall-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У dacall гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const DC_GRANT_STEP = 5;
+const DC_DEFAULT_GRANT = 5;
+const DC_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const CP_SESSIONS_FILE = path.join(__dirname, 'cleanapis-sessions.json');
+const CP_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'cleanapis-active-key.txt');
+const CP_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'cleanapis-active-model.txt');
+const CP_BASE_URL = 'https://cleanapis.com/v1';
+// SSE keepalive proxy для cleanapis (как у tabi :20155): форвардит напрямую в
+// cleanapis.com, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен ИМЕННО за паузы, и только за них. Нативного Anthropic-пути у
+// площадки НЕТ ВООБЩЕ: `POST /v1/messages` отвечает 404 (замер 30.09.2026), то есть
+// Claude Code ходит сюда только через OpenAI-шиму. Историю эталона про «пустой 403 от
+// кромки Cloudflare на каждом четвёртом запросе (замер 31.08)» сюда переносить нельзя -
+// это свойство kktoken, а не cleanapis, и оно относилось к эндпоинту, которого тут нет.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const CP_UPSTREAM = 'https://cleanapis.com';
+const CP_KEEPALIVE_PORT = 20164;
+const CP_KEEPALIVE_URL = `http://localhost:${CP_KEEPALIVE_PORT}`;
+const CP_MODELMAP_FILE = path.join(__dirname, 'cleanapis-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У cleanapis гранта НЕТ: панель платная,
+// деньги вносит владелец. Бесплатные 5M токенов в месяц - это месячная квота тарифа, а не
+// разовый грант при регистрации, и в остаток она так не приходит. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const CP_GRANT_STEP = 5;
+const CP_DEFAULT_GRANT = 5;
+const CP_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const AB_SESSIONS_FILE = path.join(__dirname, 'artbloom-sessions.json');
+const AB_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'artbloom-active-key.txt');
+const AB_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'artbloom-active-model.txt');
+const AB_BASE_URL = 'https://api.artbloom.tech/v1';
+// SSE keepalive proxy для artbloom (как у tabi :20155): форвардит напрямую в
+// api.artbloom.tech, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Кромка здесь Caddy, не Cloudflare: в ответах `Via: 1.1 Caddy`, ни `cf-*`, ни
+// `Server: cloudflare` нет вовсе. Замер 28.09: `POST /v1/messages` - 14 ответов из 14
+// чистые 200, пустых 403 не было ни разу. Поэтому «каждый четвёртый пустой 403» из
+// эталона kktoken сюда НЕ переносится: у artbloom это не замер, а чужой опыт. Хедж и
+// ретрай держим как страховку - `shouldRetryStatus` в keepalive-proxy.js уже включает
+// 403, а стоит она ноль. Keepalive нужен по другой причине: режет [1m]-суффиксы и
+// держит SSE-паузы thinking-моделей.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const AB_UPSTREAM = 'https://api.artbloom.tech';
+const AB_KEEPALIVE_PORT = 20176;
+const AB_KEEPALIVE_URL = `http://localhost:${AB_KEEPALIVE_PORT}`;
+const AB_MODELMAP_FILE = path.join(__dirname, 'artbloom-modelmap.json');
+// Шаг и резерв для «угадать грант» (см. newapiBalance). Для artbloom этот путь больше НЕ
+// ИСПОЛЬЗУЕТСЯ: `abBalance` читает настоящую цифру ключом со страницы `/usage` (см. ниже),
+// поэтому гадать не о чем. Константы оставлены по двум причинам: `AB_GRANT_STEP` служит базой
+// сортировки в `MONEY_PROVIDERS`, а `AB_DEFAULT_GRANT` - фолбэком, если страница закроется.
+// Значение 100 взято с витрины: она обещает новым аккаунтам `$100.00 in free credit - no card
+// required`, вход только через GitHub. Замером ровность этой суммы НЕ подтверждена: аккаунт
+// владельца от 28.09 показывает остаток $109.39, а это больше сотни - значит бонус либо не
+// ровно $100, либо было пополнение. Разобрать нечем: отдельной строки «грант» у площадки нет,
+// бонус уже влит в баланс и от пополнений не отделён.
+const AB_GRANT_STEP = 5;
+const AB_DEFAULT_GRANT = 100;
+const AB_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const FX_SESSIONS_FILE = path.join(__dirname, 'fxqidian-sessions.json');
 const FX_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'fxqidian-active-key.txt');
 const FX_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'fxqidian-active-model.txt');
@@ -15924,6 +16075,33 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const DC_CC_HEADERS = {
+    // 🔴 UA здесь НЕ как у остальных шлюзов, и это не вкусовщина. У dacall стоит антибот
+    // (`api.botwafguard.net`), который на `/v1/*` МОЛЧА вешает чужие UA: запрос висит до
+    // таймаута и обрывается `socket hang up`, без 403 и без 502. Живой замер 01.10 18:47
+    // по одному и тому же запросу: `curl/8.0` → 200 за 3,9 с · `axios/1.7.2` → 200 за 6,3 с ·
+    // `claude-cli/2.1.158` → таймаут · браузерный Chrome → таймаут · без UA → таймаут.
+    // То есть склонированный от KKtoken `claude-cli` тут — ровно тот, который ЗАПРЕЩЁН.
+    'user-agent': 'curl/8.0',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const CP_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const AB_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const FX_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -16052,6 +16230,84 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function dcLoad() {
+    try {
+        const raw = fs.readFileSync(DC_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'dacall.AI');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'dc_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { dcSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function cpLoad() {
+    try {
+        const raw = fs.readFileSync(CP_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Clean APIs');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'cp_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { cpSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function abLoad() {
+    try {
+        const raw = fs.readFileSync(AB_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Artbloom');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'ab_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { abSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -16215,6 +16471,15 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function dcSave(arr) {
+    durableWriteJson(DC_SESSIONS_FILE, arr);
+}
+function cpSave(arr) {
+    durableWriteJson(CP_SESSIONS_FILE, arr);
+}
+function abSave(arr) {
+    durableWriteJson(AB_SESSIONS_FILE, arr);
+}
 function fxSave(arr) {
     durableWriteJson(FX_SESSIONS_FILE, arr);
 }
@@ -16235,6 +16500,18 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function dcReadActiveModel() {
+    try { return fs.readFileSync(DC_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function cpReadActiveModel() {
+    try { return fs.readFileSync(CP_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function abReadActiveModel() {
+    try { return fs.readFileSync(AB_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function fxReadActiveModel() {
@@ -16263,6 +16540,18 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function dcReadActiveKey() {
+    try { return fs.readFileSync(DC_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function cpReadActiveKey() {
+    try { return fs.readFileSync(CP_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function abReadActiveKey() {
+    try { return fs.readFileSync(AB_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function fxReadActiveKey() {
@@ -16320,6 +16609,96 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function dcKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(DC_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(DC_KEEPALIVE_PORT),
+                UPSTREAM: DC_UPSTREAM,
+                KEY_FILE: DC_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: DC_SESSIONS_FILE,
+                MODELMAP_FILE: DC_MODELMAP_FILE,
+                ...(process.env.DC_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.DC_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive dacall.AI', DC_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`dacall keepalive proxy spawn: :${DC_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`dacall keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function cpKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(CP_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(CP_KEEPALIVE_PORT),
+                UPSTREAM: CP_UPSTREAM,
+                KEY_FILE: CP_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: CP_SESSIONS_FILE,
+                MODELMAP_FILE: CP_MODELMAP_FILE,
+                ...(process.env.CP_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.CP_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Clean APIs', CP_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`cleanapis keepalive proxy spawn: :${CP_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`cleanapis keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function abKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(AB_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(AB_KEEPALIVE_PORT),
+                UPSTREAM: AB_UPSTREAM,
+                KEY_FILE: AB_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: AB_SESSIONS_FILE,
+                MODELMAP_FILE: AB_MODELMAP_FILE,
+                ...(process.env.AB_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.AB_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Artbloom', AB_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`artbloom keepalive proxy spawn: :${AB_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`artbloom keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -16559,6 +16938,45 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function dcProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${DC_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...DC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function cpProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${CP_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...CP_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function abProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${AB_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...AB_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function fxProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -16653,6 +17071,104 @@ async function kkBalance(target, opts = {}) {
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
         force: !!opts.force,
     });
+}
+async function dcBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'api-ru.dacall.ai',
+        ccHeaders: DC_CC_HEADERS,
+        usageUrl: 'https://api-ru.dacall.ai/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(DC_DEFAULT_GRANT, Math.ceil(spent / DC_GRANT_STEP) * DC_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function cpBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'cleanapis.com',
+        ccHeaders: CP_CC_HEADERS,
+        usageUrl: 'https://cleanapis.com/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(CP_DEFAULT_GRANT, Math.ceil(spent / CP_GRANT_STEP) * CP_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+// Страница расхода artbloom. Площадка НЕ New API, поэтому общего расчёта ей мало: ручки
+// `/v1/dashboard/billing/usage` у неё нет вовсе (замер 28.09: 404 `page not found`), и
+// `newapiBalance` возвращался на этой ветке РАНЬШЕ, чем пробовал хоть один путь точной цифры.
+// Итог был не «неточная цифра», а никакой: ни остатка, ни анкера, ни прикидки. Зато у площадки
+// есть публичная страница `/usage`: она принимает ключ формой и отдаёт HTML со всеми цифрами
+// («No sign-in required - the key itself is all you need»). Ею и читаем - без кук, без профиля,
+// без аккаунта: ключ и есть идентификатор, поэтому и пул прокси тут ни при чём.
+const AB_USAGE_URL = 'https://api.artbloom.tech/usage';
+
+// Разметка чужая и однажды поедет, поэтому вяжемся не к тегам, а к паре «подпись + ближайший
+// доллар»: находим текст подписи, затем первое `$…` в следующих 400 символах. Не нашли подпись -
+// возвращаем null, и вызывающий честно говорит «не разобрал». 🪤 Ноль тут не «пусто», а «вёрстка
+// сломалась»: показать его вместо ошибки значит соврать про деньги.
+function abPickMoney(html, label) {
+    const at = html.indexOf(label);
+    if (at < 0) return null;
+    const m = html.slice(at, at + 400).match(/\$([0-9]+(?:\.[0-9]+)?)/);
+    return m ? Number(m[1]) : null;
+}
+async function abBalance(target) {
+    const t = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = t.api_key;
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    const lib = newapiLib();
+    const gated = fn => (lib && lib.hostGate) ? lib.hostGate('api.artbloom.tech', fn) : fn();
+
+    let res;
+    try {
+        res = await gated(() => fetch(AB_USAGE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ key: apiKey }).toString(),
+            signal: AbortSignal.timeout(15000),
+        }));
+    } catch (e) {
+        return { status: 'unknown', error: e.message };
+    }
+    if (res.status === 401 || res.status === 403) return { status: 'dead' };
+    if (res.status !== 200) return { status: 'unknown', error: `usage HTTP ${res.status}` };
+
+    let html;
+    try { html = await res.text(); } catch (e) { return { status: 'unknown', error: `usage read: ${e.message}` }; }
+
+    // 🪤 Неверный ключ площадка встречает ТЕМ ЖЕ 200 и той же страницей - отличается только
+    // строка «We couldn't find that API key». Без этой проверки мёртвый ключ выглядел бы как
+    // «вёрстка поехала», а авторотация не поняла бы, что аккаунт пора менять.
+    // Оговорка: у КОРОТКОГО ключа (не прошедшего проверку формы) площадка отдаёт голую форму
+    // без этой строки вовсе. Наши ключи всегда длинные и приходят из панели, так что до нас
+    // такой случай не доживает, но и врать в диагнозе нельзя - см. ветку ниже.
+    if (/couldn't find that API key/i.test(html)) return { status: 'dead' };
+
+    const balance = abPickMoney(html, 'Chat / API balance');
+    // Статус намеренно `unknown`, а не `dead`: отличить «ключ не найден» от «площадка переписала
+    // разметку» по отсутствию блока нельзя, а ошибиться в сторону `dead` значит угробить живой
+    // аккаунт в авторотации. В тексте ошибки обе версии названы прямо.
+    if (balance === null) {
+        return { status: 'unknown', error: 'страница /usage без блока баланса: ключ не найден или вёрстка площадки поехала' };
+    }
+
+    return {
+        status: 'live',
+        balanceSource: 'key',
+        // Остаток АККАУНТА в долларах. В нём уже сидит бонус новым аккаунтам, поэтому отдельный
+        // `granted` не выдумываем: отделить бонус от пополнений площадка не даёт.
+        balance,
+        // 🪤 `spent` тут НЕ отдаём, хотя цифра на странице есть. Там это расход ОДНОГО ключа
+        // («This key's usage (all time)»), а не аккаунта: при двух и более ключах он занижен.
+        // Фронт же по `spent` считает `drawn = spent - anchorSpent` и убывает вписанный баланс
+        // сам - то есть заниженный расход тихо завысил бы остаток. Без `spent` убывания просто
+        // нет, а точная цифра всё равно приходит на каждой проверке.
+        // Картинки у площадки отдельным кошельком - отдаём наружу, чтобы вкладка могла показать.
+        imageBalance: abPickMoney(html, 'Image balance'),
+        // `guessGrant` тут больше не нужен: цифра настоящая. Резерв остаётся только в
+        // `MONEY_PROVIDERS` как база сортировки, и это осознанно.
+    };
 }
 async function fxBalance(target, opts = {}) {
     return newapiBalance({
@@ -16797,6 +17313,9 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function dcApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'dacall' }); }
+function cpApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'cleanapis' }); }
+function abApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'artbloom' }); }
 function fxApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'fxqidian' }); }
 function lsApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'lsapi' }); }
 function bdApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'budsin' }); }
@@ -17114,6 +17633,75 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleDcSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = dcLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await dcProbe(s.api_key); }));
+            }
+            dcSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => dcApplyBalance(s, await dcBalance(s))));
+            }
+            dcSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: dcReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleCpSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = cpLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await cpProbe(s.api_key); }));
+            }
+            cpSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => cpApplyBalance(s, await cpBalance(s))));
+            }
+            cpSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: cpReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleAbSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = abLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await abProbe(s.api_key); }));
+            }
+            abSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => abApplyBalance(s, await abBalance(s))));
+            }
+            abSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: abReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 async function handleFxSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
     try {
@@ -17265,6 +17853,42 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await dcProbe(api_key);
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; dcSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await cpProbe(api_key);
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; cpSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await abProbe(api_key);
+        const sessions = abLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; abSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -17354,6 +17978,72 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleDcBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = dcLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await dcBalance(target || { api_key }, { force });
+            if (target) { dcApplyBalance(target, bal); dcSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('dc:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = cpLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await cpBalance(target || { api_key }, { force });
+            if (target) { cpApplyBalance(target, bal); cpSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('cp:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = abLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await abBalance(target || { api_key }, { force });
+            if (target) { abApplyBalance(target, bal); abSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('ab:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -17496,6 +18186,15 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleDcSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'dacall', load: dcLoad, save: dcSave, balanceFn: dcBalance, applyFn: dcApplyBalance });
+}
+function handleCpSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'cleanapis', load: cpLoad, save: cpSave, balanceFn: cpBalance, applyFn: cpApplyBalance });
+}
+function handleAbSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'artbloom', load: abLoad, save: abSave, balanceFn: abBalance, applyFn: abApplyBalance });
+}
 function handleFxSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'fxqidian', load: fxLoad, save: fxSave, balanceFn: fxBalance, applyFn: fxApplyBalance });
 }
@@ -17516,6 +18215,9 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const dcLkPids = new Map();
+const cpLkPids = new Map();
+const abLkPids = new Map();
 const fxLkPids = new Map();
 const lsLkPids = new Map();
 const bdLkPids = new Map();
@@ -17523,6 +18225,18 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function dcPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function cpPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function abPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -17601,6 +18315,165 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleDcSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = dcLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = dcLkPids.get(label);
+        if (dcPidAlive(prevPid)) {
+            logLine(`dacall session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'dacall', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api-ru.dacall.ai', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`dacall session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`dacall session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`dacall session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            dcLkPids.delete(label);
+            logLine(`dacall session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('dc', id);
+        });
+        proc.unref();
+        dcLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            dcLkPids.delete(label);
+            logLine(`dacall session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`dacall session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = cpLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = cpLkPids.get(label);
+        if (cpPidAlive(prevPid)) {
+            logLine(`cleanapis session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'cleanapis', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('cleanapis.com', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`cleanapis session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`cleanapis session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`cleanapis session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            cpLkPids.delete(label);
+            logLine(`cleanapis session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('cp', id);
+        });
+        proc.unref();
+        cpLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            cpLkPids.delete(label);
+            logLine(`cleanapis session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`cleanapis session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = abLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = abLkPids.get(label);
+        if (abPidAlive(prevPid)) {
+            logLine(`artbloom session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'artbloom', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.artbloom.tech', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`artbloom session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`artbloom session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`artbloom session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            abLkPids.delete(label);
+            logLine(`artbloom session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('ab', id);
+        });
+        proc.unref();
+        abLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            abLkPids.delete(label);
+            logLine(`artbloom session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`artbloom session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -17937,9 +18810,13 @@ async function handleBaiSessionOpen(req, res) {
 // из kktoken/profiles/acct_<id>/, снимается headless-скриптом share-session.js.
 
 const KK_SHARE_SCRIPT = path.join(__dirname, '..', 'kktoken', 'share-session.js');
+const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js');
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const DC_SESSIONS_DIR = path.join(__dirname, '..', 'dacall', 'sessions');
+const CP_SESSIONS_DIR = path.join(__dirname, '..', 'cleanapis', 'sessions');
+const AB_SESSIONS_DIR = path.join(__dirname, '..', 'artbloom', 'sessions');
 const FX_SESSIONS_DIR = path.join(__dirname, '..', 'fxqidian', 'sessions');
 const BD_SHARE_SCRIPT = path.join(__dirname, '..', 'budsin', 'share-session.js');
 const BD_SESSIONS_DIR = path.join(__dirname, '..', 'budsin', 'sessions');
@@ -17951,6 +18828,27 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function dcB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function dcB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function cpB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function cpB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function abB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function abB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -18039,6 +18937,100 @@ async function handleKkShare(req, res) {
         };
         const share = kkB64UrlEncode(JSON.stringify(payload));
         logLine(`kktoken share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleDcShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = dcLkPids.get(label);
+        if (dcPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Гоняем headless-снимок профиля (короткий, до 30 сек).
+        const stateFile = path.join(DC_SESSIONS_DIR, label + '.json');
+        const code = await new Promise((resolve, reject) => {
+            const proc = spawn(process.execPath, [DC_SHARE_SCRIPT, label], { detached: false, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '', err = '';
+            proc.stdout.on('data', d => out += String(d));
+            proc.stderr.on('data', d => err += String(d));
+            proc.on('error', reject);
+            proc.on('exit', (code, sig) => resolve({ code, out, err, stateFile }));
+            setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+        });
+
+        if (code.code !== 0 && code.code !== 3) {
+            logLine(`dacall share [${label}] failed (code ${code.code}): ${code.err.trim() || code.out.trim()}`);
+            return jsonRes(res, 502, { error: (code.err.trim() || code.out.trim() || 'снимок профиля не удался') });
+        }
+
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'dacall',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = dcB64UrlEncode(JSON.stringify(payload));
+        logLine(`dacall share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = abLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = abLkPids.get(label);
+        if (abPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок входа читаем С ДИСКА, а не снимаем скриптом (как это делает kktoken через
+        // share-session.js): отдельного `artbloom/share-session.js` у вкладки нет - флаг
+        // shareScript ВЫКЛЮЧЕН, и константы со скриптом снимка в файле не объявлено вовсе.
+        // 🪤 Клон эталона звал её в лоб: по кнопке 🔗 это был живой ReferenceError.
+        // Снимок в этот каталог кладёт импорт GitHub-аккаунта (см. newapiAddGithub выше).
+        // Файла может не быть - аккаунт заведён руками, - тогда отдаём пустой снимок: сам
+        // аккаунт и ключ передаются, теряется только вход без пароля, и это видно по
+        // `hasSession` в ответе. Падать тут не за что.
+        const stateFile = path.join(AB_SESSIONS_DIR, label + '.json');
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'artbloom',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = abB64UrlEncode(JSON.stringify(payload));
+        logLine(`artbloom share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -18151,6 +19143,48 @@ async function handleLsShare(req, res) {
         };
         const share = lsB64UrlEncode(JSON.stringify(payload));
         logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = cpLkPids.get(label);
+        if (cpPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа в этот каталог кладёт импорт
+        // GitHub-аккаунта (см. newapiAddGithub выше) - у cleanapis рега по GitHub, а
+        // авторега нет вовсе (`autoreg: false`), и `writeProfileSession()` по нему не бегал.
+        // Отдельного скрипта у cp нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, GitHub-импорта по нему не было) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(CP_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'cleanapis',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = cpB64UrlEncode(JSON.stringify(payload));
+        logLine(`cleanapis share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -18409,6 +19443,183 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleDcImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(dcB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'dacall' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не dacall-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = dcLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'dc_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        dcSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(DC_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(DC_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`dacall import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`dacall import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(cpB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'cleanapis' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не cleanapis-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = cpLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'cp_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        cpSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(CP_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(CP_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`cleanapis import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`cleanapis import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(abB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'artbloom' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не artbloom-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = abLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ab_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        abSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(AB_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(AB_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`artbloom import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`artbloom import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -18804,6 +20015,96 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = dcLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'dc_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        dcSave(sessions);
+        logLine(`dacall add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = cpLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'cp_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        cpSave(sessions);
+        logLine(`cleanapis add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = abLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ab_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        abSave(sessions);
+        logLine(`artbloom add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -19036,6 +20337,78 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(DC_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        dcSave(sessions);
+        logLine(`dacall set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(CP_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        cpSave(sessions);
+        logLine(`cleanapis set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = abLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(AB_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        abSave(sessions);
+        logLine(`artbloom set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -19206,6 +20579,75 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        dcSave(sessions);
+        logLine(`dacall rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        cpSave(sessions);
+        logLine(`cleanapis rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = abLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        abSave(sessions);
+        logLine(`artbloom rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -19361,6 +20803,54 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.id === idKey);
+        dcSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === dcReadActiveKey()) {
+            try { fs.rmSync(DC_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(DC_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`dacall delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.id === idKey);
+        cpSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === cpReadActiveKey()) {
+            try { fs.rmSync(CP_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(CP_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`cleanapis delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = abLoad();
+        const target = sessions.find(s => s.id === idKey);
+        abSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === abReadActiveKey()) {
+            try { fs.rmSync(AB_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(AB_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`artbloom delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -19511,6 +21001,166 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleDcActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в dacall-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = dcLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(DC_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        dcSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-dc');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = DC_KEEPALIVE_URL;   // keepalive :20177 → api-ru.dacall.ai напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — dacall-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const dcCurModel = dcReadActiveModel() || '';
+            if (dcCurModel) settings.model = dcCurModel;
+            else { delete settings.model; logLine('dacall activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из dacall-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`dacall activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20177, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const dcKa = await keepaliveBring(DC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!dcKa.ok) logLine(`dacall activate: keepalive :${DC_KEEPALIVE_PORT} НЕ поднялся — ${dcKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`dacall activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${DC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: dcKa.ok, port: DC_KEEPALIVE_PORT, error: dcKa.ok ? null : (dcKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в cleanapis-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = cpLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(CP_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        cpSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cp');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = CP_KEEPALIVE_URL;   // keepalive :20164 → cleanapis.com напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — cleanapis-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const cpCurModel = cpReadActiveModel() || '';
+            if (cpCurModel) settings.model = cpCurModel;
+            else { delete settings.model; logLine('cleanapis activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из cleanapis-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`cleanapis activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом порту, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        // (Разбор из эталона; на cleanapis это ещё не случалось, но гонка та же.)
+        const cpKa = await keepaliveBring(CP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!cpKa.ok) logLine(`cleanapis activate: keepalive :${CP_KEEPALIVE_PORT} НЕ поднялся — ${cpKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`cleanapis activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${CP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: cpKa.ok, port: CP_KEEPALIVE_PORT, error: cpKa.ok ? null : (cpKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в artbloom-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = abLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(AB_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        abSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ab');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AB_KEEPALIVE_URL;   // keepalive :20176 → api.artbloom.tech напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — artbloom-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const abCurModel = abReadActiveModel() || '';
+            if (abCurModel) settings.model = abCurModel;
+            else { delete settings.model; logLine('artbloom activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из artbloom-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`artbloom activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20176, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const abKa = await keepaliveBring(AB_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!abKa.ok) logLine(`artbloom activate: keepalive :${AB_KEEPALIVE_PORT} НЕ поднялся — ${abKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`artbloom activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${AB_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: abKa.ok, port: AB_KEEPALIVE_PORT, error: abKa.ok ? null : (abKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -19868,6 +21518,108 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleDcModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (DC_MODELS_CACHE.data && Date.now() - DC_MODELS_CACHE.ts < DC_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: DC_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${DC_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...DC_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        DC_MODELS_CACHE.data = models;
+        DC_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (DC_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: DC_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleCpModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (CP_MODELS_CACHE.data && Date.now() - CP_MODELS_CACHE.ts < CP_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: CP_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${CP_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...CP_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        CP_MODELS_CACHE.data = models;
+        CP_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (CP_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: CP_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleAbModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (AB_MODELS_CACHE.data && Date.now() - AB_MODELS_CACHE.ts < AB_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: AB_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${AB_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...AB_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        AB_MODELS_CACHE.data = models;
+        AB_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (AB_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: AB_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleFxModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -20106,6 +21858,102 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(DC_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-dc-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = DC_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`dacall set-model: settings.json FAILED: ${e.message}`);
+        }
+        const dcKaM = await keepaliveBring(DC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!dcKaM.ok) logLine(`dacall set-model: keepalive :${DC_KEEPALIVE_PORT} НЕ поднялся — ${dcKaM.error || '?'}`);
+        logLine(`dacall set-model: ${m} (base ${DC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: DC_ACTIVE_MODEL_FILE, base: DC_KEEPALIVE_URL, needRestart: true, keepalive: { up: dcKaM.ok, port: DC_KEEPALIVE_PORT, error: dcKaM.ok ? null : (dcKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(CP_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-cp-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = CP_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`cleanapis set-model: settings.json FAILED: ${e.message}`);
+        }
+        const cpKaM = await keepaliveBring(CP_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!cpKaM.ok) logLine(`cleanapis set-model: keepalive :${CP_KEEPALIVE_PORT} НЕ поднялся — ${cpKaM.error || '?'}`);
+        logLine(`cleanapis set-model: ${m} (base ${CP_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: CP_ACTIVE_MODEL_FILE, base: CP_KEEPALIVE_URL, needRestart: true, keepalive: { up: cpKaM.ok, port: CP_KEEPALIVE_PORT, error: cpKaM.ok ? null : (cpKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(AB_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ab-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AB_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`artbloom set-model: settings.json FAILED: ${e.message}`);
+        }
+        const abKaM = await keepaliveBring(AB_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!abKaM.ok) logLine(`artbloom set-model: keepalive :${AB_KEEPALIVE_PORT} НЕ поднялся — ${abKaM.error || '?'}`);
+        logLine(`artbloom set-model: ${m} (base ${AB_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: AB_ACTIVE_MODEL_FILE, base: AB_KEEPALIVE_URL, needRestart: true, keepalive: { up: abKaM.ok, port: AB_KEEPALIVE_PORT, error: abKaM.ok ? null : (abKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -20313,6 +22161,42 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleDcModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(DC_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`dacall modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleCpModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(CP_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`cleanapis modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAbModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(AB_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`artbloom modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFxModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -20389,6 +22273,24 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function dcReadModelMap() {
+    try {
+        const raw = fs.readFileSync(DC_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function cpReadModelMap() {
+    try {
+        const raw = fs.readFileSync(CP_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function abReadModelMap() {
+    try {
+        const raw = fs.readFileSync(AB_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -23478,6 +25380,516 @@ function lsFindProxySwitchPool(host) {
     const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
     if (!(cfg.enabled && Array.isArray(cfg.hosts) && cfg.hosts.includes(host))) return false;
     cfg.file = LS_LIVE_PROXY_FILE;
+    cfg.scheme = null;   // схема уже в каждой строке
+    fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    return true;
+}
+
+
+
+// ═══════════ dacall.AI: авторег (клон lsapi, порт 01.10) ═══════════
+const dcAutoreg = {
+    proc: null,
+    pid: null,
+    running: false,
+    startedAt: null,
+    count: 0,
+    stdout: [],
+    stderr: [],
+    stage: null,
+    result: null,
+    exitCode: null,
+    signal: null,
+    useProxy: true,
+};
+
+function dcAutoregPublic() {
+    return {
+        running: dcAutoreg.running,
+        pid: dcAutoreg.pid,
+        startedAt: dcAutoreg.startedAt,
+        count: dcAutoreg.count,
+        useProxy: dcAutoreg.useProxy,
+        stdout: dcAutoreg.stdout.slice(-40),
+        stderr: dcAutoreg.stderr.slice(-20),
+        stage: dcAutoreg.stage,
+        result: dcAutoreg.result,
+        exitCode: dcAutoreg.exitCode,
+        signal: dcAutoreg.signal,
+    };
+}
+
+async function handleDcAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const count = Math.max(1, Math.min(50, parseInt(body.count, 10) || 1));
+        if (dcAutoreg.running && dcAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторег dacall.AI уже идёт', ...dcAutoregPublic() });
+        }
+        const script = path.join(__dirname, '..', 'dacall', 'auto-add.js');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'dacall/auto-add.js не найден' });
+
+        // Пул прокси — переключатель, а не приговор. Когда в пуле пусто или все адреса
+        // мертвы, авторег обязан уметь пройти с домашнего IP по явному выбору владельца;
+        // раньше это было только флагом CLI, и вкладка такой возможности не давала.
+        const useProxy = body.useProxy !== false;
+        const args = [script, String(count)];
+        if (!useProxy) args.push('--no-proxy');
+
+        const proc = spawn(process.execPath, args, {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: process.env,
+        });
+        Object.assign(dcAutoreg, {
+            proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(), count,
+            useProxy, stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
+        });
+        const pushLines = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                // 🪤 Этап берём ТОЛЬКО из машиночитаемого маркера. Человекочитаемые строки
+                // («✓ код …», «✓ зарегистрирован») меняются при любой правке формулировки,
+                // и регулярка по ним однажды молча покажет не тот шаг — индикатор,
+                // который врёт, хуже отсутствующего.
+                //
+                // В буфер лога маркер НЕ кладём: он служебный, и в панели владельца от него
+                // только шум — там человек читает обычные строки прогона.
+                if (line.startsWith('DC_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('DC_STAGE '.length));
+                        if (s && typeof s.stage === 'string') {
+                            dcAutoreg.stage = { ...s, at: new Date().toISOString() };
+                        }
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                // 🪤 `DC_AUTOADD_RESULT` — тоже протокол, а не строка для чтения: итог
+                // уезжает отдельным полем и рисуется как «готово 1, в пул 1, ошибок 0».
+                // В панели он выглядел сырым JSON-ом на весь экран — владелец показал его
+                // как «вот ещё такая тема». Разбираем и НЕ показываем.
+                if (line.startsWith('DC_AUTOADD_RESULT ')) {
+                    try { dcAutoreg.result = JSON.parse(line.slice('DC_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
+                }
+                dcAutoreg[which].push(line);
+                if (dcAutoreg[which].length > 100) dcAutoreg[which].shift();
+            }
+        };
+        proc.stdout.on('data', d => pushLines('stdout', d));
+        proc.stderr.on('data', d => pushLines('stderr', d));
+        proc.on('error', e => { dcAutoreg.stderr.push(e.message); });
+        proc.on('exit', (code, signal) => {
+            dcAutoreg.running = false;
+            dcAutoreg.pid = null;
+            dcAutoreg.exitCode = code;
+            dcAutoreg.signal = signal || null;
+            dcAutoreg.proc = null;
+            dcRefillStop('прогон завершён');   // фон живёт ровно столько, сколько прогон
+            logLine(`dacall autoreg exited: count=${count} code=${code} signal=${signal || '-'}`);
+        });
+        logLine(`dacall autoreg launched: count=${count} pid=${proc.pid}`);
+        // Докорм только когда прокси реально используются: с --no-proxy прокси не нужны.
+        if (useProxy) dcRefillStart();
+        jsonRes(res, 200, { ok: true, ...dcAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleDcAutoregStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...dcAutoregPublic() });
+}
+
+async function handleDcAutoregStop(_req, res) {
+    const proc = dcAutoreg.proc;
+    if (!dcAutoreg.running || !proc) return jsonRes(res, 200, { ok: true, stopped: false, ...dcAutoregPublic() });
+    try {
+        // Windows: kill the whole Node process tree. Without /T, a future child helper
+        // (browser/mail bridge) could survive while the UI claimed that autoreg stopped.
+        if (process.platform === 'win32') {
+            await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }).catch(() => {});
+        } else {
+            try { proc.kill('SIGTERM'); } catch {}
+        }
+        dcAutoreg.signal = 'STOP';
+        logLine(`dacall autoreg stop requested: pid=${proc.pid}`);
+        return jsonRes(res, 200, { ok: true, stopped: true, ...dcAutoregPublic() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// Публичные прокси из открытых списков живут минуты, поэтому список для авторега
+// пересобирается ПЕРЕД прогоном. Ходим в CLI валидатора (`find_for_host`) — он умеет
+// скрап источников, отсев нетуннелирующих и проверку реального HTTPS до панели,
+// и останавливается, как только набрано нужное число.
+//
+// 🪤 Результат кладём в ОТДЕЛЬНЫЙ файл (`live-for-host.txt`) и переключаем на него
+// `proxy-pool.json`. Писать в `stable.txt` нельзя: это вывод трёхпроходной проверки,
+// и затирать его коротким списком значит терять результат долгого прогона.
+const DC_LIVE_PROXY_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.txt');
+// Валидатор пишет сюда, а не в рабочий файл: список пула ДОЛИВАЕТСЯ, а не заменяется.
+const DC_PROXY_TMP_FILE = path.join(__dirname, '..', 'tools', 'proxy-validator', 'export', 'live-for-host.new.txt');
+const DC_PROXY_CAP = 60;          // предел файла пула: свежие впереди, хвост отрезается
+const DC_VALIDATOR_DIR = path.join(__dirname, '..', 'tools', 'proxy-validator');
+
+// ─────────────────── долив списка прокси вместо замены ───────────────────
+//
+// 🔴 Заменять файл нельзя. Привязка прокси к аккаунту липкая, и `forAccount()` на
+// исчезнувший из пула адрес отвечает `needsReassign` — «другой подставлять не буду».
+// Перезапись списка осиротила бы привязки ВСЕХ уже начатых аккаунтов разом.
+//
+// 🪤 Но и просто склеивать нельзя. Публичные прокси мрут минутами; за прогон в 25 минут
+// файл распух бы до сотен заведомо мёртвых строк, `leastLoaded` выбирал бы из них, и новые
+// аккаунты садились бы на трупы. Поэтому свежие идут ПЕРВЫМИ, а список обрезается: хвост —
+// это то, что проверено давно, и оно уходит первым.
+function dcReadProxyLines(file) {
+    try {
+        return fs.readFileSync(file, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    } catch { return []; }
+}
+
+function dcMergeProxyLines(fresh, old, cap = DC_PROXY_CAP) {
+    const seen = new Set();
+    const out = [];
+    for (const line of [...fresh, ...old]) {
+        if (seen.has(line)) continue;
+        seen.add(line);
+        out.push(line);
+        if (out.length >= cap) break;
+    }
+    return out;
+}
+
+// Stop не должен выбрасывать уже проверенные адреса. Валидатор пишет итоговый файл
+// только при нормальном завершении, поэтому при ручном Stop сохраняем найденный префикс
+// отдельной атомарной записью и доливаем его в живой пул.
+function dcCommitPartialProxyLines(lines, liveFile) {
+    const fresh = (lines || []).map(String).map(s => s.trim()).filter(Boolean);
+    if (!fresh.length) return 0;
+    const merged = dcMergeProxyLines(fresh, dcReadProxyLines(liveFile));
+    const tmp = `${liveFile}.partial-${process.pid}.tmp`;
+    fs.writeFileSync(tmp, merged.join('\n') + '\n', 'utf8');
+    fs.renameSync(tmp, liveFile);
+    return fresh.length;
+}
+
+function handleDcProxyPoolLines(req, res) {
+    try {
+        const lines = dcReadProxyLines(DC_LIVE_PROXY_FILE);
+        jsonRes(res, 200, { ok: true, count: lines.length, lines });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/dc/proxy-pool — сколько адресов пул реально отдаст автореге.
+//
+// 🪤 Считаем `count` из `describe()`, а НЕ строки файла: пул отбрасывает неразбираемые
+// строки в `bad`, и «в файле 41» при девяти рабочих — это цифра, которая обманывает
+// ровно в тот момент, когда на неё смотрят перед прогоном.
+//
+// 🪤 Число живёт минуты. Публичные прокси мрут на ходу (замер 12.09: из трёх найденных
+// в 10:29 один мёртв к 10:45), поэтому ответ несёт `readAt` и честно означает «столько
+// было при последнем чтении файла», а не «столько есть сейчас».
+function handleDcProxyPool(_req, res) {
+    const lib = proxyPoolLib();
+    if (!lib) return jsonRes(res, 503, { error: 'proxy-pool недоступен' });
+    try {
+        const d = lib.describe();
+        // Список адресов — чтобы «сколько» можно было проверить глазами, а не верить
+        // цифре. `describe()` их не отдаёт (там только count и конфиг), поэтому берём
+        // у самого пула. Секретов тут нет: это публичные прокси из открытого файла.
+        const list = lib.pool().proxies.map(p => p.id);
+        jsonRes(res, 200, {
+            ok: true,
+            enabled: !!d.enabled,
+            enabledForHost: lib.enabledForHost('api-ru.dacall.ai'),
+            count: d.count,
+            bad: d.bad,
+            proxies: list,
+            source: d.source,
+            scheme: d.scheme,
+            hosts: d.hosts,
+            assigned: d.assigned,
+            orphans: d.orphans,
+            fileError: d.fileError || null,
+            readAt: new Date().toISOString(),
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+const dcFindProxy = {
+    proc: null, running: false, want: 0,
+    found: [], phase: '', checked: 0, total: 0,
+    startedAt: null, stopRequested: false,
+    result: null, error: null, exitCode: null,
+    mode: null,        // 'manual' (кнопка) | 'refill' (фон под прогоном)
+    log: [],           // строки валидатора как есть — владелец просил видеть лог поиска
+};
+
+function dcFindProxyPublic() {
+    return {
+        running: dcFindProxy.running,
+        want: dcFindProxy.want,
+        found: dcFindProxy.found.slice(-60),
+        foundCount: dcFindProxy.found.length,
+        phase: dcFindProxy.phase,
+        checked: dcFindProxy.checked,
+        total: dcFindProxy.total,
+        startedAt: dcFindProxy.startedAt,
+        stopRequested: dcFindProxy.stopRequested,
+        result: dcFindProxy.result,
+        error: dcFindProxy.error,
+        exitCode: dcFindProxy.exitCode,
+        mode: dcFindProxy.mode,
+        log: dcFindProxy.log.slice(-80),
+    };
+}
+
+// Разбор строк валидатора. Формат задан в `find_for_host.py`:
+//   ✓ socks5://host:port  312 мс  (3/20)      — найден живой
+//   … проверено 120/45000, живых 3            — прогресс
+//   собрано кандидатов: N · похожи на прокси (порт): M
+// Фазы человекочитаемые, но их немного и они стабильны; цифры берём ТОЛЬКО из скобок и
+// после «проверено», чтобы не подставлять в счётчик что попало.
+function dcFindProxyLine(line) {
+    const s = String(line || '').trim();
+    if (!s) return;
+    // Сырую строку кладём в лог ДО разбора: владелец просил видеть, что делает поиск,
+    // а не только итоговые цифры. Разбор ниже только уточняет состояние.
+    dcFindProxy.log.push(s);
+    if (dcFindProxy.log.length > 400) dcFindProxy.log.shift();
+    let m = s.match(/^✓\s+(\S+)\s+\d+\s*мс\s+\((\d+)\/(\d+)\)/);
+    if (m) {
+        dcFindProxy.found.push(m[1]);
+        dcFindProxy.checked = Number(m[2]);
+        dcFindProxy.total = Number(m[3]);
+        dcFindProxy.phase = `найдено ${m[2]} из ${m[3]}`;
+        return;
+    }
+    m = s.match(/^…\s*проверено\s+(\d+)\/(\d+),\s*живых\s+(\d+)/);
+    if (m) {
+        dcFindProxy.checked = Number(m[1]);
+        dcFindProxy.total = Number(m[2]);
+        dcFindProxy.phase = `проверено ${m[1]} из ${m[2]}`;
+        return;
+    }
+    if (/^скраплю источники/.test(s)) { dcFindProxy.phase = 'скраплю источники'; return; }
+    if (/^собрано кандидатов:/.test(s)) { dcFindProxy.phase = s; return; }
+    if (/^похожи на прокси/.test(s)) { dcFindProxy.phase = s; return; }
+    if (/^набрал /.test(s)) { dcFindProxy.phase = s; return; }
+}
+
+// POST /__switch/api/dc/autoreg/find-proxy — запустить поиск. Отвечает сразу.
+// Запуск поиска. Вынесен из HTTP-обработчика, потому что его зовут ДВОЕ: кнопка на вкладке
+// ('manual') и фоновый докорм под прогоном ('refill').
+function dcFindProxyLaunch({ want, mode = 'manual', host = 'api-ru.dacall.ai' }) {
+    if (dcFindProxy.running) return { ok: false, error: 'поиск прокси уже идёт' };
+    const w = Math.max(1, Math.min(30, parseInt(want, 10) || 3));
+    const py = process.env.PYTHON || 'python';
+
+    const proc = spawn(py, [
+        '-u',   // без буферизации: иначе строки прогресса доедут одним куском в конце
+        '-m', 'proxy_scraper.find_for_host',
+        '--host', host, '--want', String(w), '--json',
+        '--out', DC_PROXY_TMP_FILE,
+    ], {
+        cwd: DC_VALIDATOR_DIR, windowsHide: true,
+        // Консоль Windows по умолчанию cp1252: русская строка в логе валидатора
+        // роняла прогон UnicodeEncodeError ещё до первой проверки.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    });
+    Object.assign(dcFindProxy, {
+        proc, running: true, want: w, found: [], phase: 'запуск',
+        checked: 0, total: 0, startedAt: new Date().toISOString(),
+        stopRequested: false, result: null, error: null, exitCode: null,
+        mode, log: [],
+    });
+
+    const t0 = Date.now();
+    let tail = '';
+    let jsonLine = null;      // итог валидатора: последняя строка, начинающаяся с `{`
+    const feed = (chunk) => {
+        const text = tail + String(chunk);
+        const lines = text.split(/\r?\n/);
+        tail = lines.pop();              // последняя может быть неполной
+        for (const l of lines) {
+            const s = l.trim();
+            if (s.startsWith('{')) { jsonLine = s; continue; }
+            dcFindProxyLine(l);
+        }
+    };
+    proc.stdout.on('data', feed);
+    proc.stderr.on('data', feed);
+
+    proc.on('error', e => { dcFindProxy.error = e.message; });
+    proc.on('exit', (code) => {
+        dcFindProxy.running = false;
+        dcFindProxy.proc = null;
+        dcFindProxy.exitCode = code;
+        if (dcFindProxy.stopRequested) {
+            // Обрыв: файл пула валидатор пишет в самом конце, поэтому текущий пул и
+            // конфиг остаются нетронутыми. Ничего не переключаем и не разбираем.
+            dcFindProxy.phase = `остановлено вручную (найдено ${dcFindProxy.found.length})`;
+            try {
+                const committed = dcCommitPartialProxyLines(dcFindProxy.found, DC_LIVE_PROXY_FILE);
+                dcFindProxy.log.push(`частичный долив после Stop: ${committed} найдено, пул сохранён`);
+                logLine(`dacall find-proxy: после Stop сохранено ${committed} найденных прокси`);
+            } catch (e) { logLine(`dacall find-proxy: частичный долив не удался — ${e.message}`); }
+            logLine(`dacall find-proxy: остановлен вручную, найдено ${dcFindProxy.found.length}`);
+            return;
+        }
+        let parsed = null;
+        try { parsed = jsonLine ? JSON.parse(jsonLine) : null; } catch { /* не наш JSON */ }
+        if (parsed && parsed.ok) {
+            // Долив: свежие впереди, старые следом, хвост обрезан. Замена здесь
+            // сломала бы привязки уже начатых аккаунтов (см. dcMergeProxyLines).
+            let merged = null;
+            try {
+                const fresh = dcReadProxyLines(DC_PROXY_TMP_FILE);
+                const old = dcReadProxyLines(DC_LIVE_PROXY_FILE);
+                merged = dcMergeProxyLines(fresh, old);
+                fs.writeFileSync(DC_LIVE_PROXY_FILE, merged.join('\n') + '\n', 'utf8');
+                dcFindProxy.log.push(`долив: свежих ${fresh.length}, в файле стало ${merged.length}`);
+            } catch (e) {
+                dcFindProxy.error = `список найден, но в пул не записан: ${e.message}`;
+                logLine(`dacall find-proxy: ${dcFindProxy.error}`);
+            }
+            let switched = false;
+            try { switched = dcFindProxySwitchPool(host); }
+            catch (e) { logLine(`dacall find-proxy: конфиг пула не переключён — ${e.message}`); }
+            dcFindProxy.result = {
+                host, want: w, mode, found: parsed.proxies || [], foundCount: parsed.found || 0,
+                out: parsed.out, switched, ms: Date.now() - t0,
+                poolSize: merged ? merged.length : null,
+            };
+            dcFindProxy.phase = `готово: ${parsed.found || 0} живых`;
+            logLine(`dacall find-proxy[${mode}]: найдено ${parsed.found}/${w} за ${Math.round((Date.now() - t0) / 1000)}с, в пуле ${merged ? merged.length : '—'}, конфиг ${switched ? 'переключён' : 'не тронут'}`);
+        } else {
+            dcFindProxy.error = parsed ? (parsed.error || 'поиск не удался') : 'валидатор не отдал результат';
+            dcFindProxy.phase = 'ошибка';
+            logLine(`dacall find-proxy: ${dcFindProxy.error}`);
+        }
+    });
+
+    logLine(`dacall find-proxy[${mode}]: запущен поиск ${w} живых прокси (pid ${proc.pid})`);
+    return { ok: true, pid: proc.pid };
+}
+
+async function handleDcFindProxyStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const r = dcFindProxyLaunch({
+            want: body.want,
+            mode: body.refill ? 'refill' : 'manual',
+        });
+        if (!r.ok) return jsonRes(res, 409, { error: r.error, ...dcFindProxyPublic() });
+        jsonRes(res, 200, { ok: true, started: true, ...dcFindProxyPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// GET /__switch/api/dc/autoreg/find-proxy — прогресс поиска (фронт опрашивает).
+function handleDcFindProxyStatus(_req, res) {
+    jsonRes(res, 200, { ok: true, ...dcFindProxyPublic() });
+}
+
+// POST /__switch/api/dc/autoreg/find-proxy/stop — прервать поиск.
+//
+// 🪤 Файл пула пишет САМ валидатор в самом конце, поэтому обрыв не портит текущий пул:
+// старый `live-for-host.txt` и конфиг остаются как были. Конфиг переключается только по
+// успешному JSON-итогу — см. handleDcFindProxyResult.
+function handleDcFindProxyStop(_req, res) {
+    const p = dcFindProxy.proc;
+    if (!dcFindProxy.running || !p) return jsonRes(res, 200, { ok: true, stopped: false, ...dcFindProxyPublic() });
+    dcFindProxy.stopRequested = true;
+    try {
+        if (process.platform === 'win32') {
+            // Только execFileAsync: сырой execFile в модуле не объявлен, и его ReferenceError
+            // молча съедался этим catch — ручка докладывала stopped: true, не убив процесс.
+            // Без await: ответ не ждёт taskkill, уход процесса ловит proc.on('exit').
+            execFileAsync('taskkill.exe', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true })
+                .catch((e) => logLine(`dacall find-proxy: taskkill не убил pid ${p.pid}: ${e.message}`));
+        } else {
+            p.kill('SIGTERM');
+        }
+    } catch (e) { logLine(`dacall find-proxy: остановка не удалась (pid ${p.pid}): ${e.message}`); }
+    logLine(`dacall find-proxy: запрошена остановка (pid ${p.pid})`);
+    jsonRes(res, 200, { ok: true, stopped: true, ...dcFindProxyPublic() });
+}
+
+// ─────────────────── фоновый докорм пула под длинный прогон ───────────────────
+//
+// Прогон 50 аккаунтов — это ~25 минут (один аккаунт ≈ 30 с), а публичные прокси живут
+// минуты. Пул, набранный один раз ПЕРЕД прогоном, к середине пустеет, и дальше аккаунты
+// падают с «живых прокси в пуле не осталось». Фон доливает список на ходу.
+//
+// 🎯 Запас 10 — решение владельца 12.09: держим впереди очереди десять живых, чтобы прогон
+// не вставал на каждой второй регистрации. По его же решению авторега при пустом пуле
+// ЖДЁТ прокси, а не пропускает аккаунт (см. acquireProxyFor в auto-add.js).
+//
+// 🪤 Пул перечитывает файл по штампу mtime, поэтому свежие адреса видны сразу и рестарт для
+// докорма не нужен — в этом вся суть.
+const DC_REFILL_RESERVE = 10;
+const DC_REFILL_TICK_MS = 45_000;
+
+const dcRefill = { timer: null, reason: null, runs: 0, live: null };
+
+function dcRefillStop(why) {
+    if (dcRefill.timer) clearInterval(dcRefill.timer);
+    dcRefill.timer = null;
+    if (why) { dcRefill.reason = why; logLine(`dacall refill: остановлен (${why})`); }
+}
+
+function dcRefillTick() {
+    if (!dcAutoreg.running) { dcRefillStop('прогон завершён'); return; }
+    if (dcFindProxy.running) { dcRefill.reason = 'поиск уже идёт'; return; }
+    const lib = proxyPoolLib();
+    let live = 0;
+    try { live = lib ? lib.describe().count : 0; } catch { live = 0; }
+    dcRefill.live = live;
+
+    // Сколько аккаунтов ещё пойдёт: текущий (i, счёт с единицы) и все после него.
+    const total = Number(dcAutoreg.count || 0);
+    const done = Number((dcAutoreg.stage && dcAutoreg.stage.i) || 0);
+    const remaining = Math.max(1, total - Math.max(0, done - 1));
+    const need = remaining + DC_REFILL_RESERVE;
+
+    if (live >= need) { dcRefill.reason = `запас есть: живых ${live}, нужно ${need}`; return; }
+
+    const want = Math.max(3, Math.min(30, need - live));
+    dcRefill.runs++;
+    dcRefill.reason = `доливаю ${want}: живых ${live}, нужно ${need}`;
+    logLine(`dacall refill: ${dcRefill.reason}`);
+    const r = dcFindProxyLaunch({ want, mode: 'refill' });
+    if (!r.ok) dcRefill.reason = `запуск не удался: ${r.error}`;
+}
+
+function dcRefillStart() {
+    if (dcRefill.timer) return;
+    dcRefill.runs = 0;
+    logLine(`dacall refill: включён (запас ${DC_REFILL_RESERVE})`);
+    dcRefillTick();
+    dcRefill.timer = setInterval(dcRefillTick, DC_REFILL_TICK_MS);
+}
+
+function dcRefillPublic() {
+    return {
+        active: !!dcRefill.timer,
+        reserve: DC_REFILL_RESERVE,
+        reason: dcRefill.reason,
+        runs: dcRefill.runs,
+        live: dcRefill.live,
+    };
+}
+
+// GET /__switch/api/dc/refill — состояние фонового докорма (для UI).
+function handleDcRefillState(_req, res) {
+    jsonRes(res, 200, { ok: true, ...dcRefillPublic() });
+}
+
+// Пул должен читать именно свежий файл. Правку конфига делаем только если пул уже включён
+// на этом хосте: иначе мы бы включили проксирование молча.
+function dcFindProxySwitchPool(host) {
+    const cfgFile = path.join(__dirname, 'proxy-pool.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    if (!(cfg.enabled && Array.isArray(cfg.hosts) && cfg.hosts.includes(host))) return false;
+    cfg.file = DC_LIVE_PROXY_FILE;
     cfg.scheme = null;   // схема уже в каждой строке
     fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
     return true;
@@ -27639,6 +30051,9 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [DC_KEEPALIVE_PORT]: { name: 'dacall.AI', spawn: dcKeepaliveSpawn },
+        [CP_KEEPALIVE_PORT]: { name: 'Clean APIs', spawn: cpKeepaliveSpawn },
+        [AB_KEEPALIVE_PORT]: { name: 'Artbloom', spawn: abKeepaliveSpawn },
         [FX_KEEPALIVE_PORT]: { name: 'Fxqidian', spawn: fxKeepaliveSpawn },
         [LS_KEEPALIVE_PORT]: { name: 'Lingshu', spawn: lsKeepaliveSpawn },
         [BD_KEEPALIVE_PORT]: { name: 'BudsAI', spawn: bdKeepaliveSpawn },
@@ -29054,6 +31469,9 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    dc: { tag: 'dacall',     label: 'dacall.AI',     host: 'api-ru.dacall.ai',     keyFile: DC_ACTIVE_KEY_FILE, load: dcLoad, save: dcSave, balanceFn: dcBalance, applyFn: dcApplyBalance },
+    cp: { tag: 'cleanapis',     label: 'Clean APIs',     host: 'cleanapis.com',     keyFile: CP_ACTIVE_KEY_FILE, load: cpLoad, save: cpSave, balanceFn: cpBalance, applyFn: cpApplyBalance },
+    ab: { tag: 'artbloom',     label: 'Artbloom',     host: 'api.artbloom.tech',     keyFile: AB_ACTIVE_KEY_FILE, load: abLoad, save: abSave, balanceFn: abBalance, applyFn: abApplyBalance },
     fx: { tag: 'fxqidian',     label: 'Fxqidian',     host: 'fxqidian.de5.net',     keyFile: FX_ACTIVE_KEY_FILE, load: fxLoad, save: fxSave, balanceFn: fxBalance, applyFn: fxApplyBalance },
     ls: { tag: 'lsapi',     label: 'Lingshu',     host: 'lsapi.cloud',     keyFile: LS_ACTIVE_KEY_FILE, load: lsLoad, save: lsSave, balanceFn: lsBalance, applyFn: lsApplyBalance },
     bd: { tag: 'budsin',     label: 'BudsAI',     host: 'apichat.budsin.dev',     keyFile: BD_ACTIVE_KEY_FILE, load: bdLoad, save: bdSave, balanceFn: bdBalance, applyFn: bdApplyBalance },
@@ -30720,6 +33138,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/set-github') return handleCpSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/set-github') return handleAbSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/set-github') return handleFxSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-github') return handleBdSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/set-github') return handleNvSetGithub(req, res);
@@ -30780,6 +33200,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/keepalive/state')  return keepaliveDc.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/cp/keepalive/state')  return keepaliveCp.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ab/keepalive/state')  return keepaliveAb.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/fx/keepalive/state')  return keepaliveFx.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/keepalive/state')  return keepaliveLs.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/keepalive/state')  return keepaliveBd.state(req, res);
@@ -30789,6 +33212,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/keepalive/config') return keepaliveDc.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/keepalive/config') return keepaliveCp.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/keepalive/config') return keepaliveAb.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/keepalive/config') return keepaliveFx.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/keepalive/config') return keepaliveLs.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/keepalive/config') return keepaliveBd.config(req, res);
@@ -30816,6 +33242,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/keepalive/latency')) return keepaliveDc.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/keepalive/latency')) return keepaliveCp.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/keepalive/latency')) return keepaliveAb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/keepalive/latency')) return keepaliveFx.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/keepalive/latency')) return keepaliveLs.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/keepalive/latency')) return keepaliveBd.latency(req, res);
@@ -30869,6 +33298,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/sessions')) return handleDcSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/sessions')) return handleCpSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/sessions')) return handleAbSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/sessions')) return handleFxSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/sessions')) return handleLsSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/sessions')) return handleBdSessions(req, res);
@@ -30877,6 +33309,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/ping'))     return handleDcPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/ping'))     return handleCpPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/ping'))     return handleAbPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/ping'))     return handleFxPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/ping'))     return handleLsPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/ping'))     return handleBdPing(req, res);
@@ -30885,6 +33320,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/balance'))  return handleDcBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/balance'))  return handleCpBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/balance'))  return handleAbBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/balance'))  return handleFxBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/balance'))  return handleLsBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/balance'))  return handleBdBalance(req, res);
@@ -30893,6 +33331,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/models'))   return handleDcModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/models'))   return handleCpModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/models'))   return handleAbModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fx/models'))   return handleFxModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ls/models'))   return handleLsModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bd/models'))   return handleBdModels(req, res);
@@ -30901,6 +33342,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/active-model') return jsonRes(res, 200, { model: dcReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/cp/active-model') return jsonRes(res, 200, { model: cpReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ab/active-model') return jsonRes(res, 200, { model: abReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/fx/active-model') return jsonRes(res, 200, { model: fxReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/active-model') return jsonRes(res, 200, { model: lsReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/active-model') return jsonRes(res, 200, { model: bdReadActiveModel() || null });
@@ -30909,6 +33353,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/modelmap') return jsonRes(res, 200, { ok: true, modelMap: dcReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/cp/modelmap') return jsonRes(res, 200, { ok: true, modelMap: cpReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ab/modelmap') return jsonRes(res, 200, { ok: true, modelMap: abReadModelMap() });
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/modelmap') return handleAbModelMap(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/fx/modelmap') return jsonRes(res, 200, { ok: true, modelMap: fxReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/modelmap') return jsonRes(res, 200, { ok: true, modelMap: lsReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/bd/modelmap') return jsonRes(res, 200, { ok: true, modelMap: bdReadModelMap() });
@@ -30917,6 +33365,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/add')       return handleDcAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/add')       return handleCpAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/add')       return handleAbAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/add')       return handleFxAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/add')       return handleLsAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/add')       return handleBdAdd(req, res);
@@ -30925,6 +33376,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/key')       return handleDcSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/key')       return handleCpSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/key')       return handleAbSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/key')       return handleFxSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/key')       return handleLsSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/key')       return handleBdSetKey(req, res);
@@ -30934,6 +33388,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/rename')    return handleDcRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/rename')    return handleCpRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/rename')    return handleAbRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/rename')    return handleFxRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/rename')    return handleLsRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/rename')    return handleBdRename(req, res);
@@ -30942,6 +33399,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/delete')    return handleDcDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/delete')    return handleCpDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/delete')    return handleAbDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/delete')    return handleFxDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/delete')    return handleLsDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/delete')    return handleBdDelete(req, res);
@@ -30950,6 +33410,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/activate')  return handleDcActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/activate')  return handleCpActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/activate')  return handleAbActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/activate')  return handleFxActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/activate')  return handleLsActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/activate')  return handleBdActivate(req, res);
@@ -30958,6 +33421,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/set-model') return handleDcSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/set-model') return handleCpSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/set-model') return handleAbSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/set-model') return handleFxSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/set-model') return handleLsSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-model') return handleBdSetModel(req, res);
@@ -30966,6 +33432,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/set-balance') return handleDcSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/set-balance') return handleCpSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/set-balance') return handleAbSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/set-balance') return handleFxSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/set-balance') return handleLsSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/set-balance') return handleBdSetBalance(req, res);
@@ -30974,11 +33443,18 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/map-profiles') return handleCpMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/map-profiles') return handleAbMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/map-profiles') return handleFxMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/session/open') return handleDcSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/session/open') return handleCpSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/session/open') return handleAbSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/session/open') return handleFxSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/session/open') return handleLsSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/session/open') return handleBdSessionOpen(req, res);
@@ -30987,6 +33463,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/share')    return handleDcShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/share')    return handleCpShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/share')    return handleAbShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/share')    return handleFxShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/share')    return handleLsShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/share')    return handleBdShare(req, res);
@@ -30995,6 +33474,9 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/import')   return handleDcImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/import')   return handleCpImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/import')   return handleAbImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/import')   return handleFxImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ls/import')   return handleLsImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/import')   return handleBdImport(req, res);
@@ -31073,6 +33555,15 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/refill') return handleLsRefillState(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/proxy-lines') return handleLsProxyPoolLines(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ls/proxy-pool') return handleLsProxyPool(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/autoreg/status') return handleDcAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/autoreg/start') return handleDcAutoregStart(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/autoreg/stop') return handleDcAutoregStop(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/autoreg/find-proxy') return handleDcFindProxyStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/autoreg/find-proxy') return handleDcFindProxyStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/dc/autoreg/find-proxy/stop') return handleDcFindProxyStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/refill') return handleDcRefillState(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/proxy-lines') return handleDcProxyPoolLines(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/dc/proxy-pool') return handleDcProxyPool(req, res);
     // Вкладка «Свои прокси». Путь общий, без префикса панели: свой пул обслуживает все
     // шлюзы сразу, в отличие от ak/rm-ручек, которые показывают пул глазами одной панели.
     if (req.method === 'GET'  && req.url === '/__switch/api/proxies/state')     return handleProxiesState(req, res);
@@ -31271,6 +33762,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/cp/add-github')       return handleCpAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ab/add-github')       return handleAbAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fx/add-github')       return handleFxAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/bd/add-github')       return handleBdAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/add-github')       return handleNvAddGithub(req, res);
@@ -31379,7 +33872,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

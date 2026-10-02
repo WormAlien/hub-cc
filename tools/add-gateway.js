@@ -192,13 +192,30 @@ function withinMarker(hay, marker, needle) {
     return !!(hit && hit.found);
 }
 
+/**
+ * Невыполненные условия точки. В `when` пишется имя флага, который обязан быть ВКЛЮЧЁН,
+ * либо `!имя` — флага, который обязан быть ВЫКЛЮЧЕН.
+ *
+ * Отрицание понадобилось 28.09.2026, на artbloom: у вкладки без скрипта снимка
+ * (`shareScript: false`) обработчик «Поделиться» обязан быть ДРУГОЙ формы — он читает снимок
+ * с диска, а не спавнит скрипт. Это не ослабление существующей точки, а отдельная точка
+ * (`1.18n`), и включаться она должна ровно тогда, когда флаг выключен.
+ */
+function flagsOff(point, gw) {
+    if (!Array.isArray(point.when)) return [];
+    return point.when.filter(f => (f.startsWith('!') ? !!gw[f.slice(1)] : !gw[f]));
+}
+
+/** Как назвать невыполненное условие человеку: «нет shareScript» / «включён shareScript». */
+function flagsOffNote(off) {
+    return off.map(f => (f.startsWith('!') ? `включён ${f.slice(1)}` : `нет ${f}`)).join(', ');
+}
+
 function checkPoint(point, gw, files) {
     // Ослабление по флагам конфига
-    if (Array.isArray(point.when)) {
-        const off = point.when.filter(f => !gw[f]);
-        if (off.length) {
-            return { status: 'absent', note: `ослабление: нет ${off.join(', ')}` };
-        }
+    const off = flagsOff(point, gw);
+    if (off.length) {
+        return { status: 'absent', note: `ослабление: ${flagsOffNote(off)}` };
     }
 
     const rel = subst(point.file, gw);
@@ -254,10 +271,8 @@ function checkPoint(point, gw, files) {
  * Инструкция описывает только первую форму — вторая молча считается пропуском.
  */
 function checkAny(point, gw, files) {
-    if (Array.isArray(point.when)) {
-        const off = point.when.filter(f => !gw[f]);
-        if (off.length) return { status: 'absent', note: `ослабление: нет ${off.join(', ')}` };
-    }
+    const offAny = flagsOff(point, gw);
+    if (offAny.length) return { status: 'absent', note: `ослабление: ${flagsOffNote(offAny)}` };
 
     const rel = subst(point.file, gw);
     const abs = files[point.file] || path.join(REPO, rel);
@@ -307,7 +322,7 @@ function findAllLines(hay, needle) {
  * state: done — уже на месте · todo — вписать · bad — дефект (дубль, нет файла) ·
  * skip — ослабление по флагам конфига (точки нет намеренно, писать нечего).
  */
-function planPoint(point, gw, files) {
+function planPoint(point, gw, files, src) {
     // В спеке file — либо алиас из files, либо путь от корня (modelmap, папка шлюза,
     // .gitignore). Печатать надо путь: алиас «backend» человеку ничего не говорит и в
     // редакторе не открывается, поэтому путь считаем от корня и в прямых слэшах.
@@ -315,9 +330,10 @@ function planPoint(point, gw, files) {
     const rel = path.relative(REPO, abs).split(path.sep).join('/');
     const p = { id: point.id, title: point.title, rel, anchor: null, ready: [], note: '', state: 'todo', fileOnly: false };
 
-    if (Array.isArray(point.when) && point.when.some(f => !gw[f])) {
+    const offPlan = flagsOff(point, gw);
+    if (offPlan.length) {
         p.state = 'skip';
-        p.note = `ослабление: нет ${point.when.filter(f => !gw[f]).join(', ')}`;
+        p.note = `ослабление: ${flagsOffNote(offPlan)}`;
         return p;
     }
 
@@ -376,8 +392,20 @@ function planPoint(point, gw, files) {
     }
 
     if (point.within) {
-        const marker = subst(point.within, gw);
-        const hit = findWithinLine(hay, marker, expects[0]);
+        // 🪤 Маркер ищем у ЦЕЛИ, а если его там ещё нет — у ИСТОЧНИКА. Раньше здесь стоял
+        // только целевой, и у новой вкладки он не находится ПО ОПРЕДЕЛЕНИЮ: маркер создаёт
+        // сама вставка, которой ещё не было. План объявлял дефектом каждую такую точку
+        // (2.14 у cleanapis, 01.10), тогда как `apply` искал по источнику и писал молча.
+        // Два вывода одной спеки расходились, и верить надо было записи. Теперь обе ветки
+        // смотрят одинаково.
+        const markerDst = subst(point.within, gw);
+        const markerSrc = subst(point.within, src || gw);
+        let hit = findWithinLine(hay, markerDst, expects[0]);
+        let marker = markerDst;
+        if (!hit && markerSrc !== markerDst) {
+            hit = findWithinLine(hay, markerSrc, expects[0]);
+            marker = markerSrc;
+        }
         p.ready = expects.map(need);
         if (hit && hit.found) {
             p.state = 'done';
@@ -391,7 +419,7 @@ function planPoint(point, gw, files) {
             p.note = `вписать рядом с маркером (строка ${hit.markerLine}): ${marker}`;
         } else {
             p.state = 'bad';
-            p.note = `маркер не найден: ${marker}`;
+            p.note = `маркер не найден ни у цели, ни у эталона: ${markerDst}`;
         }
         return p;
     }
@@ -409,7 +437,19 @@ const C = process.stdout.isTTY
     ? { ok: '\x1b[32m', bad: '\x1b[31m', warn: '\x1b[33m', dim: '\x1b[2m', off: '\x1b[0m', b: '\x1b[1m' }
     : { ok: '', bad: '', warn: '', dim: '', off: '', b: '' };
 
-const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript'];
+const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript', 'customPanel'];
+
+/**
+ * Что инструмент НЕ может решить за чужую панель. Печатается, когда вкладка помечена `customPanel`.
+ * Флаг не «проверка», а ЧЕСТНОЕ ПРИЗНАНИЕ ГРАНИЦЫ: у площадки со своим API нет ни New-API-шных
+ * ручек, ни его конвенций, а `check` умеет сверять только то, что знает спека.
+ */
+const CUSTOM_PANEL_TODO = [
+    'баланс: у площадки свой API и ручек New API нет — цифру читать своим способом, а имя источника записать в конфиг (`balanceSource`)',
+    'авторизация: `HOST_AUTH` в routing/lib/newapi-account.js инструмент пишет КОПИЕЙ эталона — значение проверить живьём, а не на слово',
+    'комментарии: регионы склонированы вместе с чужими утверждениями о мире — перечитать (список печатает `apply`) и переписать',
+    'каталог и тексты вкладки: имена и число моделей берутся с витрины площадки, а не от эталона',
+];
 
 /** Конфиг шлюза или выход: без него и check, и plan печатают одно и то же. */
 function gwOrDie(name, config) {
@@ -424,6 +464,15 @@ function gwOrDie(name, config) {
 function gwHead(gw) {
     console.log(`${C.b}${gw.NAME}${C.off}  ${C.dim}(${gw.full}, префикс ${gw.p}, порт ${gw.PORT})${C.off}`);
     console.log(`${C.dim}флаги: ${FLAGS.map(f => `${f}=${gw[f] ? 'да' : 'нет'}`).join('  ')}${C.off}`);
+    // 🪤 Своя панель (не New API) — единственный случай, когда инструмент ЧЕСТНО не знает, как
+    // читать и проверять. Живой случай 28.09.2026, artbloom: цифра баланса не приходила ни одной
+    // ветвью (била в ручку, которой у площадки нет), от этого молча умерла авторотация, а тот
+    // дефект МАСКИРОВАЛ второй — `HOST_AUTH` копией от эталона, который вылез бы сразу после
+    // починки первого. Поэтому вместо тихой полуработы печатаем то, что обязан решить человек.
+    if (gw.customPanel) {
+        console.log(`${C.warn}своя панель (не New API) — инструмент это не проверит, реши руками:${C.off}`);
+        for (const t of CUSTOM_PANEL_TODO) console.log(`${C.dim}  • ${t}${C.off}`);
+    }
 }
 
 /** Пути всех файлов спеки, ключ — алиас из spec.files. */
@@ -480,7 +529,7 @@ function runCheck(name, spec, config) {
     console.log(`${head}  —  ${ok}/${total} точек на месте, ${absent} ослаблений, ${C.bad}${missing.length} пропусков${C.off}`);
     if (absent) {
         const list = spec.points
-            .filter(p => Array.isArray(p.when) && p.when.some(f => !gw[f]))
+            .filter(p => flagsOff(p, gw).length)
             .map(p => p.id);
         console.log(`${C.dim}ослабления (ожидаемы): ${list.join(', ')}${C.off}`);
     }
@@ -504,7 +553,8 @@ const STATE = {
  */
 function runPlan(name, spec, config) {
     const gw = gwOrDie(name, config);
-    const items = spec.points.map(pt => planPoint(pt, gw, specFiles(spec)));
+    const src = config[spec.source || 'kktoken'] || gw;
+    const items = spec.points.map(pt => planPoint(pt, gw, specFiles(spec), src));
 
     // Группировка по файлу: порядок файлов — как в спеке (он же порядок работы), внутри
     // файла — по номеру строки. Так файл на 25 тысяч строк проходится сверху вниз за
@@ -744,18 +794,67 @@ function refFor(point, rule, src) {
  * status: 'insert' (вставит) · 'done' (уже есть) · 'skip' (ослаблена флагом) ·
  * 'manual' (правила нет, руками) · 'bad' (якорь не найден и т.п.)
  */
-function applyPoint(point, rule, src, dst, pairs, files) {
+/**
+ * Иголки точек, которые у ЭТОЙ цели ослаблены флагами. Их код клонировать нельзя: опоры
+ * (константы, функции, реестра) у цели нет вовсе — точка, которая её создаёт, погашена флагом.
+ *
+ * Живой случай 28.09.2026, artbloom: обработчик `share` клонирован из эталона и зовёт константу
+ * скрипта снимка, а у вкладки с `shareScript: false` её не объявляет никто. Клик по кнопке 🔗
+ * падал с `ReferenceError`, и `check` этого не видел: сама точка 1.18 у цели «на месте».
+ */
+function relaxedNeedles(spec, gw) {
+    const out = [];
+    for (const pt of (spec && spec.points) || []) {
+        if (!flagsOff(pt, gw).length) continue;
+        // 🪤 Участие ЯВНОЕ (поле `guard`), а не «любой expect». Первая версия сторожа брала
+        // expect каждой ослабленной точки — и краснела на хосте: у точки 3.2 (`flatRate`)
+        // иголка это просто `'<хост>'`, а он в любом регионе законен и ничей опоры не требует.
+        // Пустой прогон пустого слота дал 16 таких дефектов сразу. `guard` же ставится ровно
+        // там, где ослабленная точка чего-то НЕ СОЗДАЁТ, а клон на это ссылается.
+        if (pt.guard == null) continue;
+        out.push([pt.id, subst(pt.guard, gw)]);
+    }
+    return out;
+}
+
+function applyPoint(point, rule, src, dst, pairs, files, spec) {
     const p = { id: point.id, title: point.title, status: 'insert', rel: '', at: null, anchor: '', lines: [], note: '' };
 
-    if (Array.isArray(point.when) && point.when.some(f => !dst[f])) {
+    const offApply = flagsOff(point, dst);
+    if (offApply.length) {
         p.status = 'skip';
-        p.note = `ослабление: нет ${point.when.filter(f => !dst[f]).join(', ')}`;
+        p.note = `ослабление: ${flagsOffNote(offApply)}`;
         return p;
     }
     if (!rule) { p.status = 'manual'; return p; }
 
     const abs = files[point.file] || path.join(REPO, subst(point.file, dst));
     p.rel = path.relative(REPO, abs).split(path.sep).join('/');
+
+    // ── создание файла ───────────────────────────────────────────────────────
+    // `kind: "file"` умел только «файла нет» и потому был вечным пропуском: инструмент
+    // файлов не создавал вовсе, и каждая новая вкладка оставляла за собой
+    // `routing/<шлюз>-modelmap.json` и `<шлюз>/open-session.js` на руки. Точка объявляет
+    // это полем правила: `inserts["3.9"] = { "create": "fromSource" }` — файл берётся у
+    // ИСТОЧНИКА по тому же шаблону пути и переводится парами токенов его конфига.
+    // 🪤 Годится только для файлов, форма которых от шлюза НЕ зависит (тир-карта: те же
+    // три ключа у всех 37 карт). Скрипты вроде `open-session.js` сайт-специфичны — адрес
+    // консоли, эвристика «залогинен ли», тексты ошибок площадки, — и клон чужого дал бы
+    // ровно ту тихую полуработу, от которой инструмент и защищает. Поэтому такие точки
+    // создаются только явным `source`, и по умолчанию их никто не включает.
+    if (rule.create === 'fromSource') {
+        if (fs.existsSync(abs)) { p.status = 'done'; p.note = 'уже на месте'; return p; }
+        if (src === dst) { p.status = 'bad'; p.note = 'источник и цель совпали, а файла у цели нет'; return p; }
+        const fromRel = subst(point.file, src);
+        const fromAbs = files[point.file] || path.join(REPO, fromRel);
+        if (!fs.existsSync(fromAbs)) { p.status = 'bad'; p.note = `у источника нет файла ${fromRel}`; return p; }
+        const text = toTarget(fs.readFileSync(fromAbs, 'utf8'), pairs);
+        p.status = 'insert';
+        p.create = { text };
+        p.note = `создать из ${path.relative(REPO, fromAbs).split(path.sep).join('/')}`;
+        return p;
+    }
+
     if (!fs.existsSync(abs)) { p.status = 'bad'; p.note = `нет файла ${p.rel}`; return p; }
 
     const hay = fs.readFileSync(abs, 'utf8');
@@ -779,6 +878,18 @@ function applyPoint(point, rule, src, dst, pairs, files) {
         if (alreadyThere(targetNeedle)) { p.status = 'done'; p.note = 'уже на месте'; return p; }
     } else if (rule.mode === 'inline') {
         if (alreadyThere(subst(rule.add, dst))) { p.status = 'done'; p.note = 'уже на месте'; return p; }
+    }
+
+    // 🪤 Источник и цель совпали - это НЕ ошибка сама по себе, и раньше здесь стоял жёсткий
+    // `process.exit(2)` в главном цикле. Он срабатывал ДО этой проверки, поэтому шлюз, который
+    // сам служит источником для точки-подмены, не мог ни проверить себя, ни записаться: у
+    // `artbloom` (источник точки 1.18m, `source: "artbloom"`) регион давно на месте, клонировать
+    // нечего, а `apply artbloom` умирал на «источник и цель совпали». Ошибка тут только одна:
+    // клонировать ЕСТЬ ЧТО, а взять неоткуда. Её и оставляем.
+    if (point.source && src === dst) {
+        p.status = 'bad';
+        p.note = `источник и цель совпали, а регион «${targetNeedle}» у цели не на месте`;
+        return p;
     }
 
     const ref = refFor(point, rule, src);
@@ -860,6 +971,20 @@ function applyPoint(point, rule, src, dst, pairs, files) {
         .map(l => (l === '' ? l : l));
     p.note = `${span}, строк ${region.end - start + 1}`;
 
+    // 🪤 Клон может принести код, опора которого у ЦЕЛИ выключена флагом (см. `relaxedNeedles`).
+    // Проверяем ДО записи: ReferenceError по кнопке ищется глазами дороже, чем строка в отчёте.
+    {
+        const cloned = p.lines.join('\n');
+        const broken = relaxedNeedles(spec, dst).filter(([, needle]) => needle && cloned.includes(needle));
+        if (broken.length) {
+            p.status = 'bad';
+            p.note = `клон несёт код ослабленных у цели точек: ${broken.map(([id, n]) => `${id} («${n}»)`).join(', ')}`
+                + ' — опоры нет, будет ReferenceError. Регион брать из другого источника (`source`) '
+                + 'или заводить точку с обратным флагом';
+            return p;
+        }
+    }
+
     // 🪤 `until-blank` — единственный регион, чья граница держится на ПУСТОЙ СТРОКЕ,
     // и копия обязана эту границу сохранить. 17.09 на nova вышло иначе: блок Nova встал
     // вплотную к блоку KKtoken (пустая строка уехала под копию), и следующий шлюз получил
@@ -873,6 +998,30 @@ function applyPoint(point, rule, src, dst, pairs, files) {
         p.note += ', с пустой строкой после';
     }
     return p;
+}
+
+/**
+ * Комментарии-УТВЕРЖДЕНИЯ из региона эталона. Регион копируется вместе с ними, переименование
+ * меняет в тексте только имена — смысл остаётся чужим, и в новой вкладке он врёт.
+ *
+ * Живой случай 28.09.2026: в дашборд artbloom уехали шесть таких утверждений — «каждый
+ * четвёртый ответ пустой 403 от кромки Cloudflare (замер 31.08)», «гранта НЕТ, панель платная»,
+ * «каталог — ровно четыре модели, все Opus». Ни одно не ловится ни `check`, ни сторожами:
+ * это утверждение о МИРЕ, а не о коде, и проверить его может только человек замером.
+ *
+ * Отбираем не все комментарии (в регионе панели их сотни), а те, что похожи на факт: замер,
+ * дата, число, «каждый/всегда», проценты, упоминание чужой кромки или гранта.
+ */
+function claimComments(lines) {
+    const isComment = /^\s*(\/\/|<!--|\*|#)/;
+    const looksFact = /(замер|проверено|грабл|каждый|никогда|всегда|грант|панель|лимит|облач|Cloudflare|Cloudflare|403|429|5\d\d|\d{2}\.\d{2}|20\d\d-\d\d)/i;
+    const out = [];
+    for (const raw of lines) {
+        const t = stripCr(String(raw)).trim();
+        if (!isComment.test(t) || !looksFact.test(t)) continue;
+        out.push(t);
+    }
+    return out;
 }
 
 function runApply(name, spec, config, write) {
@@ -902,8 +1051,10 @@ function runApply(name, spec, config, write) {
     const items = spec.points.map(pt => {
         const ptSrc = pt.source ? config[pt.source] : src;
         if (!ptSrc) { console.error(`точка ${pt.id}: нет конфига источника «${pt.source}»`); process.exit(2); }
-        if (pt.source && pt.source === name) { console.error(`точка ${pt.id}: источник и цель совпали`); process.exit(2); }
-        return applyPoint(pt, inserts[pt.id], ptSrc, dst, pairsFor(ptSrc), files);
+        // «Источник и цель совпали» проверяется внутри `applyPoint` и только тогда, когда регион
+        // у цели действительно не на месте (см. комментарий там). Здесь этой проверки быть не
+        // должно: она валила шлюз-источник ещё до того, как он успевал сказать «уже на месте».
+        return applyPoint(pt, inserts[pt.id], ptSrc, dst, pairsFor(ptSrc), files, spec);
     });
 
     const tally = { insert: 0, done: 0, skip: 0, manual: 0, bad: 0 };
@@ -932,6 +1083,24 @@ function runApply(name, spec, config, write) {
         if (it.status === 'bad') console.log(`${C.warn}        ↑ ${it.note}${C.off}`);
     }
 
+    // Комментарии клона — до ИТОГа: их надо прочитать глазами, а не искать потом по файлу.
+    {
+        let commentTotal = 0;
+        const facts = [];
+        for (const it of items) {
+            if (it.status !== 'insert') continue;
+            const lines = it.lines.map(l => (l && l.text != null ? String(l.text) : String(l)));
+            commentTotal += lines.filter(l => /^\s*(\/\/|<!--|\*|#)/.test(stripCr(l))).length;
+            for (const c of claimComments(lines)) facts.push(`${it.id}: ${c}`);
+        }
+        if (commentTotal) {
+            console.log(`\n${C.warn}Склонировано комментариев: ${commentTotal}. Прочитать и переписать под свой шлюз.${C.off}`);
+            console.log(`${C.dim}Переименование меняет в них только имена: даты, «замеры», «грант» и коды ответа остаются свойствами ЭТАЛОНА.${C.off}`);
+            for (const c of facts.slice(0, 12)) console.log(`${C.dim}  ${c.slice(0, 132)}${C.off}`);
+            if (facts.length > 12) console.log(`${C.dim}  … и ещё ${facts.length - 12} похожих на факт${C.off}`);
+        }
+    }
+
     console.log(
         `\nИТОГ  —  ${C.ok}${tally.insert} вставить${C.off}, ${tally.done} уже на месте, `
         + `${tally.skip} ослаблений, ${C.dim}${tally.manual} руками${C.off}, ${C.bad}${tally.bad} дефектов${C.off}`,
@@ -957,6 +1126,7 @@ function runApply(name, spec, config, write) {
     const byFile = new Map();
     for (const it of items) {
         if (it.status !== 'insert') continue;
+        if (it.create) continue;   // создание файлов идёт отдельным проходом ниже
         if (!byFile.has(it.rel)) byFile.set(it.rel, []);
         byFile.get(it.rel).push(it);
     }
@@ -984,8 +1154,21 @@ function runApply(name, spec, config, write) {
     }
     console.log(`${C.dim}бэкап: ${path.relative(REPO, backupDir).split(path.sep).join('/')}${C.off}`);
 
+    // Создание файлов — своим проходом: у них нет ни строк, ни якоря, и в общей сортировке
+    // по `at` они бы только мешали. Папку создаём сами: `<шлюз>/open-session.js` лежит там,
+    // где до него не было ничего.
+    const createdRels = [];
+    for (const it of items.filter((x) => x.status === 'insert' && x.create)) {
+        const abs = path.join(REPO, it.rel);
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, it.create.text, 'utf8');
+        createdRels.push(it.rel);
+        written += 1;
+        console.log(`${C.ok}создано${C.off} ${it.rel}  ${C.dim}(${it.note})${C.off}`);
+    }
+
     // Синтаксис — сразу, ДО любых советов про рестарт: SyntaxError роняет прод.
-    const jsFiles = [...byFile.keys()].filter(f => f.endsWith('.js'));
+    const jsFiles = [...byFile.keys(), ...createdRels].filter(f => f.endsWith('.js'));
     let syntaxOk = true;
     for (const rel of jsFiles) {
         const r = require('child_process').spawnSync(process.execPath, ['--check', path.join(REPO, rel)], { encoding: 'utf8' });
@@ -1012,6 +1195,26 @@ function runApply(name, spec, config, write) {
     console.log('');
     const before = 0;
     runCheck(name, spec, config);
+
+    // 🪤 28.09.2026: инструмент завёл три карты из четырёх, а четвёртую — индекс профилей
+    // GitHub — не знал вовсе. Стык ловит ЧУЖОЙ чекер `check-gh-seed-hosts.js`, и он его и поймал
+    // на artbloom. Гоняем здесь: дефект этой вкладки виден сразу после записи, а не через
+    // неделю в модалке «неизвестный хост». Медленный `check-hub.js` (около минуты) не берём —
+    // о нём напоминаем строкой.
+    const guards = [
+        ['check-gh-seed-hosts.js', 'индекс профилей GitHub сходится с таблицей заселения'],
+        ['check-spec-tokens.js', 'токены подстановки в спеке целы'],
+    ];
+    for (const [file, what] of guards) {
+        const abs = path.join(__dirname, file);
+        if (!fs.existsSync(abs)) continue;
+        const r = require('child_process').spawnSync(process.execPath, [abs], { encoding: 'utf8' });
+        const bad = r.status !== 0;
+        const tail = String(r.stdout || '').trim().split('\n').filter(Boolean).slice(-1)[0] || '';
+        console.log(`${bad ? C.bad + 'СТОРОЖ КРАСНЫЙ' : C.ok + 'сторож ок'}${C.off} ${file} — ${what}`
+            + (bad ? `\n${C.warn}   ${tail.slice(0, 200)}${C.off}` : ''));
+    }
+    console.log(`${C.dim}ещё прогнать руками: node tools/check-hub.js (около минуты, проверяет имена вкладок и разметку)${C.off}`);
 
     console.log(`\n${C.dim}вставок: ${written}. Перезапуск дашборда — задачей владельцу (рестарт рвёт его же сессию).${C.off}`);
     return 0;
@@ -1054,4 +1257,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure };
+module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments };

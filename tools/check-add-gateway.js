@@ -118,7 +118,11 @@ const fieldsOf = (p) => [p.file, ...(Array.isArray(p.expect) ? p.expect : [p.exp
     .filter((v) => typeof v === 'string');
 
 /** Точка ослаблена: хотя бы один её флаг выключен в конфиге. */
-const isAbsent = (p, gw) => Array.isArray(p.when) && p.when.some((f) => !gw[f]);
+// Ослаблена ли точка у этого шлюза. 🪤 Независимый ПЕРЕСЧЁТ, и он обязан понимать отрицание
+// `!флаг` — иначе разойдётся с инструментом на первой же такой точке (28.09.2026: 1.18n для
+// вкладок без скрипта снимка). Держим его здесь нарочно отдельной реализацией: он сверяет
+// инструмент, а не повторяет его.
+const isAbsent = (p, gw) => Array.isArray(p.when) && p.when.some((f) => (f.startsWith('!') ? !!gw[f.slice(1)] : !gw[f]));
 
 console.log('== check-add-gateway: спека и чекер вкладок сходятся ==');
 
@@ -382,16 +386,21 @@ section('when · флаги условий');
     const used = [...new Set((spec.points || []).filter((p) => Array.isArray(p.when)).flatMap((p) => p.when))].sort();
     check(used.length > 0, `в спеке есть точки с условием (${used.join(', ')})`);
 
+    // 🪤 `!флаг` — ОТРИЦАНИЕ: точка живёт, когда флаг выключен (так у 1.18n, которая заменяет
+    // 1.18 у вкладок без скрипта снимка). Имя под `!` сверяется по базе: иначе знак отрицания
+    // читался бы как отдельный «неизвестный флаг» и красил бы весь блок (28.09.2026).
+    const base = (f) => (String(f).startsWith('!') ? String(f).slice(1) : String(f));
+
     // Флаг, которого нет ни в одном конфиге, ложен всегда: точка уходит в «ослабления»
     // у КАЖДОГО шлюза, и выглядит это как честное ослабление, а не как опечатка в спеке.
-    const unknown = used.filter((f) => !flags.has(f));
+    const unknown = used.filter((f) => !flags.has(base(f)));
     check(unknown.length === 0, `каждый флаг из when — булев ключ конфига${unknown.length ? ' — неизвестны: ' + unknown.join(', ') : ''}`);
 
     // Флаг, которого нет у ОДНОГО шлюза, читается как false именно у него: шлюз флаг не
     // выключал, а точка у него уже «ожидаемо» ослаблена. Блок 3 ловит это счётчиком,
     // здесь — адресно, по конфигу.
     const holes = [];
-    for (const n of GW_NAMES) for (const f of used) if (typeof config[n][f] !== 'boolean') holes.push(`${n}.${f}`);
+    for (const n of GW_NAMES) for (const f of used) if (typeof config[n][base(f)] !== 'boolean') holes.push(`${n}.${f}`);
     check(holes.length === 0, `у каждого шлюза есть все флаги, упомянутые в when (${GW_NAMES.length} конфигов × ${used.length} флагов)${holes.length ? ' — нет: ' + holes.join(', ') : ''}`);
 
     // Флаги печатаются в шапке прогона. Проверяемый, но не показанный флаг — это ослабление,
@@ -405,8 +414,9 @@ section('when · флаги условий');
     const shown = [...flagSrc.matchAll(/'([A-Za-z][A-Za-z0-9]*)'/g)].map((m) => m[1]);
     check(shown.length > 0 && flagLine.length > 0,
         `список флагов найден (${shown.join(', ') || 'ни константы FLAGS, ни инлайнового массива — регексп устарел'})`);
-    const notShown = used.filter((f) => !shown.includes(f));
+    const notShown = used.filter((f) => !shown.includes(base(f)));
     check(notShown.length === 0, `каждый флаг из when показан в шапке прогона${notShown.length ? ' — нет: ' + notShown.join(', ') : ''}`);
+    check(shown.includes('customPanel'), 'флаг «своя панель» показан в шапке — иначе чеклист ручных решений невидим');
 }
 
 // ── 6. контракт самого инструмента ────────────────────────────────────────────
@@ -670,6 +680,108 @@ section('опора share/import · хендлер зовёт только об�
         check(dangling.length === 0,
             `опора share/import объявлена у каждого шлюза${dangling.length ? ' — нет: ' + dangling.slice(0, 6).join(' | ') : ''}`);
     }
+}
+
+// ── 10. маршруты и обвязка: точки, которых в спеке не было ────────────────────
+section('маршруты и обвязка · полнота спеки (уроки artbloom 28.09.2026)');
+{
+    const tool = require(ADD_GATEWAY);
+    const backend = fs.readFileSync(path.join(REPO, spec.files.backend), 'utf8');
+    const src = config[spec.source || 'kktoken'];
+
+    // 1. POST-роут modelmap. Живой дефект: точка 1.9f знала ТОЛЬКО GET-форму, `apply` вставлял
+    //    только её, и кнопка «Сохранить» в карточке маппинга падала в 404 ровно у восьми вкладок.
+    const postLine = `return handle${tool.xForm(src.p)}ModelMap(req, res);`;
+    const postHits = backend.split('\n').filter((l) => l.includes(postLine));
+    check(postHits.length === 1, `в живом коде ровно один POST-роут modelmap эталона (найдено ${postHits.length})`);
+    // 🪤 Покрытием считается только иголка, которая ОТЛИЧАЕТ POST от GET. Иголка точки 1.9f
+    // (`'/__switch/api/%p%/modelmap'`) живёт в ОБЕИХ строках: по ней POST «покрыт» и без
+    // отдельной точки — именно так дефект и прожил до 28.09.2026.
+    const routeLines = backend.split('\n').filter((l) => l.includes(`'/__switch/api/${src.p}/modelmap'`));
+    const postLines = routeLines.filter((l) => l.includes("'POST'"));
+    const getLines = routeLines.filter((l) => !l.includes("'POST'"));
+    check(postLines.length === 1 && getLines.length >= 1, `строки роута modelmap разделимы: POST ${postLines.length}, GET ${getLines.length}`);
+    const covers = (points) => points.some((p) => {
+        const e = Array.isArray(p.expect) ? p.expect[0] : p.expect;
+        if (!e) return false;
+        const needle = tool.subst(e, src);
+        return postLines.some((l) => l.includes(needle)) && !getLines.some((l) => l.includes(needle));
+    });
+    check(covers(spec.points), 'POST-роут modelmap покрыт точкой спеки (иголка отличает POST от GET)');
+    // 🔁 реплей: убрали точку — покрытие обязано пропасть, иначе проверка пустая.
+    check(!covers((spec.points || []).filter((p) => p.id !== '1.9f2')), 'реплей: без 1.9f2 POST-роут остаётся непокрытым');
+    check(!covers((spec.points || []).filter((p) => p.id !== '1.9f2' && p.id !== '1.9f')), 'реплей: без обеих точек modelmap POST тоже не покрыт');
+    check(!!(spec.inserts || {})['1.9f2'], 'у точки POST-роута есть правило вставки (иначе `apply` её не заведёт)');
+
+    // 2. Индекс профилей GitHub. Живой дефект: инструмент этот файл не знал вовсе, и пикер
+    //    заселения отвечал `500 неизвестный хост` — поймал чужой чекер check-gh-seed-hosts.js.
+    const ghRel = (spec.files || {}).githubSession;
+    check(!!ghRel && fs.existsSync(path.join(REPO, ghRel)), `в спеке есть файл индекса профилей (${ghRel || '—'})`);
+    const ghPoints = (spec.points || []).filter((p) => p.file === 'githubSession');
+    check(ghPoints.length > 0, 'индекс профилей покрыт точкой спеки');
+    check(ghPoints.some((p) => (p.when || []).includes('github')), 'точка индекса профилей включается флагом github');
+    check(!!(spec.inserts || {})[ghPoints[0] && ghPoints[0].id], 'у точки индекса профилей есть правило вставки');
+    const withoutGh = (spec.points || []).filter((p) => p.file !== 'githubSession');
+    check(withoutGh.length < (spec.points || []).length, 'реплей: без этой точки файл профилей выпадает из спеки');
+
+    // 3. `!флаг` — поведенческая проба на самом инструменте, а не на спеке: без отрицания
+    //    точку-подмену (1.18n против 1.18) выразить нечем, и она молча уходила бы в ослабления.
+    const on = { github: true, shareScript: true };
+    check(tool.flagsOff({ when: ['!github'] }, on).length === 1, 'flagsOff: `!github` при включённом флаге не выполнено');
+    check(tool.flagsOff({ when: ['!shareScript'] }, on).length === 1, 'flagsOff: `!shareScript` при включённом флаге не выполнено (точка-подмена ослаблена)');
+    check(tool.flagsOff({ when: ['!shareScript'] }, { shareScript: false }).length === 0, 'flagsOff: `!shareScript` при выключенном — точка проверяется');
+    check(tool.flagsOff({ when: ['shareScript'] }, { shareScript: false }).length === 1, 'flagsOff: обычный флаг при выключенном не выполнен');
+
+    // 4. Сторож «клон несёт код ослабленной точки»: у вкладки без скрипта снимка регион с
+    //    обращением к нему копировать нельзя (живой ReferenceError по кнопке 🔗).
+    const sharePt = { points: (spec.points || []).filter((p) => p.id === '1.18c') };
+    const needles = tool.relaxedNeedles(sharePt, { ...src, p: 'zz', P: 'ZZ', full: 'zzgw', NAME: 'ZZ', shareScript: false });
+    check(needles.length === 1 && needles[0][1] === 'ZZ_SHARE_SCRIPT', `relaxedNeedles даёт токен ЦЕЛИ (${JSON.stringify(needles)})`);
+    check(needles.some(([, n]) => 'const x = ZZ_SHARE_SCRIPT;'.includes(n)), 'реплей: регион с обращением к токену сторожем ловится');
+    check(tool.relaxedNeedles(sharePt, { ...src, shareScript: true }).length === 0, 'при включённом флаге сторож молчит — клон законен');
+    check(tool.relaxedNeedles({ points: [{ id: '3.2', when: ['flatRate'], expect: "'host.example'" }] }, { flatRate: false }).length === 0,
+        'точка без поля `guard` в сторожа не попадает (иначе он краснел бы на каждом хосте)');
+
+    // 5. Комментарии-утверждения: живой текст artbloom обязан ловиться, обычный комментарий — нет.
+    const claims = tool.claimComments([
+        '// 🪤 у шлюза КАЖДЫЙ ЧЕТВЁРТЫЙ ответ отдаёт пустой 403 от кромки Cloudflare (замер 31.08)',
+        '// Резерв «угадать грант». У шлюза гранта НЕТ: панель платная',
+        '// вспомогательная функция для вкладки',
+        'const x = 1;',
+    ]);
+    check(claims.length === 2, `claimComments поймал 2 утверждения из 4 строк (поймал ${claims.length})`);
+    check(tool.claimComments(['// вспомогательная функция']).length === 0, 'claimComments молчит на обычном комментарии');
+
+    // 6. Своя панель: чеклист печатается у помеченного шлюза и не печатается у остальных.
+    const custom = Object.entries(config).filter(([k, v]) => !k.startsWith('_') && v.customPanel).map(([k]) => k);
+    check(custom.length > 0, `есть шлюзы со своей панелью (${custom.join(', ')})`);
+    const runCheckOut = (name) => (spawnSync(process.execPath, [ADD_GATEWAY, 'check', name], { encoding: 'utf8', cwd: REPO }).stdout || '');
+    check(/своя панель \(не New API\)/.test(runCheckOut(custom[0])), `у «${custom[0]}» печатается чеклист ручных решений`);
+    check(!/своя панель \(не New API\)/.test(runCheckOut('kktoken')), 'у эталона чеклист не печатается — флаг выключен');
+    check(tool.claimComments([]).length === 0, 'claimComments на пустом списке не падает');
+
+    // 7. Создание файлов (`inserts[id] = { create: "fromSource" }`). До 01.10 инструмент файлов
+    // не создавал ВООБЩЕ: `kind: "file"` умел только «файла нет», и каждая новая вкладка
+    // оставляла за собой тир-карту на руки (artbloom 28.09, cleanapis 30.09). Теперь точка
+    // берёт файл у своего ИСТОЧНИКА по тому же шаблону пути и переводит парами токенов.
+    // 🪤 Ограничение осознанное и здесь закреплено: так заводятся только файлы, форма которых
+    // от шлюза НЕ зависит (тир-карта — одни и те же три ключа у всех 37 карт). Скрипты вроде
+    // `open-session.js` сайт-специфичны: адрес консоли, эвристика «залогинен ли», тексты
+    // ошибок площадки. Клон чужого дал бы ровно ту тихую полуработу, ради которой и заведены
+    // сторожа, поэтому `.js` в этом списке быть не должно.
+    const creates = Object.entries(spec.inserts || {}).filter(([, r]) => r && r.create);
+    check(creates.length > 0, 'у тир-карты есть правило создания файла (иначе вечный пропуск)');
+    const createFiles = creates.map(([id]) => ((spec.points || []).find((p) => p.id === id) || {}).file || '');
+    check(createFiles.every((f) => !f.endsWith('.js')), `создание файлов не включено ни для одного .js (${createFiles.join(', ')})`);
+    check(creates.every(([, r]) => r.create === 'fromSource'), 'создание файлов идёт только от источника, не из воздуха');
+
+    // 🪤 Живая грабля 01.10, стоившая одной неверной правки: `tokenPairs` меняет
+    // двухбуквенный префикс ГДЕ УГОДНО — в том числе внутри чужих слов. `ab` → `cp` превратил
+    // `const label = 'acct_' + id` в `const lcpel = 'acct_' + id`. Утверждение фиксирует сам
+    // факт (иначе о грабле забудут), и держит на виду правило: источник для клона выбирать
+    // по коду, а не по похожести площадки.
+    check(tool.toTarget('const label = 1;', tool.tokenPairs(config.artbloom, config.cleanapis)) === 'const lcpel = 1;',
+        'двухбуквенный префикс подменяется внутри слова — источник клона выбирать по коду (грабля 01.10)');
 }
 
 // ── итог ──────────────────────────────────────────────────────────────────────

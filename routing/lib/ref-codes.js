@@ -32,6 +32,11 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // Artbloom (2026-09-28) — форма СВОЯ: `/signup?ref=`, без дефиса и с параметром `ref`,
+    // а не `/sign-up?aff=` восьми соседей. Проверено живой ссылкой владельца: `/signup?ref=`
+    // отвечает 200 (`/signup` рендерит кнопку «Continue with GitHub» c тем же ref), а
+    // шаблонная `/sign-up?aff=` — 404. Вход только через GitHub, капчи на форме нет.
+    artbloom:     { host: 'api.artbloom.tech',        path: '/signup?ref=',  label: 'Artbloom' },
     fxqidian:     { host: 'fxqidian.de5.net',        path: '/sign-up?aff=',  label: 'Fxqidian' },
     lsapi:     { host: 'lsapi.cloud',        path: '/sign-up?aff=',  label: 'Lingshu' },
     budsin:     { host: 'apichat.budsin.dev',        path: '/sign-up?aff=',  label: 'BudsAI' },

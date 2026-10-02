@@ -767,6 +767,21 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="dacall" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
+        <span class="w-5 text-center text-[14px]">📞</span>
+        <span class="flex-1">dacall.AI</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-dacall">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="cleanapis" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
+        <span class="w-5 text-center text-[14px]">🧼</span>
+        <span class="flex-1">Clean APIs</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-cleanapis">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="artbloom" title="Свой шлюз, не New API: витрина Artbloom, кромка Caddy. За Claude-каналом Amazon Kiro (kiro_credits в usage). Из Claude живой один claude-opus-4-8, ярлык claude-opus-5 отвечает как 4-8 (3 запроса из 3); рядом self-deploy DeepSeek-V4-Flash, картинки gpt-image-2.5 и мёртвая kimi-k3. Баланс читается ключом со страницы /usage. 🪤 Инструменты работают ТОЛЬКО на /v1/messages - на /v1/chat/completions массив tools выбрасывается, и max_tokens не действует">
+        <span class="w-5 text-center text-[14px]">🌸</span>
+        <span class="flex-1">Artbloom</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-artbloom">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="fxqidian" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">🔮</span>
         <span class="flex-1">Fxqidian</span>
@@ -7342,6 +7357,534 @@ window.finNavCount = async () => {
       </div>
     </div>
 
+    <div data-tab-content="dacall">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-orange">📞</span> <a href="https://api-ru.dacall.ai/sign-up?aff=Sog2" data-ref-link="dacall" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-orange">dacall.AI</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-orange text-xs">api-ru.dacall.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-orange text-xs">:20177</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+          </div>
+        </header>
+
+        <div id="dc-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). У dacall все три тира смотрят в Opus:
+             opus → claude-opus-5, sonnet и haiku → claude-opus-4-8. Ставить сюда sonnet/gpt
+             нельзя — таких моделей на шлюзе нет, запрос вернётся пустым 403. -->
+        <div id="dc-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог opus-only</h2>
+            <button onclick="loadDcModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="dc-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20177).
+             🪤 Ретраи здесь не роскошь: у dacall каждый ЧЕТВЁРТЫЙ POST /v1/messages
+             отдаёт пустой 403 от кромки Cloudflare (замер 31.08 — отказы на 4/8/12/16/20
+             из 20). Ставить «попыток на запрос» в 1 = каждый четвёртый запрос в лицо. -->
+        <div id="dc-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20177 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="dcLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="dc-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="dc-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="dc-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="dc-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="dc-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="dcApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="dcResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="dc-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="dc-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="dc-lat-chart" class="w-full"></div>
+              <div id="dc-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="dc-lat-windows"></div>
+          </div>
+          <div id="dc-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="dc-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="dc-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="dc-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="dc-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="dc-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="dc-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="dc-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="dc-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadDcModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="dc-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div id="dc-find-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Поиск прокси</h3>
+              <span id="dc-find-mode" class="text-[10px] font-mono text-faint"></span>
+              <span id="dc-find-pool" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="dcFindLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере и вернётся при следующем поиске">скрыть</button>
+            </div>
+          </div>
+          <pre id="dc-find-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-56 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <div id="dc-find-pool-list" class="text-[10px] font-mono text-faint mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all"></div>
+        </div>
+
+        <!-- Лог автореги. Бэкенд отдавал stdout/stderr с самого начала, а рисовать их было
+             негде: панель показывала одну строку «идёт N · pid …», и разбирать упавший
+             прогон было нечем. Блок остаётся видимым ПОСЛЕ завершения — именно тогда в
+             него и смотрят. Этап берётся из маркера DC_STAGE, не из русского текста. -->
+        <div id="dc-autoreg-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Лог автореги</h3>
+              <span id="dc-autoreg-stage" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="inline-flex items-center gap-1 text-[10px] text-faint cursor-pointer select-none" title="Прокручивать к последней строке по мере прогона">
+                <input id="dc-autoreg-log-follow" type="checkbox" checked class="accent-azure w-3 h-3">
+                <span>автоскролл</span>
+              </label>
+              <button onclick="dcAutoregLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере — панель вернётся при следующем прогоне или обновлении статуса">скрыть</button>
+            </div>
+          </div>
+          <pre id="dc-autoreg-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <pre id="dc-autoreg-log-err" class="hidden text-[10px] font-mono leading-relaxed bg-crimson/5 border border-crimson/40 rounded-lg p-2.5 mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-crimson"></pre>
+        </div>
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadDcSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadDcSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="dcCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="dcMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="dcShowAdd()" class="text-xs px-3 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">➕ Добавить</button>
+          <button onclick="dcShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="dc-autoreg-count" type="number" min="1" max="50" value="1" oninput="dcProxyPool()" class="text-xs font-mono bg-surface border border-line-soft rounded-lg px-2 py-2 w-14 text-center focus:outline-none focus:border-violet/60" title="Сколько аккаунтов создать">
+          <button id="dc-autoreg-start" onclick="dcAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Чистый HTTP: почта → OTP → регистрация → ключ → cookie-сессия → эта таблица">🤖 Авторег</button>
+          <button id="dc-autoreg-stop" onclick="dcAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+          <label id="dc-autoreg-proxy-wrap" class="inline-flex items-center gap-1.5 cursor-pointer select-none" title="Снять галочку — регистрация пойдёт с домашнего IP. Нужно, когда пул прокси пуст или адреса мертвы; поток регистраций с одного адреса упирается в 429, поэтому для пачки лучше держать прокси">
+            <input id="dc-autoreg-proxy" type="checkbox" checked onchange="dcAutoregProxyToggle()" class="peer sr-only">
+            <span class="relative w-8 h-[18px] rounded-full bg-line-soft transition peer-checked:bg-teal/70 peer-focus-visible:ring-2 peer-focus-visible:ring-teal/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-[14px] after:h-[14px] after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-[14px]"></span>
+            <span id="dc-autoreg-proxy-label" class="text-[10px] font-medium text-teal">прокси</span>
+          </label>
+          <button id="dc-autoreg-find" onclick="dcAutoregFindProxy()" class="text-xs px-3 py-2 bg-cyan/10 border border-cyan/50 text-cyan rounded-lg hover:bg-cyan/20 font-medium" title="Публичные прокси живут минуты, поэтому список пересобирается перед прогоном: скрап всех источников, проверка туннеля и TLS до панели, стоп как только набрано нужное число">🔎 Найти прокси</button>
+          <button id="dc-proxy-stop" onclick="dcAutoregFindProxyStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium" title="Прервать поиск. Пул и его конфиг останутся как были — валидатор пишет файл только в самом конце">■ Стоп</button>
+          <!-- Сколько адресов пул РЕАЛЬНО отдаст: берём count из describe(), а не строки
+               файла — неразбираемые строки пул отбрасывает в bad. Число живёт минуты,
+               поэтому подпись говорит «было при чтении», а не «есть сейчас». -->
+          <span id="dc-proxy-badge" class="text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help" onclick="dcProxyPool({ toast: true })" title="Сколько прокси в пуле при последнем чтении файла">прокси: …</span>
+          <span id="dc-autoreg-status" class="text-[10px] font-mono text-faint"></span>
+          <input id="dc-filter" oninput="newapiFilterChange('dc')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-orange/60">
+          <select id="dc-sort" onchange="newapiSortChange('dc')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-orange/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="dc-add-form" class="hidden rounded-xl bg-surface border border-orange/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="dc-add-email" oninput="newapiAddGhHint('dc')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-orange/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="dc-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-orange/60">
+            </label>
+            <button onclick="dcAdd()" class="text-xs px-4 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('dc')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">🐙 из менеджера</button>
+            <button onclick="dcShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="dc-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="dc-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="dcShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/dacall уже залогинены).</p>
+          <textarea id="dc-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="dc-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="dcImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="dcShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="dc-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20177</code> keepalive → <code class="text-ink">api-ru.dacall.ai</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://api-ru.dacall.ai/sign-up?aff=Sog2" data-ref-link="dacall" target="_blank" class="text-orange hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="cleanapis">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-blue">🧼</span> <a href="https://cleanapis.com/sign-up?aff=Sog2" data-ref-link="cleanapis" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-blue">Clean APIs</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-blue text-xs">cleanapis.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-blue text-xs">:20164</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+          </div>
+        </header>
+
+        <div id="cp-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). У cleanapis все три тира смотрят в Opus:
+             opus → claude-opus-5, sonnet и haiku → claude-opus-4-8. Ставить сюда sonnet/gpt
+             нельзя — таких моделей на шлюзе нет, запрос вернётся пустым 403. -->
+        <div id="cp-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог opus-only</h2>
+            <button onclick="loadCpModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="cp-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20164).
+             🪤 Ретраи здесь не роскошь: у cleanapis каждый ЧЕТВЁРТЫЙ POST /v1/messages
+             отдаёт пустой 403 от кромки Cloudflare (замер 31.08 — отказы на 4/8/12/16/20
+             из 20). Ставить «попыток на запрос» в 1 = каждый четвёртый запрос в лицо. -->
+        <div id="cp-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20164 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="cpLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="cp-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="cp-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="cp-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="cp-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="cp-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="cpApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="cpResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="cp-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="cp-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="cp-lat-chart" class="w-full"></div>
+              <div id="cp-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="cp-lat-windows"></div>
+          </div>
+          <div id="cp-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="cp-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="cp-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="cp-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="cp-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="cp-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="cp-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="cp-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="cp-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadCpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="cp-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadCpSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadCpSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="cpCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="cpMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="cpShowAdd()" class="text-xs px-3 py-2 bg-blue/10 border border-blue/50 text-blue rounded-lg hover:bg-blue/20 font-medium">➕ Добавить</button>
+          <button onclick="cpShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="cp-filter" oninput="newapiFilterChange('cp')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-blue/60">
+          <select id="cp-sort" onchange="newapiSortChange('cp')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-blue/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="cp-add-form" class="hidden rounded-xl bg-surface border border-blue/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="cp-add-email" oninput="newapiAddGhHint('cp')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-blue/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="cp-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-blue/60">
+            </label>
+            <button onclick="cpAdd()" class="text-xs px-4 py-2 bg-blue/10 border border-blue/50 text-blue rounded-lg hover:bg-blue/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('cp')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-blue/10 border border-blue/50 text-blue rounded-lg hover:bg-blue/20 font-medium">🐙 из менеджера</button>
+            <button onclick="cpShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="cp-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="cp-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="cpShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/cleanapis уже залогинены).</p>
+          <textarea id="cp-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="cp-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="cpImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="cpShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="cp-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20164</code> keepalive → <code class="text-ink">cleanapis.com</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://cleanapis.com/sign-up?aff=Sog2" data-ref-link="cleanapis" target="_blank" class="text-blue hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="artbloom">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-pink">🌸</span> <a href="https://api.artbloom.tech/signup?ref=FORTEDLF4I" data-ref-link="artbloom" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-pink">Artbloom</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-pink text-xs">api.artbloom.tech</code> · клик по ключу = активный (через keepalive <code class="font-mono text-pink text-xs">:20176</code>) · вход только через GitHub · из Claude живёт один <code class="font-mono text-xs">claude-opus-4-8</code> (ярлык <code class="font-mono text-xs">claude-opus-5</code> отвечает как 4-8) · инструменты только на <code class="font-mono text-xs">/v1/messages</code> · баланс читается ключом со страницы <code class="font-mono text-xs">/usage</code></p>
+          </div>
+        </header>
+
+        <div id="ab-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). Каталог artbloom 28.09: настоящий Claude
+             один — claude-opus-4-8; claude-opus-5 это ярлык на него (3 запроса из 3 вернулись
+             как 4-8, usage побитово тот же). Ещё есть DeepSeek-V4-Flash (свой self-deploy,
+             учёт честный), три gpt-image-2.5 и мёртвая kimi-k3 (таймаут 120 с).
+             🪤 Отказ тут будет не «пустым 403» как в эталоне, а таймаутом или ошибкой канала. -->
+        <div id="ab-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации</h2>
+            <button onclick="loadAbModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ab-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20176).
+             🪤 «Каждый четвёртый пустой 403» из эталона здесь НЕ подтверждён: замер 28.09
+             на /v1/messages дал 14 чистых ответов из 14, а кромка у artbloom Caddy, не
+             Cloudflare. Мультизапрос держим ради SSE-пауз thinking-моделей; попытки в 1
+             поставить не страшно, но запас ничего не стоит. -->
+        <div id="ab-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20176 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="abLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="ab-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="ab-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="ab-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="ab-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="ab-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="abApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="abResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="ab-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="ab-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="ab-lat-chart" class="w-full"></div>
+              <div id="ab-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="ab-lat-windows"></div>
+          </div>
+          <div id="ab-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="ab-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="ab-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="ab-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="ab-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="ab-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="ab-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="ab-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="ab-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <button onclick="loadAbModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ab-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadAbSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadAbSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="abCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="abMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="abShowAdd()" class="text-xs px-3 py-2 bg-pink/10 border border-pink/50 text-pink rounded-lg hover:bg-pink/20 font-medium">➕ Добавить</button>
+          <button onclick="abShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="ab-filter" oninput="newapiFilterChange('ab')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-pink/60">
+          <select id="ab-sort" onchange="newapiSortChange('ab')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-pink/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="ab-add-form" class="hidden rounded-xl bg-surface border border-pink/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="ab-add-email" oninput="newapiAddGhHint('ab')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-pink/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="ab-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-pink/60">
+            </label>
+            <button onclick="abAdd()" class="text-xs px-4 py-2 bg-pink/10 border border-pink/50 text-pink rounded-lg hover:bg-pink/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('ab')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-pink/10 border border-pink/50 text-pink rounded-lg hover:bg-pink/20 font-medium">🐙 из менеджера</button>
+            <button onclick="abShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="ab-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="ab-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="abShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/artbloom уже залогинены).</p>
+          <textarea id="ab-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="ab-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="abImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="abShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="ab-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20176</code> keepalive → <code class="text-ink">api.artbloom.tech</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 На <code class="text-ink">/v1/chat/completions</code> шлюз выбрасывает массив <code class="text-ink">tools</code> и игнорирует <code class="text-ink">max_tokens</code> - инструменты живут только на нативном <code class="text-ink">/v1/messages</code></span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://api.artbloom.tech/signup?ref=FORTEDLF4I" data-ref-link="artbloom" target="_blank" class="text-pink hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
     <div data-tab-content="fxqidian">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
@@ -10234,7 +10777,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -10267,7 +10810,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -10479,6 +11022,9 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'dacall') { if (!state.loaded.dacall) { state.loaded.dacall = true; loadDcSessions(false); } dcLoadKeepalive(); }
+  if (name === 'cleanapis') { if (!state.loaded.cleanapis) { state.loaded.cleanapis = true; loadCpSessions(false); } cpLoadKeepalive(); }
+  if (name === 'artbloom') { if (!state.loaded.artbloom) { state.loaded.artbloom = true; loadAbSessions(false); } abLoadKeepalive(); }
   if (name === 'fxqidian') { if (!state.loaded.fxqidian) { state.loaded.fxqidian = true; loadFxSessions(false); } fxLoadKeepalive(); }
   // 🪤 Хвост после `lsLoadKeepalive()` нужен ровно потому, что он есть у ak: там эти
   // вызовы приезжают КАСКАДОМ от `loadAkSessions()`, а у ls каскад клонирован от kktoken
@@ -10565,9 +11111,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -15110,6 +15656,9 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  dc: '/__switch/api/dc/keepalive',
+  cp: '/__switch/api/cp/keepalive',
+  ab: '/__switch/api/ab/keepalive',
   fx: '/__switch/api/fx/keepalive',
   ls: '/__switch/api/ls/keepalive',
   bd: '/__switch/api/bd/keepalive',
@@ -15483,6 +16032,9 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const dcLoadKeepalive   = () => loadKeepaliveCard('dc', KEEPALIVE_API.dc);
+const cpLoadKeepalive   = () => loadKeepaliveCard('cp', KEEPALIVE_API.cp);
+const abLoadKeepalive   = () => loadKeepaliveCard('ab', KEEPALIVE_API.ab);
 const fxLoadKeepalive   = () => loadKeepaliveCard('fx', KEEPALIVE_API.fx);
 const lsLoadKeepalive   = () => loadKeepaliveCard('ls', KEEPALIVE_API.ls);
 const bdLoadKeepalive   = () => loadKeepaliveCard('bd', KEEPALIVE_API.bd);
@@ -15491,6 +16043,9 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const dcApplyKeepalive  = () => applyKeepaliveCard('dc', KEEPALIVE_API.dc);
+const cpApplyKeepalive  = () => applyKeepaliveCard('cp', KEEPALIVE_API.cp);
+const abApplyKeepalive  = () => applyKeepaliveCard('ab', KEEPALIVE_API.ab);
 const fxApplyKeepalive  = () => applyKeepaliveCard('fx', KEEPALIVE_API.fx);
 const lsApplyKeepalive  = () => applyKeepaliveCard('ls', KEEPALIVE_API.ls);
 const odApplyKeepalive  = () => applyKeepaliveCard('od', KEEPALIVE_API.od);
@@ -15516,6 +16071,9 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const dcResetKeepalive  = () => resetKeepaliveCard('dc', KEEPALIVE_API.dc);
+const cpResetKeepalive  = () => resetKeepaliveCard('cp', KEEPALIVE_API.cp);
+const abResetKeepalive  = () => resetKeepaliveCard('ab', KEEPALIVE_API.ab);
 const fxResetKeepalive  = () => resetKeepaliveCard('fx', KEEPALIVE_API.fx);
 const lsResetKeepalive  = () => resetKeepaliveCard('ls', KEEPALIVE_API.ls);
 const odResetKeepalive  = () => resetKeepaliveCard('od', KEEPALIVE_API.od);
@@ -15550,6 +16108,9 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  dacall: ['dc', '/__switch/api/dc/keepalive'],
+  cleanapis: ['cp', '/__switch/api/cp/keepalive'],
+  artbloom: ['ab', '/__switch/api/ab/keepalive'],
   fxqidian: ['fx', '/__switch/api/fx/keepalive'],
   lsapi: ['ls', '/__switch/api/ls/keepalive'],
   budsin: ['bd', '/__switch/api/bd/keepalive'],
@@ -15688,7 +16249,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -15787,7 +16348,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -16702,7 +17263,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, fx: null, bd: null, nv: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, cp: null, ab: null, fx: null, bd: null, nv: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -17013,6 +17574,8 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
+  cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
+  ab: { label: 'Artbloom',     host: 'api.artbloom.tech',        color: 'pink', reload: () => loadAbSessions(), list: () => state.artbloom,  render: () => renderAb(), setKey: id => abSetKey(id), open: id => abOpenLk(id) },
   fx: { label: 'Fxqidian',     host: 'fxqidian.de5.net',        color: 'rose', reload: () => loadFxSessions(), list: () => state.fxqidian,  render: () => renderFx(), setKey: id => fxSetKey(id), open: id => fxOpenLk(id) },
   bd: { label: 'BudsAI',     host: 'apichat.budsin.dev',        color: 'teal', reload: () => loadBdSessions(), list: () => state.budsin,  render: () => renderBd(), setKey: id => bdSetKey(id), open: id => bdOpenLk(id) },
   nv: { label: 'Nova',     host: 'nova.vcrauo.com',        color: 'cyan', reload: () => loadNvSessions(), list: () => state.nova,  render: () => renderNv(), setKey: id => nvSetKey(id), open: id => nvOpenLk(id) },
@@ -18564,6 +19127,1568 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function dcPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (DC_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderDcGauge() {
+  moneyAutoFetch('dacall').then(() => moneyRotateToHistory('dacall')).catch(() => {});
+  const st = dcPoolStats(state.dacall);
+  renderEnergyGauge($('dc-energy'), {
+    title: 'dacall.AI · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-orange">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-orange">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20177 → api-ru.dacall.ai (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadDcSessions(probe) {
+  if (probe) $('dc-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/dc/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.dacall = data.sessions || [];
+    if ($('nav-count-dacall')) $('nav-count-dacall').textContent = state.dacall.length;
+    await newapiEnsureGhNames(state.dacall);
+    renderDc();
+    renderDcGauge();
+    loadDcModels();
+    loadDcModelMap();
+    if (probe) toast('✓ dacall.AI: статусы обновлены', 'success');
+  } catch (e) {
+    $('dc-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadDcSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/dc/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.dacall = data.sessions || [];
+    if ($('nav-count-dacall')) $('nav-count-dacall').textContent = state.dacall.length;
+    renderDc();
+    renderDcGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadDcModels(force) {
+  const keys = state.dacall
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('dc-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('dc-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/dc/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderDcModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('dc-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderDcModels(models) {
+  if (models) state.dcModels = models;
+  const list = state.dcModels || [];
+  let active = state.dcActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/dc/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.dcActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('dc-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — orange, а orange же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-orange/15 border border-orange/50 text-orange' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='dcSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + dacall-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "dacall")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderDcModelMap();
+}
+async function dcSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/dc/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.dcModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.dcActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderDcModels(state.dcModels);
+  } catch (e) { toast('dcSelectModel: ' + e.message, 'error'); }
+}
+
+function renderDc() {
+  const { list: all, total, q } = newapiRows(state.dacall, 'dc');
+  if (!all.length) {
+    $('dc-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-orange text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-orange/5' : '';
+    const activeTag = active ? '<span class="text-orange mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = dcBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderDcModels.
+    const keyCell = noKey ? noKeyCell(`dcSetKey(${idJ})`) : `<button onclick='dcActivate(${kJ})' title="Сделать активным (keepalive :20177 → api-ru.dacall.ai)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-orange/10 border-orange/50 text-orange' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'dc')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`dcCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`dcShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`dcSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`dcRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`dcActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`dcPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'dc', idJ)}
+        ${actBtn(`dcOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс dacall)', '🌐', 'violet')}
+        ${actBtn(`dcDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('dc-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'dc', q),
+    { sortProv: 'dc', accent: 'orange' }
+  );
+}
+
+function dcBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'dc'); }
+
+function dcShowAdd(show = true) {
+  $('dc-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('dc');
+  if (show) { $('dc-add-email').value = ''; $('dc-add-key').value = ''; $('dc-add-email').focus(); }
+}
+async function dcAdd() {
+  const email = $('dc-add-email').value.trim();
+  const api_key = $('dc-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/dc/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.dc }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      dcShowAdd(false);
+      loadDcSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) dcOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function dcDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/dc/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadDcSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function dcShare(id) {
+  const cur = state.dacall.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/dc/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'dacall.AI',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function dcShowImport(show = true) {
+  $('dc-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('dc-import-text').value = '';
+    $('dc-import-preview').innerHTML = '';
+    $('dc-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function dcImport() {
+  const share = $('dc-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('dc-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/dc/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('dc-import-preview').innerHTML = '';
+    dcShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadDcSessions(false);
+  } catch (e) {
+    $('dc-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли dacall).
+async function dcSetKey(id) {
+  const cur = state.dacall.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли dacall после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/dc/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadDcSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (dcSetKey).
+async function dcRename(id) {
+  const cur = state.dacall.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/dc/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadDcSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function dcActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/dc/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'dacall';
+      state.urls.dacall = 'http://localhost:20177';
+      paintStatus();
+      loadDcSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function dcPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/dc/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.dacall.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.dacall[idx].status = data.status;
+    renderDc();
+    renderDcGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function dcCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/dc/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.dacall.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderDc();
+    renderDcGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function dcCheckAllBalances() {
+  $('dc-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/dc/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.dacall = data.sessions || [];
+    renderDc();
+    renderDcGauge();
+    balanceBatchToast(state.dacall);
+  } catch (e) {
+    $('dc-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function dcSetBalance(api_key) {
+  return newapiSetBalanceUI('dc', api_key, () => state.dacall, () => { renderDc(); renderDcGauge(); });
+}
+
+function dcMapProfiles() {
+  return newapiMapProfilesUI('dc', () => loadDcSessions(false));
+}
+
+async function dcOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/dc/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function dcCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → dacall-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadDcModelMap() {
+  try {
+    const res = await fetch('/__switch/api/dc/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.dcModelMap = data.modelMap || {};
+    renderDcModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderDcModelMap() {
+  const mm = state.dcModelMap || {};
+  const models = (state.dcModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /dc/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя dacall-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="dc-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('dc-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='dcSaveModelMap()' class="text-xs px-3 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function dcSaveModelMap() {
+  const mm = {
+    opus: $('dc-mm-opus')?.value || '',
+    sonnet: $('dc-mm-sonnet')?.value || '',
+    haiku: $('dc-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/dc/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.dcModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function cpPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (CP_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderCpGauge() {
+  moneyAutoFetch('cleanapis').then(() => moneyRotateToHistory('cleanapis')).catch(() => {});
+  const st = cpPoolStats(state.cleanapis);
+  renderEnergyGauge($('cp-energy'), {
+    title: 'Clean APIs · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-blue">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-blue">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20164 → cleanapis.com (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadCpSessions(probe) {
+  if (probe) $('cp-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/cp/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.cleanapis = data.sessions || [];
+    if ($('nav-count-cleanapis')) $('nav-count-cleanapis').textContent = state.cleanapis.length;
+    await newapiEnsureGhNames(state.cleanapis);
+    renderCp();
+    renderCpGauge();
+    loadCpModels();
+    loadCpModelMap();
+    if (probe) toast('✓ Clean APIs: статусы обновлены', 'success');
+  } catch (e) {
+    $('cp-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadCpSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/cp/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.cleanapis = data.sessions || [];
+    if ($('nav-count-cleanapis')) $('nav-count-cleanapis').textContent = state.cleanapis.length;
+    renderCp();
+    renderCpGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadCpModels(force) {
+  const keys = state.cleanapis
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('cp-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('cp-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/cp/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderCpModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('cp-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderCpModels(models) {
+  if (models) state.cpModels = models;
+  const list = state.cpModels || [];
+  let active = state.cpActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/cp/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.cpActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('cp-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — blue, а blue же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-blue/15 border border-blue/50 text-blue' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='cpSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + cleanapis-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "cleanapis")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderCpModelMap();
+}
+async function cpSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/cp/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.cpModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.cpActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderCpModels(state.cpModels);
+  } catch (e) { toast('cpSelectModel: ' + e.message, 'error'); }
+}
+
+function renderCp() {
+  const { list: all, total, q } = newapiRows(state.cleanapis, 'cp');
+  if (!all.length) {
+    $('cp-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-blue text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-blue/5' : '';
+    const activeTag = active ? '<span class="text-blue mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = cpBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderCpModels.
+    const keyCell = noKey ? noKeyCell(`cpSetKey(${idJ})`) : `<button onclick='cpActivate(${kJ})' title="Сделать активным (keepalive :20164 → cleanapis.com)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-blue/10 border-blue/50 text-blue' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'cp')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`cpCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`cpShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`cpSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`cpRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`cpActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`cpPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'cp', idJ)}
+        ${actBtn(`cpOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс cleanapis)', '🌐', 'violet')}
+        ${actBtn(`cpDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('cp-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'cp', q),
+    { sortProv: 'cp', accent: 'blue' }
+  );
+}
+
+function cpBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'cp'); }
+
+function cpShowAdd(show = true) {
+  $('cp-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('cp');
+  if (show) { $('cp-add-email').value = ''; $('cp-add-key').value = ''; $('cp-add-email').focus(); }
+}
+async function cpAdd() {
+  const email = $('cp-add-email').value.trim();
+  const api_key = $('cp-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/cp/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.cp }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      cpShowAdd(false);
+      loadCpSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) cpOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function cpDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/cp/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadCpSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function cpShare(id) {
+  const cur = state.cleanapis.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/cp/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Clean APIs',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function cpShowImport(show = true) {
+  $('cp-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('cp-import-text').value = '';
+    $('cp-import-preview').innerHTML = '';
+    $('cp-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function cpImport() {
+  const share = $('cp-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('cp-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/cp/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('cp-import-preview').innerHTML = '';
+    cpShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadCpSessions(false);
+  } catch (e) {
+    $('cp-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли cleanapis).
+async function cpSetKey(id) {
+  const cur = state.cleanapis.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли cleanapis после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/cp/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadCpSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (cpSetKey).
+async function cpRename(id) {
+  const cur = state.cleanapis.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/cp/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadCpSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function cpActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/cp/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'cleanapis';
+      state.urls.cleanapis = 'http://localhost:20164';
+      paintStatus();
+      loadCpSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function cpPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/cp/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.cleanapis.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.cleanapis[idx].status = data.status;
+    renderCp();
+    renderCpGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function cpCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/cp/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.cleanapis.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderCp();
+    renderCpGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function cpCheckAllBalances() {
+  $('cp-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/cp/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.cleanapis = data.sessions || [];
+    renderCp();
+    renderCpGauge();
+    balanceBatchToast(state.cleanapis);
+  } catch (e) {
+    $('cp-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function cpSetBalance(api_key) {
+  return newapiSetBalanceUI('cp', api_key, () => state.cleanapis, () => { renderCp(); renderCpGauge(); });
+}
+
+function cpMapProfiles() {
+  return newapiMapProfilesUI('cp', () => loadCpSessions(false));
+}
+
+async function cpOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/cp/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function cpCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → cleanapis-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadCpModelMap() {
+  try {
+    const res = await fetch('/__switch/api/cp/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.cpModelMap = data.modelMap || {};
+    renderCpModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderCpModelMap() {
+  const mm = state.cpModelMap || {};
+  const models = (state.cpModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /cp/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя cleanapis-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="cp-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('cp-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='cpSaveModelMap()' class="text-xs px-3 py-2 bg-blue/10 border border-blue/50 text-blue rounded-lg hover:bg-blue/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function cpSaveModelMap() {
+  const mm = {
+    opus: $('cp-mm-opus')?.value || '',
+    sonnet: $('cp-mm-sonnet')?.value || '',
+    haiku: $('cp-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/cp/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.cpModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function abPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (AB_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderAbGauge() {
+  moneyAutoFetch('artbloom').then(() => moneyRotateToHistory('artbloom')).catch(() => {});
+  const st = abPoolStats(state.artbloom);
+  renderEnergyGauge($('ab-energy'), {
+    title: 'Artbloom · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-pink">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-pink">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20176 → api.artbloom.tech (напрямую). Ретраи держим как страховку: пустых 403 на замере 28.09 не было (14 из 14 чистые), кромка Caddy.',
+  });
+}
+
+async function loadAbSessions(probe) {
+  if (probe) $('ab-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ab/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.artbloom = data.sessions || [];
+    if ($('nav-count-artbloom')) $('nav-count-artbloom').textContent = state.artbloom.length;
+    await newapiEnsureGhNames(state.artbloom);
+    renderAb();
+    renderAbGauge();
+    loadAbModels();
+    loadAbModelMap();
+    if (probe) toast('✓ Artbloom: статусы обновлены', 'success');
+  } catch (e) {
+    $('ab-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadAbSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/ab/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.artbloom = data.sessions || [];
+    if ($('nav-count-artbloom')) $('nav-count-artbloom').textContent = state.artbloom.length;
+    renderAb();
+    renderAbGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadAbModels(force) {
+  const keys = state.artbloom
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('ab-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('ab-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/ab/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderAbModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('ab-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderAbModels(models) {
+  if (models) state.abModels = models;
+  const list = state.abModels || [];
+  let active = state.abActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/ab/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.abActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('ab-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — pink, а pink же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-pink/15 border border-pink/50 text-pink' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='abSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + artbloom-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "artbloom")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderAbModelMap();
+}
+async function abSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/ab/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.abModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.abActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderAbModels(state.abModels);
+  } catch (e) { toast('abSelectModel: ' + e.message, 'error'); }
+}
+
+function renderAb() {
+  const { list: all, total, q } = newapiRows(state.artbloom, 'ab');
+  if (!all.length) {
+    $('ab-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-pink text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-pink/5' : '';
+    const activeTag = active ? '<span class="text-pink mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = abBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderAbModels.
+    const keyCell = noKey ? noKeyCell(`abSetKey(${idJ})`) : `<button onclick='abActivate(${kJ})' title="Сделать активным (keepalive :20176 → api.artbloom.tech)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-pink/10 border-pink/50 text-pink' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'ab')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`abCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`abShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`abSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`abRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`abActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`abPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'ab', idJ)}
+        ${actBtn(`abOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс artbloom)', '🌐', 'violet')}
+        ${actBtn(`abDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('ab-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'ab', q),
+    { sortProv: 'ab', accent: 'pink' }
+  );
+}
+
+function abBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'ab'); }
+
+function abShowAdd(show = true) {
+  $('ab-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('ab');
+  if (show) { $('ab-add-email').value = ''; $('ab-add-key').value = ''; $('ab-add-email').focus(); }
+}
+async function abAdd() {
+  const email = $('ab-add-email').value.trim();
+  const api_key = $('ab-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ab/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.ab }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      abShowAdd(false);
+      loadAbSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) abOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function abDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/ab/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadAbSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function abShare(id) {
+  const cur = state.artbloom.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/ab/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Artbloom',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function abShowImport(show = true) {
+  $('ab-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('ab-import-text').value = '';
+    $('ab-import-preview').innerHTML = '';
+    $('ab-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function abImport() {
+  const share = $('ab-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('ab-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/ab/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('ab-import-preview').innerHTML = '';
+    abShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadAbSessions(false);
+  } catch (e) {
+    $('ab-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли artbloom).
+async function abSetKey(id) {
+  const cur = state.artbloom.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли artbloom после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/ab/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadAbSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (abSetKey).
+async function abRename(id) {
+  const cur = state.artbloom.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ab/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadAbSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function abActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/ab/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'artbloom';
+      state.urls.artbloom = 'http://localhost:20176';
+      paintStatus();
+      loadAbSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function abPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/ab/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.artbloom.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.artbloom[idx].status = data.status;
+    renderAb();
+    renderAbGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function abCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/ab/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.artbloom.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderAb();
+    renderAbGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function abCheckAllBalances() {
+  $('ab-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ab/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.artbloom = data.sessions || [];
+    renderAb();
+    renderAbGauge();
+    balanceBatchToast(state.artbloom);
+  } catch (e) {
+    $('ab-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function abSetBalance(api_key) {
+  return newapiSetBalanceUI('ab', api_key, () => state.artbloom, () => { renderAb(); renderAbGauge(); });
+}
+
+function abMapProfiles() {
+  return newapiMapProfilesUI('ab', () => loadAbSessions(false));
+}
+
+async function abOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/ab/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function abCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → artbloom-модели (как в Custom).
+// Каталог artbloom на 28.09: Claude один - `claude-opus-4-8`, а ярлык `claude-opus-5`
+// обслуживается той же моделью (замер 3/3). Есть ещё `claude-opus-5-5`, `DeepSeek-V4-Flash`
+// (свой self-deploy, учёт и инструменты честнее Claude-яруса) и мёртвая `kimi-k3`.
+// Текущая карта: все три тира в `claude-opus-4-8`. Пустой тир = «model not supported» без ретрая.
+async function loadAbModelMap() {
+  try {
+    const res = await fetch('/__switch/api/ab/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.abModelMap = data.modelMap || {};
+    renderAbModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderAbModelMap() {
+  const mm = state.abModelMap || {};
+  const models = (state.abModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /ab/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя artbloom-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="ab-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('ab-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='abSaveModelMap()' class="text-xs px-3 py-2 bg-pink/10 border border-pink/50 text-pink rounded-lg hover:bg-pink/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function abSaveModelMap() {
+  const mm = {
+    opus: $('ab-mm-opus')?.value || '',
+    sonnet: $('ab-mm-sonnet')?.value || '',
+    haiku: $('ab-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/ab/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.abModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -24435,6 +26560,408 @@ async function lsAutoregStop() {
   } catch (e) { toast('Стоп: ' + e.message, 'error'); }
 }
 
+// ═══════════ dacall.AI: авторег UI (клон lsapi) ═══════════
+function dcAutoregProxyToggle() {
+  const on = $('dc-autoreg-proxy').checked;
+  const label = $('dc-autoreg-proxy-label');
+  label.textContent = on ? 'прокси' : 'напрямую';
+  label.className = on ? 'text-[10px] font-medium text-teal' : 'text-[10px] font-medium text-amber';
+  if (!on) toast('🏠 авторег пойдёт с домашнего IP — для пачки аккаунтов это упрётся в 429', 'warn', 5000);
+}
+
+// Публичные прокси живут минуты, поэтому список пересобирается ПЕРЕД прогоном, а не
+// берётся из вчерашнего файла.
+//
+// 🎯 Цель поиска — НАПОЛНИТЬ пул, а не «набрать ровно под эту пачку». Раньше считалось
+// `аккаунтов + 2`: при поле «1» это три адреса, и пул из трёх опустошался за десять минут —
+// то есть к следующему прогону его не было. Теперь у цели есть ПОЛ: даже под один аккаунт
+// ищем заметно больше, потому что половина публичных прокси умирает по дороге.
+const DC_FIND_FLOOR = 20;
+function dcFindProxyWant() {
+  const accounts = Math.max(1, parseInt($('dc-autoreg-count').value, 10) || 1);
+  return Math.max(DC_FIND_FLOOR, accounts + 2);
+}
+
+// Поиск идёт минуты, поэтому запуск возвращает управление сразу, а прогресс забираем
+// опросом. Счётчик живой: видно, сколько уже проверено и сколько найдено, — и есть чем
+// прервать (кнопка «■ Стоп»), а не «ищу…» без единой цифры на всё время.
+async function dcAutoregFindProxy() {
+  const want = dcFindProxyWant();
+  const btn = $('dc-autoreg-find');
+  btn.disabled = true;
+  btn.textContent = '🔎 ищу…';
+  $('dc-autoreg-status').textContent = `запускаю поиск ${want} живых прокси…`;
+  try {
+    const r = await fetch('/__switch/api/dc/autoreg/find-proxy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ want }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    $('dc-proxy-stop').classList.remove('hidden');
+    dcFindProxyPoll(true);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '🔎 Найти прокси';
+    $('dc-autoreg-status').textContent = '';
+    toast('Поиск прокси: ' + e.message, 'error');
+  }
+}
+
+let dcFindProxyPollPromise = null;
+
+function dcFindProxyPoll(force = false) {
+  // The guard is synchronous: callers from startup, stop, and loadDcSessions all
+  // reuse the same lifecycle, including when the first request is still pending.
+  if (dcFindProxyPollPromise) return dcFindProxyPollPromise;
+
+  let timer = null;
+  let finished = false;
+  const clearPollTimer = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const poller = (async () => {
+    const tick = async () => {
+      if (finished) return false;
+      try {
+        const d = await (await fetch('/__switch/api/dc/autoreg/find-proxy')).json();
+        const btn = $('dc-autoreg-find');
+        const stop = $('dc-proxy-stop');
+        const st = $('dc-autoreg-status');
+        dcRenderFindLog(d);
+
+        if (d.running) {
+          stop.classList.remove('hidden');
+          btn.disabled = true;
+          btn.textContent = '🔎 ищу…';
+          const prog = d.total ? ` · проверено ${d.checked}/${d.total}` : '';
+          st.textContent = `🔎 найдено ${d.foundCount} из ${d.want}${prog} · ${d.phase || ''}`;
+          return true;
+        }
+
+        // Завершилось
+        finished = true;
+        clearPollTimer();
+        stop.classList.add('hidden');
+        btn.disabled = false;
+        btn.textContent = '🔎 Найти прокси';
+
+        const res = d.result;
+        if (d.stopRequested) {
+          st.textContent = `поиск остановлен вручную — в пуле осталось прежнее (найдено ${d.foundCount})`;
+          toast('Поиск прокси остановлен', 'info');
+        } else if (res) {
+          st.textContent = res.foundCount
+            ? `✓ живых ${res.foundCount} · пул ${res.switched ? 'обновлён' : 'не тронут'}`
+            : 'живых не нашлось';
+          toast(res.foundCount
+            ? `✓ прокси: найдено ${res.foundCount} — пул перезаписан`
+            : 'не нашлось живых прокси — можно снять галочку и работать напрямую',
+            res.foundCount ? 'success' : 'warn', 6000);
+        } else {
+          st.textContent = d.error ? `поиск не удался: ${d.error}` : '';
+          if (d.error) toast('Поиск прокси: ' + d.error, 'error');
+        }
+        await dcProxyPool();          // список переписан — счётчик обязан показать новую цифру
+        await dcRenderPoolLines();    // и сам список: «сколько» без «каких» не проверить
+        return false;
+      } catch (e) {
+        finished = true;
+        clearPollTimer();
+        return false;
+      }
+    };
+
+    const scheduleNext = () => {
+      if (finished) return;
+      timer = setTimeout(async () => {
+        timer = null;
+        if (await tick()) scheduleNext();
+      }, 1500);
+    };
+
+    if (await tick()) scheduleNext();
+  })();
+
+  // Assign before any caller can observe the first await, then release the guard
+  // only after terminal cleanup and the single final pool refresh complete.
+  dcFindProxyPollPromise = poller.finally(() => {
+    clearPollTimer();
+    dcFindProxyPollPromise = null;
+  });
+  return dcFindProxyPollPromise;
+}
+
+async function dcAutoregFindProxyStop() {
+  try {
+    const r = await fetch('/__switch/api/dc/autoreg/find-proxy/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка поиска отправлена' : 'поиск уже завершён', 'info');
+    await dcFindProxyPoll(true);
+  } catch (e) { toast('Стоп поиска: ' + e.message, 'error'); }
+}
+
+// Счётчик прокси. Отвечает на вопрос «хватит ли пула на пачку», который до этого
+// приходилось выяснять запуском.
+//
+// 🪤 Берём count из describe(), а НЕ длину файла: пул отбрасывает неразбираемые строки,
+// и «в файле 41» при девяти рабочих обманывает ровно перед прогоном.
+// 🪤 Число живёт минуты (замер 12.09: из трёх найденных в 10:29 один мёртв к 10:45),
+// поэтому подпись — «было при чтении», а не «есть сейчас».
+async function dcProxyPool({ toast: withToast = false } = {}) {
+  const badge = $('dc-proxy-badge');
+  if (!badge) return null;
+  try {
+    const r = await fetch('/__switch/api/dc/proxy-pool');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'HTTP ' + r.status);
+
+    const want = Math.max(1, parseInt($('dc-autoreg-count').value, 10) || 1);
+    const n = Number(d.count || 0);
+    const off = !d.enabledForHost;
+    badge.textContent = off ? `прокси: ${n} (выкл)` : `прокси: ${n}`;
+
+    // Три состояния, а не два: пул может быть полон и при этом выключен для хоста —
+    // тогда авторег всё равно пойдёт с домашнего IP, и зелёная цифра врала бы.
+    const tone = off || n === 0 ? 'faint'
+      : n < want ? 'amber'
+      : 'emerald';
+    badge.className = `text-[10px] font-mono px-2 py-1 rounded border cursor-help ${
+      tone === 'emerald' ? 'border-emerald/50 text-emerald bg-emerald/10'
+      : tone === 'amber' ? 'border-amber/50 text-amber bg-amber/10'
+      : 'border-line-soft text-faint'}`;
+
+    const readAt = d.readAt ? new Date(d.readAt).toLocaleTimeString('ru-RU') : '—';
+    // Список адресов — в подсказку: «сколько» без «каких» проверить нечем, а цифра
+    // протухает за минуты. Секретов тут нет, это публичные прокси из открытого файла.
+    const list = Array.isArray(d.proxies) ? d.proxies : [];
+    const shown = list.slice(0, 20);
+    badge.title = [
+      `Живых прокси в пуле: ${n}${d.bad ? ` · отброшено строк: ${d.bad}` : ''}`,
+      `Пул для www.dacall.com: ${d.enabledForHost ? 'включён' : 'ВЫКЛЮЧЕН — авторег пойдёт напрямую'}`,
+      `Источник: ${String(d.source || '—').split(/[\\/]/).pop()}`,
+      `Прочитано в ${readAt} — публичные прокси живут минуты, перед прогоном жми 🔎`,
+      n < want && !off ? `⚠️ на ${want} аккаунт(ов) не хватит: часть сядет на повторный IP` : '',
+      d.fileError ? `Ошибка файла: ${d.fileError}` : '',
+      shown.length ? '' : '',
+      shown.length ? `Доступны (${list.length}):` : '',
+      ...shown.map((p, i) => `  ${i + 1}. ${p}`),
+      list.length > shown.length ? `  …и ещё ${list.length - shown.length}` : '',
+    ].filter(Boolean).join('\n');
+
+    if (withToast) {
+      toast(off
+        ? `прокси: ${n} в пуле, но для панели пул выключен — пойдёт напрямую`
+        : n < want
+          ? `прокси: ${n} на ${want} аккаунт(ов) — не хватит, жми 🔎`
+          : `прокси: ${n} — хватит на ${want}`,
+        off || n < want ? 'warn' : 'info', 5000);
+    }
+    return d;
+  } catch (e) {
+    badge.textContent = 'прокси: ?';
+    badge.className = 'text-[10px] font-mono px-2 py-1 rounded border border-line-soft text-faint cursor-help';
+    badge.title = 'счётчик недоступен: ' + e.message;
+    if (withToast) toast('Пул прокси: ' + e.message, 'error');
+    return null;
+  }
+}
+
+// Человекочитаемые подписи этапов. Ключи — ровно те, что шлёт `stage()` в
+// dacall/auto-add.js; парсинг русского текста лога запрещён намеренно (формулировки
+// правятся, и индикатор соврал бы молча).
+const DC_STAGE_LABELS = {
+  mail:     ['📬', 'ящик'],
+  otp_wait: ['⏳', 'жду код'],
+  wait_proxy: ['⏳', 'жду прокси'],
+  register: ['📝', 'регистрация'],
+  login:    ['🔑', 'вход'],
+  token:    ['🎫', 'токен'],
+  key:      ['🗝️', 'ключ'],
+  self:     ['💳', 'квота'],
+  done:     ['✅', 'готово'],
+};
+
+function dcRenderStage(d) {
+  const el = $('dc-autoreg-stage');
+  if (!el) return;
+  const s = d.stage;
+  if (!s || !s.stage) { el.textContent = ''; return; }
+  const [icon, label] = DC_STAGE_LABELS[s.stage] || ['•', s.stage];
+  const of = s.count > 1 && s.i ? ` · аккаунт ${s.i}/${s.count}` : '';
+  el.textContent = `${icon} ${label}${of}`;
+  // 🪤 Только токены из @theme. `text-teal`/`text-cyan` в этом файле МЁРТВЫЕ: классов
+  // 177, а токенов --color-teal/--color-cyan в @theme нет — замер в браузере даёт им
+  // ровно цвет текста по умолчанию. Здесь берём azure, он определён.
+  el.className = s.stage === 'done' || !d.running
+    ? 'text-[10px] font-mono text-faint'
+    : 'text-[10px] font-mono text-azure';
+}
+
+// Лог прогона. Показываем, как только есть что показать, и НЕ убираем после завершения:
+// разбирать упавший прогон надо именно тогда, когда он уже упал.
+function dcRenderLog(d) {
+  const wrap = $('dc-autoreg-log-wrap');
+  const pre = $('dc-autoreg-log');
+  const err = $('dc-autoreg-log-err');
+  if (!wrap || !pre) return;
+  const out = Array.isArray(d.stdout) ? d.stdout : [];
+  const bad = Array.isArray(d.stderr) ? d.stderr : [];
+  if (!out.length && !bad.length) return;        // нечего рисовать — панель не дёргаем
+  if (state.dcLogHidden) return;                 // владелец скрыл вручную
+
+  wrap.classList.remove('hidden');
+  const text = out.join('\n');
+  if (pre.textContent !== text) {
+    // Автоскролл только когда владелец сам не отлистал вверх читать середину прогона.
+    const follow = $('dc-autoreg-log-follow') ? $('dc-autoreg-log-follow').checked : true;
+    pre.textContent = text;
+    if (follow) pre.scrollTop = pre.scrollHeight;
+  }
+  const badText = bad.join('\n');
+  err.classList.toggle('hidden', !badText);
+  if (badText && err.textContent !== badText) {
+    err.textContent = badText;
+    err.scrollTop = err.scrollHeight;
+  }
+}
+
+function dcAutoregLogHide() {
+  state.dcLogHidden = true;
+  $('dc-autoreg-log-wrap').classList.add('hidden');
+}
+
+function dcFindLogHide() {
+  state.dcFindLogHidden = true;
+  $('dc-find-log-wrap').classList.add('hidden');
+}
+
+// Панель поиска: строки валидатора + текущий список пула.
+function dcRenderFindLog(d) {
+  const wrap = $('dc-find-log-wrap');
+  if (!wrap || state.dcFindLogHidden) return;
+  const lines = Array.isArray(d.log) ? d.log : [];
+  if (!lines.length && !d.running) return;      // нечего показывать — не дёргаем панель
+
+  wrap.classList.remove('hidden');
+  const pre = $('dc-find-log');
+  const text = lines.join('\n');
+  if (pre.textContent !== text) {
+    pre.textContent = text;
+    pre.scrollTop = pre.scrollHeight;           // идёт прогон — держим низ
+  }
+  $('dc-find-mode').textContent = d.mode === 'refill'
+    ? '· фон, докорм под прогоном'
+    : d.mode === 'manual' ? '· запущен кнопкой' : '';
+}
+
+// Список того, что РЕАЛЬНО лежит в пуле. Отдельно от счётчика: счётчик отвечает «сколько»,
+// а этот блок — «какие», и по нему видно, что докорм действительно доливает.
+async function dcRenderPoolLines() {
+  const el = $('dc-find-pool-list');
+  if (!el) return;
+  try {
+    const d = await (await fetch('/__switch/api/dc/proxy-lines')).json();
+    if (!d.ok) return;
+    $('dc-find-pool').textContent = `· в пуле ${d.count}`;
+    el.textContent = (d.lines || []).join('\n');
+  } catch { /* пул недоступен — молчим, счётчик рядом скажет своё */ }
+}
+
+async function dcAutoregStatus({ quiet = false } = {}) {
+  try {
+    const r = await fetch('/__switch/api/dc/autoreg/status');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'status HTTP ' + r.status);
+    const running = !!d.running;
+    $('dc-autoreg-start').classList.toggle('hidden', running);
+    $('dc-autoreg-stop').classList.toggle('hidden', !running);
+    $('dc-autoreg-proxy-wrap').classList.toggle('opacity-40', running);
+    $('dc-autoreg-proxy').disabled = running;
+    const result = d.result || {};
+    dcRenderStage(d);
+    dcRenderLog(d);
+    $('dc-autoreg-status').textContent = running
+      ? `идёт ${d.count || 1}${d.useProxy === false ? ' · напрямую' : ''} · pid ${d.pid || '—'}`
+      : result.created != null
+        ? `готово ${result.created}, в пул ${result.written}, ошибок ${result.failed}`
+        : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
+    // 🪤 Здесь был БЕСКОНЕЧНЫЙ ЦИКЛ, и он делал вкладку нерабочей. `loadDcSessions()`
+    // в конце каскадом зовёт `dcAutoregStatus()`, а тот после завершённого прогона
+    // (`!running && result.created > 0`) возвращался сюда же — и так по кругу, десяток
+    // раз в секунду. Снаружи это выглядело как «вкладка мерцает, клики теряются,
+    // маппинг не выбрать»: перерисовка шла быстрее, чем курсор успевал попасть по
+    // элементу, и DOM под мышью подменялся (замер: 171 мутация за 3 с в покое).
+    //
+    // Лечение — `loadDcSessionsLight()`: тот же fetch и тот же `renderLs()`, но БЕЗ
+    // каскада. Ровно для этого он и написан. Запускался цикл после любого успешного
+    // авторега, поэтому и проявлялся не сразу, а «когда что-то создашь».
+    if (!running && result.created > 0) await loadDcSessionsLight();
+    return running;
+  } catch (e) {
+    if (!quiet) toast('Авторег status: ' + e.message, 'error');
+    return false;
+  }
+}
+
+async function dcAutoregStart() {
+  const raw = $('dc-autoreg-count').value;
+  const count = Math.max(1, Math.min(50, parseInt(raw, 10) || 1));
+  $('dc-autoreg-count').value = String(count);
+  const useProxy = $('dc-autoreg-proxy').checked;
+  try {
+    const r = await fetch('/__switch/api/dc/autoreg/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count, useProxy }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    // Новый прогон — новый лог: если панель была скрыта от прошлого раза, показываем снова.
+    state.dcLogHidden = false;
+    $('dc-autoreg-log').textContent = '';
+    $('dc-autoreg-log-err').textContent = '';
+    $('dc-autoreg-log-err').classList.add('hidden');
+    toast(`🤖 dacall.AI: запущено ${count}${useProxy ? '' : ' (напрямую)'}`, 'success');
+    await dcAutoregStatus({ quiet: true });
+    if (state.dcAutoregTimer) clearInterval(state.dcAutoregTimer);
+    state.dcAutoregTimer = setInterval(async () => {
+      const running = await dcAutoregStatus({ quiet: true });
+      if (!running) { clearInterval(state.dcAutoregTimer); state.dcAutoregTimer = null; }
+    }, 2500);
+  } catch (e) { toast('Авторег: ' + e.message, 'error'); }
+}
+
+// 🔴 Статус автореги спрашиваем и ПРИ ЗАГРУЗКЕ страницы, а не только кнопкой запуска.
+// 🪤 Без этого панель лога и кнопка «■ Стоп» не появлялись вовсе, если прогон уже идёт:
+// таймер опроса заводился ТОЛЬКО внутри `dcAutoregStart()`, то есть нажатием кнопки в
+// этой же вкладке. Обновил страницу посреди прогона — и лога нет, и остановить нечем,
+// а повторный запуск отвечает «авторега уже идёт». Ровно эта грабля поймана владельцем
+// 21.09 21:17. У Odyssey то же место вылечено 16.09 тем же приёмом.
+dcAutoregStatus({ quiet: true }).then(running => {
+  if (running && !state.dcAutoregTimer) {
+    state.dcAutoregTimer = setInterval(async () => {
+      const r = await dcAutoregStatus({ quiet: true });
+      if (!r) { clearInterval(state.dcAutoregTimer); state.dcAutoregTimer = null; }
+    }, 2500);
+  }
+});
+
+async function dcAutoregStop() {
+  if (!confirm('Остановить авторег dacall.AI? Текущий незавершённый аккаунт может не попасть в пул.')) return;
+  try {
+    const r = await fetch('/__switch/api/dc/autoreg/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка отправлена' : 'авторег уже завершён', 'info');
+    await dcAutoregStatus({ quiet: true });
+  } catch (e) { toast('Стоп: ' + e.message, 'error'); }
+}
+
 
 // ── 🤖 Авторег Odyssey ───────────────────────────────────────────────────────────
 //
@@ -28586,6 +31113,8 @@ const GH_USE_META = {
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
   jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },
+  cp: { icon: '🧼', short: 'CP', label: 'Clean APIs',     badge: 'bg-blue/15 text-blue border-blue/40' },
+  ab: { icon: '🌸', short: 'AB', label: 'Artbloom',     badge: 'bg-pink/15 text-pink border-pink/40' },
   fx: { icon: '🔮', short: 'FX', label: 'Fxqidian',     badge: 'bg-rose/15 text-rose border-rose/40' },
   bd: { icon: '🌿', short: 'BD', label: 'BudsAI',     badge: 'bg-teal/15 text-teal border-teal/40' },
   nv: { icon: '🛰️', short: 'NV', label: 'Nova',     badge: 'bg-cyan/15 text-cyan border-cyan/40' },
@@ -28640,7 +31169,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -31035,6 +33564,9 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  dacall:     { id: 'dacall',     p: 'dc', stateKey: 'dacall',     base: 5,   sym: '$',  label: 'dacall.AI',     icon: '📞', color: 'orange', reload: () => loadDcSessionsLight() },
+  cleanapis:     { id: 'cleanapis',     p: 'cp', stateKey: 'cleanapis',     base: 5,   sym: '$',  label: 'Clean APIs',     icon: '🧼', color: 'blue', reload: () => loadCpSessionsLight() },
+  artbloom:     { id: 'artbloom',     p: 'ab', stateKey: 'artbloom',     base: 5,   sym: '$',  label: 'Artbloom',     icon: '🌸', color: 'pink', reload: () => loadAbSessionsLight() },
   fxqidian:     { id: 'fxqidian',     p: 'fx', stateKey: 'fxqidian',     base: 5,   sym: '$',  label: 'Fxqidian',     icon: '🔮', color: 'rose', reload: () => loadFxSessionsLight() },
   lsapi:     { id: 'lsapi',     p: 'ls', stateKey: 'lsapi',     base: 5,   sym: '$',  label: 'Lingshu',     icon: '🀄', color: 'violet', reload: () => loadLsSessionsLight() },
   budsin:     { id: 'budsin',     p: 'bd', stateKey: 'budsin',     base: 5,   sym: '$',  label: 'BudsAI',     icon: '🌿', color: 'teal', reload: () => loadBdSessionsLight() },
@@ -34587,7 +37119,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -34908,6 +37440,9 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'dacall':       loadDcSessionsLight(); break;
+      case 'cleanapis':       loadCpSessionsLight(); break;
+      case 'artbloom':       loadAbSessionsLight(); break;
       case 'fxqidian':       loadFxSessionsLight(); break;
       case 'lsapi':       loadLsSessionsLight(); lsAutoregStatus({ quiet: true }); lsProxyPool(); lsFindProxyPoll(true); lsRenderPoolLines(); break;
       case 'budsin':       loadBdSessionsLight(); break;
@@ -34992,6 +37527,9 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'dacall',     fn: () => loadDcSessionsLight() },
+  { tab: 'cleanapis',     fn: () => loadCpSessionsLight() },
+  { tab: 'artbloom',     fn: () => loadAbSessionsLight() },
   { tab: 'fxqidian',     fn: () => loadFxSessionsLight() },
   { tab: 'lsapi',     fn: () => loadLsSessionsLight() },
   { tab: 'budsin',     fn: () => loadBdSessionsLight() },
@@ -35148,7 +37686,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)

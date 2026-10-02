@@ -26,6 +26,13 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    { id: 'dc', file: 'dacall-sessions.json', name: 'dacall.AI' },
+    { id: 'cp', file: 'cleanapis-sessions.json', name: 'Clean APIs' },
+    // Artbloom (2026-09-28) — свой шлюз, не New API, за Claude-каналом Amazon Kiro.
+    // В сумму идёт наравне с соседями: деньги на аккаунте настоящие, а вот ЧИТАТЬ их
+    // ключом площадка не даёт вовсе (шесть ручек баланса из шести - 404), поэтому цифра
+    // появится только из ЛК куками профиля. Пока их нет, вкладка честно светит резерв.
+    { id: 'ab', file: 'artbloom-sessions.json', name: 'Artbloom' },
     { id: 'fx', file: 'fxqidian-sessions.json', name: 'Fxqidian' },
     { id: 'ls', file: 'lsapi-sessions.json', name: 'Lingshu' },
     { id: 'bd', file: 'budsin-sessions.json', name: 'BudsAI' },

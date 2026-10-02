@@ -2,7 +2,8 @@
   "_readme": [
     "Конфиги шлюзов для tools/add-gateway.js. Заполняется по §0 инструкции ADDING-A-GATEWAY.md.",
     "flags: github (есть GitHub-вход и пул) · ref (есть реф-код) · flatRate (плоский тариф за запрос,",
-    "нужен FLAT_RATE_HOSTS и maxHedges:0) · anthropic (работает /v1/messages — конвертер не нужен).",
+    "нужен FLAT_RATE_HOSTS и maxHedges:0) · anthropic (работает /v1/messages — конвертер не нужен) ·",
+    "customPanel (у площадки СВОЯ панель, не New API: инструмент печатает чеклист того, чего он проверить не может).",
     "Эталон для сверки — kktoken. Он обязан давать ПОЛНО, иначе спека или чекер врут."
   ],
 
@@ -10,81 +11,102 @@
     "p": "kk", "P": "KK", "full": "kktoken", "NAME": "KKtoken",
     "HOST": "kktoken.cc", "PORT": 20161, "FOLDER": "kktoken",
     "ICON": "🪙", "COLOR": "emerald", "REF": "Sog2",
-    "github": true, "ref": true, "flatRate": false, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": true, "flatRate": false, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "hcnsec": {
     "p": "hn", "P": "HN", "full": "hcnsec", "NAME": "HCNsec",
     "HOST": "api.hcnsec.cn", "PORT": 20162, "FOLDER": "hcnsec",
     "ICON": "🛡️", "COLOR": "emerald", "REF": "u4eN",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "aipm": {
     "p": "ap", "P": "AP", "full": "aipm", "NAME": "AIPM",
     "HOST": "emtf.aipm9527.online", "PORT": 20163, "FOLDER": "aipm",
     "ICON": "🔷", "COLOR": "indigo", "REF": "NS3L",
-    "github": true, "ref": true, "flatRate": true, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": true, "flatRate": true, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "fluxnat": {
     "p": "fn", "P": "FN", "full": "fluxnat", "NAME": "FluxRouter",
     "HOST": "llm.fluxnat.dev", "PORT": 20167, "FOLDER": "fluxnat",
     "ICON": "🌀", "COLOR": "fuchsia", "REF": "",
-    "github": true, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "getunikey": {
     "p": "uk", "P": "UK", "full": "getunikey", "NAME": "UniKey",
     "HOST": "www.getunikey.ai", "PORT": 20168, "FOLDER": "getunikey",
     "ICON": "🔑", "COLOR": "sky", "REF": "6ssC",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false, "shareScript": true, "autoreg": false
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false, "shareScript": true, "autoreg": false, "customPanel": false
   },
   "bai": {
     "p": "bai", "P": "BAI", "full": "bai", "NAME": "B.AI",
     "HOST": "chat.b.ai", "PORT": 20169, "FOLDER": "bai",
     "ICON": "🅱️", "COLOR": "amber", "REF": "6H755H",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false, "shareScript": true, "autoreg": false
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": false, "shareScript": true, "autoreg": false, "customPanel": true
   },
   "odyssey": {
     "p": "od", "P": "OD", "full": "odyssey", "NAME": "Odyssey",
     "HOST": "odysseyapi.tech", "PORT": 20170, "FOLDER": "odyssey",
     "ICON": "🧭", "COLOR": "lime", "REF": "",
-    "github": false, "ref": false, "flatRate": false, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false
+    "github": false, "ref": false, "flatRate": false, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false, "customPanel": true
   },
 
   "nova": {
     "p": "nv", "P": "NV", "full": "nova", "NAME": "Nova",
     "HOST": "nova.vcrauo.com", "PORT": 20172, "FOLDER": "nova",
     "ICON": "🛰️", "COLOR": "cyan", "REF": "ITSp",
-    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "budsin": {
     "p": "bd", "P": "BD", "full": "budsin", "NAME": "BudsAI",
     "HOST": "apichat.budsin.dev", "PORT": 20173, "FOLDER": "budsin",
     "ICON": "🌿", "COLOR": "teal", "REF": "kSyu",
-    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
 
   "lsapi": {
     "p": "ls", "P": "LS", "full": "lsapi", "NAME": "Lingshu",
     "HOST": "lsapi.cloud", "PORT": 20174, "FOLDER": "lsapi",
     "ICON": "🀄", "COLOR": "violet", "REF": "YaPV",
-    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": false
   },
 
   "aikeysapi": {
     "p": "ak", "P": "AK", "full": "aikeysapi", "NAME": "AIKeysAPI",
     "HOST": "www.aikeysapi.com", "PORT": 20165, "FOLDER": "aikeysapi",
     "ICON": "🔑", "COLOR": "teal", "REF": "vsFh",
-    "github": false, "ref": true, "flatRate": true, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true
+    "github": false, "ref": true, "flatRate": true, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": false
   },
 
   "fxqidian": {
     "p": "fx", "P": "FX", "full": "fxqidian", "NAME": "Fxqidian",
     "HOST": "fxqidian.de5.net", "PORT": 20175, "FOLDER": "fxqidian",
     "ICON": "🔮", "COLOR": "rose", "REF": "9BEo",
-    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
+  },
+
+  "artbloom": {
+    "p": "ab", "P": "AB", "full": "artbloom", "NAME": "Artbloom",
+    "HOST": "api.artbloom.tech", "PORT": 20176, "FOLDER": "artbloom",
+    "ICON": "🌸", "COLOR": "pink", "REF": "FORTEDLF4I",
+    "github": true, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": false, "customPanel": true
+  },
+
+  "cleanapis": {
+    "p": "cp", "P": "CP", "full": "cleanapis", "NAME": "Clean APIs",
+    "HOST": "cleanapis.com", "PORT": 20164, "FOLDER": "cleanapis",
+    "ICON": "🧼", "COLOR": "blue", "REF": "",
+    "github": true, "ref": false, "flatRate": false, "anthropic": false, "pool": true, "shareScript": false, "autoreg": false, "customPanel": true
+  },
+
+  "dacall": {
+    "p": "dc", "P": "DC", "full": "dacall", "NAME": "dacall.AI",
+    "HOST": "api-ru.dacall.ai", "PORT": 20177, "FOLDER": "dacall",
+    "ICON": "📞", "COLOR": "orange", "REF": "",
+    "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": true, "customPanel": true
   }
 }

@@ -1,0 +1,52 @@
+{
+  "name": "hub-gemini-antigravity",
+  "version": "2.7.7",
+  "description": "Anthropic-совместимый API поверх Google Cloud Code для вкладки Gemini в хабе (вендор форка antigravity-claude-proxy)",
+  "main": "src/index.js",
+  "type": "module",
+  "_vendor": {
+    "upstream": "https://github.com/badrisnarayanan/antigravity-claude-proxy",
+    "upstreamVersion": "2.7.7",
+    "taken": "2026-10-02",
+    "from": "F:\\antigravity-claude-proxy (локальный форк, папка-копия без git)",
+    "removed": [
+      "src/webui/** и public/** — веб-морду заменила вкладка хаба; API аккаунтов переехал в src/account-api.js",
+      "src/cli/** и bin/** — пульт теперь вкладка",
+      "postcss/tailwind и сборка CSS — собирать нечего",
+      "async-mutex — мёртвая зависимость (в src/ не импортируется ни разу)"
+    ],
+    "keptWhole": [
+      "src/cloudcode/**, src/format/**, src/account-manager/**, src/auth/oauth.js — хрупкая совместимость с Google, перенесена без правок",
+      "legacy-путь чтения БД Antigravity (часть account-manager) оставлен: better-sqlite3 уже стоит в корне хаба, а путь даёт вход без OAuth, если Antigravity-приложение залогинено"
+    ]
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test:proxy": "node tests/test-proxy-pool.mjs",
+    "test:sanitizer": "node tests/test-schema-sanitizer.cjs",
+    "test:strategies": "node tests/test-strategies.cjs"
+  },
+  "keywords": [
+    "antigravity",
+    "gemini",
+    "claude",
+    "anthropic",
+    "proxy",
+    "hub-cc"
+  ],
+  "author": "Badri Narayanan (upstream)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/badrisnarayanan/antigravity-claude-proxy.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "undici": "^7.20.0"
+  }
+}

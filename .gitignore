@@ -437,6 +437,7 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/vani-sessions.json
 routing/dacall-sessions.json
 routing/cleanapis-sessions.json
 routing/artbloom-sessions.json
@@ -689,3 +690,23 @@ cleanapis/gh-sessions/
 artbloom/profiles/
 artbloom/sessions/
 artbloom/gh-sessions/
+
+# ── Vani (вкладка 09-11.10): приватные данные ────────────────────────────────
+# `vani/profiles/` - профили Camoufox автореги: куки, кэш, сессия панели (тысячи файлов;
+# на 11.10 их было 4811, и без этих двух строк весь мусор уехал бы в коммит).
+# `vani/sessions/` - снимки кук аккаунтов для кнопки «🌐». Код (auto-add*.py, *.js) и
+# `*-modelmap.json` коммитятся. Сами ключи лежат в `routing/vani-sessions.json` - он уже
+# закрыт общим правилом для `*-sessions.json`.
+vani/profiles/
+vani/sessions/
+
+# Метка живого процесса движка Gemini: pid'ы этой машины, пересоздаётся на старте.
+gemini/server.pid
+
+# ── Gemini: файл с OAuth-клиентом (client id + secret) ────────────────────────
+# `gemini/src/constants.js` несёт clientId/clientSecret Google OAuth. Значения ПУБЛИЧНЫЕ
+# (из opencode-antigravity-auth, ставились не мы), но GitHub Push Protection их не
+# различает и отклоняет пуш целиком ("Push cannot contain secrets", замер 11.10.2026).
+# Держим файл вне репо, как `config.js` и `notion/config.js`; локальная копия на месте -
+# движок работает. Нужен на чистом клоне - взять значения из апстрима.
+gemini/src/constants.js

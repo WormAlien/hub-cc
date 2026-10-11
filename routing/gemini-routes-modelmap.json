@@ -1,0 +1,6 @@
+{
+  "default": "gemini-3.8-flash-tiered",
+  "opus": "gemini-3.8-flash-tiered",
+  "sonnet": "gemini-3.6-flash-medium",
+  "haiku": "gemini-3.5-flash-lite"
+}

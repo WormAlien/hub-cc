@@ -102,6 +102,9 @@
 <!-- Вкладка Google (пул аккаунтов под подписку AI Pro). Пара файлов в /vendor, как у MEDIA
      и «Моделей»: разметка рисуется из JS, поэтому классы здесь свои (gg-*), а не Tailwind. -->
 <link rel="stylesheet" href="/vendor/google-tab.css">
+<!-- Вкладка Gemini (Antigravity): тот же Google-аккаунт, но не как хранилище, а как рабочая
+     подписка — тир, квота и модели Gemini прямо в Claude Code. Классы свои (gm-*). -->
+<link rel="stylesheet" href="/vendor/gemini-tab.css">
 <!-- 🪤 Анти-FOUC: Tailwind собирается В БРАУЗЕРЕ, и это гонка с первой отрисовкой.
      Замер 10.09 в Chrome: CSS готов на 173 мс, первая отрисовка на 236 мс — запас всего
      63 мс. Zen (Firefox) на холодном кеше эту гонку ПРОИГРЫВАЕТ: страница успевает
@@ -767,6 +770,11 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="vani" title="Своя панель Vani (не New API) за Cloudflare. Вход БЕЗ пароля: email → код. API api.vani.ai, консоль c.vani.ai/settings/developer. Авторега через Camoufox">
+        <span class="w-5 text-center text-[14px]">🧿</span>
+        <span class="flex-1">Vani</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-vani">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="dacall" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">📞</span>
         <span class="flex-1">dacall.AI</span>
@@ -879,10 +887,15 @@ function randomThemeId() {
         <span class="flex-1">Outlook-почты</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-outlook" title="живых / всего ящиков">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="google" title="Пул Google-аккаунтов под подписку AI Pro: логин и пароль с копированием, живой 2FA-код, профиль браузера на аккаунт, прокси. Кредиты Flow и Antigravity - следующими шагами">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="google" title="Пул Google-аккаунтов под подписку AI Pro: логин и пароль с копированием, живой 2FA-код, профиль браузера на аккаунт, прокси. Расходует их вкладка Gemini">
         <span class="w-5 text-center text-[14px]">🔵</span>
         <span class="flex-1">Google аккаунты</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-google" title="живых / всего в пуле">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="gemini" title="Gemini через подписку Google: тир аккаунта, остаток квоты по моделям и сам сервер вкладки. Модели Gemini и Claude идут в Claude Code">
+        <span class="w-5 text-center text-[14px]">✦</span>
+        <span class="flex-1">Gemini</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-gemini" title="живых / всего аккаунтов">—</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="telegram">
         <span class="w-5 text-center text-[14px]">📱</span>
@@ -5731,7 +5744,7 @@ window.finNavCount = async () => {
               <input id="cun-models-filter" type="search" placeholder="фильтр: opus, gpt-5.4…"
                      oninput="renderCunModels()"
                      class="text-[11px] px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg w-44 focus:outline-none focus:border-violet/50 text-ink placeholder:text-faint">
-              <button onclick="loadCunModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+              <div class="flex items-center gap-2"><code id="cun-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model cun[1m]</code><button onclick='copyToClipboard("/model cun[1m]", "команда /model cun[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadCunModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
             </div>
           </div>
           <div>
@@ -5850,7 +5863,7 @@ window.finNavCount = async () => {
         <div id="ot-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models (копировать /model для терминала)</h2>
-            <button onclick="loadOtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ot-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model ourtoken[1m]</code><button onclick='copyToClipboard("/model ourtoken[1m]", "команда /model ourtoken[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadOtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ot-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -5931,6 +5944,14 @@ window.finNavCount = async () => {
          window.GOOGLE), как у MEDIA и «Моделей». Секретов в статике нет и быть не должно. -->
     <div data-tab-content="google">
       <div id="google-root"></div>
+    </div>
+
+    <!-- ═════════ TAB: Gemini (Antigravity) ═════════ -->
+    <!-- Скелет пустой намеренно: разметку строит /vendor/gemini-tab.js (неймспейс
+         window.GEMINI). Опрос идёт в /__switch/api/gemini/*, то есть в хаб, а не в Google:
+         к Google ходит сервер вкладки, и только по явному нажатию. -->
+    <div data-tab-content="gemini">
+      <div id="gemini-root"></div>
     </div>
 
     <!-- ═════════ TAB: MEDIA ═════════ -->
@@ -6137,7 +6158,7 @@ window.finNavCount = async () => {
               <input id="cdt-models-filter" type="search" placeholder="фильтр: opus, deepseek…"
                      oninput="renderCdtModels()"
                      class="text-[11px] px-2.5 py-1.5 bg-elevated border border-line-soft rounded-lg w-44 focus:outline-none focus:border-violet/50 text-ink placeholder:text-faint">
-              <button onclick="loadCdtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+              <div class="flex items-center gap-2"><code id="cdt-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model conduit[1m]</code><button onclick='copyToClipboard("/model conduit[1m]", "команда /model conduit[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadCdtModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
             </div>
           </div>
           <div>
@@ -6412,7 +6433,7 @@ window.finNavCount = async () => {
         <div id="ar-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (settings.json → новые сессии) · 📋 = копия id</h2>
-            <button onclick="loadArModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ar-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model agentrouter[1m]</code><button onclick='copyToClipboard("/model agentrouter[1m]", "команда /model agentrouter[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadArModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ar-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -6650,7 +6671,7 @@ window.finNavCount = async () => {
         <div id="go-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadGoModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="go-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model gorouter[1m]</code><button onclick='copyToClipboard("/model gorouter[1m]", "команда /model gorouter[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadGoModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="go-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -6810,7 +6831,7 @@ window.finNavCount = async () => {
         <div id="jw-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadJwModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="jw-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model justwoker[1m]</code><button onclick='copyToClipboard("/model justwoker[1m]", "команда /model justwoker[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadJwModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="jw-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -6965,7 +6986,7 @@ window.finNavCount = async () => {
         <div id="sk-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadSkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="sk-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model seekai[1m]</code><button onclick='copyToClipboard("/model seekai[1m]", "команда /model seekai[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadSkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="sk-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7119,7 +7140,7 @@ window.finNavCount = async () => {
         <div id="ts-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadTsModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ts-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model truesota[1m]</code><button onclick='copyToClipboard("/model truesota[1m]", "команда /model truesota[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadTsModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ts-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7280,7 +7301,7 @@ window.finNavCount = async () => {
         <div id="kk-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadKkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="kk-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model kktoken[1m]</code><button onclick='copyToClipboard("/model kktoken[1m]", "команда /model kktoken[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadKkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="kk-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7353,6 +7374,217 @@ window.finNavCount = async () => {
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://kktoken.cc/sign-up?aff=Sog2" data-ref-link="kktoken" target="_blank" class="text-emerald hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="vani">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-indigo">🧿</span> <a href="https://c.vani.ai/login" target="_blank" rel="noopener" title="вход/регистрация vani (без пароля: email → код)" class="text-ink underline underline-offset-4 hover:text-indigo">Vani</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-indigo text-xs">api.vani.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-indigo text-xs">:20180</code>) · своя панель (не New API) · вход БЕЗ пароля: email → 6-значный код · консоль ключей <code class="font-mono text-xs">c.vani.ai/settings/developer</code></p>
+          </div>
+        </header>
+
+        <!-- Vani pool energy gauge (как у FreeModel: карточка + свечение, две полосы) -->
+        <div id="vn-sec-energy" class="rounded-xl bg-surface border border-line-soft p-5 relative overflow-hidden scroll-mt-40">
+          <div class="absolute -top-24 -right-24 size-56 rounded-full bg-indigo/10 blur-3xl pointer-events-none"></div>
+          <div id="vn-energy" class="relative"></div>
+          <div id="vn-energy-m" class="relative mt-5"></div>
+        </div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). Тиры vani смотрят в модели с витрины
+             (имена с неймспейсом, как отдаёт /v1/models): opus → anthropic/claude-opus-5,
+             sonnet → anthropic/claude-sonnet-5, haiku → anthropic/claude-haiku-4.5. -->
+        <div id="vn-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог opus-only</h2>
+            <button onclick="loadVnModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="vn-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20180).
+             🪤 Прежний текст про «каждый четвёртый 403» - факт эталона, у vani не замерен
+             (пробы 09.10 - чистые 200). Ретраи держим как страховку: панель за Cloudflare,
+             а keepalive ещё и сглаживает SSE-паузы thinking-моделей. -->
+        <div id="vn-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20180 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="vnLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="vn-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="vn-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="vn-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="vn-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="vn-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="vnApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="vnResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="vn-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <!-- Vision-мост: шлюз картинки НЕ принимает (400 на image-блок), их описывает
+               deepseek у AgentRouter и описание подменяет картинки. Self-applying (как
+               pooldrop): тумблер/поле шлют патч сразу, «Применить» не нужен. -->
+          <div class="flex gap-3 items-end flex-wrap mt-3 pt-3 border-t border-line-soft">
+            <label class="inline-flex items-center gap-2.5 cursor-pointer select-none py-2" title="Картинки из запроса уходят в AgentRouter за описанием и подменяются текстом перед отправкой в шлюз">
+              <input id="vn-vision-bridge" type="checkbox" onchange="vnVisionApply()" class="peer sr-only">
+              <span class="relative w-8 h-[18px] rounded-full bg-line-soft transition peer-checked:bg-emerald/70 peer-focus-visible:ring-2 peer-focus-visible:ring-emerald/40 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:w-[14px] after:h-[14px] after:rounded-full after:bg-white after:transition peer-checked:after:translate-x-[14px]"></span>
+              <span class="text-xs text-muted">🖼 Vision-мост (картинки через AgentRouter)</span>
+            </label>
+            <label class="flex flex-col gap-1 w-56">
+              <span class="text-[10px] text-faint leading-tight">модель-описатель у AgentRouter</span>
+              <select id="vn-vision-model" onchange="vnVisionApply()" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-indigo/60">
+                <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+              </select>
+            </label>
+            <span id="vn-vision-status" class="text-[10px] font-mono text-faint pb-2"></span>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="vn-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="vn-lat-chart" class="w-full"></div>
+              <div id="vn-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="vn-lat-windows"></div>
+          </div>
+          <div id="vn-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="vn-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="vn-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="vn-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="vn-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="vn-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="vn-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="vn-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="vn-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="vn-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model vani[1m]</code><button onclick='copyToClipboard("/model vani[1m]", "команда /model vani[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadVnModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="vn-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadVnSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadVnSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="vnCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="vnMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="vnShowAdd()" class="text-xs px-3 py-2 bg-indigo/10 border border-indigo/50 text-indigo rounded-lg hover:bg-indigo/20 font-medium">➕ Добавить</button>
+          <button onclick="vnShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <button id="vn-autoreg-start" onclick="vnAutoregStart()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Camoufox: ящик emailnator → форма входа → капча Turnstile → код из письма → ключ → эта таблица">🤖 Авторег</button>
+          <!-- СКОЛЬКО зарегать. Цикл выходит на ПЕРВОМ успехе, поэтому без этой цели авторега
+               всегда заводила ровно один аккаунт. Здесь владелец задаёт, сколько нужно. -->
+          <label class="flex items-center gap-1.5 text-[11px] text-muted" title="Сколько аккаунтов завести за прогон: цикл крутит попытки, пока не наберёт столько успехов">
+            зарегать
+            <select id="vn-autoreg-want" class="text-xs bg-surface border border-line-soft rounded-lg px-2 py-1.5 focus:outline-none focus:border-indigo/60">
+              <option>1</option><option>2</option><option>3</option><option>5</option><option>10</option><option>20</option><option>50</option>
+            </select>
+          </label>
+          <button id="vn-autoreg-stop" onclick="vnAutoregStop()" class="hidden text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+          <span id="vn-autoreg-status" class="text-[10px] font-mono text-faint"></span>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="vn-filter" oninput="newapiFilterChange('vn')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-indigo/60">
+          <select id="vn-sort" onchange="newapiSortChange('vn')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-indigo/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="vn-add-form" class="hidden rounded-xl bg-surface border border-indigo/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="vn-add-email" oninput="newapiAddGhHint('vn')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-indigo/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="vn-add-key" placeholder="пусто = оставь, ключ впишешь позже кнопкой 🔑" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-indigo/60">
+            </label>
+            <button onclick="vnAdd()" class="text-xs px-4 py-2 bg-indigo/10 border border-indigo/50 text-indigo rounded-lg hover:bg-indigo/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('vn')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-indigo/10 border border-indigo/50 text-indigo rounded-lg hover:bg-indigo/20 font-medium">🐙 из менеджера</button>
+            <button onclick="vnShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="vn-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="vn-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="vnShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/vani уже залогинены).</p>
+          <textarea id="vn-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="vn-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="vnImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="vnShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <!-- Лог автореги vani (Camoufox). Остаётся видимым ПОСЛЕ завершения - разбирать
+             упавший прогон надо тогда, когда он уже упал. Этап - из маркера VN_STAGE. -->
+        <div id="vn-autoreg-log-wrap" class="hidden rounded-xl bg-surface border border-line-soft p-3">
+          <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h3 class="text-xs font-semibold tracking-tight">Лог автореги</h3>
+              <span id="vn-autoreg-stage" class="text-[10px] font-mono text-faint"></span>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="inline-flex items-center gap-1 text-[10px] text-faint cursor-pointer select-none" title="Прокручивать к последней строке по мере прогона">
+                <input id="vn-autoreg-log-follow" type="checkbox" checked class="accent-azure w-3 h-3">
+                <span>автоскролл</span>
+              </label>
+              <button onclick="vnAutoregLogHide()" class="text-[10px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line" title="Скрыть панель. Лог останется на сервере">скрыть</button>
+            </div>
+          </div>
+          <pre id="vn-autoreg-log" class="text-[10px] font-mono leading-relaxed bg-elevated border border-line-soft rounded-lg p-2.5 max-h-64 overflow-auto whitespace-pre-wrap break-all text-dim"></pre>
+          <pre id="vn-autoreg-log-err" class="hidden text-[10px] font-mono leading-relaxed bg-crimson/5 border border-crimson/40 rounded-lg p-2.5 mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-crimson"></pre>
+        </div>
+
+        <div id="vn-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20180</code> keepalive → <code class="text-ink">api.vani.ai</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">vani_…</code> - бери в консоли c.vani.ai/settings/developer (вход по коду из письма)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">stop</code> шлюз молча игнорирует (врёт <code class="text-ink">finish_reason: stop</code>), картинки не принимает</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://c.vani.ai/login" target="_blank" class="text-indigo hover:underline">вход/регистрация vani</a>
         </div>
       </div>
     </div>
@@ -7438,7 +7670,7 @@ window.finNavCount = async () => {
         <div id="dc-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadDcModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="dc-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model dacall[1m]</code><button onclick='copyToClipboard("/model dacall[1m]", "команда /model dacall[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadDcModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="dc-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7647,7 +7879,7 @@ window.finNavCount = async () => {
         <div id="cp-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadCpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="cp-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model cleanapis[1m]</code><button onclick='copyToClipboard("/model cleanapis[1m]", "команда /model cleanapis[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadCpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="cp-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7808,7 +8040,7 @@ window.finNavCount = async () => {
         <div id="ab-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadAbModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ab-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model artbloom[1m]</code><button onclick='copyToClipboard("/model artbloom[1m]", "команда /model artbloom[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadAbModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ab-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -7966,7 +8198,7 @@ window.finNavCount = async () => {
         <div id="fx-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadFxModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="fx-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model fxqidian[1m]</code><button onclick='copyToClipboard("/model fxqidian[1m]", "команда /model fxqidian[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadFxModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="fx-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8124,7 +8356,7 @@ window.finNavCount = async () => {
         <div id="ls-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadLsModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ls-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model lsapi[1m]</code><button onclick='copyToClipboard("/model lsapi[1m]", "команда /model lsapi[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadLsModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ls-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8299,7 +8531,7 @@ window.finNavCount = async () => {
         <div id="bd-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadBdModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="bd-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model budsin[1m]</code><button onclick='copyToClipboard("/model budsin[1m]", "команда /model budsin[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadBdModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="bd-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8458,7 +8690,7 @@ window.finNavCount = async () => {
         <div id="nv-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadNvModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="nv-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model nova[1m]</code><button onclick='copyToClipboard("/model nova[1m]", "команда /model nova[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadNvModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="nv-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8670,7 +8902,7 @@ window.finNavCount = async () => {
         <div id="od-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadOdModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="od-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model odyssey[1m]</code><button onclick='copyToClipboard("/model odyssey[1m]", "команда /model odyssey[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadOdModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="od-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8826,7 +9058,7 @@ window.finNavCount = async () => {
         <div id="bai-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadBaiModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="bai-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model bai[1m]</code><button onclick='copyToClipboard("/model bai[1m]", "команда /model bai[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadBaiModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="bai-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -8986,7 +9218,7 @@ window.finNavCount = async () => {
         <div id="uk-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadUkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="uk-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model getunikey[1m]</code><button onclick='copyToClipboard("/model getunikey[1m]", "команда /model getunikey[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadUkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="uk-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -9148,7 +9380,7 @@ window.finNavCount = async () => {
         <div id="ap-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadApModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="ap-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model aipm[1m]</code><button onclick='copyToClipboard("/model aipm[1m]", "команда /model aipm[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadApModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="ap-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -9305,7 +9537,7 @@ window.finNavCount = async () => {
         <div id="hn-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — по мощности и популярности · клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadHnModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="hn-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model hcnsec[1m]</code><button onclick='copyToClipboard("/model hcnsec[1m]", "команда /model hcnsec[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadHnModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="hn-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -9431,7 +9663,7 @@ window.finNavCount = async () => {
         </div>
 
         <div id="ak-models" class="rounded-xl bg-surface border border-line-soft p-4">
-          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><button onclick="loadAkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><div class="flex items-center gap-2"><code id="ak-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model aikeysapi[1m]</code><button onclick='copyToClipboard("/model aikeysapi[1m]", "команда /model aikeysapi[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadAkModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div></div>
           <div id="ak-models-list" class="flex flex-wrap gap-1.5"><span class="text-[10px] text-faint">загрузка…</span></div>
         </div>
 
@@ -9583,7 +9815,7 @@ window.finNavCount = async () => {
         </div>
 
         <div id="rm-models" class="rounded-xl bg-surface border border-line-soft p-4">
-          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><button onclick="loadRmModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          <div class="flex items-center justify-between mb-3"><h2 class="text-sm font-semibold tracking-tight">Models · клик = применить · 📋 = копия id</h2><div class="flex items-center gap-2"><code id="rm-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model rumeng[1m]</code><button onclick='copyToClipboard("/model rumeng[1m]", "команда /model rumeng[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadRmModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div></div>
           <div id="rm-models-list" class="flex flex-wrap gap-1.5"><span class="text-[10px] text-faint">загрузка…</span></div>
         </div>
 
@@ -9705,7 +9937,7 @@ window.finNavCount = async () => {
         <div id="tb-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadTbModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="tb-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model tabi[1m]</code><button onclick='copyToClipboard("/model tabi[1m]", "команда /model tabi[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadTbModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="tb-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -9864,7 +10096,7 @@ window.finNavCount = async () => {
         <div id="xp-models" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
-            <button onclick="loadXpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+            <div class="flex items-center gap-2"><code id="xp-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model xpeach[1m]</code><button onclick='copyToClipboard("/model xpeach[1m]", "команда /model xpeach[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadXpModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
           </div>
           <div id="xp-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
@@ -10777,7 +11009,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -10810,7 +11042,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -11009,6 +11241,9 @@ function showTab(name) {
   // Google: гвард по typeof обязателен по той же причине - код в /vendor/google-tab.js,
   // подключённом в конце body, а восстановление вкладки на F5 зовёт showTab раньше.
   if (name === 'google' && !state.loaded.google) { state.loaded.google = true; if (typeof GOOGLE !== 'undefined') GOOGLE.load(); }
+  // Gemini: гвард по typeof обязателен по той же причине - код в /vendor/gemini-tab.js,
+  // подключённом в конце body.
+  if (name === 'gemini' && !state.loaded.gemini) { state.loaded.gemini = true; if (typeof GEMINI !== 'undefined') GEMINI.load(); }
   // Гвард по typeof — та же причина, что у лиги ниже: `grokRenderSaved` живёт в последнем
   // блоке скриптов, а восстановление вкладки на F5 зовёт `showTab` из блока 5. С открытой
   // вкладкой Grok летел `grokRenderSaved is not defined`, и исключение съедало всё, что
@@ -11022,6 +11257,7 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'vani') { if (!state.loaded.vani) { state.loaded.vani = true; loadVnSessions(false); } vnLoadKeepalive(); vnVisionLoad(); }
   if (name === 'dacall') { if (!state.loaded.dacall) { state.loaded.dacall = true; loadDcSessions(false); } dcLoadKeepalive(); }
   if (name === 'cleanapis') { if (!state.loaded.cleanapis) { state.loaded.cleanapis = true; loadCpSessions(false); } cpLoadKeepalive(); }
   if (name === 'artbloom') { if (!state.loaded.artbloom) { state.loaded.artbloom = true; loadAbSessions(false); } abLoadKeepalive(); }
@@ -11111,9 +11347,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -12596,8 +12832,10 @@ function popMenu(ev, items) {
 }
 
 // ещё нет — вместо ключа лежит заглушка `no-key-…`. Настоящий ключ у всех трёх
-// (NewAPI) — 'sk-' + 48 символов. Зеркало isRealKey() из transparent-proxy.js.
-function isRealKey(k) { return /^sk-/.test(String(k || '')); }
+// Зеркало isRealKey() из transparent-proxy.js. Кроме `sk-` принимает форму vani
+// (`vani_` + 64 hex): у этой панели ключи так не начинаются, и без этого таблица
+// объявляла живой ключ отсутствующим (та же грабля, что у ZhiFlow).
+function isRealKey(k) { return /^sk-/.test(String(k || '')) || /^vani_[A-Za-z0-9]{40,}$/.test(String(k || '')); }
 
 // Плашка вместо кнопки-активации у аккаунта без ключа.
 //
@@ -15656,6 +15894,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  vn: '/__switch/api/vn/keepalive',
   dc: '/__switch/api/dc/keepalive',
   cp: '/__switch/api/cp/keepalive',
   ab: '/__switch/api/ab/keepalive',
@@ -16032,6 +16271,57 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+// Vision-мост (self-applying, как pooldropFill): тумблер и поле модели шлют патч сразу,
+// без общей кнопки «Применить» - иначе один зеркальный контрол затирал бы другой.
+async function vnVisionLoad() {
+  try {
+    const r = await fetch('/__switch/api/vn/keepalive/state');
+    const d = await r.json();
+    const c = (d && d.cfg) || {};
+    if ($('vn-vision-bridge')) $('vn-vision-bridge').checked = !!c.visionBridge;
+    vnVisionFill(c.visionModel || '');
+    if ($('vn-vision-status')) $('vn-vision-status').textContent = c.visionBridge ? ('вкл · ' + (c.visionModel || '')) : 'выкл';
+  } catch (e) { /* keepalive лежит - оставляем тумблер как есть */ }
+}
+// Селектор описателя кормится каталогом моделей AgentRouter - той же серверной ручкой
+// `/__switch/api/routes/models`, что и селекты вкладки «Маршруты»: она ведёт всю цепочку
+// ключей (живой → ключ из пула → снимок на диске), поэтому список не пустой и при лежащем
+// шлюзе. Текущее значение держим в опциях, даже если его нет в каталоге: иначе селект
+// показал бы пусто и мост уехал бы на «как есть» - молча.
+async function vnVisionFill(current) {
+  const sel = $('vn-vision-model');
+  if (!sel) return;
+  let models = [];
+  try {
+    const d = await (await fetch('/__switch/api/routes/models?provider=agentrouter')).json();
+    models = (d && Array.isArray(d.models)) ? d.models : [];
+  } catch {}
+  // 🪤 Дефолт - `deepseek-v4-flash`, а не «первый по алфавиту». Без него пустой конфиг
+  // (keepalive лежит / ещё не активирован) давал селекту первый пункт каталога
+  // (`claude-opus-4-8`), и владелец видел выбранной совсем не ту модель.
+  const want = current || 'deepseek-v4-flash';
+  const rest = [...new Set(models)].filter(m => m && m !== want).sort();
+  const all = [want, ...rest];
+  sel.innerHTML = all.map(m =>
+    `<option value="${esc(m)}"${m === want ? ' selected' : ''}>${esc(m)}</option>`).join('');
+}
+async function vnVisionApply() {
+  const on = $('vn-vision-bridge') ? $('vn-vision-bridge').checked : false;
+  const model = $('vn-vision-model') ? $('vn-vision-model').value.trim() : '';
+  try {
+    const r = await fetch('/__switch/api/vn/keepalive/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visionBridge: on, visionModel: model || 'deepseek-v4-flash' }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || ('HTTP ' + r.status));
+    const c = d.cfg || {};
+    vnVisionFill(c.visionModel || '');
+    if ($('vn-vision-status')) $('vn-vision-status').textContent = c.visionBridge ? ('вкл · ' + (c.visionModel || '')) : 'выкл';
+    toast(c.visionBridge ? '🖼 Vision-мост вкл · картинки → ' + (c.visionModel || '') : '🖼 Vision-мост выкл', 'success', 3000);
+  } catch (e) { toast('Vision-мост: ' + e.message, 'error'); }
+}
+const vnLoadKeepalive   = () => loadKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcLoadKeepalive   = () => loadKeepaliveCard('dc', KEEPALIVE_API.dc);
 const cpLoadKeepalive   = () => loadKeepaliveCard('cp', KEEPALIVE_API.cp);
 const abLoadKeepalive   = () => loadKeepaliveCard('ab', KEEPALIVE_API.ab);
@@ -16043,6 +16333,7 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const vnApplyKeepalive  = () => applyKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcApplyKeepalive  = () => applyKeepaliveCard('dc', KEEPALIVE_API.dc);
 const cpApplyKeepalive  = () => applyKeepaliveCard('cp', KEEPALIVE_API.cp);
 const abApplyKeepalive  = () => applyKeepaliveCard('ab', KEEPALIVE_API.ab);
@@ -16071,6 +16362,7 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const vnResetKeepalive  = () => resetKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcResetKeepalive  = () => resetKeepaliveCard('dc', KEEPALIVE_API.dc);
 const cpResetKeepalive  = () => resetKeepaliveCard('cp', KEEPALIVE_API.cp);
 const abResetKeepalive  = () => resetKeepaliveCard('ab', KEEPALIVE_API.ab);
@@ -16108,6 +16400,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  vani: ['vn', '/__switch/api/vn/keepalive'],
   dacall: ['dc', '/__switch/api/dc/keepalive'],
   cleanapis: ['cp', '/__switch/api/cp/keepalive'],
   artbloom: ['ab', '/__switch/api/ab/keepalive'],
@@ -16249,7 +16542,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -16348,7 +16641,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -16676,6 +16969,7 @@ function moneyInOf(s) {
 function topUpWatch() {
   for (const prov of Object.keys(MONEY_PROVIDERS)) {
     if (prov === 'xpeach') continue;
+    if (MONEY_PROVIDERS[prov].noMoney) continue;   // проценты vani - не деньги
     const list = state[MONEY_PROVIDERS[prov].stateKey] || [];
     let gotIn = 0, gotOut = 0;
     for (const s of list) {
@@ -19127,6 +19421,701 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+// Пул vani по КВОТЕ, а не по деньгам: у free-плана денег нет, есть проценты расхода по
+// двум окнам из /v1/me (неделя + месяц). Считаем СРЕДНИЙ ОСТАТОК по аккаунтам с квотой -
+// как fmPoolStats у freemodel. Нет данных → окно считаем свежим.
+function vnPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0, noKey = 0;
+  let wSum = 0, wWith = 0, mSum = 0, mWith = 0;
+  let weekReset = null, monthEnd = null;
+  for (const s of (sessions || [])) {
+    total++;
+    if (!isRealKey(s.api_key)) { noKey++; continue; }
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') { dead++; continue; }
+    const q = s.quota || null;
+    if (q) {
+      if (typeof q.wpct === 'number') { wSum += (100 - q.wpct); wWith++; }
+      if (typeof q.mpct === 'number') { mSum += (100 - q.mpct); mWith++; }
+      if (!weekReset && q.week_reset) weekReset = q.week_reset;
+      if (!monthEnd && q.period_end) monthEnd = q.period_end;
+    }
+  }
+  const remPct = wWith ? Math.round(wSum / wWith) : (total ? Math.round((live / total) * 100) : 0);
+  const remMPct = mWith ? Math.round(mSum / mWith) : remPct;
+  return { live, dead, total, noKey, withQ: wWith, withQM: mWith, remPct, remMPct, weekReset, monthEnd };
+}
+function vnFmtReset(iso, what) {
+  if (!iso) return '';
+  try { return `⏳ ${what}: ${new Date(iso).toLocaleString('ru-RU')}`; } catch { return ''; }
+}
+function renderVnGauge() {
+  moneyAutoFetch('vani').then(() => moneyRotateToHistory('vani')).catch(() => {});
+  const st = vnPoolStats(state.vani);
+  renderEnergyGauge($('vn-energy'), {
+    title: 'Vani · запас пула (нед)',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-indigo">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.noKey > 0 ? `<span class="text-amber/80">${st.noKey} без ключа</span>` : '',
+      st.withQ ? `<span class="text-faint">${st.withQ} с недельной квотой</span>` : '',
+    ].filter(Boolean).join(''),
+    note: (st.withQ ? '' : 'Квота читается кнопкой 💳 «Балансы всех» — /v1/me ключом (проценты, не доллары). ')
+      + vnFmtReset(st.weekReset, 'неделя сбросится'),
+  });
+  renderEnergyGauge($('vn-energy-m'), {
+    title: 'Vani · общий (мес)',
+    pct: st.remMPct,
+    color: 'azure',
+    sub: `<span><span class="text-ink font-semibold">${st.withQM}</span> акк с месячной квотой</span>`,
+    note: vnFmtReset(st.monthEnd, 'месяц обновится'),
+  });
+}
+
+// ── Авторега vani (Camoufox) ────────────────────────────────────────────────
+// Скрипт vani/auto-add.py: ящик emailnator, форма входа без пароля, капча Turnstile
+// (движком, не решателем), код из письма, ключ. Этапы - из маркера VN_STAGE, не из текста
+// лога (формулировки правятся, индикатор соврал бы молча).
+const VN_STAGE_LABELS = {
+  mail:      ['📬', 'ящик'],
+  form:      ['📝', 'форма'],
+  turnstile: ['🛡️', 'капча'],
+  code:      ['⏳', 'жу код'],
+  verify:    ['🔑', 'вход'],
+  key:       ['🗝️', 'ключ'],
+  done:      ['✅', 'готово'],
+};
+
+function vnRenderStage(d) {
+  const el = $('vn-autoreg-stage');
+  if (!el) return;
+  const s = d.stage;
+  if (!s || !s.stage) { el.textContent = ''; return; }
+  const [icon, label] = VN_STAGE_LABELS[s.stage] || ['•', s.stage];
+  el.textContent = `${icon} ${label}`;
+  el.className = (s.stage === 'done' || !d.running)
+    ? 'text-[10px] font-mono text-faint'
+    : 'text-[10px] font-mono text-azure';
+}
+
+function vnRenderLog(d) {
+  const wrap = $('vn-autoreg-log-wrap');
+  const pre = $('vn-autoreg-log');
+  const err = $('vn-autoreg-log-err');
+  if (!wrap || !pre) return;
+  const out = Array.isArray(d.stdout) ? d.stdout : [];
+  const bad = Array.isArray(d.stderr) ? d.stderr : [];
+  if (!out.length && !bad.length) return;
+  if (state.vnLogHidden) return;
+  wrap.classList.remove('hidden');
+  const text = out.join('\n');
+  if (pre.textContent !== text) {
+    const follow = $('vn-autoreg-log-follow') ? $('vn-autoreg-log-follow').checked : true;
+    pre.textContent = text;
+    if (follow) pre.scrollTop = pre.scrollHeight;
+  }
+  const badText = bad.join('\n');
+  err.classList.toggle('hidden', !badText);
+  if (badText && err.textContent !== badText) { err.textContent = badText; err.scrollTop = err.scrollHeight; }
+}
+
+function vnAutoregLogHide() {
+  state.vnLogHidden = true;
+  $('vn-autoreg-log-wrap').classList.add('hidden');
+}
+
+async function vnAutoregStatus({ quiet = false } = {}) {
+  try {
+    const r = await fetch('/__switch/api/vn/autoreg/status');
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'status HTTP ' + r.status);
+    const running = !!d.running;
+    $('vn-autoreg-start').classList.toggle('hidden', running);
+    $('vn-autoreg-stop').classList.toggle('hidden', !running);
+    const result = d.result || {};
+    vnRenderStage(d);
+    vnRenderLog(d);
+    $('vn-autoreg-status').textContent = running
+      ? `идёт · цель ${d.want || 1} · pid ${d.pid || '-'}`
+      : (result.ok && result.key) ? `готово: ${result.email || ''}`
+        : d.failText ? d.failText
+          : d.exitCode != null ? `завершён · code ${d.exitCode}` : '';
+    // 🪤 Перечитываем таблицу БЕЗ каскада (`loadVnSessionsLight`), иначе «статус -> перезагрузка
+    // -> статус» зацикливается и вкладка мерцает (ровно этот баг был у ak).
+    if (!running && result.ok && result.key) await loadVnSessionsLight();
+    return running;
+  } catch (e) {
+    if (!quiet) toast('Авторег vani status: ' + e.message, 'error');
+    return false;
+  }
+}
+
+async function vnAutoregStart() {
+  try {
+    const r = await fetch('/__switch/api/vn/autoreg/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tier: 'scraper', mail: 'emailnator', want: Math.max(1, Math.min(50, Number($('vn-autoreg-want') ? $('vn-autoreg-want').value : 1) || 1)) }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    state.vnLogHidden = false;
+    $('vn-autoreg-log').textContent = '';
+    $('vn-autoreg-log-err').textContent = '';
+    $('vn-autoreg-log-err').classList.add('hidden');
+    toast('🤖 Vani: авторега запущена (Camoufox)', 'success');
+    await vnAutoregStatus({ quiet: true });
+    if (state.vnAutoregTimer) clearInterval(state.vnAutoregTimer);
+    state.vnAutoregTimer = setInterval(async () => {
+      const running = await vnAutoregStatus({ quiet: true });
+      if (!running) { clearInterval(state.vnAutoregTimer); state.vnAutoregTimer = null; }
+    }, 2500);
+  } catch (e) { toast('Авторег vani: ' + e.message, 'error'); }
+}
+
+async function vnAutoregStop() {
+  if (!confirm('Остановить авторегу vani? Незавершённый аккаунт может не попасть в пул.')) return;
+  try {
+    const r = await fetch('/__switch/api/vn/autoreg/stop', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'ошибка');
+    toast(d.stopped ? '■ остановка отправлена' : 'авторега уже завершена', 'info');
+    await vnAutoregStatus({ quiet: true });
+  } catch (e) { toast('Стоп: ' + e.message, 'error'); }
+}
+
+async function loadVnSessions(probe) {
+  if (probe) $('vn-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/vn/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.vani = data.sessions || [];
+    if ($('nav-count-vani')) $('nav-count-vani').textContent = state.vani.length;
+    await newapiEnsureGhNames(state.vani);
+    renderVn();
+    renderVnGauge();
+    loadVnModels();
+    loadVnModelMap();
+    vnAutoregStatus({ quiet: true });
+    if (probe) toast('✓ Vani: статусы обновлены', 'success');
+  } catch (e) {
+    $('vn-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadVnSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/vn/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.vani = data.sessions || [];
+    if ($('nav-count-vani')) $('nav-count-vani').textContent = state.vani.length;
+    renderVn();
+    renderVnGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadVnModels(force) {
+  const keys = state.vani
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('vn-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('vn-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/vn/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderVnModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('vn-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+// Ранг модели от СИЛЬНЕЙШЕЙ к слабейшей: семейство (opus > gpt-6-sol/astra > grok-4.7 >
+// sonnet > ... > haiku) + версия по убыванию, минус за дешёвые варианты (-fast/-flash/-luna).
+function vnModelRank(id) {
+  const s = String(id || '').toLowerCase();
+  let base = 400;
+  if (/opus/.test(s)) base = 1000;
+  else if (/gpt-6-astra|gpt-6-sol|gpt-6\.1/.test(s)) base = 950;
+  else if (/grok-4\.7/.test(s)) base = 930;
+  else if (/gemini-3\.[6-9]/.test(s)) base = 900;
+  else if (/sonnet/.test(s)) base = 850;
+  else if (/gpt-6-luna|gpt-6/.test(s)) base = 800;
+  else if (/gpt-5\.6/.test(s)) base = 760;
+  else if (/grok-4\.[56]/.test(s)) base = 740;
+  else if (/kimi-k3/.test(s)) base = 720;
+  else if (/glm-5/.test(s)) base = 680;
+  else if (/haiku/.test(s)) base = 650;
+  else if (/gemini/.test(s)) base = 620;
+  else if (/deepseek-v4/.test(s)) base = 600;
+  const ver = ((s.match(/\d+(?:\.\d+)?/g) || []).map(Number)).reduce((a, n) => Math.max(a, n), 0);
+  const cheap = /(-fast|-flash|-luna|mini)/.test(s) ? -60 : 0;
+  return base + Math.min(ver * 10, 90) + cheap;
+}
+async function renderVnModels(models) {
+  if (models) state.vnModels = models;
+  const list = [...(state.vnModels || [])].sort((a, b) => vnModelRank(b.id) - vnModelRank(a.id));
+  let active = state.vnActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/vn/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.vnActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('vn-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — indigo, а indigo же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-indigo/15 border border-indigo/50 text-indigo' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='vnSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + vani-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "vani")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderVnModelMap();
+}
+async function vnSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/vn/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.vnModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.vnActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderVnModels(state.vnModels);
+  } catch (e) { toast('vnSelectModel: ' + e.message, 'error'); }
+}
+
+function renderVn() {
+  const { list: all, total, q } = newapiRows(state.vani, 'vn');
+  if (!all.length) {
+    $('vn-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-indigo text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-indigo/5' : '';
+    const activeTag = active ? '<span class="text-indigo mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = vnBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderVnModels.
+    const keyCell = noKey ? noKeyCell(`vnSetKey(${idJ})`) : `<button onclick='vnActivate(${kJ})' title="Сделать активным (keepalive :20180 → api.vani.ai)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-indigo/10 border-indigo/50 text-indigo' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`vnCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`vnShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`vnSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`vnRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`vnActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`vnPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${actBtn(`vnOpenLk(${idJ})`,    noKey ? 'Открыть браузер входа (ключа нет)' : 'Открыть браузер аккаунта (баланс vani)', '🌐', 'violet')}
+        ${actBtn(`vnDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('vn-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'vn', q),
+    { sortProv: 'vn', accent: 'indigo' }
+  );
+}
+
+// vani - проценты квоты, а не деньги: ДВЕ шкалы-полоски на строку.
+// Сверху - НЕДЕЛЬНАЯ (цвет по остатку: зелёный/янтарный/красный), снизу - МЕСЯЧНАЯ
+// (всегда синяя, как вторая полоса пула) - чтобы полоски различались на глаз.
+function vnBalanceCell(s, kJ) {
+  if (!isRealKey(s.api_key)) return NO_KEY_BALANCE;
+  if (s.status === 'dead') return '<span class="text-crimson text-sm" title="ключ мёртв">🔴</span>';
+  const q = s.quota || {};
+  const mRem = (typeof q.mpct === 'number') ? Math.max(0, 100 - q.mpct) : null;
+  const wRem = (typeof q.wpct === 'number') ? Math.max(0, 100 - q.wpct) : null;
+  // Кнопка чека одного аккаунта (у строки своя, помимо «💳 Балансы всех»).
+  const checkBtn = `<button onclick='vnCheckBalance(${kJ})' title="Проверить квоту и баланс этого аккаунта" class="text-amber hover:text-ink text-sm leading-none px-0.5 shrink-0">💰</button>`;
+  if (mRem == null && wRem == null) {
+    return `<span class="inline-flex items-center gap-1">${checkBtn}<span class="text-faint font-mono text-[10px]">нет данных</span></span>`;
+  }
+  const healthFill = v => v > 50 ? 'bg-emerald' : v > 15 ? 'bg-amber' : 'bg-crimson';
+  const healthText = v => v > 50 ? 'text-emerald' : v > 15 ? 'text-amber' : 'text-crimson';
+  const bar = (lbl, v, fillCls, txtCls) => v == null ? '' : `
+    <div class="flex items-center gap-1.5" title="${lbl}: осталось ${Math.round(v)}%">
+      <span class="text-[9px] text-faint w-5 shrink-0">${lbl}</span>
+      <div class="h-1.5 rounded-full bg-elevated/80 border border-line-soft overflow-hidden w-[64px] shrink-0">
+        <div class="h-full rounded-full ${fillCls(v)}" style="width:${Math.round(v)}%"></div>
+      </div>
+      <span class="text-[9px] font-mono ${txtCls(v)} w-7 text-right shrink-0">${Math.round(v)}%</span>
+    </div>`;
+  return `<span class="inline-flex items-center gap-1.5">`
+    + `<span class="flex flex-col gap-1">${bar('нед', wRem, healthFill, healthText)}${bar('мес', mRem, () => 'bg-azure', () => 'text-azure')}</span>`
+    + checkBtn
+    + `</span>`;
+}
+
+function vnShowAdd(show = true) {
+  $('vn-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('vn');
+  if (show) { $('vn-add-email').value = ''; $('vn-add-key').value = ''; $('vn-add-email').focus(); }
+}
+async function vnAdd() {
+  const email = $('vn-add-email').value.trim();
+  const api_key = $('vn-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/vn/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.vn }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      vnShowAdd(false);
+      loadVnSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) vnOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function vnDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/vn/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadVnSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function vnShare(id) {
+  const cur = state.vani.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/vn/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Vani',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function vnShowImport(show = true) {
+  $('vn-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('vn-import-text').value = '';
+    $('vn-import-preview').innerHTML = '';
+    $('vn-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function vnImport() {
+  const share = $('vn-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('vn-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/vn/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('vn-import-preview').innerHTML = '';
+    vnShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadVnSessions(false);
+  } catch (e) {
+    $('vn-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли vani).
+async function vnSetKey(id) {
+  const cur = state.vani.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли vani после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/vn/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadVnSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (vnSetKey).
+async function vnRename(id) {
+  const cur = state.vani.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/vn/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadVnSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function vnActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/vn/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'vani';
+      state.urls.vani = 'http://localhost:20180';
+      paintStatus();
+      loadVnSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function vnPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/vn/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.vani.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.vani[idx].status = data.status;
+    renderVn();
+    renderVnGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function vnCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/vn/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.vani.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        if (data.quota) s.quota = data.quota;   // у vani баланс - проценты квоты, а не деньги
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderVn();
+    renderVnGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function vnCheckAllBalances() {
+  $('vn-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/vn/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.vani = data.sessions || [];
+    renderVn();
+    renderVnGauge();
+    balanceBatchToast(state.vani);
+  } catch (e) {
+    $('vn-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function vnSetBalance(api_key) {
+  return newapiSetBalanceUI('vn', api_key, () => state.vani, () => { renderVn(); renderVnGauge(); });
+}
+
+function vnMapProfiles() {
+  return newapiMapProfilesUI('vn', () => loadVnSessions(false));
+}
+
+async function vnOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/vn/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function vnCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → vani-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadVnModelMap() {
+  try {
+    const res = await fetch('/__switch/api/vn/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.vnModelMap = data.modelMap || {};
+    renderVnModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderVnModelMap() {
+  const mm = state.vnModelMap || {};
+  const models = (state.vnModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /vn/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя vani-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="vn-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('vn-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='vnSaveModelMap()' class="text-xs px-3 py-2 bg-indigo/10 border border-indigo/50 text-indigo rounded-lg hover:bg-indigo/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function vnSaveModelMap() {
+  const mm = {
+    opus: $('vn-mm-opus')?.value || '',
+    sonnet: $('vn-mm-sonnet')?.value || '',
+    haiku: $('vn-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/vn/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.vnModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -26986,11 +27975,18 @@ async function odAutoregStatus({ quiet = false } = {}) {
     const stageNote = d.stage && d.stage.note ? (' · ' + d.stage.note) : '';
     // Текст статуса говорит, что ПРОИСХОДИТ и что ДЕЛАТЬ, а не «code 4»: причина отказа
     // приходит с сервера готовой фразой (OD_AUTOADD_FAIL), и дублировать её тут незачем.
+    // 🪤 Исключение одно - сбой ОКРУЖЕНИЯ (`result.env`), и оно не прихоть. Общая фраза по
+    // коду отказа в этом случае называет не ту причину: код 8 расшифровывается как «прогони
+    // install-deps.sh», но КАКОГО интерпретатора не хватило, знает только сам прогон. Без
+    // этой ветки владелец читал бы в статусе общий совет, а точную причину искал в логе.
+    // Правка владельца (28.09.2026), в апстриме её нет — при обновлении возвращать.
+    const envFail = !running && d.result && !d.result.ok && d.result.env && d.result.error;
     $('od-autoreg-status').textContent = running
       ? (stageName ? `идёт: ${stageName}${stageNote}` : 'идёт')
       : (d.result && d.result.ok
         ? `готово · ${d.result.email || 'ключ в пуле'}`
-        : (d.failText ? 'ошибка: ' + d.failText : 'ожидание'));
+        : (envFail ? 'ошибка: ' + d.result.error
+          : (d.failText ? 'ошибка: ' + d.failText : 'ожидание')));
 
     if (running || (d.stdout && d.stdout.length) || (d.stderr && d.stderr.length)) {
       $('od-autoreg-log-wrap').classList.remove('hidden');
@@ -27198,7 +28194,7 @@ async function akSaveModelMap() {
 
 // ═══════════════════ RUMENG (如梦AI) ═══════════════════════════════
 // Провайдер `api.rumeng-ai.com` — десятый шлюз и структурная копия вкладки AIKeysAPI:
-// пул ключей + балансы + keepalive-активация через прокси :20166 + авторег с логом +
+// пул ключей + балансы + keepalive-активация через прокси :20180 + авторег с логом +
 // поиск прокси + share/import. Аккаунт идентифицируется id (не api_key).
 //
 // 🔴 ТРИ МЕСТА, ГДЕ 1:1 С ZhiFlow НЕ РАБОТАЕТ (и это НЕ про UI — бэкенд их прячет):
@@ -33564,6 +34560,11 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  // 🪤 noMoney: у vani баланс - ПРОЦЕНТЫ (0-100), не деньги. Ротация у него есть, поэтому
+  // запись в карте нужна (её читают sideAutoKind/moneyAutoFetch), а три ДЕНЕЖНЫХ места -
+  // карточка сайдбара, купюра topUpWatch и общий энергобар - обязаны его пропускать:
+  // иначе 100% свежего аккаунта рисуется как «$100.00», а пул складывает проценты (7 акков → $699).
+  vani:     { id: 'vani',     p: 'vn', stateKey: 'vani',     base: 5,   sym: '$',  label: 'Vani',     icon: '🧿', color: 'indigo', noMoney: true, reload: () => loadVnSessionsLight() },
   dacall:     { id: 'dacall',     p: 'dc', stateKey: 'dacall',     base: 5,   sym: '$',  label: 'dacall.AI',     icon: '📞', color: 'orange', reload: () => loadDcSessionsLight() },
   cleanapis:     { id: 'cleanapis',     p: 'cp', stateKey: 'cleanapis',     base: 5,   sym: '$',  label: 'Clean APIs',     icon: '🧼', color: 'blue', reload: () => loadCpSessionsLight() },
   artbloom:     { id: 'artbloom',     p: 'ab', stateKey: 'artbloom',     base: 5,   sym: '$',  label: 'Artbloom',     icon: '🌸', color: 'pink', reload: () => loadAbSessionsLight() },
@@ -33630,7 +34631,7 @@ function paintSideBalance() {
   // Провайдер без денежного баланса, либо данных ещё нет, либо у активного ключа
   // баланс не опрошен — блок просто не показываем. Пустая строка «—» врала бы,
   // что денег нет.
-  if (!mp || !act || typeof act.balance !== 'number') { box.classList.add('hidden'); return; }
+  if (!mp || mp.noMoney || !act || typeof act.balance !== 'number') { box.classList.add('hidden'); return; }
 
   const st = poolMoneyStat(accounts, mp.base);
   const pct = st.sumGrant > 0 ? Math.max(0, Math.min(100, Math.round((st.sumBalance / st.sumGrant) * 100))) : 0;
@@ -33769,7 +34770,7 @@ async function renderGlobalGauge() {
   // Правдивые провайдеры — из общей карты MONEY_PROVIDERS. Добавить нового = одна
   // запись там. fetchData возвращает массив аккаунтов вида
   // { api_key, status, balance, grant }.
-  const truthfulProviders = Object.values(MONEY_PROVIDERS).map(mp => ({
+  const truthfulProviders = Object.values(MONEY_PROVIDERS).filter(mp => !mp.noMoney).map(mp => ({
     ...mp,
     fetchData: () => moneySessions(mp.id),
     stat: (accounts) => poolMoneyStat(accounts, mp.base),
@@ -37119,7 +38120,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -37440,6 +38441,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'vani':       loadVnSessionsLight(); break;
       case 'dacall':       loadDcSessionsLight(); break;
       case 'cleanapis':       loadCpSessionsLight(); break;
       case 'artbloom':       loadAbSessionsLight(); break;
@@ -37460,6 +38462,7 @@ function autoRefreshTick() {
       case 'media':         if (typeof MEDIA !== 'undefined') MEDIA.refresh(); break;
       case 'github':        loadGhKeys(); break;
       case 'google':        if (typeof GOOGLE !== 'undefined') GOOGLE.refresh(); break;
+      case 'gemini':        if (typeof GEMINI !== 'undefined') GEMINI.refresh(); break;
       case 'outlook':       loadOlList(); break;
       case 'omniroute-pool': loadOmSessions(false); break;
       // Гвард по typeof — код вкладки во внешнем /vendor/models-tab.js, тик может
@@ -37527,6 +38530,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'vani',     fn: () => loadVnSessionsLight() },
   { tab: 'dacall',     fn: () => loadDcSessionsLight() },
   { tab: 'cleanapis',     fn: () => loadCpSessionsLight() },
   { tab: 'artbloom',     fn: () => loadAbSessionsLight() },
@@ -37555,6 +38559,9 @@ const NAV_COUNT_JOBS = [
   // Google: `mark` — та же причина, что у media. Задача заполняет цифру в сайдбаре и
   // рисует вкладку; список секретов не несёт (пароль приходит отдельной ручкой).
   { tab: 'google',      fn: () => (typeof GOOGLE !== 'undefined') && GOOGLE.load(), mark: 'google' },
+  // Gemini: задача ходит в хаб (не в Google) и приносит и список аккаунтов, и состояние
+  // сервера вкладки, поэтому `mark` — как у google.
+  { tab: 'gemini',      fn: () => (typeof GEMINI !== 'undefined') && GEMINI.load(), mark: 'gemini' },
   // Свои прокси: ТОЛЬКО цифра, без рендера вкладки. Так же, как cun/ot/vyceai ниже, и по
   // той же причине - цена.
   //
@@ -37686,7 +38693,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
@@ -44231,6 +45238,7 @@ setTimeout(() => { ladProbeRole(); }, 2500);
      Разбор — docs/MEDIA-TAB-SEAM.md, регресс — tools/check-media.js. -->
 <script src="/vendor/media-tab.js"></script>
 <script src="/vendor/google-tab.js"></script>
+<script src="/vendor/gemini-tab.js"></script>
 
 <!-- Вкладка «Свои прокси» — тем же приёмом: код (window.PROXIES) во внешней паре файлов.
      Регресс — tools/check-proxy-mapping.js (логика пула) и tools/check-proxy-admin.js. -->

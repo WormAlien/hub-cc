@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+log.txt
+
+# IDE
+.vscode/
+.idea/
+.history/
+
+# Local config (may contain tokens)
+.claude/
+.deepvcode/
+
+# Runtime data
+data/
+
+# Test artifacts
+tests/utils/*.png
+tests/utils/*.jpg
+tests/utils/*.jpeg
+
+# Environment
+.env
+.env.local
+
+# Build output
+dist/
+build/
+
+# Пул аккаунтов вкладки Gemini: refresh-токены Google, в репозиторий не уходят
+accounts.json
+__pycache__/
+

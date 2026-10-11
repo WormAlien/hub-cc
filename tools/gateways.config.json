@@ -108,5 +108,12 @@
     "HOST": "api-ru.dacall.ai", "PORT": 20177, "FOLDER": "dacall",
     "ICON": "📞", "COLOR": "orange", "REF": "",
     "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": true, "customPanel": true
+  },
+
+  "vani": {
+    "p": "vn", "P": "VN", "full": "vani", "NAME": "Vani",
+    "HOST": "api.vani.ai", "PORT": 20180, "FOLDER": "vani", "KEY_RE": "/^vani_[A-Za-z0-9]{40,}$/",
+    "ICON": "🧿", "COLOR": "indigo", "REF": "",
+    "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": true
   }
 }

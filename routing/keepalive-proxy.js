@@ -20,6 +20,10 @@
  *   3. Upstream-таймаут (UPSTREAM_TIMEOUT_MS): каждая попытка ограничена по
  *      времени — устраняет висящие минутами запросы (в логах были 129с).
  *   4. Не ретраить после отмены клиентом (проверка aborted перед retry).
+ *   5. NOSTREAM (2026-10-06, гейт по апстриму justwoker.icu / UPSTREAM_NOSTREAM=1): у
+ *      justwoker по `stream:true` блоки приходят БЕЗ текста, а без стрима ответ
+ *      нормальный. Наверх уходит `stream:false`, а SSE для Claude Code рисует
+ *      jsonMessageToSse. Цена: ответ приходит одним куском через ~4-12с.
  *
  * Запуск:
  *   node keepalive-proxy.js
@@ -330,6 +334,106 @@ const SIG_ERR_RE = /Invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
 function modelInBody(buf) {
     try { return String(JSON.parse((buf || Buffer.alloc(0)).toString('utf8') || '{}').model || ''); } catch { return ''; }
 }
+// ── Vision-мост ────────────────────────────────────────────────────────────────
+// Шлюзы вроде vani картинки НЕ принимают (400 на image-блок), а AgentRouter их ВИДИТ:
+// замер 12.09 (probe-vision.js) - `deepseek-v4-flash` «РЕАЛЬНО ВИДИТ и описывает скрин».
+// Мост берёт каждый image-блок из тела запроса, просит AR описать его и ПОДМЕНЯЕТ блок
+// текстом перед форвардом. Включается ручкой cfg.visionBridge (тумблер на вкладке шлюза),
+// модель - cfg.visionModel. Кэш по хэшу картинки гасит повторные вызовы AR.
+const AR_KEY_FILE = path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
+const VISION_CACHE = new Map();
+const VISION_CACHE_MAX = 50;
+function arKeyNow() {
+    try { return fs.readFileSync(AR_KEY_FILE, 'utf8').trim(); } catch (e) { return ''; }
+}
+function describeImage(imgBlock, model) {
+    return new Promise((resolve) => {
+        const key = arKeyNow();
+        const src = (imgBlock && imgBlock.source) || {};
+        if (!key || !src.data) return resolve(null);
+        const payload = Buffer.from(JSON.stringify({
+            model, max_tokens: 1024, stream: false,
+            messages: [{ role: 'user', content: [
+                { type: 'image', source: { type: 'base64', media_type: src.media_type || 'image/png', data: src.data } },
+                { type: 'text', text: 'Опиши ПОДРОБНО, что изображено на картинке. Текст на ней перепиши дословно. Если изображения не видишь - ответь ровно: НЕ ВИЖУ ИЗОБРАЖЕНИЕ.' },
+            ] }],
+        }), 'utf8');
+        const r = https.request({
+            hostname: 'agentrouter.org', port: 443, method: 'POST', path: '/v1/messages?beta=true',
+            headers: {
+                'content-type': 'application/json', 'content-length': payload.length,
+                'authorization': `Bearer ${key}`, 'x-api-key': key,
+                'user-agent': 'claude-cli/2.1.220 (external, sdk-cli)', 'x-app': 'cli',
+                'anthropic-version': '2023-06-01', 'accept': 'application/json', 'accept-encoding': 'identity',
+            }, timeout: 30000,
+        }, (res) => {
+            let buf = '';
+            res.on('data', (c) => { buf += c; });
+            res.on('end', () => {
+                try {
+                    const j = JSON.parse(buf);
+                    const txt = Array.isArray(j.content)
+                        ? j.content.filter((b) => b && b.type === 'text').map((b) => b.text).join('\n') : '';
+                    resolve(txt && txt.trim() ? txt.trim() : null);
+                } catch (e) { resolve(null); }
+            });
+        });
+        r.on('error', () => resolve(null));
+        r.on('timeout', () => { r.destroy(); resolve(null); });
+        r.end(payload);
+    });
+}
+// Возвращает новое тело (Buffer) со подменёнными картинками, либо null, если картинок нет
+// (текстовые запросы не трогаем - на них цена ноль). Ошибка AR не ломает запрос: блок
+// заменяется честной пометкой, форвард идёт дальше.
+async function visionBridgeBody(body) {
+    let j;
+    try { j = JSON.parse(body.toString('utf8') || '{}'); } catch (e) { return null; }
+    if (!Array.isArray(j.messages)) return null;
+    const crypto = require('crypto');
+
+    // 1. Собрать ВСЕ image-блоки, где бы они ни лежали. Обход РЕКУРСИВНЫЙ: картинка
+    // приезжает не только верхним уровнем сообщения, но и внутри `tool_result.content[]` -
+    // именно так её кладёт `Read` PNG-файла (набор скриншотов в сессии → тул-результаты).
+    // 🪤 Плоский обход верхнего уровня её ПРОПУСКАЛ, и vani отвечал
+    // `400 Unsupported Anthropic request field: source` - живая поломка 10.10.2026
+    // (дамп fail-perm-…: шесть картинок внутри tool_result, мост не сработал ни на одной).
+    const spots = [];   // { arr, i, b, h }
+    const walk = (arr) => {
+        if (!Array.isArray(arr)) return;
+        for (let i = 0; i < arr.length; i++) {
+            const b = arr[i];
+            if (!b || typeof b !== 'object') continue;
+            if (b.type === 'image' && b.source && b.source.data) {
+                spots.push({ arr, i, b, h: crypto.createHash('sha1').update(String(b.source.data)).digest('hex') });
+                continue;
+            }
+            if (Array.isArray(b.content)) walk(b.content);   // tool_result и родня
+        }
+    };
+    for (const m of j.messages) if (m && Array.isArray(m.content)) walk(m.content);
+    if (!spots.length) return null;
+
+    // 2. Описать УНИКАЛЬНЫЕ картинки ПАРАЛЛЕЛЬНО. Последовательный обход стоил ~5с на
+    // картинку, а в рабочей сессии их десятки (Read по PNG) - это минуты ожидания.
+    // Отказ одной не должен ронять весь мост: тело вернулось бы непреобразованным, и
+    // vani снова ответил бы 400.
+    const uniq = [...new Set(spots.map(s => s.h))];
+    const need = uniq.filter(h => !VISION_CACHE.has(h));
+    await Promise.all(need.map(async (h) => {
+        let desc = '';
+        try { desc = await describeImage(spots.find(s => s.h === h).b, cfg.visionModel); } catch (e) { /* ниже подставим заглушку */ }
+        VISION_CACHE.set(h, desc || '[vision-мост: изображение не удалось распознать]');
+    }));
+    while (VISION_CACHE.size > VISION_CACHE_MAX) VISION_CACHE.delete(VISION_CACHE.keys().next().value);
+
+    // 3. Подменить блоки описанием - клиент получает ответ, будто шлюз «увидел» картинку.
+    for (const s of spots) {
+        s.arr[s.i] = { type: 'text', text: `[vision-мост · ${cfg.visionModel}] ${VISION_CACHE.get(s.h)}` };
+    }
+    log(`vision-мост: ${spots.length} картинок (${need.length} новых) → ${cfg.visionModel}`);
+    return Buffer.from(JSON.stringify(j), 'utf8');
+}
 // 🔬 11.09 (вечер): тело запроса, умершего в бою, — на диск: и при исчерпании бюджета
 // ретраев, и на постоянной ошибке. Синтетические пробы проходят любую форму (1.35 МБ
 // разнородного текста, max_tokens 64000, тул-пара WebSearch — все 200), а реальные
@@ -506,6 +610,74 @@ let GPT_PROXY_ENABLED = !!HAIKU_GPT_PROXY
 // odyssey (как прочие per-шлюз gpt-правки). EMPTY_TEXT_FIX=1 — принудительно.
 let EMPTY_TEXT_FIX = process.env.EMPTY_TEXT_FIX === '1'
   || /(^|\.)odysseyapi\.tech$/i.test(upstream.hostname);
+
+// ── NOSTREAM: аварийный режим для шлюза, у которого пропал текст в потоке ───────
+// Включён был для justwoker с 06.10 (тогда его стрим отдавал блоки без текста). 09.10
+// выключен: шлюз починил потоковую отдачу - замер даёт текст, thinking и `tool_use` прямо
+// в потоке, первый байт ~1.7с против 8-10с у не-стрима. И не-стрим оказался структурно
+// хуже: ответ обязан уложиться в лимит Cloudflare (~100с), иначе `524` и обрыв - а поток
+// таких длинных ответов не боится, потому что данные идут непрерывно.
+// 🪤 Включать ТОЛЬКО если у шлюза снова пропадёт текст в потоке: UPSTREAM_NOSTREAM=1.
+const UPSTREAM_NOSTREAM = process.env.UPSTREAM_NOSTREAM === '1';
+
+// Разворот готового JSON-сообщения в валидный Anthropic-SSE (гейт UPSTREAM_NOSTREAM).
+// Текст берём из не-стрима и отдаём одним текстовым блоком с индексом 0: индексация
+// своя, поэтому кривизна их потока (блок размышлений с `index:1` и без блока 0) не
+// доезжает до клиента вовсе. Возвращает null, если тело не похоже на сообщение -
+// тогда путь остаётся прежним (ошибку отдаём как раньше).
+function jsonMessageToSse(text, echoName) {
+  let m;
+  try { m = JSON.parse(text); } catch (e) { return null; }
+  if (!m || !Array.isArray(m.content)) return null;
+  const u = m.usage || {};
+  const ev = (t, d) => `event: ${t}\ndata: ${JSON.stringify(d)}\n\n`;
+  let out = ev('message_start', { type: 'message_start', message: {
+    id: m.id || `msg_${Date.now().toString(36)}`, type: 'message', role: 'assistant',
+    // echoName, а не их model: иначе потеряется [1m]-инъекция и клиент посчитает окно по 200k
+    model: echoName || m.model || '', content: [], stop_reason: null, stop_sequence: null,
+    usage: { input_tokens: u.input_tokens || 0, output_tokens: 0 } } });
+  let idx = 0;
+  let sawTool = false;
+  for (const b of m.content) {
+    if (!b) continue;
+    if (b.type === 'text') {
+      const t = b.text || '';
+      if (!t) continue;                        // пустой блок клиенту не нужен
+      out += ev('content_block_start', { type: 'content_block_start', index: idx,
+        content_block: { type: 'text', text: '' } });
+      out += ev('content_block_delta', { type: 'content_block_delta', index: idx,
+        delta: { type: 'text_delta', text: t } });
+      out += ev('content_block_stop', { type: 'content_block_stop', index: idx });
+      idx += 1;
+    } else if (b.type === 'tool_use') {
+      // 🪤 09.10, регрессия первой версии: переносились ТОЛЬКО текстовые блоки, и вызов
+      // инструмента пропадал целиком. Клиент видел один текст без вызова и отвечал
+      // «The model's tool call could not be parsed (retry also failed)» - то есть на
+      // justwoker переставали работать все инструменты, хотя ответы шли.
+      sawTool = true;
+      out += ev('content_block_start', { type: 'content_block_start', index: idx,
+        content_block: { type: 'tool_use', id: b.id || `toolu_${Date.now().toString(36)}_${idx}`,
+          name: b.name || '', input: {} } });
+      out += ev('content_block_delta', { type: 'content_block_delta', index: idx,
+        delta: { type: 'input_json_delta', partial_json: JSON.stringify(b.input || {}) } });
+      out += ev('content_block_stop', { type: 'content_block_stop', index: idx });
+      idx += 1;
+    }
+    // thinking и прочее не переносим: подпись блока может быть поддельной, и её всё
+    // равно срежет stripFakeThinking на следующем ходу
+  }
+  if (idx === 0) {                             // ответ без содержимого - отдаём пустой текст
+    out += ev('content_block_start', { type: 'content_block_start', index: 0,
+      content_block: { type: 'text', text: '' } });
+    out += ev('content_block_stop', { type: 'content_block_stop', index: 0 });
+  }
+  out += ev('message_delta', { type: 'message_delta',
+    // stop_reason=end_turn при живом вызове клиент прочитал бы как «вызова нет»
+    delta: { stop_reason: sawTool ? 'tool_use' : (m.stop_reason || 'end_turn'), stop_sequence: null },
+    usage: { input_tokens: u.input_tokens || 0, output_tokens: u.output_tokens || 0 } });
+  out += ev('message_stop', { type: 'message_stop' });
+  return out;
+}
 
 // Стейт-машина над ГОТОВЫМИ SSE-событиями (режем по `\n\n`; одиночный \n границей не
 // считается, поэтому многобайтный UTF-8 на стыке чанков не рвётся). Пересобирает поток в
@@ -694,6 +866,9 @@ const DEFAULT_CFG = {
   maxAttempts: 3,
   maxHedges: 1,
   preCommitMs: 10000,
+  // Vision-мост: image-блоки уходят в AgentRouter (deepseek) за описанием. Дефолт - ВЫКЛ.
+  visionBridge: false,
+  visionModel: 'deepseek-v4-flash',
   // Таймаут ПРОСТОЯ сокета на попытку. Был константой 600000 мимо конфига — и это
   // единственная ручка, которую нельзя было покрутить, не пересобрав процесс.
   //
@@ -856,6 +1031,12 @@ const cfg = {
     ? DEFAULT_CFG.poolFallbackModel
     : String(process.env.POOL_FALLBACK_MODEL),
   poolDeadMs: Number(process.env.POOL_DEAD_MS || DEFAULT_CFG.poolDeadMs),
+  // Vision-мост: шлюз картинки не принимает (vani отвечает 400 на image-блок), а AgentRouter
+  // их видит. Мост вытаскивает image-блоки из запроса, просит `deepseek-v4-flash` описать
+  // их и подменяет картинки описанием перед форвардом. Ручка на вкладке шлюза, по умолчанию
+  // ВЫКЛ - у соседей картинки проходят родным путём, и включать мост им нельзя.
+  visionBridge: process.env.VISION_BRIDGE === '1',
+  visionModel: process.env.VISION_MODEL || 'deepseek-v4-flash',
 };
 
 // Числовая ручка из патча: мусор игнорируем, дурь зажимаем (иначе опечатка
@@ -885,7 +1066,11 @@ function patchNum(v, min, max, allowZero) {
 // Правило то же. 🪤 Поднятие версии АРХИВИРУЕТ keepalive-config-<порт>.json в
 // `.v6.bak` и переписывает его дефолтами: ручные preCommitMs/holdMs, выставленные на
 // живом инстансе, при первом же изменении настроек слетят к поставочным.
-const CFG_VERSION = 7;
+// v8 (2026-10-10): добавлены visionBridge и visionModel — vision-мост шлюза: картинки
+// уходят в AgentRouter за описанием, которое подменяет image-блоки. Правило то же: без
+// поднятия версии у тех, кто однажды нажал «Применить», нового поля в json нет. 🪤 Как и
+// у v3-v7 - версия АРХИВИРУЕТ keepalive-config-<порт>.json и переписывает дефолтами.
+const CFG_VERSION = 8;
 // Платный мульти-запрос: на плоскотарифных шлюзах дубль стоит полную цену запроса, поэтому там
 // его нельзя включить ни из json, ни из панели, ни curl'ом — только осознанным
 // ALLOW_PAID_HEDGE=1 при запуске процесса. Гвоздь прибит НАД конфигом намеренно:
@@ -946,6 +1131,8 @@ function loadConfig() {
   if (typeof c.poolFallbackModel === 'string') cfg.poolFallbackModel = c.poolFallbackModel.trim();
   const pd = patchNum(c.poolDeadMs, 60000, 86400000, true);
   if (pd !== null) cfg.poolDeadMs = pd;
+  if (typeof c.visionBridge === 'boolean') cfg.visionBridge = c.visionBridge;
+  if (typeof c.visionModel === 'string' && c.visionModel.trim()) cfg.visionModel = c.visionModel.trim();
 }
 function saveConfig() {
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
@@ -1002,6 +1189,10 @@ function applyPatch(p) {
   if ('poolDeadMs' in p) {
     const pd = patchNum(p.poolDeadMs, 60000, 86400000, true);
     if (pd !== null) cfg.poolDeadMs = pd;
+  }
+  if ('visionBridge' in p) cfg.visionBridge = !!p.visionBridge;
+  if ('visionModel' in p && typeof p.visionModel === 'string') {
+    cfg.visionModel = p.visionModel.trim() || 'deepseek-v4-flash';
   }
   const clamped = clampPaidHedge('патч конфига');
   saveConfig();
@@ -1483,7 +1674,7 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // другой. 403 доезжал до клиента, и Claude Code показывал владельцу «Please run /login» вместо
 // того, чтобы молча сменить аккаунт. 🪤 Ловим ФРАЗУ, а не слово `quota`: рядом живёт
 // `quota exceeded for this model` («нет прав на модель»), на которой ротация крутила бы пул зря.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -1510,7 +1701,14 @@ function leftUsd(s) { return moneyNum(s, '用户剩余额度', 'user\\s+quota');
 // Статус проверяем, чтобы фраза из чужого контекста (эхо тела в 200) не считалась
 // отказом. 402 сюда добавлен на будущее: в HTTP это и есть Payment Required.
 function rotateReason(status, buf) {
-  if (status !== 401 && status !== 402 && status !== 403) return null;
+  // 🪤 429 здесь ОБЯЗАТЕЛЕН, и его отсутствие тихо выключало ротацию у целого класса шлюзов.
+  // Живой случай 10.10.2026, vani: план отвечает `429 {"error":{"message":"You have used this
+  // week's allowance…"}}` - то есть ЛИМИТ КВОТЫ приходит как 429, а не 402. Без 429 ротация
+  // не срабатывала никогда: keepalive брал удержание (ждал до 120с), пул из семи живых
+  // аккаунтов стоял нетронутым, а снаружи это выглядело как «шлюз завис».
+  // Отбор по СМЫСЛУ остаётся: 429 ротирует только при совпадении с OUT_OF_BALANCE_RE,
+  // поэтому рядовой rate-limit (too many requests) аккаунт не меняет.
+  if (status !== 401 && status !== 402 && status !== 403 && status !== 429) return null;
   const s = buf.toString('utf8');
   if (OUT_OF_BALANCE_RE.test(s)) return 'out-of-balance';
   if (DEAD_KEY_RE.test(s)) return 'dead';
@@ -1533,6 +1731,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'api.vani.ai': 'vn',
   'api-ru.dacall.ai': 'dc',
   'cleanapis.com': 'cp',
   'api.artbloom.tech': 'ab',
@@ -1964,6 +2163,7 @@ const server = http.createServer((req, res) => {
   let thinkStripTried = false;
   let tgt = null;                 // результат remapHaiku
   let streaming = false;          // стримовый запрос (ранний SSE + identity)
+  let noStreamSynth = false;      // NOSTREAM: наверх без стрима, SSE рисуем сами (jsonMessageToSse)
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
   let echoName = '';              // имя для ответа клиенту: clientModel + [1m]-инъекция (echoModelFor)
   let modelEchoDone = false;      // имя модели в ответе уже подменено (message_start)
@@ -2238,6 +2438,28 @@ const server = http.createServer((req, res) => {
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
           if (!res.writableEnded && !res.destroyed) res.destroy(err);
         });
+      } else if (noStreamSynth && status >= 200 && status < 300 && !compressed) {
+        // NOSTREAM: шлюз отдал готовый JSON вместо потока (justwoker, 06.10) - это НЕ ошибка,
+        // а нормальный ответ шлюза со сломанной потоковой отдачей. Разворачиваем в SSE сами;
+        // без этой ветки клиент получил бы in-band error на живом ответе.
+        const nb = [];
+        stream.on('data', (c) => nb.push(c));
+        stream.on('end', () => {
+          if (aborted || res.writableEnded) return;
+          const raw = Buffer.concat(nb);
+          const sse = jsonMessageToSse(raw.toString('utf8'), echoName);
+          if (!sse) { inbandError(status, raw); return; }
+          const sseBuf = Buffer.from(sse, 'utf8');
+          log(`${req.method} ${reqPath} NOSTREAM: JSON ${status} развёрнут в SSE (${sseBuf.length}Б)`);
+          contentSent = true;
+          sentBytes += sseBuf.length;
+          res.write(sseBuf);
+          noteStop(sseBuf);
+          noteBytes(sseBuf);
+          stopTimer();
+          if (!res.writableEnded) res.end();
+        });
+        stream.on('error', () => inbandError(status, Buffer.alloc(0)));
       } else {
         // не-2xx после исчерпания ретраев / сжатый поток → in-band SSE-ошибка
         const ec = [];
@@ -2265,6 +2487,40 @@ const server = http.createServer((req, res) => {
       }
     }
 
+    // NOSTREAM (пре-коммита не было): клиент просил поток, а шлюз отдал готовый JSON.
+    // Отдаём под text/event-stream нарисованный SSE - как JSON его разберёт только
+    // не-стримовый клиент, а Claude Code стримит всегда.
+    if (!isSSE && noStreamSynth) {
+      const nb = [];
+      stream.on('data', (c) => nb.push(c));
+      stream.on('end', () => {
+        if (aborted || res.writableEnded || res.destroyed) return;
+        const raw = Buffer.concat(nb);
+        const sse = (status >= 200 && status < 300) ? jsonMessageToSse(raw.toString('utf8'), echoName) : null;
+        if (!sse) {                       // не сообщение или отказ - отдаём как есть, прежним поведением
+          if (!res.headersSent) res.writeHead(status, hdrs);
+          if (!res.writableEnded) res.end(raw);
+          return;
+        }
+        if (!res.headersSent) {
+          res.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+          });
+        }
+        const sseBuf = Buffer.from(sse, 'utf8');
+        log(`${req.method} ${reqPath} NOSTREAM: JSON ${status} развёрнут в SSE (${sseBuf.length}Б)`);
+        contentSent = true;
+        sentBytes += sseBuf.length;
+        res.write(sseBuf);
+        noteStop(sseBuf);
+        noteBytes(sseBuf);
+        stopTimer();
+        if (!res.writableEnded) res.end();
+      });
+      stream.on('error', () => { if (!res.writableEnded) res.destroy(); });
+      return;
+    }
     if (!isSSE) {
       // Не-stream ответ: тело целиком уже в буфере (forwardBuffered), можно
       // подменить имя модели и пересчитать content-length.
@@ -2979,7 +3235,7 @@ const server = http.createServer((req, res) => {
     bodyChunks.push(c);
     bodySize += c.length;
   });
-  req.on('end', () => {
+  req.on('end', async () => {
     const rawBody0 = Buffer.concat(bodyChunks, bodySize);
     rawBody = rawBody0;
     // Каталог моделей шлюза освежаем в фоне, НЕ дожидаясь: этот запрос уедет по той
@@ -3038,6 +3294,15 @@ const server = http.createServer((req, res) => {
         }
       }
     }
+    // Vision-мост: картинки → AgentRouter (deepseek) → текст. Только если включён тумблером
+    // на вкладке шлюза (cfg.visionBridge). Текстовые запросы выходят из visionBridgeBody
+    // сразу, ценой ноль. Порядок: ПОСЛЕ ремапа и срезок, ДО заголовков/форварда.
+    if (cfg.visionBridge && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+      try {
+        const vb = await visionBridgeBody(reqBody);
+        if (vb) { reqBody = vb; stats.remaps += 1; }
+      } catch (e) { log(`vision-мост сорвался: ${e.message}`); }
+    }
     // 🔬 11.09: снимок заголовков ПРЯМЫХ glm-запросов — на диск, рядом с дампами тел.
     // Разбор того дня упёрся в бисект хопов только потому, что снимка заголовков не
     // было: тело оказалось невиновно, а виноват content-length. Пишем и входящую
@@ -3066,6 +3331,21 @@ const server = http.createServer((req, res) => {
       if (sent && !res.headersSent) res.setHeader('x-actual-model', sent);
     } catch (e) { /* не-JSON тело: реальную модель знать неоткуда, заголовка не будет */ }
     streaming = wantsStream(req.method, reqPath, req.headers, reqBody);
+    // Гейт NOSTREAM: клиент просит поток, а шлюз отдаёт по стриму пустоту. Просим у него
+    // готовый JSON (не-стрим у justwoker работает), а SSE нарисуем сами в forward().
+    // 🪤 Тело правим ПОСЛЕ wantsStream: иначе прокси решил бы, что клиент потока не просил,
+    // и потерял бы и пре-коммит, и удержание, и защиту от пустого потока.
+    if (UPSTREAM_NOSTREAM && streaming && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+      try {
+        const j = JSON.parse(reqBody.toString('utf8') || '{}');
+        if (j.stream === true) {
+          j.stream = false;
+          reqBody = Buffer.from(JSON.stringify(j), 'utf8');
+          noStreamSynth = true;
+          log(`${req.method} ${reqPath} NOSTREAM: наверх без стрима, SSE рисуем сами`);
+        }
+      } catch (e) { /* не-JSON тело — переключать нечего */ }
+    }
     // Пре-коммит (v1tusha): открываем SSE клиенту только после cfg.preCommitMs
     // тишины от upstream, не сразу. 0 = отложенный пре-коммит выключен.
     if (streaming && cfg.preCommitMs > 0 && preTimer === null) {
@@ -3119,6 +3399,38 @@ const server = http.createServer((req, res) => {
 if (process.argv[2] === 'selftest') {
   const assert = require('assert');
   const parse = (b) => JSON.parse(b.toString('utf8'));
+
+  // ── NOSTREAM: разворот готового JSON в SSE (jsonMessageToSse) ────────────────
+  // justwoker (06.10): по стриму блоки приходят без текста, в не-стриме текст есть.
+  // Проверяем, что разворот даёт валидный поток и что кривизна их индексов не проезжает.
+  {
+    const j = JSON.stringify({ id: 'msg_1', model: 'claude-opus-4-8', stop_reason: 'end_turn',
+      content: [{ type: 'thinking', thinking: 'размышление' }, { type: 'text', text: 'привет' }],
+      usage: { input_tokens: 11, output_tokens: 22 } });
+    const sse = jsonMessageToSse(j, 'claude-opus-4-8[1m]');
+    assert.ok(sse && sse.includes('event: message_start'), 'NOSTREAM: поток начинается message_start');
+    assert.ok(sse.includes('"model":"claude-opus-4-8[1m]"'), 'NOSTREAM: имя в ответе - эхо с [1m], не их model');
+    assert.ok(sse.includes('"text":"привет"'), 'NOSTREAM: текст из не-стрима доехал до клиента');
+    assert.ok(sse.includes('event: content_block_stop') && sse.includes('event: message_stop'),
+      'NOSTREAM: блок закрыт и поток закрыт');
+    assert.ok(!/"index":[1-9]/.test(sse), 'NOSTREAM: индексы только нулевые — их `index:1` не переносим');
+    assert.ok(!/"type":"thinking"/.test(sse), 'NOSTREAM: блок размышлений в поток не идёт');
+    assert.strictEqual(jsonMessageToSse('не json вовсе', 'x'), null, 'NOSTREAM: не-JSON → null');
+    assert.strictEqual(jsonMessageToSse('{"error":{"code":"x"}}', 'x'), null, 'NOSTREAM: отказ шлюза → null');
+
+    // 🪤 Регрессия 09.10: переносились только текстовые блоки, и вызов инструмента
+    // пропадал - клиент отвечал «The model's tool call could not be parsed».
+    const jt = JSON.stringify({ id: 'msg_2', model: 'claude-opus-4-8', stop_reason: 'end_turn',
+      content: [{ type: 'text', text: 'Сейчас прочитаю файл.' },
+                { type: 'tool_use', id: 'toolu_abc', name: 'Read', input: { file_path: '/etc/hosts' } }] });
+    const st = jsonMessageToSse(jt, 'claude-opus-4-8[1m]');
+    assert.ok(st.includes('"type":"tool_use"'), 'NOSTREAM: блок tool_use доехал до клиента');
+    assert.ok(st.includes('"id":"toolu_abc"') && st.includes('"name":"Read"'), 'NOSTREAM: id и имя инструмента на месте');
+    assert.ok(st.includes('input_json_delta') && st.includes('/etc/hosts'), 'NOSTREAM: аргументы вызова доехали');
+    assert.ok(st.includes('"stop_reason":"tool_use"'), 'NOSTREAM: stop_reason переключён на tool_use');
+    assert.ok(st.indexOf('"index":0') < st.indexOf('"index":1'), 'NOSTREAM: блоки идут по порядку, индексы без дырок');
+    assert.ok(!/"index":[2-9]/.test(st), 'NOSTREAM: лишних индексов нет');
+  }
 
   // ── Фильтр пустого text-блока odyssey (makeEmptyTextFilter) ──────────────────
   // Точный поток odyssey: пустой text (idx0) без дельт, thinking (idx1) с дельтой,

@@ -334,9 +334,13 @@ section('прогон `add-gateway.js check` · эталон и остальны
         const want = expectAbsent(config[name]);
         check(q.absent === want.length, `«${name}»: ослаблений ${q.absent}, по флагам посчитано независимо ${want.length}`);
         check(q.total === (spec.points || []).length, `«${name}»: инструмент прошёл все точки (${q.total} из ${(spec.points || []).length})`);
-        // Код возврата — единственное, чем этот инструмент управляет снаружи: 0 ⟺ пропусков нет.
-        check((q.missed === 0) === (res.code === 0),
-            `«${name}»: код ${res.code} соответствует ${q.missed} пропускам (0 пропусков ⟺ код 0)`);
+        // Код возврата — единственное, чем этот инструмент управляет снаружи: 0 ⟺ пропусков
+        // нет И порт свободен. С 10.10 у кода вторая причина — сторож портов (дубль порта
+        // ломает карту спавна keepalive молча), и он тоже даёт 1. Читаем её из вывода, а не
+        // из кода: тест повторяет контракт, а не реализацию.
+        const clash = /🔴 ПОРТ \d+ ЗАНЯТ ЧУЖИМ ШЛЮЗОМ/.test(res.out);
+        check((q.missed === 0 && !clash) === (res.code === 0),
+            `«${name}»: код ${res.code} соответствует ${q.missed} пропускам${clash ? ' + занятому порту' : ''} (0 пропусков и свободный порт ⟺ код 0)`);
         console.log(`  · ${name}: ${q.ok}/${q.total} на месте, ${q.absent} ослаблений, ${q.missed} пропусков — цифра к сведению, вердикт не отсюда`);
     }
 }
@@ -446,7 +450,8 @@ section('add-gateway.js · контракт');
         `сухой прогон не тронул ни одного файла (сверено ${touched.size} по sha1)${changedFiles.length ? ' — ИЗМЕНЕНЫ: ' + changedFiles.join(', ') : ''}`);
     check(/--write/.test(toolSrc), 'флаг --write у apply на месте (запись только осознанным действием)');
 
-    check(/missing\.length\s*\?\s*1\s*:\s*0/.test(toolSrc), 'пропуски возвращают код 1 — иначе провал не виден ни глазами, ни скриптом');
+    check(/\(\s*missing\.length\s*\|\|\s*clash\s*\|\|\s*badKey\s*\)\s*\?\s*1\s*:\s*0/.test(toolSrc),
+        'пропуски, занятый порт или незашитая форма ключа возвращают код 1 — иначе провал не виден ни глазами, ни скриптом');
     check(/process\.exit\(main\(\)\)/.test(toolSrc), 'код возврата пробрасывается из main() (process.exit(main()))');
 
     // Отчёт (`check`) и план (`plan`) читают ОДНУ спеку и обязаны видеть её одинаково:
@@ -782,6 +787,68 @@ section('маршруты и обвязка · полнота спеки (уро
     // по коду, а не по похожести площадки.
     check(tool.toTarget('const label = 1;', tool.tokenPairs(config.artbloom, config.cleanapis)) === 'const lcpel = 1;',
         'двухбуквенный префикс подменяется внутри слова — источник клона выбирать по коду (грабля 01.10)');
+}
+
+// ── блок 9: сторож портов ────────────────────────────────────────────────────
+// Грабля 10.10.2026, vani: конфиг просил порт 20166, а тот уже держал rumeng - вкладка,
+// заведённая руками и в gateways.config.json отсутствующая. Дубль порта ломает карту
+// спавна keepalive молча (поднимается последний), а симптом выглядит как «вкладка не
+// поднимается». Сторож обязан ловить это сам, из трёх источников сразу, и отменять запись.
+{
+    const tool = require(ADD_GATEWAY);
+    check(typeof tool.portAudit === 'function' && typeof tool.portConflicts === 'function',
+        'сторож портов экспортирован (portAudit/portConflicts)');
+
+    // Синтетика на два шлюза с ОДНИМ портом: конфиг-источник обязан поймать и назвать чужого.
+    const fake = {
+        alpha: { p: 'al', P: 'AL', full: 'alpha', NAME: 'Alpha', HOST: 'a.example', PORT: 20001 },
+        beta: { p: 'be', P: 'BE', full: 'beta', NAME: 'Beta', HOST: 'b.example', PORT: 20001 },
+        gamma: { p: 'ga', P: 'GA', full: 'gamma', NAME: 'Gamma', HOST: 'c.example', PORT: 20002 },
+    };
+    const clashAlpha = tool.portConflicts(fake.alpha, 'alpha', fake);
+    check(clashAlpha.length === 1 && /Beta/.test(clashAlpha[0]),
+        'дубль порта в конфиге ловится, и назван именно ЧУЖОЙ шлюз (Beta)');
+    check(tool.portConflicts(fake.gamma, 'gamma', fake).length === 0,
+        'свой порт без соседей чужим не считается (Gamma чиста)');
+
+    // Живая грабля: vani после развязки 10.10 обязан быть чист на своём порту.
+    const cfgNow = tool.loadConfig();
+    if (cfgNow.vani) {
+        check(tool.portConflicts(cfgNow.vani, 'vani', cfgNow).length === 0,
+            'живой vani чист на своём порту (развязка с rumeng, 10.10)');
+    }
+
+    // Сторож врезан во ВСЕ три команды, а не только в check: определение + три вызова.
+    const src = fs.readFileSync(ADD_GATEWAY, 'utf8');
+    const calls = (src.match(/portGuard\(/g) || []).length;
+    check(calls >= 4, `portGuard зовётся в check/plan/apply (вхождений ${calls}, нужно >=4)`);
+    check(/if \(clash \|\| badKey\)[\s\S]{0,200}запись отменена/.test(src),
+        'при записи порт-коллизия (или незашитая форма ключа) отменяет её целиком, как дефект');
+}
+
+// ── блок 10: сторож формы ключа ──────────────────────────────────────────────
+// Грабля 10.10.2026, vani: `isRealKey` знал только `/^sk-/`, а ключи вида `vani_<64hex>`
+// сочли заглушкой - вкладка показала «нет ключа» при ЖИВОМ ключе, и правили руками в двух
+// зеркалах. Форма заявлена в конфиге полем `KEY_RE`, сторож сверяет ОБА зеркала.
+{
+    const tool = require(ADD_GATEWAY);
+    check(typeof tool.keyGuard === 'function', 'сторож формы ключа экспортирован (keyGuard)');
+
+    // Синтетика: форма заведомо не зашита -> сторож обязан вернуть true.
+    check(tool.keyGuard('vani', { KEY_RE: '/^zzz_nope_[0-9]{9}$/' }, {}) === true,
+        'незашитая форма ключа ловится (сторож вернул true)');
+
+    // Живая vani: форма зашита в оба зеркала -> чисто. И проверяем ОБА файла напрямую,
+    // без инструмента, иначе тест повторит его же ошибку.
+    const cfgNow = tool.loadConfig();
+    if (cfgNow.vani && cfgNow.vani.KEY_RE) {
+        const re = cfgNow.vani.KEY_RE;
+        check(tool.keyGuard('vani', cfgNow.vani, cfgNow) === false,
+            'живой vani: форма ключа зашита в оба зеркала');
+        check(fs.readFileSync(path.join(REPO, 'routing', 'transparent-proxy.js'), 'utf8').includes(re)
+            && fs.readFileSync(path.join(REPO, 'routing', 'proxy-dashboard.html'), 'utf8').includes(re),
+            'форма ключа vani реально есть в обоих файлах (сверка без инструмента)');
+    }
 }
 
 // ── итог ──────────────────────────────────────────────────────────────────────

@@ -1,0 +1,31 @@
+{
+  "_comment": "Образец пула аккаунтов вкладки Gemini. Рабочий файл — accounts.json рядом; в него пишет сервер после входа через Google. Секретов здесь нет и быть не должно.",
+  "accounts": [
+    {
+      "email": "example@gmail.com",
+      "source": "oauth",
+      "enabled": true,
+      "dbPath": null,
+      "refreshToken": "<кладёт сервер после входа: rt|projectId|managedProjectId>",
+      "addedAt": "2026-10-02T00:00:00.000Z",
+      "isInvalid": false,
+      "invalidReason": null,
+      "verifyUrl": null,
+      "modelRateLimits": {},
+      "lastUsed": null,
+      "subscription": {
+        "tier": "pro",
+        "projectId": "aicode-consumers",
+        "detectedAt": 1790000000000
+      },
+      "quota": {
+        "models": {
+          "gemini-3.8-flash-tiered": { "remainingFraction": 0.83, "resetTime": "2026-10-02T12:00:00Z" }
+        },
+        "lastChecked": 1790000000000
+      }
+    }
+  ],
+  "settings": {},
+  "activeIndex": 0
+}

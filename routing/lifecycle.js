@@ -139,6 +139,15 @@ function children() {
         { port: frontdoorPort(), name: 'Front Door', respawn: true },
         { port: 20132, name: 'AR-конвертер', respawn: true },
         { port: 20133, name: 'AgentRouter keepalive', respawn: true },
+        // Вкладка Gemini: сервер держит пул Google-аккаунтов, их тир и квоту, и вкладка обязана
+        // показывать это, НЕ будучи активным бэкендом. Поэтому `respawn: true` (поднимается на
+        // старте хаба, как AgentRouter), а не `false` — иначе цифры во вкладке были бы мёртвыми
+        // до первого переключения на Gemini. Порт, попав сюда, сам резервируется от аллокатора
+        // Custom-конвертеров (routing/lib/custom-ports.js читает эту же таблицу).
+        { port: 20178, name: 'Gemini (Antigravity)', respawn: true },
+        // Шлюз вкладки Gemini (keepalive перед её движком): переводит имена моделей Claude Code
+        // в модели Antigravity. Поднимается активацией, как у остальных неактивных шлюзов.
+        { port: 20179, name: 'Gemini шлюз', respawn: false },
         { port: 20155, name: 'Tabi keepalive', respawn: false },
         { port: 20156, name: 'GoRouter keepalive', respawn: false },
         { port: 20157, name: 'XPeach keepalive', respawn: false },
@@ -146,6 +155,7 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20180, name: 'Vani keepalive', respawn: false },
         { port: 20177, name: 'dacall.AI keepalive', respawn: false },
         { port: 20164, name: 'Clean APIs keepalive', respawn: false },
         { port: 20176, name: 'Artbloom keepalive', respawn: false },

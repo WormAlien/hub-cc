@@ -484,11 +484,122 @@ function specFiles(spec) {
     return files;
 }
 
+// ── сторож портов ────────────────────────────────────────────────────────────
+//
+// Порт — единственная точка вкладки, которую инструмент брал из конфига и НИ С ЧЕМ не
+// сверял. Живой случай 10.10.2026, vani: конфиг просил 20166, а тот уже держал rumeng —
+// вкладка, заведённая РУКАМИ (`RM_KEEPALIVE_PORT ... || 20166` в transparent-proxy.js, в
+// gateways.config.json её нет вовсе). На диске обе записи легли молча, а в бою карта
+// спавна `maps.spawn` получила два одинаковых ключа - и `keepaliveBring(20166)` поднимал
+// rumeng вместо vani. Симптом «вкладка не поднимается» лечился не там, где причина.
+//
+// Поэтому перед check/plan/apply порт шлюза сверяется с ТРЕМЯ источниками сразу:
+//   1. gateways.config.json - PORT каждого шлюза (владелец = ключ конфига);
+//   2. routing/lifecycle.js - `port: N, name: '<NAME> keepalive'`;
+//   3. routing/transparent-proxy.js - `const <P>_KEEPALIVE_PORT = N;` (и форма с env).
+// Владелец каждой заявки резолвится в ключ конфига (по NAME и по префиксу); не
+// резолвился - значит вкладка заведена руками, и это тоже повод сказать, а не молчать.
+
+function readFileSafe(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } }
+
+/** Заявки на порты: Map<порт, Set<владелец>> + подписи владельцев для отчёта. */
+function portAudit(config) {
+    const claims = new Map();
+    const labels = new Map();
+    const add = (port, owner, label) => {
+        const p = Number(port);
+        if (!p) return;
+        if (!claims.has(p)) claims.set(p, new Set());
+        claims.get(p).add(owner);
+        if (!labels.has(owner)) labels.set(owner, label);
+    };
+
+    const byName = {}, byPrefix = {};
+    for (const [key, gw] of Object.entries(config)) {
+        if (key.startsWith('_')) continue;
+        byName[String(gw.NAME || '').toLowerCase()] = key;
+        byPrefix[String(gw.P || '').toUpperCase()] = key;
+        add(gw.PORT, key, `${gw.NAME || key} (gateways.config.json)`);
+    }
+
+    const life = readFileSafe(path.join(REPO, 'routing', 'lifecycle.js'));
+    for (const m of life.matchAll(/port:\s*(\d+)\s*,\s*name:\s*'([^']+)'/g)) {
+        const nm = m[2].replace(/\s+keepalive\s*$/i, '').trim();
+        const owner = byName[nm.toLowerCase()] || ('lifecycle:' + nm.toLowerCase());
+        add(m[1], owner, `${m[2]} (lifecycle.js)`);
+    }
+
+    const tp = readFileSafe(path.join(REPO, 'routing', 'transparent-proxy.js'));
+    for (const m of tp.matchAll(/const\s+([A-Z0-9]+)_KEEPALIVE_PORT\s*=\s*(?:Number\(\s*process\.env\.[A-Z0-9_]+\s*\|\|\s*)?(\d+)/g)) {
+        const owner = byPrefix[m[1]] || ('prefix:' + m[1].toLowerCase());
+        add(m[2], owner, `${m[1]}_KEEPALIVE_PORT (transparent-proxy.js)`);
+    }
+
+    return { claims, labels };
+}
+
+/** Чужие заявки на порт шлюза -> массив подписей. Свои (ключ/NAME/префикс) отброшены. */
+function portConflicts(gw, name, config) {
+    const { claims, labels } = portAudit(config);
+    const own = new Set([
+        name,
+        `lifecycle:${String(gw.NAME || '').toLowerCase()}`,
+        `prefix:${String(gw.P || '').toLowerCase()}`,
+    ]);
+    const foreign = [];
+    for (const o of (claims.get(Number(gw.PORT)) || new Set())) {
+        if (own.has(o)) continue;
+        foreign.push(labels.get(o) || o);
+    }
+    return foreign;
+}
+
+/** Печать сторожа перед check/plan/apply. true - порт занят чужим (заводить нельзя). */
+function portGuard(name, gw, config) {
+    const foreign = portConflicts(gw, name, config);
+    if (!foreign.length) return false;
+    console.log(`${C.bad}${C.b}🔴 ПОРТ ${gw.PORT} ЗАНЯТ ЧУЖИМ ШЛЮЗОМ${C.off}`);
+    for (const f of foreign) console.log(`${C.bad}   • ${f}${C.off}`);
+    console.log(`${C.dim}   Порт кейсует карту спавна keepalive: при дубле поднимется ПОСЛЕДНИЙ, и вкладка молча уйдёт на чужой шлюз. Возьми свободный порт в gateways.config.json.${C.off}`);
+    console.log('');
+    return true;
+}
+
+// ── сторож формы ключа ───────────────────────────────────────────────────────
+//
+// Живой случай 10.10.2026, vani: общий `isRealKey` знал только `/^sk-/`, а ключи vani -
+// `vani_<64hex>`. Вкладка показывала `no_key` при ЖИВОМ ключе, и правили руками в ДВУХ
+// зеркалах (бэкенд `transparent-proxy.js` + дашборд `proxy-dashboard.html`). Форма ключа -
+// свойство ПЛОЩАДКИ, а не эталона, поэтому заявлена в конфиге шлюза полем `KEY_RE`
+// (JS-литерал регекспа целиком, со слэшами). Сторож проверяет, что форма ЗАШИТА в ОБА
+// зеркала: разъедутся - дашборд покажет ключ, а бэкенд сочтёт его заглушкой (`no_key`).
+
+const KEY_MIRRORS = [
+    ['бэкенд', path.join(REPO, 'routing', 'transparent-proxy.js')],
+    ['дашборд', path.join(REPO, 'routing', 'proxy-dashboard.html')],
+];
+
+/** Печать сторожа формы ключа. true - форма заявлена, но не зашита в зеркало(-а). */
+function keyGuard(name, gw, config) {
+    if (!gw.KEY_RE) return false;
+    const missing = [];
+    for (const [label, file] of KEY_MIRRORS) {
+        if (!readFileSafe(file).includes(gw.KEY_RE)) missing.push(label);
+    }
+    if (!missing.length) return false;
+    console.log(`${C.bad}${C.b}🔴 ФОРМА КЛЮЧА ${gw.KEY_RE} НЕ ЗАШИТА: ${missing.join(', ')}${C.off}`);
+    console.log(`${C.dim}   Ключи такой формы сочтут заглушкой - вкладка покажет «нет ключа» при живом ключе. Впиши ветку в оба зеркала isRealKey().${C.off}`);
+    console.log('');
+    return true;
+}
+
 function runCheck(name, spec, config) {
     const gw = gwOrDie(name, config);
     const files = specFiles(spec);
 
     gwHead(gw);
+    const clash = portGuard(name, gw, config);
+    const badKey = keyGuard(name, gw, config);
     console.log('');
 
     let ok = 0, absent = 0;
@@ -533,8 +644,9 @@ function runCheck(name, spec, config) {
             .map(p => p.id);
         console.log(`${C.dim}ослабления (ожидаемы): ${list.join(', ')}${C.off}`);
     }
+    if (clash || badKey) console.log(`${C.bad}${C.b}ВЕРДИКТ КРАСНЫЙ НЕ ИЗ-ЗА ТОЧЕК - порт занят или форма ключа не зашита.${C.off}`);
 
-    return missing.length ? 1 : 0;
+    return (missing.length || clash || badKey) ? 1 : 0;
 }
 
 // ── план правок (вывод) ──────────────────────────────────────────────────────
@@ -571,6 +683,8 @@ function runPlan(name, spec, config) {
     for (const it of items) tally[it.state] += 1;
 
     gwHead(gw);
+    const clash = portGuard(name, gw, config);
+    const badKey = keyGuard(name, gw, config);
     console.log(`${C.dim}легенда: ${Object.values(STATE).map(s => `${s.mark} ${s.plain}`).join(' · ')}${C.off}`);
     console.log(`${C.dim}файлов: ${groups.size}, точек: ${items.length}; внутри файла — сверху вниз${C.off}\n`);
 
@@ -609,8 +723,9 @@ function runPlan(name, spec, config) {
         const list = items.filter(i => i.state === 'skip').map(i => i.id);
         console.log(`${C.dim}ослабления (ожидаемы): ${list.join(', ')}${C.off}`);
     }
+    if (clash || badKey) console.log(`${C.bad}${C.b}ПОРТ ЗАНЯТ ИЛИ ФОРМА КЛЮЧА НЕ ЗАШИТА - заводить нельзя.${C.off}`);
 
-    return tally.bad ? 1 : 0;
+    return (tally.bad || clash || badKey) ? 1 : 0;
 }
 
 // ── apply: вставка кода эталона в целевые файлы ──────────────────────────────
@@ -1061,6 +1176,8 @@ function runApply(name, spec, config, write) {
     for (const it of items) tally[it.status] += 1;
 
     gwHead(dst);
+    const clash = portGuard(name, dst, config);
+    const badKey = keyGuard(name, dst, config);
     console.log(`${C.dim}эталон: ${srcName} · режим: ${write ? `${C.bad}ЗАПИСЬ${C.off}` : `${C.ok}сухой прогон${C.off} — файлы не тронуты`}${C.off}\n`);
 
     for (const it of items) {
@@ -1112,7 +1229,12 @@ function runApply(name, spec, config, write) {
     }
 
     // 🪤 Дефект при записи — стоп целиком: часть вкладки в файле хуже, чем ни одной,
-    // потому что «наполовину заведённый» шлюз выглядит рабочим.
+    // потому что «наполовину заведённый» шлюз выглядит рабочим. Порт-коллизия — тот же
+    // стоп, только раньше: дублирующийся порт ломает карту спавна молча.
+    if (clash || badKey) {
+        console.error(`\n${C.bad}Порт занят или форма ключа не зашита — запись отменена целиком, файлы не тронуты.${C.off}`);
+        return 1;
+    }
     if (tally.bad) {
         console.error(`\n${C.bad}Есть дефекты (${tally.bad}) — запись отменена целиком, файлы не тронуты.${C.off}`);
         return 1;
@@ -1257,4 +1379,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments };
+module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments, portAudit, portConflicts, portGuard, keyGuard };

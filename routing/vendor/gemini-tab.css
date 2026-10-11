@@ -1,0 +1,330 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   gemini-tab.css — вкладка «Gemini» дашборда ABUSE HUB (:8200)
+
+   Пул Google-аккаунтов, отдающих модели Gemini и Claude в Claude Code через подписку:
+   карточка на аккаунт, тир подписки, шкала остатка квоты, список моделей с остатком по
+   каждой и кнопки управления сервером вкладки.
+
+   🔴 Форма взята с вкладки Google (`google-tab.css`), а не из головы: это тот же язык,
+      что у GitHub и «Моделей», только переписанный под нас. Числа — из шкалы Tailwind,
+      которой набран дашборд:
+
+        отступы      4 / 8 / 12 / 16 / 24 / 32 px
+        радиусы      4 / 6 (rounded-md) / 8 (rounded-lg) / 12 (rounded-xl)
+        кегли        24 (text-2xl) / 14 (text-sm) / 12 (text-xs) / 10 (text-[10px])
+        карточка     8 px радиус, тело 16 px, вертикальный зазор 10 px
+        кнопка       28 px высоты, радиус 6
+
+   🪤 Префикс `--color-` обязателен: дашборд объявляет токены через Tailwind 4 `@theme` и
+      навешивает `--color-*` инлайном на <html>; коротких имён вроде `--surface` нет.
+
+   🪤 Своих hex здесь быть не должно: захардкоженный цвет делает панель тёмным островом на
+      светлых темах. Смешивать только `color-mix(in oklab, …)`.
+
+   🪤 Шрифты — из дашборда (`--font-sans` / `--font-mono`), не системные: моноширинные
+      имена моделей и проценты на системном шрифте «плывут».
+
+   🔴 Разметку рисует `gemini-tab.js`, а не статический HTML, поэтому Tailwind-утилиты
+      здесь не соберутся — вся форма живёт в этом файле.
+
+   🪤 Статус НИКОГДА не одним цветом: цвет + знак + слово. И «не смогли измерить» (тир
+      неизвестен, квоту ещё не спрашивали) не выглядит как «сломан».
+   ════════════════════════════════════════════════════════════════════════════ */
+
+.gm-wrap {
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  box-sizing: border-box;
+}
+.gm-wrap *, .gm-wrap *::before, .gm-wrap *::after { box-sizing: inherit; }
+.gm-toasts, .gm-toasts * { box-sizing: border-box; }
+
+.gm-mono { font-family: var(--font-mono), ui-monospace, monospace; }
+
+/* ── Шапка ─────────────────────────────────────────────────────────────────── */
+
+.gm-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.gm-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--color-ink);
+  letter-spacing: -0.01em;
+}
+.gm-sub { margin-top: 4px; font-size: 14px; color: var(--color-muted); }
+.gm-note {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-dim);
+  max-width: 720px;
+}
+.gm-live { color: var(--color-emerald); font-weight: 600; }
+.gm-ok { color: var(--color-emerald); }
+.gm-bad { color: var(--color-crimson); }
+.gm-dim { color: var(--color-dim); }
+.gm-small { font-size: 11px; }
+
+.gm-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ── Кнопки ────────────────────────────────────────────────────────────────── */
+
+.gm-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  color: var(--color-ink);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+.gm-btn:hover { background: color-mix(in oklab, var(--color-elevated), var(--color-ink) 8%); }
+.gm-btn-go {
+  border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
+  background: color-mix(in oklab, var(--color-emerald) 12%, transparent);
+  color: var(--color-emerald);
+}
+.gm-btn-go:hover { background: color-mix(in oklab, var(--color-emerald) 20%, transparent); }
+.gm-btn-dim { color: var(--color-dim); }
+.gm-btn[disabled] { opacity: 0.5; cursor: default; }
+
+/* ── Панель авторизации аккаунта ───────────────────────────────────────────── */
+
+.gm-auth-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.gm-auth-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gm-auth-mail { font-size: 13px; color: var(--color-ink); overflow-wrap: anywhere; }
+.gm-input {
+  height: 28px;
+  min-width: 260px;
+  flex: 1;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  color: var(--color-ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  padding: 0 8px;
+}
+.gm-hint-warn {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklab, var(--color-amber) 45%, transparent);
+  background: color-mix(in oklab, var(--color-amber) 10%, transparent);
+  color: var(--color-amber);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ── Панель (сообщение, каталог) ───────────────────────────────────────────── */
+
+.gm-panel {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  background: var(--color-surface);
+  padding: 16px;
+}
+.gm-panel-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--color-dim);
+  margin-bottom: 8px;
+}
+
+/* ── Сетка карточек ────────────────────────────────────────────────────────── */
+
+.gm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.gm-card {
+  border: 1px solid var(--color-line-soft);
+  border-radius: 8px;
+  background: var(--color-surface);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.gm-card-off { opacity: 0.55; }
+
+.gm-card-head { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.gm-mail {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 14px;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+.gm-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Плашки статуса: цвет + слово, не цветом единым ────────────────────────── */
+
+.gm-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-line);
+  color: var(--color-muted);
+  background: var(--color-elevated);
+  white-space: nowrap;
+}
+.gm-tier-pro {
+  border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
+  color: var(--color-emerald);
+  background: color-mix(in oklab, var(--color-emerald) 12%, transparent);
+}
+.gm-tier-ultra {
+  border-color: color-mix(in oklab, var(--color-violet) 50%, transparent);
+  color: var(--color-violet);
+  background: color-mix(in oklab, var(--color-violet) 12%, transparent);
+}
+.gm-tier-free {
+  border-color: color-mix(in oklab, var(--color-azure) 50%, transparent);
+  color: var(--color-azure);
+  background: color-mix(in oklab, var(--color-azure) 12%, transparent);
+}
+.gm-tier-unknown { color: var(--color-dim); }
+.gm-tag-off { color: var(--color-dim); }
+.gm-tag-bad {
+  border-color: color-mix(in oklab, var(--color-crimson) 50%, transparent);
+  color: var(--color-crimson);
+  background: color-mix(in oklab, var(--color-crimson) 12%, transparent);
+}
+.gm-tag-warn {
+  border-color: color-mix(in oklab, var(--color-amber) 50%, transparent);
+  color: var(--color-amber);
+  background: color-mix(in oklab, var(--color-amber) 12%, transparent);
+}
+.gm-tag-dim { color: var(--color-dim); }
+
+/* ── Шкала квоты: контейнер, саму полосу рисует renderEnergyGauge ───────────── */
+
+.gm-energy { min-height: 44px; }
+.gm-unmeasured {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--color-faint);
+  border: 1px dashed var(--color-line-soft);
+  border-radius: 6px;
+  padding: 0 12px;
+}
+
+.gm-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.gm-card-foot { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Список моделей ────────────────────────────────────────────────────────── */
+
+.gm-models { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Панель тиров: три выбираемых значения, как на вкладке AgentRouter ──────── */
+
+.gm-map { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.gm-map-row { display: flex; align-items: center; gap: 8px; }
+.gm-map-tier {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--color-muted);
+  min-width: 56px;
+}
+.gm-select {
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-elevated);
+  color: var(--color-ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  padding: 0 8px;
+  max-width: 320px;
+}
+.gm-map-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.gm-mt { margin-top: 16px; }
+
+/* Модель-каталог: тег стал кнопкой — значит нужен вид нажимаемого */
+button.gm-tag { cursor: pointer; font-family: var(--font-mono), ui-monospace, monospace; }
+button.gm-tag:hover { border-color: color-mix(in oklab, var(--color-ink) 40%, transparent); }
+.gm-tag-on {
+  border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent);
+  color: var(--color-emerald);
+  background: color-mix(in oklab, var(--color-emerald) 12%, transparent);
+}
+.gm-models-open {
+  border-top: 1px solid var(--color-line-soft);
+  padding-top: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.gm-models-list { display: flex; flex-direction: column; gap: 4px; }
+.gm-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+}
+.gm-model-name { color: var(--color-muted); overflow-wrap: anywhere; }
+.gm-model-left { font-family: var(--font-mono), ui-monospace, monospace; color: var(--color-ink); text-align: right; }
+
+/* ── Тосты ─────────────────────────────────────────────────────────────────── */
+
+.gm-toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+.gm-toast {
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  max-width: 420px;
+}
+.gm-toast-ok { border-color: color-mix(in oklab, var(--color-emerald) 50%, transparent); }
+.gm-toast-bad { border-color: color-mix(in oklab, var(--color-crimson) 50%, transparent); }
+
+/* ── Брейкпоинты: те же, что у остальных вкладок ───────────────────────────── */
+
+@media (max-width: 1024px) {
+  .gm-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+}
+@media (max-width: 640px) {
+  .gm-wrap { padding: 16px 12px; }
+  .gm-grid { grid-template-columns: 1fr; }
+  .gm-head { align-items: flex-start; }
+  .gm-title { font-size: 20px; }
+}
+@media (min-width: 1536px) {
+  .gm-grid { grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); }
+}

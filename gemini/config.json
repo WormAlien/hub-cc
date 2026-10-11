@@ -1,0 +1,9 @@
+{
+  "port": 20178,
+  "webuiPassword": "",
+  "debug": false,
+  "logLevel": "info",
+  "maxAccounts": 50,
+  "tokenCacheTtlMs": 3000000,
+  "quotaCacheTtlMs": 600000
+}

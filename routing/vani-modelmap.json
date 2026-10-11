@@ -1,0 +1,5 @@
+{
+  "opus": "openai/gpt-6-astra",
+  "sonnet": "openai/gpt-6-astra",
+  "haiku": "deepseek/deepseek-v4.1-flash"
+}

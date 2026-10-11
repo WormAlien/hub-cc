@@ -148,6 +148,17 @@ const SQLITE_EXE = process.env.SQLITE3
 // При смене порта править оба места (ниже стоит ассерт на расхождение).
 const AR_KEEPALIVE_URL_EARLY = 'http://localhost:20133';
 
+// То же для вкладки Gemini: Claude Code смотрит на её ШЛЮЗ (keepalive :20177), а сам сервер
+// вкладки (вендор Antigravity-прокси) слушает :20178. Два порта, а не один, — и это не
+// усложнение ради усложнения: сервер принимает ТОЛЬКО родные имена моделей Antigravity,
+// а Claude Code присылает `claude-opus-5` из своего `settings.model`. Переводит имя по дороге
+// keepalive — ровно так, как у двадцати остальных шлюзов. Без него первый же запрос падал
+// `400 Invalid model: claude-opus-5` (живой случай 02.10.2026).
+// Канонический источник портов — `routing/lib/gemini-routes.js`; литерал здесь потому, что
+// BACKENDS объявлен выше подключения модуля. При смене портов править оба места.
+// 02.10: 20177 занят dacall.AI keepalive, поэтому шлюз переехал на 20179, а движок - на 20178.
+const GEMINI_KEEPALIVE_URL_EARLY = 'http://127.0.0.1:20179';
+
 const BACKENDS = {
     agentrouter: {
         label: 'AgentRouter (opus-5 1M)',
@@ -232,6 +243,18 @@ const BACKENDS = {
         // ключ живёт в kktoken-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    vani: {
+        label: 'Vani',
+        base_url: 'http://localhost:20180',
+        api_key: 'dummy',           // real key keepalive reads from vani-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20180) → api.vani.ai (БЕЗ /v1).
+        // Активация через handleVnActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в vani-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: держит SSE-паузы thinking-моделей и режет
+        // [1m]-суффиксы. Прежнее «каждый четвёртый 403» - факт эталона, у vani не замерен.
     },
     dacall: {
         label: 'dacall.AI',
@@ -372,6 +395,20 @@ const BACKENDS = {
         api_key: 'dummy',
         model: null,
         clear_helper: true,
+    },
+    gemini: {
+        label: 'Gemini (Antigravity, подписка Google)',
+        // Не шлюз по ключу, а свой сервер вкладки: Anthropic-совместимый API поверх Google
+        // Cloud Code (вендор Antigravity-прокси, см. `gemini/`). Ключа нет вовсе — сервер
+        // слушает только петлю, поэтому подставляем `dummy`: Claude Code обязан что-то послать,
+        // а наш сервер это не проверяет.
+        base_url: GEMINI_KEEPALIVE_URL_EARLY,
+        api_key: 'dummy',
+        model: null,
+        clear_helper: true,
+        // 🪤 Модели у него СВОИ и в тир-карте (`gemini-modelmap.json`), а не стандартные имена
+        // Claude Code: без карты запрос уедет именем `claude-opus-5`, которого Google не знает.
+        // Тир-карта ложится прямо в `ANTHROPIC_DEFAULT_*_MODEL` — см. geminiApplyTiers.
     },
     rumeng: {
         label: 'rumeng',
@@ -561,6 +598,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    vani: 'vani',
     dacall: 'dacall',
     cleanapis: 'cleanapis',
     artbloom: 'artbloom',
@@ -574,6 +612,7 @@ const CC_MODEL_PREFIX = {
     aipm: 'aipm',
     aikeysapi: 'aikeysapi',
     ak: 'aikeysapi',
+    gemini: 'gemini',
     rumeng: 'rumeng',
     hcnsec: 'hcnsec',
     ourtoken: 'ot',
@@ -847,8 +886,9 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 // route-сегментов самого дашборда (/__switch/api/ap/…, /jw/…) и из CC_MODEL_PREFIX.
 const BACKEND_ALIASES = {
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
+    gm: 'gemini',
     rm: 'rumeng',
     om: 'omniroute', cdt: 'conduit', ot: 'ourtoken',
 };
@@ -1024,7 +1064,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // НЕ равен CC_MODEL_PREFIX: у gorouter карта зовётся `gorouter-modelmap.json`
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -1108,7 +1148,42 @@ function writeTierMap(file, patch, emptyAs) {
         mm[k] = clean || (emptyAs === null ? null : '');
     }
     fs.writeFileSync(file, JSON.stringify(mm, null, 2) + '\n', 'utf8');
+    mirrorTierMapPair(file, mm);
     return mm;
+}
+
+// Зеркало двух тир-карт одного шлюза.
+//
+// У шлюза их ДВЕ: `<p>-modelmap.json` (путь активного бэкенда, правится на вкладке шлюза)
+// и `<p>-routes-modelmap.json` (префиксный путь, правится во вкладке «Маршруты»). До
+// 11.10.2026 правка одной вторую не трогала, и владелец видел в двух местах РАЗНОЕ:
+// «чтобы маппинг на вкладке синхронизировался с Маршрутами». Теперь любая запись тир-карты
+// зеркалит общие тиры (opus/sonnet/haiku) в ПАРНУЮ карту - но только если та на диске ЕСТЬ
+// (новых файлов не заводим: у шлюза без routes-карты префиксного пути и не было).
+//
+// 🪤 Хук стоит в `writeTierMap`, а не в ручках: через неё идут ВСЕ записи тир-карт (~20
+// ручек `<p>/modelmap` + `routeWriteTier`), поэтому синхронизация покрывает весь флот
+// разом, а не по одной правке на вкладку. `_tierMirrorBusy` рвёт рекурсию: зеркало пишет
+// парную карту - тем же `writeTierMap`, и без флага оно зеркалило бы назад бесконечно.
+const TIER_MIRROR_TIERS = ['opus', 'sonnet', 'haiku'];
+let _tierMirrorBusy = false;
+function mirrorTierMapPair(file, mm) {
+    if (_tierMirrorBusy) return;
+    const base = path.basename(file);
+    let sib = null;
+    if (base.endsWith('-routes-modelmap.json')) {
+        sib = path.join(path.dirname(file), base.replace(/-routes-modelmap\.json$/, '-modelmap.json'));
+    } else if (base.endsWith('-modelmap.json')) {
+        sib = path.join(path.dirname(file), base.replace(/-modelmap\.json$/, '-routes-modelmap.json'));
+    }
+    if (!sib || !fs.existsSync(sib)) return;
+    const shared = {};
+    for (const t of TIER_MIRROR_TIERS) if (mm[t] != null) shared[t] = mm[t];
+    if (!Object.keys(shared).length) return;
+    _tierMirrorBusy = true;
+    try { writeTierMap(sib, shared, ''); }
+    catch (e) { logLine(`tier-mirror ${base}: ${e.message}`); }
+    finally { _tierMirrorBusy = false; }
 }
 
 // Запись ОДНОГО тира из вкладки «Маршруты».
@@ -1942,8 +2017,10 @@ function makeKeepaliveHandlers(port) {
                 //   `poolFallbackModel` — фолбэк при пустом пуле наливки
                 //     (`402 Budget pool quota has been exhausted`), `''` выключает фичу;
                 //   `poolDeadMs` — TTL памяти процесса о мёртвой модели.
+                //   `visionBridge`/`visionModel` — vision-мост: картинки уходят в AgentRouter
+                //     (deepseek) за описанием, которое подменяет image-блоки (тумблер на вкладке).
                 const KNOBS = ['hedgeMs', 'maxHedges', 'maxAttempts', 'preCommitMs',
-                               'poolFallbackModel', 'poolDeadMs'];
+                               'poolFallbackModel', 'poolDeadMs', 'visionBridge', 'visionModel'];
                 if (!KNOBS.some(k => k in patch))
                     return jsonRes(res, 400, { error: 'ожидался { ' + KNOBS.join('?, ') + '? }' });
                 const r = await keepaliveFetch('POST', '/__config', patch, port);
@@ -2005,6 +2082,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveVn = makeKeepaliveHandlers(Number(process.env.VN_KEEPALIVE_PORT || 20180));
 const keepaliveDc = makeKeepaliveHandlers(Number(process.env.DC_KEEPALIVE_PORT || 20177));
 const keepaliveCp = makeKeepaliveHandlers(Number(process.env.CP_KEEPALIVE_PORT || 20164));
 const keepaliveAb = makeKeepaliveHandlers(Number(process.env.AB_KEEPALIVE_PORT || 20176));
@@ -3754,6 +3832,18 @@ try {
 } catch (e) {
     tgVenvPython = () => path.join(__dirname, '..', 'tools', 'tg-venv', 'Scripts', 'python.exe');
 }
+
+// Правка владельца (28.09.2026), в апстриме её нет — при обновлении возвращать.
+// Тем же приёмом - интерпретатор для Camoufox-скриптов (авторега Odyssey и чтение её
+// кабинета). Он САМ откатывается на глобальный python, если venv нет, поэтому запасной
+// вариант в catch - ровно то, чем дашборд зовёт остальной Python: на машинах со
+// глобальной установкой camoufox (install-deps.sh) поведение не меняется вовсе.
+let camoufoxPython;
+try {
+    camoufoxPython = require('../tools/camoufox-python.js');
+} catch (e) {
+    camoufoxPython = () => process.env.PYTHON || 'python';
+}
 const TG_OPEN_PY = path.join(__dirname, '..', 'tools', 'tg-open.py');
 
 async function handleTgOpen(req, res) {
@@ -4627,7 +4717,7 @@ customSweepOrphanProxyConfigs();
 // были бы второй копией: разъехалась бы она молча, а заметили бы по чужому шлюзу в логе.
 const { PORT_MIN: CUSTOM_PROXY_PORT_MIN, PORT_MAX: CUSTOM_PROXY_PORT_MAX } = (() => {
     try { return require('./lib/custom-ports'); }
-    catch { return { PORT_MIN: 20150, PORT_MAX: 20250 }; }
+    catch { return { PORT_MIN: 20150, PORT_MAX: 20299 }; }
 })();
 
 function customLoad() {
@@ -4654,14 +4744,14 @@ function customReadActiveProvider() {
     return null;
 }
 
-// Порты 20150–20250 под Anthropic→OpenAI прокси Custom-провайдеров.
+// Порты 20150–20299 под Anthropic→OpenAI прокси Custom-провайдеров.
 // Провайдер с заполненным modelMap (opus/sonnet/haiku) не умеет Anthropic API
 // напрямую → активация спавнит custom-openai-proxy.js и направляет CC на него.
 function customProxyConfigFile(id) {
     return path.join(os.homedir(), '.claude', `custom-${id}-proxy.json`);
 }
 
-// 🪤 Keepalive шлюзов сидят на 20155–20164 — ВНУТРИ диапазона кастомов 20150–20250.
+// 🪤 Keepalive шлюзов сидят на 20155–20164 — ВНУТРИ диапазона кастомов 20150–20299.
 // Бинд-проба от этого не спасает: пока keepalive неактивного шлюза не поднят, порт
 // свободен, аллокатор его отдаёт, а потом шлюз стартовать уже не может. Разбор,
 // список и фолбэк — routing/lib/custom-ports.js.
@@ -4712,7 +4802,7 @@ async function customSpawnProxy(provider) {
             if (!free) port = null;
         }
         if (!port) port = await customFindFreePort();
-        if (!port) return { ok: false, error: 'нет свободного порта 20150–20250' };
+        if (!port) return { ok: false, error: 'нет свободного порта 20150–20299' };
         const cfg = {
             port,
             upstream: provider.baseUrl,
@@ -4976,6 +5066,7 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Vani',  port: Number(process.env.VN_KEEPALIVE_PORT || 20180), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive dacall.AI',  port: Number(process.env.DC_KEEPALIVE_PORT || 20177), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Clean APIs',  port: Number(process.env.CP_KEEPALIVE_PORT || 20164), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Artbloom',  port: Number(process.env.AB_KEEPALIVE_PORT || 20176), path: '/__keepalive/api/status', keepalive: true },
@@ -4987,7 +5078,7 @@ async function handleHealth(res) {
         { name: 'Keepalive B.AI',  port: Number(process.env.BAI_KEEPALIVE_PORT || 20169), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive UniKey',  port: Number(process.env.UK_KEEPALIVE_PORT || 20168), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive HCNsec',   port: Number(process.env.HN_KEEPALIVE_PORT || 20162), path: '/__keepalive/api/status', keepalive: true },
-        // 🪤 AIPM :20163 сидит ВНУТРИ диапазона кастомов 20150–20250, и без этой строки
+        // 🪤 AIPM :20163 сидит ВНУТРИ диапазона кастомов 20150–20299, и без этой строки
         // промах по таблице уводил его в ветку «осиротевших конвертеров» ниже — шлюз,
         // поднятый автоподъёмом по префиксу (`ap/…`), отвечал 200 на /__keepalive/api/status,
         // а Health рисовал «Порт :20163 (осиротел)» и опрашивал чужим путём /__custom/api/status.
@@ -4995,6 +5086,13 @@ async function handleHealth(res) {
         { name: 'Keepalive AIPM',     port: AP_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive AIKeysAPI', port: AK_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive rumeng',   port: RM_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
+        // 🪤 Два лица вкладки Gemini (02.10). У Яна они добавлены только в `keepaliveInstances()`,
+        // а таблица Health перечисляет шлюзы ПОИМЁННО - и её `check-hub.js` считает источником
+        // правды именно реестр. Без этих двух строк движок и шлюз уходили в ветку «осиротевших
+        // конвертеров»: живой шлюз (:20179 обслуживает трафик) рисовался как «Порт :20179
+        // (осиротел)» и down, а владельцу предлагалось его убить - то есть оборвать своё окно.
+        { name: 'Gemini движок',      port: GEMINI_ENGINE_PORT, path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Gemini шлюз',        port: GEMINI_KEEPALIVE_PORT, path: '/__keepalive/api/status', keepalive: true },
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
@@ -5026,9 +5124,9 @@ async function handleHealth(res) {
         }
         if (healed) customSave(cdata);
     }
-    // Осиротевшие конвертеры 20150–20250 (слушают, но не в конфиге) — полезно знать
+    // Осиротевшие конвертеры диапазона кастомов (слушают, но не в конфиге) — полезно знать
     for (const port of listening.keys()) {
-        if (port >= 20150 && port <= 20250 && !knownPorts.has(port))
+        if (port >= CUSTOM_PROXY_PORT_MIN && port <= CUSTOM_PROXY_PORT_MAX && !knownPorts.has(port))
             checks.push({ name: `Порт :${port} (осиротел)`, port, path: '/__custom/api/status', orphan: true });
     }
 
@@ -7631,6 +7729,197 @@ const olPool = require('./lib/outlook-pool');
 const googleRoutes = require('./lib/google-routes');
 googleRoutes.setHub({ log: logLine, earlyFailure: sessionOpenEarlyFailure });
 
+// ── Вкладка Gemini (Antigravity) ─────────────────────────────────────────────
+// Пульт к вендоренной копии форка antigravity-claude-proxy в `..\gemini`: она держит пул
+// Google-аккаунтов с их refresh-токенами, тиром и квотой и отдаёт Anthropic-совместимый API
+// поверх Google Cloud Code. Весь HTTP вкладки живёт в модуле (`/__switch/api/gemini/*`),
+// а отсюда модуль получает ИНЪЕКЦИЕЙ `logLine`, ранний пробник окна и `hooks` — то, что
+// обязано жить в этом файле, потому что трогает `settings.json` и фронт-дверь.
+const geminiRoutes = require('./lib/gemini-routes');
+// Два порта вкладки: движок (сам Antigravity-прокси, к нему ходит дашборд) и шлюз (keepalive,
+// к которому ходит Claude Code). Между ними и происходит перевод имён моделей.
+const GEMINI_ENGINE_PORT = geminiRoutes.PORT;
+const GEMINI_ENGINE_URL = `http://127.0.0.1:${GEMINI_ENGINE_PORT}`;
+const GEMINI_KEEPALIVE_PORT = Number(process.env.GEMINI_KEEPALIVE_PORT || 20179);
+const GEMINI_KEEPALIVE_URL = `http://127.0.0.1:${GEMINI_KEEPALIVE_PORT}`;
+// Ранний литерал в BACKENDS обязан совпадать с портом шлюза: иначе Claude Code уехал бы
+// на мёртвый адрес молча (та же проверка, что у AR ниже, но эта нужна раньше — бэкенд
+// подставляется из BACKENDS).
+if (GEMINI_KEEPALIVE_URL_EARLY !== GEMINI_KEEPALIVE_URL) {
+    throw new Error(`Gemini URL расходится: BACKENDS=${GEMINI_KEEPALIVE_URL_EARLY} vs модуль=${GEMINI_KEEPALIVE_URL}`);
+}
+const GEMINI_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'gemini-active-key.txt');
+const GEMINI_MODELMAP_FILE = path.join(__dirname, 'gemini-modelmap.json');
+const GEMINI_ROUTES_MODELMAP_FILE = path.join(__dirname, 'gemini-routes-modelmap.json');
+const GEMINI_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'gemini-active-model.txt');
+
+// Ключ шлюзу не нужен (сервер вкладки ключей не проверяет), но keepalive обязан что-то
+// подставить в заголовок: файл с заглушкой заводим здесь, иначе он ругнётся на пропажу ключа.
+function geminiEnsureKeyFile() {
+    try {
+        if (!fs.existsSync(GEMINI_ACTIVE_KEY_FILE)) fs.writeFileSync(GEMINI_ACTIVE_KEY_FILE, 'dummy\n', 'utf8');
+        return GEMINI_ACTIVE_KEY_FILE;
+    } catch (e) { logLine(`gemini: ключ-заглушка не записался (${e.message})`); return GEMINI_ACTIVE_KEY_FILE; }
+}
+
+// Шлюз вкладки: тот же keepalive-proxy.js, что у двадцати шлюзов, только апстрим — локальный
+// сервер вкладки, а тир-карта — её собственная. Ради чего он и стоит: перевести `claude-opus-5`
+// из настроек Claude Code в модель, которую знает Google.
+async function geminiKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(GEMINI_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        // Движок обязан быть живым ДО шлюза: иначе шлюз поднимется и будет отдавать 502
+        // на каждый запрос, а причина будет не видна.
+        await geminiRoutes.spawnServer();
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(GEMINI_KEEPALIVE_PORT),
+                UPSTREAM: GEMINI_ENGINE_URL,
+                KEY_FILE: geminiEnsureKeyFile(),
+                MODELMAP_FILE: GEMINI_MODELMAP_FILE,
+            },
+        });
+        watchChildExit(child, 'keepalive Gemini', GEMINI_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`gemini keepalive spawn: :${GEMINI_KEEPALIVE_PORT} → ${GEMINI_ENGINE_URL} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`gemini keepalive spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+
+// Тир-карта: стандартные тиры Claude Code → модели, которые знает Google. Читается с диска,
+// потому что её правит человек на вкладке — и именно она уезжает в `ANTHROPIC_DEFAULT_*_MODEL`.
+function geminiReadModelMap() {
+    try {
+        const raw = fs.readFileSync(GEMINI_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+    } catch { return {}; }
+}
+
+function geminiActiveModel() {
+    try { return fs.readFileSync(GEMINI_ACTIVE_MODEL_FILE, 'utf8').trim() || null; } catch { return null; }
+}
+
+// Кладёт тиры карты в окружение Claude Code.
+//
+// 🪤 Почему именно так, а не через keepalive с тир-картой (как у двадцати шлюзов): сервер
+// вкладки — не New-API-шлюз, он принимает РОДНЫЕ имена моделей Antigravity. Значит маппинг
+// некуда вставить по дороге: либо его делает Claude Code (эти три переменные), либо запрос
+// уедет именем `claude-opus-5`, которого Google не знает. Побочная выгода: лишнего процесса
+// в цепочке нет вовсе.
+function geminiApplyTiers(settings) {
+    const mm = geminiReadModelMap();
+    const set = (k, v) => { const s = String(v || '').trim(); if (s) settings.env[k] = s; else delete settings.env[k]; };
+    settings.env = settings.env || {};
+    set('ANTHROPIC_DEFAULT_OPUS_MODEL', mm.opus);
+    set('ANTHROPIC_DEFAULT_SONNET_MODEL', mm.sonnet);
+    set('ANTHROPIC_DEFAULT_HAIKU_MODEL', mm.haiku);
+    set('ANTHROPIC_SMALL_FAST_MODEL', mm.haiku || mm.sonnet || mm.opus);
+    for (const k of ['ANTHROPIC_DEFAULT_OPUS_MODEL_NAME', 'ANTHROPIC_DEFAULT_SONNET_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME']) delete settings.env[k];
+    return { opus: mm.opus || null, sonnet: mm.sonnet || null, haiku: mm.haiku || null };
+}
+
+async function geminiWriteSettings(reason, wanted) {
+    const settings = readSettings();
+    makeSettingsBackup(reason);
+    settings.env = settings.env || {};
+    settings.env.ANTHROPIC_BASE_URL = GEMINI_KEEPALIVE_URL;
+    settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+    delete settings.env.ANTHROPIC_API_KEY;
+    delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+    delete settings.apiKeyHelper;
+    clearOtEnv(settings);
+    const tiers = geminiApplyTiers(settings);
+    const mm = geminiReadModelMap();
+    const model = String(wanted || geminiActiveModel() || '').trim();
+    const mapped = model ? (mm[normalizeCcModel(model)] || normalizeCcModel(model)) : '';
+    if (mapped) settings.model = mapped; else delete settings.model;
+    writeSettings(settings);
+    return { tiers, model: mapped || null };
+}
+
+// «Сделать активным»: Claude Code ходит на ШЛЮЗ вкладки (:20177), тот переводит имена моделей
+// по тир-карте и уходит на движок (:20176). Движок поднимаем первым: мёртвый движок за живым
+// шлюзом — это 502 на каждый запрос без внятной причины.
+async function handleGeminiActivate(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const wanted = String(body.model || '').trim();
+        if (wanted) fs.writeFileSync(GEMINI_ACTIVE_MODEL_FILE, wanted + '\n', 'utf8');
+        await geminiRoutes.spawnServer();
+        let settingsOk = false, applied = null;
+        try { applied = await geminiWriteSettings('settings-gemini', wanted); settingsOk = true; }
+        catch (e) { logLine(`gemini activate settings: ${e.message}`); }
+        const kl = await keepaliveBring(GEMINI_KEEPALIVE_PORT, { waitMs: 8000 });
+        const en = await geminiRoutes.serverStatus(2000);
+        logLine(`gemini activate: gateway=${GEMINI_KEEPALIVE_URL} engine=${GEMINI_ENGINE_URL} (движок ${en.up ? 'жив' : 'ЛЕЖИТ'}) model=${applied && applied.model ? applied.model : '(пусто)'} settings=${settingsOk ? 'ок' : 'НЕ ЗАПИСАЛИСЬ'}`);
+        jsonRes(res, 200, {
+            ok: true, base: GEMINI_KEEPALIVE_URL, engine: GEMINI_ENGINE_URL, settingsUpdated: settingsOk,
+            model: applied && applied.model, tiers: applied && applied.tiers, engineUp: !!en.up,
+            keepalive: { up: kl.ok, port: GEMINI_KEEPALIVE_PORT, error: kl.ok ? null : kl.error },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Выбор главной модели вкладки (чипы моделей, как у AgentRouter).
+//
+// 🪤 Пишем И в тир-карту (`opus`), и в файл активной модели — и это не дублирование.
+// Карта решает, что уедет на движок, когда Claude Code просит СВОЙ тир (`claude-opus-5`);
+// файл — что подставить в настройки, если человек выбрал модель по имени из каталога.
+// Без карты выбранная модель действовала бы только до первого запроса чужого имени.
+async function handleGeminiSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const model = String(body.model || '').trim();
+        if (!model) return jsonRes(res, 400, { error: 'model обязателен' });
+        fs.writeFileSync(GEMINI_ACTIVE_MODEL_FILE, model + '\n', 'utf8');
+        const mm = writeTierMap(GEMINI_MODELMAP_FILE, { opus: model }, null);
+        writeTierMap(GEMINI_ROUTES_MODELMAP_FILE, { opus: model, default: model }, null);
+        let settingsOk = false, applied = null;
+        try { applied = await geminiWriteSettings('settings-gemini-model', model); settingsOk = true; }
+        catch (e) { logLine(`gemini set-model settings: ${e.message}`); }
+        const kl = await keepaliveBring(GEMINI_KEEPALIVE_PORT, { waitMs: 8000 });
+        logLine(`gemini model: главная — ${model} (тир opus переписан, карта ${mm.opus || '-'})`);
+        jsonRes(res, 200, { ok: true, model, appliedModel: applied && applied.model, settingsUpdated: settingsOk, needRestart: false, keepalive: { up: kl.ok, port: GEMINI_KEEPALIVE_PORT } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// Тир-карта (opus/sonnet/haiku). Пишем ОБА файла одной правкой: активный путь читает
+// `gemini-modelmap.json`, префиксный `/model gemini/...` — `gemini-routes-modelmap.json`,
+// и разъехавшиеся карты дали бы разные модели в двух режимах одного шлюза.
+async function handleGeminiModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const patch = { opus: body.opus, sonnet: body.sonnet, haiku: body.haiku };
+        const mm = writeTierMap(GEMINI_MODELMAP_FILE, patch, null);
+        writeTierMap(GEMINI_ROUTES_MODELMAP_FILE, { ...patch, default: body.default || body.opus || body.sonnet || body.haiku }, null);
+        logLine(`gemini modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+geminiRoutes.setHub({
+    log: logLine,
+    earlyFailure: sessionOpenEarlyFailure,
+    hooks: {
+        activate: handleGeminiActivate,
+        setModel: handleGeminiSetModel,
+        modelMap: handleGeminiModelMap,
+        readModelMap: geminiReadModelMap,
+        activeModel: geminiActiveModel,
+    },
+});
+
 const OL_OPEN_SCRIPT = path.join(__dirname, '..', 'outlook', 'open-session.js');
 const OL_CODE_SCRIPT = path.join(__dirname, '..', 'outlook', 'read-code.js');
 const OL_CODE_TIMEOUT_MS = 90_000;
@@ -8642,7 +8931,14 @@ async function handleConduitSetModel(req, res) {
 // идентификатором в кликах активации/баланса, а `add` отбивает дубли по нему.
 // Настоящий ключ у всех трёх (NewAPI) — 'sk-' + 48 символов.
 // Заглушка → статус 'no_key', 🌐 ведёт на регистрацию по рефке, а не в консоль.
-function isRealKey(k) { return /^sk-/.test(String(k || '').trim()); }
+// Настоящий ключ. Кроме общего `sk-` принимаем форму vani (`vani_` + 64 hex): у этой
+// панели ключи так НЕ начинаются с `sk-`, и без этого вкладка молча считала живой ключ
+// отсутствующим (грабля та же, что была у ZhiFlow/aikeysapi). Паттерн узкий - `vani_`
+// не выдаёт ни один другой шлюз, поэтому общий код соседей не задет.
+function isRealKey(k) {
+    const s = String(k || '').trim();
+    return /^sk-/.test(s) || /^vani_[A-Za-z0-9]{40,}$/.test(s);
+}
 function makeNoKeyStub() {
     return 'no-key-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -8948,6 +9244,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'api.vani.ai':      path.join(__dirname, '..', 'vani', 'profiles'),
     'api-ru.dacall.ai':      path.join(__dirname, '..', 'dacall', 'profiles'),
     'cleanapis.com':      path.join(__dirname, '..', 'cleanapis', 'profiles'),
     'api.artbloom.tech':      path.join(__dirname, '..', 'artbloom', 'profiles'),
@@ -9104,7 +9401,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -9170,7 +9467,7 @@ function newapiMigrateAnchors(sessions) {
 // Общий расчёт. target — запись пула (нужен api_key; profile/anchor опциональны).
 // guessGrant(spent) — легаси-угадывание провайдера, вызывается только как резерв.
 // force — не переиспользовать сохранённую точную цифру (явный клик пользователя).
-async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant, force = false }) {
+async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessGrant, force = false, subLimitGrant = false }) {
     const apiKey = target && target.api_key;
     if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
     const lib = newapiLib();
@@ -9620,7 +9917,13 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
     const grant = guessGrant(usageSpent);
     const bonus = Number(target.bonus) > 0 ? Number(target.bonus) : 0;
     const referral = Number(target.referral) > 0 ? Number(target.referral) : 0;
-    const legacyGrant = Number(target.grantManual) > 0 ? Number(target.grantManual) : grant;
+    // Правка владельца (28.09.2026): у new-api-шлюзов `hard_limit_usd` из
+    // `subscription` — это ВЫДАННАЯ аккаунту сумма, а не потолок. Она точнее
+    // угадывания ceil(spent/25)*25: на «GIFT 2» hard_limit 100 при потраченных
+    // 54.89 даёт остаток 45.11, а прикидка давала 120.11. Значение 100 000 000 —
+    // маркер «unlimited», денег не несёт, суммой считать нельзя: для таких
+    // аккаунтов остаёмся на угадывании. Заполняется ниже, в ветке subscription.
+    let subGrant = null;
     let accessUntil = null;
     if (subUrl) {
         try {
@@ -9632,8 +9935,20 @@ async function newapiBalance({ target, host, ccHeaders, usageUrl, subUrl, guessG
             if (subRes.status === 200) {
                 const sub = await subRes.json();
                 accessUntil = sub.access_until && sub.access_until > 0 ? sub.access_until : null;
+                if (subLimitGrant) {
+                    const hard = Number(sub.hard_limit_usd);
+                    if (isFinite(hard) && hard > 0 && hard < 100_000_000) subGrant = hard;
+                }
             }
         } catch { /* срок доступа не критичен */ }
+    }
+    // grantManual (выдача, вписанная владельцем) главнее всего; затем живая цифра
+    // subscription; угадывание — только если ни того, ни другого нет.
+    const legacyGrant = Number(target.grantManual) > 0 ? Number(target.grantManual)
+        : (subGrant != null ? subGrant : grant);
+    if (subGrant != null && !(Number(target.grantManual) > 0)) {
+        logLine(`баланс ${host}: выдача из subscription.hard_limit_usd — $${subGrant.toFixed(2)}`
+            + ` вместо угаданной $${grant.toFixed(2)}`);
     }
     // Отрицательного остатка на ключе не бывает: шлюз бы просто отказал. Значит
     // выдачу угадали мимо (у hcnsec так получалось −$2174) — и честный ответ
@@ -9700,6 +10015,7 @@ async function arBalance(target, opts = {}) {
         subUrl: `${AR_BASE_URL}/v1/dashboard/billing/subscription`,
         guessGrant: spent => Math.max(AR_DEFAULT_GRANT, Math.ceil(spent / AR_GRANT_STEP) * AR_GRANT_STEP),
         force: !!opts.force,
+        subLimitGrant: true,   // правка владельца: для ключей без куки остаток = hard_limit_usd − расход (см. newapiBalance)
     });
 }
 
@@ -15811,6 +16127,30 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const VN_SESSIONS_FILE = path.join(__dirname, 'vani-sessions.json');
+const VN_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'vani-active-key.txt');
+const VN_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'vani-active-model.txt');
+const VN_BASE_URL = 'https://api.vani.ai/v1';
+// SSE keepalive proxy для vani (как у tabi :20155): форвардит напрямую в
+// api.vani.ai, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Прежнее «каждый четвёртый пустой 403» - факт ЭТАЛОНА, у vani НЕ замерен:
+// пробы 09.10 (chat, stream, tools, opus) - чистые 200, отказов кромки не видели.
+// Панель за Cloudflare, поэтому ретрай 403 в keepalive-proxy.js оставлен страховкой.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const VN_UPSTREAM = 'https://api.vani.ai';
+const VN_KEEPALIVE_PORT = 20180;
+const VN_KEEPALIVE_URL = `http://localhost:${VN_KEEPALIVE_PORT}`;
+const VN_MODELMAP_FILE = path.join(__dirname, 'vani-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У vani тариф free (замер 09.10:
+// plan.code=free), размер бонуса на старте НЕ подтверждён. Резерв округляет расход
+// вверх до $5 и светится бейджем `~`.
+// 🔴 Своя панель: New-API ручка /api/user/self НЕ подходит - баланс читать способом
+// vani (читалка ещё не написана). HOST_AUTH['api.vani.ai'] = 'jwt' - копия эталона,
+// для своей панели мёртв.
+const VN_GRANT_STEP = 5;
+const VN_DEFAULT_GRANT = 5;
+const VN_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const DC_SESSIONS_FILE = path.join(__dirname, 'dacall-sessions.json');
 const DC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'dacall-active-key.txt');
 const DC_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'dacall-active-model.txt');
@@ -16075,6 +16415,13 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const VN_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const DC_CC_HEADERS = {
     // 🔴 UA здесь НЕ как у остальных шлюзов, и это не вкусовщина. У dacall стоит антибот
     // (`api.botwafguard.net`), который на `/v1/*` МОЛЧА вешает чужие UA: запрос висит до
@@ -16230,6 +16577,32 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function vnLoad() {
+    try {
+        const raw = fs.readFileSync(VN_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Vani');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'vn_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { vnSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -16471,6 +16844,9 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function vnSave(arr) {
+    durableWriteJson(VN_SESSIONS_FILE, arr);
+}
 function dcSave(arr) {
     durableWriteJson(DC_SESSIONS_FILE, arr);
 }
@@ -16500,6 +16876,10 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function vnReadActiveModel() {
+    try { return fs.readFileSync(VN_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function dcReadActiveModel() {
@@ -16540,6 +16920,10 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function vnReadActiveKey() {
+    try { return fs.readFileSync(VN_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function dcReadActiveKey() {
@@ -16609,6 +16993,36 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function vnKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(VN_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(VN_KEEPALIVE_PORT),
+                UPSTREAM: VN_UPSTREAM,
+                KEY_FILE: VN_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: VN_SESSIONS_FILE,
+                MODELMAP_FILE: VN_MODELMAP_FILE,
+                ...(process.env.VN_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.VN_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Vani', VN_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`vani keepalive proxy spawn: :${VN_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`vani keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -16938,6 +17352,19 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function vnProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${VN_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...VN_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function dcProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -17071,6 +17498,43 @@ async function kkBalance(target, opts = {}) {
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
         force: !!opts.force,
     });
+}
+// Квота vani. У площадки свои ручки, и денег на free-плане нет - есть ПРОЦЕНТЫ расхода
+// по двум окнам. Читаем /v1/me ключом: usage.used_percent (месяц) и
+// usage.weekly.used_percent (неделя). `balance` = остаток месячной квоты (%),
+// окна - в `quota` (их рисует счётчик на вкладке, как у freemodel).
+async function vnBalance(target, opts = {}) {
+    const t = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = t.api_key;
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    const lib = newapiLib();
+    const gated = fn => (lib && lib.hostGate) ? lib.hostGate('api.vani.ai', fn) : fn();
+    let res;
+    try {
+        res = await gated(() => fetch('https://api.vani.ai/v1/me', {
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(15000),
+        }));
+    } catch (e) { return { status: 'unknown', error: e.message }; }
+    if (res.status === 401 || res.status === 403) return { status: 'dead', error: `HTTP ${res.status}` };
+    if (res.status !== 200) return { status: 'unknown', error: `HTTP ${res.status}` };
+    let d = {};
+    try { d = await res.json(); } catch (e) { return { status: 'unknown', error: 'ответ не JSON' }; }
+    const u = d.usage || {};
+    const monthUsed = (typeof u.used_percent === 'number') ? u.used_percent : null;
+    const weekUsed = (u.weekly && typeof u.weekly.used_percent === 'number') ? u.weekly.used_percent : null;
+    return {
+        status: 'live',
+        balanceSource: 'quota',
+        balance: monthUsed != null ? Math.max(0, 100 - monthUsed) : null,
+        quota: {
+            mpct: monthUsed,
+            wpct: weekUsed,
+            plan: (d.plan && d.plan.code) || null,
+            period_end: u.period_end || null,
+            week_reset: (u.weekly && u.weekly.resets_at) || null,
+        },
+    };
 }
 async function dcBalance(target, opts = {}) {
     return newapiBalance({
@@ -17313,6 +17777,16 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+// vani - не New API: у неё ПРОЦЕНТЫ квоты, а не доллары, поэтому свой apply (не
+// newapiApplyBalance, который ждёт деньги и статус live/guess).
+function vnApplyBalance(target, bal) {
+    if (!target || !bal) return;
+    if (bal.status) target.status = bal.status;
+    if (bal.quota) target.quota = bal.quota;
+    if (typeof bal.balance === 'number') { target.balance = bal.balance; target.balanceSource = 'quota'; }
+    target.balanceCheckedAt = new Date().toISOString();
+    if (bal.error) target.balanceError = bal.error; else delete target.balanceError;
+}
 function dcApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'dacall' }); }
 function cpApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'cleanapis' }); }
 function abApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'artbloom' }); }
@@ -17633,6 +18107,29 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleVnSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = vnLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await vnProbe(s.api_key); }));
+            }
+            vnSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => vnApplyBalance(s, await vnBalance(s))));
+            }
+            vnSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: vnReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 async function handleDcSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
     try {
@@ -17853,6 +18350,18 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await vnProbe(api_key);
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; vnSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -17978,6 +18487,28 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleVnBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = vnLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await vnBalance(target || { api_key }, { force });
+            if (target) { vnApplyBalance(target, bal); vnSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('vn:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -18186,6 +18717,9 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleVnSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'vani', load: vnLoad, save: vnSave, balanceFn: vnBalance, applyFn: vnApplyBalance });
+}
 function handleDcSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'dacall', load: dcLoad, save: dcSave, balanceFn: dcBalance, applyFn: dcApplyBalance });
 }
@@ -18215,6 +18749,7 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const vnLkPids = new Map();
 const dcLkPids = new Map();
 const cpLkPids = new Map();
 const abLkPids = new Map();
@@ -18225,6 +18760,10 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function vnPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -18315,6 +18854,59 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleVnSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = vnLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = vnLkPids.get(label);
+        if (vnPidAlive(prevPid)) {
+            logLine(`vani session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'vani', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.vani.ai', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`vani session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`vani session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`vani session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            vnLkPids.delete(label);
+            logLine(`vani session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('vn', id);
+        });
+        proc.unref();
+        vnLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            vnLkPids.delete(label);
+            logLine(`vani session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`vani session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -18814,6 +19406,7 @@ const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js')
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const VN_SESSIONS_DIR = path.join(__dirname, '..', 'vani', 'sessions');
 const DC_SESSIONS_DIR = path.join(__dirname, '..', 'dacall', 'sessions');
 const CP_SESSIONS_DIR = path.join(__dirname, '..', 'cleanapis', 'sessions');
 const AB_SESSIONS_DIR = path.join(__dirname, '..', 'artbloom', 'sessions');
@@ -18828,6 +19421,13 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function vnB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function vnB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -19146,6 +19746,47 @@ async function handleLsShare(req, res) {
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = vnLkPids.get(label);
+        if (vnPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `vani/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у vn нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(VN_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'vani',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = vnB64UrlEncode(JSON.stringify(payload));
+        logLine(`vani share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleCpShare(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -19443,6 +20084,65 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleVnImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(vnB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'vani' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не vani-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = vnLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'vn_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        vnSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(VN_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(VN_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`vani import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`vani import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -20015,6 +20715,36 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = vnLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'vn_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        vnSave(sessions);
+        logLine(`vani add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -20337,6 +21067,30 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(VN_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        vnSave(sessions);
+        logLine(`vani set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -20579,6 +21333,29 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        vnSave(sessions);
+        logLine(`vani rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -20803,6 +21580,22 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.id === idKey);
+        vnSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === vnReadActiveKey()) {
+            try { fs.rmSync(VN_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(VN_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`vani delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -21001,6 +21794,59 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleVnActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в vani-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = vnLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(VN_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        vnSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-vn');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = VN_KEEPALIVE_URL;   // keepalive :20180 → api.vani.ai напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — vani-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const vnCurModel = vnReadActiveModel() || '';
+            if (vnCurModel) settings.model = vnCurModel;
+            else { delete settings.model; logLine('vani activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из vani-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`vani activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20180, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const vnKa = await keepaliveBring(VN_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!vnKa.ok) logLine(`vani activate: keepalive :${VN_KEEPALIVE_PORT} НЕ поднялся — ${vnKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`vani activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${VN_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: vnKa.ok, port: VN_KEEPALIVE_PORT, error: vnKa.ok ? null : (vnKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -21518,6 +22364,40 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleVnModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (VN_MODELS_CACHE.data && Date.now() - VN_MODELS_CACHE.ts < VN_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: VN_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${VN_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...VN_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        VN_MODELS_CACHE.data = models;
+        VN_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (VN_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: VN_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleDcModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -21858,6 +22738,38 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(VN_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-vn-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = VN_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`vani set-model: settings.json FAILED: ${e.message}`);
+        }
+        const vnKaM = await keepaliveBring(VN_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!vnKaM.ok) logLine(`vani set-model: keepalive :${VN_KEEPALIVE_PORT} НЕ поднялся — ${vnKaM.error || '?'}`);
+        logLine(`vani set-model: ${m} (base ${VN_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: VN_ACTIVE_MODEL_FILE, base: VN_KEEPALIVE_URL, needRestart: true, keepalive: { up: vnKaM.ok, port: VN_KEEPALIVE_PORT, error: vnKaM.ok ? null : (vnKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -22161,6 +23073,18 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleVnModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(VN_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`vani modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleDcModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -22273,6 +23197,12 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function vnReadModelMap() {
+    try {
+        const raw = fs.readFileSync(VN_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -24523,10 +25453,7 @@ function handleProxiesOwn(req, res) {
         // POST-ручки вкладки разом: сохранение списка, проверку, ребаланс и отвязку.
         // GET при этом работал, поэтому вкладка рисовалась и выглядела живой.
         const doc = body || {};
-        // `mode` без значения = импорт (дописать к сохранённому). Замена списка - только
-        // по явному `'replace'`: кнопка называется «добавить», и человек, вставляющий
-        // список, не ждёт, что прежние прокси при этом исчезнут.
-        const out = lib.saveOwn(doc.text, { mode: doc.mode });
+        const out = lib.saveOwn(doc.text);
         jsonRes(res, out.ok ? 200 : 400, out);
     }).catch(e => jsonRes(res, e.httpStatus || 500, { error: e.message }));
 }
@@ -26906,7 +27833,7 @@ async function handleOdAutoregStart(req, res) {
             || ('od_' + Date.now());
         // Ярус - переключатель, а не приговор: при пустом или мёртвом пуле владелец
         // вправе пройти напрямую явным выбором (у Odyssey капча от этого строже).
-        const py = process.env.PYTHON || 'python';
+        const py = camoufoxPython();   // правка владельца: свой venv Camoufox, откат внутрь (см. require выше)
         const proc = spawn(py, ['-u', script, label, '--tier', tier, '--count', String(count),
                                 '--mail', mail], {
             cwd: path.join(__dirname, '..'),
@@ -26984,6 +27911,117 @@ async function handleOdAutoregStop(_req, res) {
         odAutoreg.signal = 'STOP';
         logLine(`odyssey autoreg stop requested: pid=${proc.pid}`);
         return jsonRes(res, 200, { ok: true, stopped: true, ...odAutoregPublic() });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── Авторега vani (Camoufox) ─────────────────────────────────────────────────
+// Скрипт `vani/auto-add.py` (Python - капчу Turnstile на шаге входа берёт движок Camoufox,
+// а он приходит из Python-мира). Делает всё сам: ящик emailnator, форма, капча, код из
+// письма, ключ. Вход у vani БЕЗ ПАРОЛЯ (email -> код), поэтому в пул едут email + ключ.
+const vnAutoreg = {
+    proc: null, pid: null, running: false, startedAt: null, label: null, tier: null, mail: null,
+    stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
+};
+
+const VN_AUTOADD_FAIL = {
+    1: 'скрипт не запустился - смотри лог дашборда',
+    2: 'капча/регистрация не прошли: код не запрошен. Попробуй другой прокси - на части адресов капча проходит молча',
+    3: 'код из письма не получен за 200 с - письмо не дошло на адрес, повтори прогон',
+    4: 'аккаунт создан, но ключ снять не удалось',
+    5: 'прокси не получен: пул отказал. Напрямую не идём намеренно - проверь пул или выбери другой ярус',
+    6: 'ящик не взят: emailnator не выдал адрес - это лотерея сервиса, повтори прогон',
+};
+
+function vnAutoregPublic() {
+    return {
+        running: vnAutoreg.running, pid: vnAutoreg.pid, startedAt: vnAutoreg.startedAt,
+        label: vnAutoreg.label, tier: vnAutoreg.tier, mail: vnAutoreg.mail, want: vnAutoreg.want,
+        stdout: vnAutoreg.stdout.slice(-40), stderr: vnAutoreg.stderr.slice(-20),
+        stage: vnAutoreg.stage, result: vnAutoreg.result,
+        exitCode: vnAutoreg.exitCode, signal: vnAutoreg.signal,
+        failText: vnAutoreg.exitCode != null ? (VN_AUTOADD_FAIL[vnAutoreg.exitCode] || null) : null,
+    };
+}
+
+async function handleVnAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        if (vnAutoreg.running && vnAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторега vani уже идёт', ...vnAutoregPublic() });
+        }
+        const script = path.join(__dirname, '..', 'vani', 'auto-add-loop.py');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'vani/auto-add-loop.py не найден' });
+        // Ярус: как у odyssey - по умолчанию СКРАППЕР. Выходы наших нод - хостинги, которые
+        // панели даво разобрали черными списками; скрапер ближе к «домашнему» адресу.
+        const tier = ['own', 'scraper', 'none'].includes(String(body.tier)) ? String(body.tier) : 'scraper';
+        const mail = String(body.mail || 'emailnator');
+        // ЦЕЛЬ: сколько аккаунтов завести за прогон. Цикл выходит на ПЕРВОМ успехе, поэтому
+        // без числа авторега заводила ровно один аккаунт - владельцу нужен выбор (10.10.2026).
+        const want = Math.max(1, Math.min(50, Number(body.want) || 1));
+        const label = String(body.label || '').trim().replace(/[^\w-]/g, '_') || ('vn_' + Date.now());
+        const py = camoufoxPython();
+        const proc = spawn(py, ['-u', script, label, '--tier', tier, '--mail', mail, '--want', String(want)], {
+            cwd: path.join(__dirname, '..'),
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            // Источник пула перекрываем ТОЛЬКО этому прогону (как у odyssey): брать из скрапера.
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8', PROXY_POOL_SOURCE: 'scraped' },
+        });
+        Object.assign(vnAutoreg, {
+            proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),
+            label, tier, mail, want, stdout: [], stderr: [], stage: null, result: null,
+            exitCode: null, signal: null,
+        });
+        const pushLines = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                // Этап - ТОЛЬКО из машинного маркера: человекочитаемые строки меняются при
+                // любой правке формулировки, и регулярка по ним однажды молча соврёт.
+                if (line.startsWith('VN_STAGE ')) {
+                    try {
+                        const s = JSON.parse(line.slice('VN_STAGE '.length));
+                        if (s && typeof s.stage === 'string') vnAutoreg.stage = { ...s, at: new Date().toISOString() };
+                    } catch { /* битый маркер не должен ломать чтение лога */ }
+                    continue;
+                }
+                if (line.startsWith('VN_AUTOADD_RESULT ')) {
+                    try { vnAutoreg.result = JSON.parse(line.slice('VN_AUTOADD_RESULT '.length)); } catch {}
+                    continue;
+                }
+                vnAutoreg[which].push(line);
+                if (vnAutoreg[which].length > 100) vnAutoreg[which].shift();
+            }
+        };
+        proc.stdout.on('data', d => pushLines('stdout', d));
+        proc.stderr.on('data', d => pushLines('stderr', d));
+        proc.on('error', e => { vnAutoreg.stderr.push(e.message); });
+        proc.on('exit', (code, signal) => {
+            vnAutoreg.running = false; vnAutoreg.pid = null;
+            vnAutoreg.exitCode = code; vnAutoreg.signal = signal || null; vnAutoreg.proc = null;
+            // Ключ в пул вписывает САМ скрипт - ручкой `/__switch/api/vn/add`. Здесь только след.
+            logLine(`vani autoreg exited: label=${label} tier=${tier} code=${code} signal=${signal || '-'}`);
+        });
+        logLine(`vani autoreg launched: label=${label} tier=${tier} pid=${proc.pid}`);
+        jsonRes(res, 200, { ok: true, ...vnAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+function handleVnAutoregStatus(_req, res) { jsonRes(res, 200, { ok: true, ...vnAutoregPublic() }); }
+
+async function handleVnAutoregStop(_req, res) {
+    const proc = vnAutoreg.proc;
+    if (!vnAutoreg.running || !proc) {
+        return jsonRes(res, 200, { ok: true, stopped: false, ...vnAutoregPublic() });
+    }
+    try {
+        // Windows: убиваем всё дерево. Без /T дочерний Camoufox пережил бы «остановку».
+        if (process.platform === 'win32') {
+            await execFileAsync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }).catch(() => {});
+        } else {
+            try { proc.kill('SIGTERM'); } catch {}
+        }
+        vnAutoreg.signal = 'STOP';
+        logLine(`vani autoreg stop requested: pid=${proc.pid}`);
+        return jsonRes(res, 200, { ok: true, stopped: true, ...vnAutoregPublic() });
     } catch (e) { return jsonRes(res, 500, { error: e.message }); }
 }
 
@@ -30051,6 +31089,7 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [VN_KEEPALIVE_PORT]: { name: 'Vani', spawn: vnKeepaliveSpawn },
         [DC_KEEPALIVE_PORT]: { name: 'dacall.AI', spawn: dcKeepaliveSpawn },
         [CP_KEEPALIVE_PORT]: { name: 'Clean APIs', spawn: cpKeepaliveSpawn },
         [AB_KEEPALIVE_PORT]: { name: 'Artbloom', spawn: abKeepaliveSpawn },
@@ -30068,6 +31107,11 @@ function keepaliveInstances() {
         // Front-door — не keepalive, но чинится ровно так же, а кнопка нужна тем
         // более: пока он лежит, у Claude Code нет бэкенда вообще.
         [frontdoorPort()]: { name: 'Front Door', spawn: frontdoorSpawn, statusPath: '/__frontdoor/api/status' },
+        // Два лица вкладки Gemini: движок (сервер Antigravity-прокси, :20176) и его шлюз
+        // (keepalive, :20177 — к нему ходит Claude Code). Оба чинятся этой же кнопкой в Health.
+        // Свой `/status` движок и шлюз отдают по общему для keepalive пути, `statusPath` не нужен.
+        [GEMINI_ENGINE_PORT]: { name: 'Gemini движок', spawn: () => geminiRoutes.spawnServer() },
+        [GEMINI_KEEPALIVE_PORT]: { name: 'Gemini шлюз', spawn: geminiKeepaliveSpawn },
     };
 }
 
@@ -30232,7 +31276,11 @@ async function bootSpawnActiveBackend() {
 // процесс сама, а лежащий порт неактивного провайдера — покой, не поломка.
 async function bootSweepStaleChildren() {
     const active = activeBackendPort();
-    const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active]);   // эти пересоздаём отдельно
+    // 🪤 Движок вкладки Gemini (:20176) остаётся жить вместе с AgentRouter и фронт-дверью: он
+    // держит пул аккаунтов, тир и квоту, и вкладка обязана показывать их, даже когда Gemini не
+    // выбран активным бэкендом. ШЛЮЗ (:20177) сюда НЕ входит — он поднимается активацией, как
+    // шлюзы остальных неактивных провайдеров.
+    const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active, GEMINI_ENGINE_PORT]);   // эти пересоздаём отдельно
     const swept = [];
     for (const [p, inst] of Object.entries(keepaliveInstances())) {
         const port = Number(p);
@@ -30241,7 +31289,7 @@ async function bootSweepStaleChildren() {
         const killed = await stopPortSoftly(port);
         if (killed) swept.push(`${inst.name} :${port}`);
     }
-    // Конвертеры Custom-провайдеров (20150–20250) — тот же расклад, но АКТИВНЫЙ не
+    // Конвертеры Custom-провайдеров (20150–20299) — тот же расклад, но АКТИВНЫЙ не
     // трогаем ни в каком случае: на boot его никто не поднимает обратно, и снять его
     // значило бы оставить Claude Code вообще без бэкенда.
     try {
@@ -31469,6 +32517,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    vn: { tag: 'vani',     label: 'Vani',     host: 'api.vani.ai',     keyFile: VN_ACTIVE_KEY_FILE, load: vnLoad, save: vnSave, balanceFn: vnBalance, applyFn: vnApplyBalance },
     dc: { tag: 'dacall',     label: 'dacall.AI',     host: 'api-ru.dacall.ai',     keyFile: DC_ACTIVE_KEY_FILE, load: dcLoad, save: dcSave, balanceFn: dcBalance, applyFn: dcApplyBalance },
     cp: { tag: 'cleanapis',     label: 'Clean APIs',     host: 'cleanapis.com',     keyFile: CP_ACTIVE_KEY_FILE, load: cpLoad, save: cpSave, balanceFn: cpBalance, applyFn: cpApplyBalance },
     ab: { tag: 'artbloom',     label: 'Artbloom',     host: 'api.artbloom.tech',     keyFile: AB_ACTIVE_KEY_FILE, load: abLoad, save: abSave, balanceFn: abBalance, applyFn: abApplyBalance },
@@ -32197,6 +33246,10 @@ const server = http.createServer((req, res) => {
     // ЦЕЛИКОМ - любой `?query` мимо них пролетает и вкладка получает 404. Здесь один
     // вход: модуль берёт всё под `/__switch/api/google/`, на чужие пути возвращает false.
     if (googleRoutes.handle(req, res)) return;
+
+    // ── Вкладка Gemini: весь её HTTP тоже живёт в модуле ──────────────────────
+    // Модуль не ходит в Google сам — он говорит с локальным сервером вкладки (:20176).
+    if (geminiRoutes.handle(req, res)) return;
 
     if (req.method === 'GET' && req.url === '/__switch/api/status') {
         return jsonRes(res, 200, {
@@ -33200,6 +34253,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/vn/keepalive/state')  return keepaliveVn.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/dc/keepalive/state')  return keepaliveDc.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/cp/keepalive/state')  return keepaliveCp.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ab/keepalive/state')  return keepaliveAb.state(req, res);
@@ -33212,6 +34266,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/keepalive/config') return keepaliveVn.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/keepalive/config') return keepaliveDc.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/keepalive/config') return keepaliveCp.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/keepalive/config') return keepaliveAb.config(req, res);
@@ -33242,6 +34297,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/keepalive/latency')) return keepaliveVn.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/keepalive/latency')) return keepaliveDc.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/keepalive/latency')) return keepaliveCp.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/keepalive/latency')) return keepaliveAb.latency(req, res);
@@ -33298,6 +34354,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/sessions')) return handleVnSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/sessions')) return handleDcSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/sessions')) return handleCpSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/sessions')) return handleAbSessions(req, res);
@@ -33309,6 +34366,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/ping'))     return handleVnPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/ping'))     return handleDcPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/ping'))     return handleCpPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/ping'))     return handleAbPing(req, res);
@@ -33320,6 +34378,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/balance'))  return handleVnBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/balance'))  return handleDcBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/balance'))  return handleCpBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/balance'))  return handleAbBalance(req, res);
@@ -33331,6 +34390,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/models'))   return handleVnModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/dc/models'))   return handleDcModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/cp/models'))   return handleCpModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ab/models'))   return handleAbModels(req, res);
@@ -33342,6 +34402,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/vn/active-model') return jsonRes(res, 200, { model: vnReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/dc/active-model') return jsonRes(res, 200, { model: dcReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/cp/active-model') return jsonRes(res, 200, { model: cpReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/ab/active-model') return jsonRes(res, 200, { model: abReadActiveModel() || null });
@@ -33353,6 +34414,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/vn/modelmap') return jsonRes(res, 200, { ok: true, modelMap: vnReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/dc/modelmap') return jsonRes(res, 200, { ok: true, modelMap: dcReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/cp/modelmap') return jsonRes(res, 200, { ok: true, modelMap: cpReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/ab/modelmap') return jsonRes(res, 200, { ok: true, modelMap: abReadModelMap() });
@@ -33365,6 +34427,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/add')       return handleVnAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/add')       return handleDcAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/add')       return handleCpAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/add')       return handleAbAdd(req, res);
@@ -33376,6 +34439,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/key')       return handleVnSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/key')       return handleDcSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/key')       return handleCpSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/key')       return handleAbSetKey(req, res);
@@ -33388,6 +34452,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/rename')    return handleVnRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/rename')    return handleDcRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/rename')    return handleCpRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/rename')    return handleAbRename(req, res);
@@ -33399,6 +34464,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/delete')    return handleVnDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/delete')    return handleDcDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/delete')    return handleCpDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/delete')    return handleAbDelete(req, res);
@@ -33410,6 +34476,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/activate')  return handleVnActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/activate')  return handleDcActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/activate')  return handleCpActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/activate')  return handleAbActivate(req, res);
@@ -33421,6 +34488,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/set-model') return handleVnSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/set-model') return handleDcSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/set-model') return handleCpSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/set-model') return handleAbSetModel(req, res);
@@ -33432,6 +34500,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/set-balance') return handleVnSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/set-balance') return handleDcSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/set-balance') return handleCpSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/set-balance') return handleAbSetBalance(req, res);
@@ -33449,9 +34518,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/modelmap')  return handleVnModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/session/open') return handleVnSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/session/open') return handleDcSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/session/open') return handleCpSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/session/open') return handleAbSessionOpen(req, res);
@@ -33463,6 +34534,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/share')    return handleVnShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/share')    return handleDcShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/share')    return handleCpShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/share')    return handleAbShare(req, res);
@@ -33474,6 +34546,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/import')   return handleVnImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/autoreg/start')  return handleVnAutoregStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/vn/autoreg/status') return handleVnAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/vn/autoreg/stop')   return handleVnAutoregStop(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/import')   return handleDcImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/import')   return handleCpImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/import')   return handleAbImport(req, res);
@@ -33872,7 +34948,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {
@@ -34442,7 +35518,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
             // вкладкой «Свои прокси»: её `proxies-tab.js` и `.css` попали в исключение не
             // сразу, и сделанное в них было не проверить перезагрузкой. Дописывая вкладку
             // с внешними файлами - дописывай сюда её префикс.
-            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab', 'google-tab'];
+            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab', 'google-tab', 'gemini-tab'];
             const name = parts[parts.length - 1];
             const fresh = FRESH_PREFIXES.some(p => name.startsWith(p));
             res.writeHead(200, {

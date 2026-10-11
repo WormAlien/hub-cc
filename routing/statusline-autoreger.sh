@@ -372,6 +372,13 @@ if [ -n "$provider" ] && [ "$model_id" != "unknown" ] \
     # CC_MODEL_PREFIX из transparent-proxy.js (урезанная копия — только провайдеры
     # с keepalive, у которых маппинг работает).
     map_prefix=""
+    # 🔴 ЭТО НЕ КОПИЯ «НА ПАМЯТЬ», А МЕСТО, КОТОРОЕ УЖЕ РАСХОДИЛОСЬ.
+    # Источник истины - `CC_MODEL_PREFIX` в routing/transparent-proxy.js. Здесь он
+    # продублирован поимённо, потому что скрипт держится bash 3.2 и без форков
+    # (jq/python не зовём). Живой случай 10.10.2026: у `vani` записи НЕ было, и
+    # `map_prefix` оставался пустым - блок тир-карты пропускался ЦЕЛИКОМ, статусбар
+    # показывал `claude-opus-5.5`, хотя запрос уезжал на `openai/gpt-6-astra`.
+    # Владелец прочитал это как «идёт на опус». Добавил нового шлюза - СВЕРЬ оба списка.
     case "$provider" in
         agentrouter) map_prefix="ar" ;;
         gorouter)    map_prefix="gorouter" ;;
@@ -380,12 +387,27 @@ if [ -n "$provider" ] && [ "$model_id" != "unknown" ] \
         justwoker)   map_prefix="justwoker" ;;
         seekai)      map_prefix="seekai" ;;
         truesota)    map_prefix="truesota" ;;
-        aikeysapi)  map_prefix="aikeysapi" ;;
-        rumeng)      map_prefix="rumeng" ;;
         kktoken)     map_prefix="kktoken" ;;
-        hcnsec)      map_prefix="hcnsec" ;;
+        vani)        map_prefix="vani" ;;
+        dacall)      map_prefix="dacall" ;;
+        cleanapis)   map_prefix="cleanapis" ;;
+        artbloom)    map_prefix="artbloom" ;;
+        fxqidian)    map_prefix="fxqidian" ;;
+        lsapi)       map_prefix="lsapi" ;;
+        budsin)      map_prefix="budsin" ;;
+        nova)        map_prefix="nova" ;;
+        odyssey)     map_prefix="odyssey" ;;
+        bai)         map_prefix="bai" ;;
+        getunikey)   map_prefix="getunikey" ;;
         aipm)        map_prefix="aipm" ;;
-        wisdomsatan) map_prefix="wisdomsatan" ;;
+        aikeysapi)   map_prefix="aikeysapi" ;;
+        ak)          map_prefix="aikeysapi" ;;
+        gemini)      map_prefix="gemini" ;;
+        rumeng)      map_prefix="rumeng" ;;
+        hcnsec)      map_prefix="hcnsec" ;;
+        ourtoken)    map_prefix="ot" ;;
+        cun)         map_prefix="cun" ;;
+        conduit)     map_prefix="cdt" ;;
         Custom*)     map_prefix="custom" ;;
     esac
     if [ -n "$map_prefix" ] || [ "$route_bare" = "1" ]; then

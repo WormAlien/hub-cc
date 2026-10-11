@@ -26,6 +26,7 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    { id: 'vn', file: 'vani-sessions.json', name: 'Vani' },
     { id: 'dc', file: 'dacall-sessions.json', name: 'dacall.AI' },
     { id: 'cp', file: 'cleanapis-sessions.json', name: 'Clean APIs' },
     // Artbloom (2026-09-28) — свой шлюз, не New API, за Claude-каналом Amazon Kiro.

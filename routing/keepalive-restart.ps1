@@ -57,6 +57,8 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20180 = @{ UPSTREAM = 'https://api.vani.ai'; KEY_FILE = "$profileDir\.claude\vani-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'vani-modelmap.json') }
   20177 = @{ UPSTREAM = 'https://api-ru.dacall.ai'; KEY_FILE = "$profileDir\.claude\dacall-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'dacall-modelmap.json') }
   20176 = @{ UPSTREAM = 'https://api.artbloom.tech'; KEY_FILE = "$profileDir\.claude\artbloom-active-key.txt";

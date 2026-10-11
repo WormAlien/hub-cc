@@ -62,7 +62,7 @@
 | **Tabi Token** | Пул ключей `tabitoken.com` через keepalive `:20155`. Выдача `$100`, `+$20` рефереру за приведённого. |
 | **GitHub аккаунты** | Хранилище аккаунтов: логин/пароль/2FA-секрет/recovery/ник. **TOTP считается локально в браузере** (RFC 6238), профиль браузера на аккаунт, фильтры по возрасту и занятости, плашки «в каком шлюзе уже израсходован». |
 | **Telegram аккаунты** | Пул авторегов (`freemodel/tg_pool.json`): статус, health-чек пачкой, «свободен для» по сервисам, импорт `.session` и hex-строк. |
-| **Custom** | Свои OpenAI-совместимые провайдеры: конвертер поднимается на активацию в диапазоне `20150–20250`. |
+| **Custom** | Свои OpenAI-совместимые провайдеры: конвертер поднимается на активацию в диапазоне `20150–20299`. |
 | **SuperGrok** | Сессии grok.com, запуск браузера и терминала под аккаунт. |
 | **Health** | Куда реально смотрит Claude Code (включая цепочку front-door → бэкенд → порт), git-состояние репо, аптайм, сервисы по портам с кнопками «перезапустить» и «убить». |
 | **Плагины / MCP / Скиллы** | Тоггл `enabledPlugins` из `~/.claude/settings.json`, MCP-серверов из `~/.claude.json` и скиллов через `skillOverrides`, кнопка «★ рекомендованные». |
@@ -111,7 +111,7 @@
 | `20156` | **GoRouter keepalive** (SSE) | `routing/keepalive-proxy.js` |
 | `20158` | **JustWoker keepalive** (SSE, апстрим — корень `api.justwoker.icu`, без `/v1`) | `routing/keepalive-proxy.js` |
 | `20157` | XPeach keepalive (SSE; вкладка в архиве, прокси живой) | `routing/keepalive-proxy.js` |
-| `20150–20250` | **Custom OpenAI proxies** — свободный порт из диапазона, поднимается на активацию | `routing/custom-openai-proxy.js` |
+| `20150–20299` | **Custom OpenAI proxies** — свободный порт из диапазона, поднимается на активацию | `routing/custom-openai-proxy.js` |
 | `20126` | FreeModel Key Rotator *(легаси)* | `routing/freemodel-rotator.js` |
 | `20130` | FreeModel OpenAI Proxy *(легаси)* | `routing/freemodel-openai-proxy.js` |
 | `20131` | VyceAI OpenAI Proxy *(легаси)* | `routing/vyceai-openai-proxy.js` |

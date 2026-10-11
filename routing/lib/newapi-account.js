@@ -243,6 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'api.vani.ai': 'jwt',
     'api-ru.dacall.ai': 'jwt',
     'cleanapis.com': 'jwt',
     // api.artbloom.tech — НЕ New API вовсе: свой шлюз (витрина `Artbloom`, кромка Caddy).

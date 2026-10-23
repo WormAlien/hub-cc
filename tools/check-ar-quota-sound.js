@@ -36,7 +36,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 
-const DASH = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
+const DASH = process.env.AR_SOUND_DASH_FILE || path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const URL = 'http://dashboard.test/__switch';
 // Партия берётся из ТОГО ЖЕ расписания, что и страница, — из модуля `ar-quota-probe`,
 // а не своей формулой. Третья копия арифметики разошлась бы с двумя боевыми МОЛЧА:
@@ -123,7 +123,7 @@ ok(/const KEY_SND_DRY = 'ar-quota-sound-dry'/.test(src),
 ok(/addEventListener\('pointerdown', arqSndArm/.test(src), 'контекст будится жестом человека');
 ok(/function arqSndScheduleUp/.test(src) && /await arqSndScheduleUp\(\);/.test(src),
     'налив по расписанию определён и зовётся из stSync (звенит и когда ротация занулила пробу)');
-ok(/arqSndScheduleUp[\s\S]{0,400}?arqSndSeen\(KEY_SND_DROP\) === d[\s\S]{0,200}?arqSndPlay\('in'\)/.test(src),
+ok(/arqSndScheduleUp[\s\S]{0,900}?arqSndSeen\(KEY_SND_DROP\)\.includes\(d\)[\s\S]{0,200}?arqSndPlay\('in'\)/.test(src),
     'налив по расписанию: дедуп общий с пробой (KEY_SND_DROP), голос вверх');
 
 // ═════ 3. Живой прогон ══════════════════════════════════════════════════════
@@ -150,7 +150,7 @@ async function routeDash(page) {
     });
 }
 
-async function mkPage(context, stub) {
+async function mkPage(context, stub, options = {}) {
     await context.route('**/*', (route) => {
         const u = route.request().url();
         if (u === URL) return route.fulfill({ contentType: 'text/html; charset=utf-8', body: src });
@@ -158,10 +158,28 @@ async function mkPage(context, stub) {
             contentType: 'application/json', body: JSON.stringify({ ok: true, pools: stub.pools }) });
         if (u.includes('/ar/quota-check')) return route.fulfill({
             contentType: 'application/json', body: JSON.stringify(stub.check || {}) });
+        if (u.includes('/ar/quota-schedule')) return route.fulfill({
+            contentType: 'application/json', body: JSON.stringify(stub.schedule || {}) });
         if (/\.js(\?|$)/.test(u)) return route.fulfill({ contentType: 'application/javascript', body: '' });
         return route.fulfill({ contentType: 'application/json', body: '{}' });
     });
     const page = await context.newPage();
+    if (options.openedAt) await page.addInitScript(({ openedAt, storage }) => {
+        const RealDate = Date;
+        window.__now = Number(sessionStorage.getItem('ar-sound-test-now')) || openedAt;
+        window.Date = class extends RealDate {
+            constructor(...args) { super(...(args.length ? args : [window.__now])); }
+            static now() { return window.__now; }
+        };
+        // Перехватываем настоящий callback таймера, не копию детектора из исходника.
+        window.setInterval = (fn, ms) => {
+            if (ms === 30000 && fn.name === 'stSync') window.__quotaPoll = fn;
+            return 0;
+        };
+        for (const [key, value] of Object.entries(storage || {})) {
+            if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
+        }
+    }, options);
     await page.addInitScript(() => {
         window.__osc = 0;
         const P = () => ({ value: 0, setValueAtTime() {}, linearRampToValueAtTime() {},
@@ -198,6 +216,100 @@ async function mkPage(context, stub) {
 // visibilitychange зовёт stSync, когда вкладка НЕ скрыта.
 const poke = (page) => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
 const osc = (page) => page.evaluate(() => window.__osc);
+
+// Смешанные расписания проверяем сутками виртуального времени, но через тот же
+// callback, который браузер вызывает каждые 30 с. Все HTTP-запросы перехвачены.
+const MIXED_SCHEDULE = { ok: true, source: 'file', tz: 'Asia/Shanghai', times: ['10:00', '19:00'],
+    pools: { opus55: { tz: 'Asia/Shanghai', times: ['09:00'] } } };
+const OPENED_AT = Date.parse('2026-10-22T10:00:00Z'); // 13:00 МСК, до обеих новых партий
+const moveTo = (page, at) => page.evaluate((at) => {
+    window.__now = Date.parse(at);
+    sessionStorage.setItem('ar-sound-test-now', String(window.__now));
+}, at);
+async function pollAt(page, at) {
+    await moveTo(page, at);
+    const before = await osc(page);
+    await page.evaluate(() => window.__quotaPoll());
+    return (await osc(page)) - before;
+}
+async function scheduledPage(browser, stub, options = {}) {
+    const context = await browser.newContext({ timezoneId: 'Europe/Moscow' });
+    const result = await mkPage(context, stub, { openedAt: OPENED_AT, ...options });
+    await result.page.waitForFunction(() => typeof window.__quotaPoll === 'function');
+    await result.page.waitForTimeout(200); // начальные stSync и schedFetch завершились
+    return { ...result, context };
+}
+
+async function mixedSchedules(browser) {
+    console.log('\nE. Разные расписания, открытая сутками страница');
+    const stub = { schedule: MIXED_SCHEDULE, pools: {
+        opus: { state: null, stale: true }, opus55: { state: null, stale: true }, gpt: { state: null, stale: true },
+    } };
+    const E = await scheduledPage(browser, stub);
+    try {
+        eq(await osc(E.page), 0, 'загрузка до новых партий молчит');
+        eq(await pollAt(E.page, '2026-10-22T11:00:30Z'), VOICE_OSC, '14:00: общая партия даёт один звонок');
+        eq(await pollAt(E.page, '2026-10-22T11:01:00Z'), 0, 'повторный опрос общей партии молчит');
+        eq(await pollAt(E.page, '2026-10-23T01:00:30Z'), VOICE_OSC, '04:00: 5.5 звенит один раз, вчерашняя общая партия молчит');
+        eq(await pollAt(E.page, '2026-10-23T01:01:00Z'), 0, 'следующий тик не путает две разные метки налива');
+        eq(await pollAt(E.page, '2026-10-23T01:17:00Z'), 0, '04:17: повторов нет и спустя много тиков');
+        eq(await pollAt(E.page, '2026-10-23T02:00:30Z'), VOICE_OSC, '05:00: новая общая партия звенит, партия 5.5 молчит');
+        eq(await pollAt(E.page, '2026-10-23T02:01:00Z'), 0, 'после 05:00 все повторные опросы молчат');
+
+        const shared = Date.parse('2026-10-23T02:00:00Z');
+        const separate = Date.parse('2026-10-23T01:00:00Z');
+        for (const pool of ['opus', 'opus55', 'gpt']) {
+            stub.pools[pool] = rec('available', shared + 120000, pool === 'opus55' ? separate : shared);
+        }
+        eq(await pollAt(E.page, '2026-10-23T02:02:00Z'), 0, 'пробы обеих партий не повторяют уже прозвеневшее по расписанию');
+        stub.pools.opus = rec('exhausted', shared + 180000, shared, 'drop');
+        stub.pools.gpt = rec('exhausted', shared + 180000, shared, 'drop');
+        eq(await pollAt(E.page, '2026-10-23T02:03:00Z'), DRY_OSC * 2, 'конец opus и gpt остаётся отдельным событием каждой полосы');
+        eq(await pollAt(E.page, '2026-10-23T02:03:30Z'), 0, 'концы полос тоже не повторяются');
+        stub.pools.opus55 = rec('exhausted', shared + 240000, separate, 'drop');
+        eq(await pollAt(E.page, '2026-10-23T02:04:00Z'), DRY_OSC, 'конец 5.5 не потерян после концов других полос');
+
+        for (const at of ['2026-10-23T11:00:30Z', '2026-10-24T01:00:30Z', '2026-10-24T02:00:30Z']) {
+            eq(await pollAt(E.page, at), VOICE_OSC, `${at}: следующие партии не заглушены историей`);
+            eq(await pollAt(E.page, ISO(Date.parse(at) + 30000)), 0, 'повторный опрос следующей партии молчит');
+        }
+        await E.page.reload({ waitUntil: 'domcontentloaded' });
+        await E.page.waitForFunction(() => typeof window.__quotaPoll === 'function');
+        await E.page.waitForTimeout(200);
+        eq(await osc(E.page), 0, 'F5 не повторяет ни один из голосов');
+        stub.pools.gpt = rec('available', Date.parse('2026-10-24T02:02:00Z'), Date.parse('2026-10-24T02:00:00Z'));
+        eq(await pollAt(E.page, '2026-10-24T02:02:00Z'), 0, 'после F5 новая проба той же партии помнит историю');
+
+        const E2 = await mkPage(E.context, stub, { openedAt: Date.parse('2026-10-24T02:02:00Z') });
+        await E2.page.waitForTimeout(200);
+        stub.pools.gpt.checkedAt = '2026-10-24T02:03:00.000Z';
+        eq(await pollAt(E2.page, '2026-10-24T02:03:00Z'), 0, 'второе окно читает тот же набор прозвеневших партий');
+        eq(E.errors.length + E2.errors.length, 0, 'смешанные расписания не дают ошибок страницы');
+    } finally { await E.context.close(); }
+
+    console.log('\nF. Старая метка и ручные проверки разных партий');
+    const morning = Date.parse('2026-10-22T02:00:00Z');
+    const stubF = { schedule: MIXED_SCHEDULE, pools: {}, check: {} };
+    const F = await scheduledPage(browser, stubF, { storage: { 'ar-quota-sound-drop': String(morning) } });
+    try {
+        stubF.pools.gpt = rec('available', OPENED_AT + 60000, morning);
+        eq(await pollAt(F.page, '2026-10-22T10:01:00Z'), 0, 'числовая метка прежнего формата продолжает гасить звонок');
+        for (const [pool, at, drop] of [
+            ['opus', '2026-10-22T11:00:30Z', '2026-10-22T11:00:00Z'],
+            ['opus55', '2026-10-23T01:00:30Z', '2026-10-23T01:00:00Z'],
+        ]) {
+            stubF.check = rec('available', Date.parse(at), Date.parse(drop));
+            await moveTo(F.page, at);
+            const before = await osc(F.page);
+            await F.page.evaluate(pool => window.arqCheckQuota(pool), pool);
+            eq(await osc(F.page), before, `ручная проверка ${pool} молчит`);
+            eq(await pollAt(F.page, at), 0, `опрос после ручной проверки ${pool} не повторяет ни свою, ни соседнюю партию`);
+        }
+        eq(await pollAt(F.page, '2026-10-23T02:00:30Z'), VOICE_OSC, 'ручные отметки не глушат следующую общую партию');
+        eq(await pollAt(F.page, '2026-10-23T02:01:00Z'), 0, 'ручные отметки разных партий больше не перезаписывают друг друга');
+        eq(F.errors.length, 0, 'миграция старой метки и ручная проверка без ошибок');
+    } finally { await F.context.close(); }
+}
 
 async function main() {
     const browser = await chromium.launch();
@@ -264,8 +376,8 @@ async function main() {
     const B = await mkPage(ctxB, stubB);
     await B.page.waitForTimeout(800);
     eq(await osc(B.page), 0, 'налили, пока страницы не было → на загрузке молчит');
-    ok(/Квота есть/.test(await B.page.evaluate(() => document.getElementById('arq-check-result').textContent)),
-        'но состояние не спрятано: строка под часами говорит «Квота есть»');
+    ok(/есть/.test(await B.page.evaluate(() => (document.querySelector('#arq-pool-state .arq-lane[data-pool="opus"]') || {}).textContent || '')),
+        'но состояние не спрятано: чип полосы говорит «есть»');
 
     // 🎯 Главная сцена: окно свёрнуто, тик опроса идёт своим ходом, сторож наливки спит.
     await B.page.evaluate(() => Object.defineProperty(document, 'hidden', { get: () => true, configurable: true }));
@@ -283,9 +395,9 @@ async function main() {
     const ctxC = await browser.newContext();
     const C = await mkPage(ctxC, stubC);
     stubC.check = { state: 'available', checkedAt: ISO(Date.now()), dropAt: ISO(dropAt(Date.now())), restored: false };
-    await C.page.evaluate(() => document.getElementById('arq-check').click());
+    await C.page.evaluate(() => document.querySelector('#arq-pool-state .arq-lane[data-pool="opus"]').click());
     await C.page.waitForTimeout(900);
-    eq(await osc(C.page), 0, 'нажал «Проверить квоту» сам → молчит, ответ и так на экране');
+    eq(await osc(C.page), 0, 'нажал чип полосы сам → молчит, ответ и так на экране');
     eq(await C.page.evaluate(() => localStorage.getItem('ar-quota-sound-drop')),
         String(dropAt(Date.now())), 'но партия помечена просмотренной: автопроба не звякнет задним числом');
     eq(C.errors.length, 0, `ошибок в странице нет${C.errors.length ? ': ' + C.errors[0] : ''}`);
@@ -325,6 +437,7 @@ async function main() {
     ok(each.filter((n) => n === 0).length === 1, 'звенело одно окно, второе смолчало');
     await ctxD.close();
 
+    await mixedSchedules(browser);
     await browser.close();
     console.log(failed ? `\n❌ провалов: ${failed}` : '\n✅ все проверки прошли');
     process.exit(failed ? 1 : 0);
@@ -370,7 +483,7 @@ async function live() {
         return { snd: !!b, pressed: b && b.getAttribute('aria-pressed'), icon: b && b.textContent,
             title: b && b.title, osc: window.__osc,
             rec: localStorage.getItem('ar-quota-state'),
-            line: (document.getElementById('arq-check-result') || {}).textContent };
+            line: (document.getElementById('arq-pool-state') || {}).textContent };
     });
     ok(got.snd, '🔔 в сайдбаре на живом дашборде');
     eq(got.pressed, 'true', '🔔 по умолчанию включён');
@@ -423,7 +536,7 @@ async function watch(minutes) {
     while (Date.now() < until) {
         await page.waitForTimeout(20000);
         const s = await page.evaluate(() => ({
-            osc: window.__osc, line: (document.getElementById('arq-check-result') || {}).textContent,
+            osc: window.__osc, line: (document.getElementById('arq-pool-state') || {}).textContent,
             rec: localStorage.getItem('ar-quota-state'), seen: localStorage.getItem('ar-quota-sound-drop') }));
         if (s.osc > 0 && !beeped) {
             beeped = s;

@@ -23,7 +23,7 @@
 
   "aipm": {
     "p": "ap", "P": "AP", "full": "aipm", "NAME": "AIPM",
-    "HOST": "emtf.aipm9527.online", "PORT": 20163, "FOLDER": "aipm",
+    "HOST": "emtf.aipm9527.site", "PORT": 20163, "FOLDER": "aipm",
     "ICON": "🔷", "COLOR": "indigo", "REF": "NS3L",
     "github": true, "ref": true, "flatRate": true, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
@@ -108,6 +108,13 @@
     "HOST": "api-ru.dacall.ai", "PORT": 20177, "FOLDER": "dacall",
     "ICON": "📞", "COLOR": "orange", "REF": "",
     "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": true, "customPanel": true
+  },
+
+  "premier": {
+    "p": "pm", "P": "PM", "full": "premier", "NAME": "Premier",
+    "HOST": "ide.kgpix.bond", "PORT": 20189, "FOLDER": "premier", "KEY_RE": "/^prm_[A-Za-z0-9_-]{40,}$/",
+    "ICON": "🅿️", "COLOR": "amber", "REF": "",
+    "github": true, "ref": false, "flatRate": true, "anthropic": false, "pool": true, "shareScript": false, "autoreg": false, "customPanel": true
   },
 
   "vani": {

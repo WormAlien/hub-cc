@@ -528,6 +528,20 @@ const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 256);
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
+// Пул keep-alive: край/туннель закрывает простаивающее соединение за 10-15 с.
+// Замер стенда 20.10.2026 (LTE через CDN): простой 10 с - сокет жив, 15 с - EOF за
+// 0-6 мс. Если взять такой сокет из пула, запрос уходит в мёртвую трубу и ждёт до
+// upstreamTimeoutMs (300 с), а клиент видит минуты тишины. Сбрасываем ТОЛЬКО
+// свободные сокеты - активные стримы не трогаем.
+const IDLE_FLUSH_MS = Number(process.env.IDLE_FLUSH_MS || 10000);
+function flushFreeSockets(requester) {
+  const a = agentFor(requester || upRequester);
+  let n = 0;
+  for (const list of Object.values(a.freeSockets || {})) {
+    for (const s of list) { try { s.destroy(); n += 1; } catch (e) { /* уже мёртв */ } }
+  }
+  return n;
+}
 // ── Трассировка исходящего соединения: почему первый запрос после простоя тормозит ──
 // Симптом (28.08): после АФК активный шлюз «не раздупляет», и лечит только перезапуск
 // процесса — значит портится состояние ЗДЕСЬ, а не у шлюза (Cloudflare и квота от
@@ -1001,7 +1015,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online', 'www.aikeysapi.com']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1615,6 +1629,7 @@ function isTransientBody(status, buf) {
   // Bedrock-канал AgentRouter прислал свой model identifier — повтор пойдёт на другой канал.
   // Проверяем ДО RETRY_NO, потому что `bad request` из RETRY_NO ловит и Bedrock-ответ.
   if (status === 400 && /ValidationException|model identifier|InvokeModel|Bedrock/i.test(s)) return true;
+  if (status === 429 && /daily message limit reached|сообщения на сегодня закончились/i.test(s)) return false;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -1731,6 +1746,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'ide.kgpix.bond': 'pm',
   'api.vani.ai': 'vn',
   'api-ru.dacall.ai': 'dc',
   'cleanapis.com': 'cp',
@@ -1742,7 +1758,7 @@ const GW_BY_HOST = {
   'odysseyapi.tech': 'od',
   'chat.b.ai': 'bai',
   'www.getunikey.ai': 'uk',
-  'emtf.aipm9527.online': 'ap',
+  'emtf.aipm9527.site': 'ap',
   'www.aikeysapi.com': 'ak',
   // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
   // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
@@ -2941,6 +2957,15 @@ const server = http.createServer((req, res) => {
     // перегрузки (см. isFastFail5xx). Момент старта — здесь, а не в колбэке ответа:
     // в цену попытки входит и установка соединения.
     const attemptT0 = Date.now();
+    // Простой больше порога - край уже закрыл keep-alive соединение. Гасим свободные
+    // сокеты ДО запроса, иначе он возьмёт мёртвый из пула и провисит до таймаута.
+    if (IDLE_FLUSH_MS > 0 && lastUpAt) {
+      const idleMs = Date.now() - lastUpAt;
+      if (idleMs > IDLE_FLUSH_MS) {
+        const flushed = flushFreeSockets(t.requester);
+        if (flushed) log(`${req.method} ${reqPath} простой ${Math.round(idleMs / 1000)}с — сброшено свободных сокетов: ${flushed} (attempt ${attempt})`);
+      }
+    }
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -3216,6 +3241,9 @@ const server = http.createServer((req, res) => {
       // именно он и есть симптом «после простоя не раздупляет».
       log(`${req.method} ${reqPath} upstream timeout ${cfg.upstreamTimeoutMs}ms (attempt ${attempt})`
         + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
+      // Таймаут на сокете из пула - тот же отмерший keep-alive; повтор должен идти
+      // новым соединением, а не следующим мёртвым.
+      if (ctrace && ctrace.reused) flushFreeSockets(t.requester);
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
@@ -3224,6 +3252,12 @@ const server = http.createServer((req, res) => {
       // его молча, пока мы простаивали, и узнали мы об этом только записью в трубу.
       log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`
         + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
+      // Сокет из пула + обрыв = отмершее keep-alive. Гасим остальные свободные,
+      // иначе повтор возьмёт такой же мёртвый и сгорит ещё раз.
+      if (ctrace && ctrace.reused) {
+        const flushed = flushFreeSockets(t.requester);
+        if (flushed) log(`${req.method} ${reqPath} ошибка на сокете из пула — сброшено свободных: ${flushed}`);
+      }
       attemptDone(upReq, err.message, 0);
     });
     upReq.end(body);

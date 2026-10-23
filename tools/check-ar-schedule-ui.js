@@ -34,6 +34,13 @@ const VENDOR = { ok: true, tz: 'Asia/Shanghai', times: ['10:00', '19:00'], sourc
                  updated: '2026-09-18', error: null,
                  fallback: { tz: 'Asia/Shanghai', times: ['10:00', '19:00'] } };
 const THREE = { ...VENDOR, tz: 'UTC', times: ['00:00', '08:00', '16:00'] };
+// 21.10: у claude-opus-5-5 своя партия - Пекин 09:00. В ответе ручки она приезжает
+// отдельной полосой, и часы обязаны переключиться на неё, а не считать по общим 10/19.
+const VENDOR55 = { ...VENDOR, pools: {
+    opus: { tz: 'Asia/Shanghai', times: ['10:00', '19:00'], source: 'file', error: null },
+    opus55: { tz: 'Asia/Shanghai', times: ['09:00'], source: 'file', error: null },
+    gpt: { tz: 'Asia/Shanghai', times: ['10:00', '19:00'], source: 'file', error: null },
+} };
 
 // Считаем ожидание тем же расписанием, что и страница: проба не должна зависеть от
 // того, в какой час её запустили.
@@ -99,15 +106,27 @@ async function main() {
         console.log('── A. поставка: Пекин 10:00 и 19:00 ──────────────────────────────');
         const A = await mkPage(browser, VENDOR, () => VENDOR);
         const line = await A.page.textContent('#arq-sched-line');
-        ok(/Две партии в сутки/.test(line), `под часами сказано «Две партии в сутки» — ${line.trim().slice(0, 70)}`);
+        ok(/Opus 5 и GPT/.test(line), `строка называет общую группу — ${line.trim().slice(0, 70)}`);
         ok(line.includes('10:00') && line.includes('19:00'), 'названы времена объявления');
-        ok(line.includes(localTimes(VENDOR).join(' и ')), `назван пересчёт в твою зону: ${localTimes(VENDOR).join(' и ')}`);
+        ok(line.includes(localTimes(VENDOR).join(', ')), `назван пересчёт в твою зону: ${localTimes(VENDOR).join(', ')}`);
+        ok(/Opus 5\.5/.test(line) && line.includes('09:00') && line.includes('04:00'),
+            'отдельная полоса 5.5 названа своим временем и пересчётом');
         ok(/用完即止/.test(line), 'оговорка «партия конечная» на месте');
 
-        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-big .mks circle').length), 2,
-            'суточный круг нарисовал РОВНО две метки — по числу партий, а не три зашитых');
-        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-mini .mks circle').length), 2,
-            'мини-версия нарисовала столько же');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-big .mks .arq-mk').length), 3,
+            'общий круг нарисовал три метки: 04:00, 05:00 и 14:00');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-big .mks svg').length), 5,
+            'на метках стоят логотипы полос: 5.5 отдельно, opus и gpt вместе');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-big .arq-dial').length), 1,
+            'на вкладке один циферблат, а не два');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-pool-state .arq-lane').length), 3,
+            'одна строка состояния назвала все три полосы');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-pool-state .arq-lane-ico svg').length), 3,
+            'у каждой полосы в строке свой маленький SVG-знак');
+        eq(await A.page.evaluate(() => document.querySelectorAll('#arq-mini .arq-host').length), 0,
+            'в сайдбаре нет второго циферблата - часы одни');
+        ok(await A.page.evaluate(() => !!document.querySelector('#arq-mini-logo svg')),
+            'в строке сайдбара остался маленький знак полосы');
 
         // 🎯 Флаг большой дуги: сектор идёт от ПРОШЛОЙ партии к следующей, и на ночном
         // промежутке (15 ч = 225°) он обязан быть единицей. Зашитый ноль выворачивал бы
@@ -132,13 +151,32 @@ async function main() {
         eq(A.errors.length, 0, `ошибок в странице нет${A.errors.length ? ': ' + A.errors.join(' | ') : ''}`);
         await A.context.close();
 
+        // ── Сцена A2: отдельная полоса Opus 5.5, одна партия ────────────────────
+        console.log('\n── A2. Opus 5.5: отдельная партия, Пекин 09:00 ───────────────────');
+        const A2 = await mkPage(browser, VENDOR55, () => VENDOR55);
+        const line55 = await A2.page.textContent('#arq-sched-line');
+        ok(/Opus 5\.5/.test(line55), `строка называет полосу - ${line55.trim().slice(0, 80)}`);
+        ok(/09:00/.test(line55), 'время 09:00 Пекина на месте');
+        ok(/04:00/.test(line55), `пересчёт в МСК - 04:00 (${line55.trim().slice(0, 100)})`);
+        eq(await A2.page.evaluate(() => document.querySelectorAll('#arq-big .mks .arq-mk').length), 3,
+            'общий круг показывает все три метки, а не только 5.5');
+        const chip55 = await A2.page.textContent('#arq-pool-state .arq-lane[data-pool="opus55"]');
+        ok(/Opus 5\.5/.test(chip55), `в строке состояния есть чип 5.5 — ${chip55.trim()}`);
+        await A2.page.selectOption('#arq-sched-pool', 'opus55');
+        eq(await A2.page.inputValue('#arq-sched-times'), '09:00',
+            'карточка расписания правит ОТДЕЛЬНУЮ полосу, а не общий график');
+        eq(await A2.page.inputValue('#arq-sched-tz'), 'Asia/Shanghai', 'зона полосы своя');
+        eq(A2.errors.length, 0, `ошибок в странице нет${A2.errors.length ? ': ' + A2.errors.join(' | ') : ''}`);
+        await A2.context.close();
+
         // ── Сцена 2: три партии, зона UTC ───────────────────────────────────────
         console.log('\n── B. три партии в зоне UTC ─────────────────────────────────────');
         const B = await mkPage(browser, THREE, () => THREE);
         const lineB = await B.page.textContent('#arq-sched-line');
-        ok(/Три партии в сутки/.test(lineB), 'под часами сказано «Три партии в сутки»');
-        eq(await B.page.evaluate(() => document.querySelectorAll('#arq-big .mks circle').length), 3,
-            'меток стало три — круг следует за расписанием, а не за константой');
+        ok(lineB.includes('00:00, 08:00, 16:00') && /Opus 5\.5/.test(lineB),
+            'под часами названы три партии UTC и отдельная 5.5');
+        eq(await B.page.evaluate(() => document.querySelectorAll('#arq-big .mks .arq-mk').length), 4,
+            'меток четыре: три партии UTC плюс отдельная 5.5');
         eq(await B.page.inputValue('#arq-sched-times'), '00:00, 08:00, 16:00', 'поля перечитались под новое расписание');
         eq(B.errors.length, 0, 'ошибок в странице нет');
         await B.context.close();
@@ -148,9 +186,11 @@ async function main() {
         // больше полукруга, и с зашитым нулём в флаге большой дуги SVG рисует ЕГО ЖЕ
         // наоборот — через соседний сектор. 12.09 это уже случалось на третьем круге,
         // и поймал его владелец глазами, а не проба. Теперь ловит проба: часы
-        // пришпилены к 23:00 МСК, между вечерней и утренней партией.
+        // пришпилены к 04:30 МСК: ближайшая партия - общая 05:00, прошлая 14:00,
+        // промежуток 15 ч. Ровно в 23:00 ближайшей была бы 5.5 в 04:00, и сцена
+        // проверяла бы не тот промежуток.
         console.log('\n── D. ночной промежуток 15 ч ────────────────────────────────────');
-        const NIGHT = Date.UTC(2026, 8, 18, 20, 0, 0);      // 23:00 МСК
+        const NIGHT = Date.UTC(2026, 8, 18, 1, 30, 0);      // 04:30 МСК
         const N = await mkPage(browser, VENDOR, () => VENDOR, NIGHT);
         const arcN = await N.page.evaluate(() => document.querySelector('#arq-big .hf').getAttribute('d'));
         const nN = (arcN.match(/-?\d+(?:\.\d+)?/g) || []).map(Number);
@@ -160,8 +200,8 @@ async function main() {
         eq(Math.round(spanN / 60), 15, 'проба встала ровно на 15-часовой промежуток (иначе сцена ничего не проверяет)');
         eq(nN[5], 1, 'на 225° флаг большой дуги = 1 (с нулём дуга вывернется через соседний сектор)');
         eq(nN[6], 1, 'и по-прежнему по часовой');
-        eq(await N.page.textContent('#arq-big .hero'), '06:00:00',
-            'отсчёт до утренней партии: от 23:00 МСК до 05:00 — ровно 6 часов');
+        eq(await N.page.textContent('#arq-big .hero'), '00:30:00',
+            'отсчёт до общей партии: от 04:30 МСК до 05:00 — полчаса');
         eq(N.errors.length, 0, 'ошибок в странице нет');
         await N.context.close();
 
@@ -184,20 +224,22 @@ async function main() {
         const alienAt = Date.now() - 60_000;
         const E1 = await mkPage(browser, VENDOR, () => VENDOR);
         await seedCache(E1.page, seed(alienAt, OLD_GRID(alienAt)));
-        eq(await E1.page.textContent('#arq-check-result'),
-            'запись от прежней схемы партий - обнови страницу и проверь заново',
-            'запись чужого календаря называет себя, а не молчит прочерком');
+        const alienChip = E1.page.locator('#arq-pool-state .arq-lane[data-pool="opus"]');
+        ok(/F5/.test(await alienChip.textContent()),
+            'запись чужого календаря называет себя в чипе, а не молчит прочерком');
+        ok(/прежней схемы/.test(String(await alienChip.getAttribute('title'))),
+            'подсказка чипа объясняет, что нужен F5');
         eq(await E1.page.evaluate(() => document.querySelector('#arq-big').getAttribute('data-arq-state')),
             null, 'цвета такая запись не даёт: врать про квоту по чужой сетке нельзя');
         await E1.context.close();
 
         // Запись ПРОШЛОЙ партии по моей же сетке: согласована и с собой, и со мной -
-        // значит F5 не при чём, и правильный ответ здесь именно молчаливый прочерк.
+        // значит F5 не при чём, и правильный ответ здесь именно «неизвестно».
         const prev = arQuotaBatches(Date.now() - 26 * 3600e3, schedOf(VENDOR)).last;
         const E2 = await mkPage(browser, VENDOR, () => VENDOR);
         await seedCache(E2.page, seed(prev + 60_000, prev));
-        eq(await E2.page.textContent('#arq-check-result'), '—',
-            'запись просто прошлой партии молчит прочерком - F5 ей ничем не поможет');
+        ok(/неизв\./.test(await E2.page.textContent('#arq-pool-state .arq-lane[data-pool="opus"]')),
+            'запись просто прошлой партии не выдаёт себя за свежую');
         await E2.context.close();
 
         // ── Сцена 3: применение и отказ ─────────────────────────────────────────
@@ -211,7 +253,8 @@ async function main() {
         await C.page.click('#arq-sched button:has-text("Применить")');
         await C.page.waitForFunction(() => /записано/.test(document.getElementById('arq-sched-msg').textContent),
             null, { timeout: 5000 });
-        ok(/Две партии в сутки: 05:00 и 14:00/.test(await C.page.textContent('#arq-sched-line')),
+        const lineC = await C.page.textContent('#arq-sched-line');
+        ok(/Europe\/Moscow 05:00, 14:00/.test(lineC) && /Opus 5\.5/.test(lineC),
             'после записи подпись пересобралась под новое расписание');
         eq(await C.page.inputValue('#arq-sched-tz'), 'Europe/Moscow', 'поля показывают записанное');
         await C.context.close();

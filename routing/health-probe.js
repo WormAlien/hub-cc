@@ -82,7 +82,7 @@ const FLAT_RATE_HOSTS = new Set([
     'seekai.cc',
     'true-sota.com',
     'kktoken.cc',
-    'emtf.aipm9527.online',
+    'emtf.aipm9527.site',
 ]);
 
 // ─────────────────────────── Реестр шлюзов ───────────────────────────
@@ -106,7 +106,7 @@ const GATEWAYS = {
     ts: { tag: 'truesota',    label: 'TrueSOTA',    host: 'true-sota.com',          base: 'https://true-sota.com/v1',          keyName: 'truesota', subscription: true },
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',             base: 'https://kktoken.cc/v1',             keyName: 'kktoken',  ignoresMaxTokens: true },
     // minBal 0.10 — как в MONEY_GW (у AIPM свой порог, аккаунты там центовые).
-    ap: { tag: 'aipm',        label: 'AIPM',        host: 'emtf.aipm9527.online',   base: 'https://emtf.aipm9527.online/v1',   keyName: 'aipm',     minBal: 0.10 },
+    ap: { tag: 'aipm',        label: 'AIPM',        host: 'emtf.aipm9527.site',   base: 'https://emtf.aipm9527.site/v1',   keyName: 'aipm',     minBal: 0.10 },
     hn: { tag: 'hcnsec',      label: 'HCNsec',      host: 'api.hcnsec.cn',          base: 'https://api.hcnsec.cn/v1',          keyName: 'hcnsec' },
 };
 

@@ -46,9 +46,9 @@ const path = require('path');
 // репозиторий: раньше код был в десяти местах, и забытое = потерянный реф-кредит.
 const REGISTER_URL = require("../routing/lib/ref-codes.js").url("aipm");
 // Ключ уже вписан → сразу баланс, а не логин.
-const CONSOLE_URL = 'https://emtf.aipm9527.online/wallet';
+const CONSOLE_URL = 'https://emtf.aipm9527.site/wallet';
 // Корень нужен для прогрева перед регистрацией (см. openRegisterViaRef).
-const ROOT_URL = 'https://emtf.aipm9527.online/';
+const ROOT_URL = 'https://emtf.aipm9527.site/';
 const PROFILES_DIR = path.join(__dirname, 'profiles');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 

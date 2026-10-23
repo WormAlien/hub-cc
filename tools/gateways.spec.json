@@ -141,7 +141,7 @@
     { "id": "2.13", "title": "Фронт: рендер вкладки",       "file": "frontend", "kind": "must", "expect": "function render%x%Gauge(" },
 
     { "id": "3.1",  "title": "GW_BY_HOST",                  "file": "keepalive", "kind": "must", "expect": "'%HOST%': '%p%'" },
-    { "id": "3.2",  "title": "FLAT_RATE_HOSTS",             "file": "keepalive", "kind": "must", "when": ["flatRate"], "expect": "'%HOST%'" },
+    { "id": "3.2",  "title": "FLAT_RATE_HOSTS",             "file": "keepalive", "kind": "must", "when": ["flatRate"], "expect": "'%HOST%'", "within": "const FLAT_RATE_HOSTS" },
     { "id": "3.3",  "title": "lifecycle: keepalive",        "file": "lifecycle", "kind": "must", "expect": "port: %PORT%, name: '%NAME% keepalive'" },
     { "id": "3.4",  "title": "keepalive-restart.ps1",       "file": "restart", "kind": "must", "expect": "%PORT% = @{ UPSTREAM" },
     { "id": "3.5",  "title": "Реф-код в SHAPES",            "file": "refcodes", "kind": "must", "when": ["ref"], "expect": "%full%:" },
@@ -231,6 +231,7 @@
     "2.11":  {},
 
     "3.1":   {},
+    "3.2":   { "mode": "inline", "find": "'%HOST%'", "add": ", '%HOST%'" },
     "3.3":   {},
     "3.4":   { "span": "braces" },
     "3.7":   {},

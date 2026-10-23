@@ -97,6 +97,7 @@
 <!-- Вкладка «Модели» вынесена во внешнюю пару файлов: этот html и без того на 31k строк.
      Отдаёт их тот же :8200 маршрутом /vendor/*, как и остальную локальную вендор-пачку. -->
 <link rel="stylesheet" href="/vendor/models-tab.css">
+<link rel="stylesheet" href="/vendor/a6api-tab.css">
 <link rel="stylesheet" href="/vendor/media-tab.css">
 <link rel="stylesheet" href="/vendor/proxies-tab.css">
 <!-- Вкладка Google (пул аккаунтов под подписку AI Pro). Пара файлов в /vendor, как у MEDIA
@@ -670,7 +671,7 @@ function randomThemeId() {
            у него долив, нужно как раз чтобы решить, переключаться ли на него. -->
       <div id="arq-mini" class="arq hidden mt-1.5 pt-1.5 border-t border-line-soft/60 flex items-center gap-2 text-[10px]"
            title="Партии AgentRouter — расписание читается с диска">
-        <span class="arq-host shrink-0 leading-none"></span>
+        <span id="arq-mini-logo" class="shrink-0 leading-none" style="color: var(--arq-cc)"></span>
         <span class="arq-txt text-dim truncate"></span>
         <!-- 🔔 звука на наливку партии. Стоит рядом с часами намеренно: оба про одно
              событие, и вопрос «а услышу ли я его» возникает ровно здесь. -->
@@ -681,6 +682,9 @@ function randomThemeId() {
 
     <!-- Nav -->
     <nav id="main-nav" class="px-2 space-y-0.5 flex-1 min-h-0 overflow-y-auto">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="a6api">
+        <span class="w-5 text-center text-[14px]">🛒</span><span class="flex-1">a6api</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="health">
         <span class="w-5 text-center text-[14px]">🩺</span>
         <span class="flex-1">Health</span>
@@ -770,6 +774,11 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="premier" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
+        <span class="w-5 text-center text-[14px]">🅿️</span>
+        <span class="flex-1">Premier</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-premier">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="vani" title="Своя панель Vani (не New API) за Cloudflare. Вход БЕЗ пароля: email → код. API api.vani.ai, консоль c.vani.ai/settings/developer. Авторега через Camoufox">
         <span class="w-5 text-center text-[14px]">🧿</span>
         <span class="flex-1">Vani</span>
@@ -825,7 +834,7 @@ function randomThemeId() {
         <span class="flex-1">B.AI</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-bai">—</span>
       </button>
-      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aipm" title="New API поверх emtf.aipm9527.online. Платная панель, без гранта.">
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="aipm" title="New API поверх emtf.aipm9527.site. Платная панель, без гранта.">
         <span class="w-5 text-center text-[14px]">🔷</span>
         <span class="flex-1">AIPM</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-aipm">—</span>
@@ -849,6 +858,11 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🎫</span>
         <span class="flex-1">Tabi Token</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-tabi">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="seekai" title="seekai.cc · DeepSeek-V4-Flash живой (deepseek-ai/DeepSeek-V4-Flash-0731)">
+        <span class="w-5 text-center text-[14px]">🔎</span>
+        <span class="flex-1">SeekAi</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-seekai">—</span>
       </button>
       <!-- LEAGUE-TAB:NAV:BEGIN -->
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="league" title="Рейтинг между установками хаба: токены, сожжено, налито, промпты, аккаунты">
@@ -942,7 +956,7 @@ function randomThemeId() {
         </div>
       </div>
 
-      <!-- Чтим память (deprecated: XPeach, SeekAi, TrueSOTA, FreeModel, TokenRouter, Devin, Notion) -->
+      <!-- Чтим память (deprecated: XPeach, TrueSOTA, FreeModel, TokenRouter, Devin, Notion) -->
       <!-- 🪤 TrueSOTA (05.09, решение владельца) попал сюда по ДРУГОЙ причине, чем XPeach и
            SeekAi: шлюз РАБОЧИЙ, но узкий — наш системный промпт исполняют только
            claude-opus-5 и claude-opus-5-thinking, остальные 16 моделей каталога это реселл
@@ -962,10 +976,6 @@ function randomThemeId() {
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="xpeach" title="все ключи 403 banned — регистрация больше не проходит">
             🍑 XPeach
             <span class="text-[10px] font-mono opacity-50" id="nav-count-xpeach">—</span>
-          </button>
-          <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="seekai" title="реселл веб-Клода под видом API: свой system-промпт шлюза перебивает наш, для Claude Code непригоден (замер 24.08)">
-            🔎 SeekAi
-            <span class="text-[10px] font-mono opacity-50" id="nav-count-seekai">—</span>
           </button>
           <button class="nav-btn group w-full text-left px-3 py-1.5 rounded text-xs flex items-center gap-2 text-faint hover:text-muted hover:bg-elevated/30 transition" data-tab="truesota" title="sub2api: подписочная квота как API. Годятся только claude-opus-5 и claude-opus-5-thinking — остальные модели каталога подменяют системный промпт промптом Kiro">
             🛰️ TrueSOTA
@@ -5294,6 +5304,7 @@ window.finNavCount = async () => {
     <div data-tab-content="proxies" id="tab-proxies">
       <div id="proxies-root"></div>
     </div>
+    <div data-tab-content="a6api" id="tab-a6api"><div id="a6api-root"></div></div>
     <div data-tab-content="models">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
@@ -6354,7 +6365,7 @@ window.finNavCount = async () => {
              разметку — по той же причине, что у ar-checkin ниже: пересборка рамки мигает. -->
         <div id="arq-big" class="arq rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between gap-3 mb-1">
-            <h2 class="text-sm font-semibold tracking-tight">⏳ До сброса квоты <span id="arq-pool-name" class="text-[10px] font-mono text-dim"></span></h2>
+            <h2 class="text-sm font-semibold tracking-tight">⏳ До сброса квоты</h2>
             <div class="flex items-center gap-1 shrink-0">
               <button type="button" class="arq-nav arq-prev px-1.5 py-0.5 rounded hover:bg-elevated transition text-base leading-none" title="Предыдущий вид">‹</button>
               <span class="arq-name text-[10px] font-mono w-[68px] text-center text-dim"></span>
@@ -6366,20 +6377,10 @@ window.finNavCount = async () => {
                намеренно: в нём не должно быть зашитых времён, которые протухнут. -->
           <p id="arq-sched-line" class="text-xs text-muted mb-2"></p>
           <div class="flex justify-center py-1"><span class="arq-host"></span></div>
-          <!-- Что отвечает СЕЙЧАС и когда кончилась квота. Отдельной строкой и заметным
-               цветом: владелец 16.09 не понял этого по мелкой подписи в карточке конфига. -->
-          <p id="arq-pool-state" class="text-xs font-mono leading-tight text-center text-muted mb-1.5" aria-live="polite"></p>
-          <div class="mt-2 flex flex-col items-center gap-1.5">
-            <!-- Полос две, и они разные: Claude и GPT наливают вместе, но кончаются
-                 порознь. Кнопка проверяет СВОЮ полосу и переводит на неё циферблат;
-                 вторая строка показывает состояние второй полосы, не переключаясь. -->
-            <div class="flex items-center gap-2">
-              <button id="arq-check" type="button" onclick="arqCheckQuota('opus')" class="text-xs px-3 py-1.5 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить Opus</button>
-              <button id="arq-check-gpt" type="button" onclick="arqCheckQuota('gpt')" class="text-xs px-3 py-1.5 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium disabled:opacity-50 disabled:cursor-wait">Проверить GPT</button>
-            </div>
-            <span id="arq-check-result" class="text-xs text-faint font-mono" aria-live="polite">—</span>
-            <span id="arq-check-result-gpt" class="text-xs text-faint font-mono" aria-live="polite">—</span>
-          </div>
+          <!-- Одна строка на все полосы: логотип + состояние, клик по логотипу - проба
+               своей полосы. Отдельных кнопок и отдельных строк больше нет: три кнопки
+               дублировали то же самое и занимали пол-карточки. -->
+          <div id="arq-pool-state" class="flex items-center justify-center gap-1.5 flex-wrap mt-1.5" aria-live="polite"></div>
         </div>
 
         <!-- AR-QUOTA-SCHED - расписание партий AgentRouter. Стоит отдельной карточкой,
@@ -6397,6 +6398,13 @@ window.finNavCount = async () => {
           </div>
           <p id="arq-sched-line2" class="text-xs text-muted mb-2"></p>
           <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1 w-52">
+              <span class="text-[10px] text-faint leading-tight">какая полоса</span>
+              <select id="arq-sched-pool" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+                <option value="">общий график (Opus 5 / GPT)</option>
+                <option value="opus55">Opus 5.5 - отдельная полоса</option>
+              </select>
+            </label>
             <label class="flex flex-col gap-1 w-56">
               <span class="text-[10px] text-faint leading-tight">времена партий через запятую</span>
               <input id="arq-sched-times" type="text" placeholder="10:00, 19:00" spellcheck="false"
@@ -6413,7 +6421,7 @@ window.finNavCount = async () => {
               <span id="arq-sched-msg" class="text-xs text-faint font-mono" aria-live="polite">—</span>
             </div>
           </div>
-          <p class="text-[10px] text-faint mt-2">Пишется в <code class="font-mono">~/.claude/ar-quota-schedule.json</code> — тот же файл читают часы и серверная автопроверка. Применяется без рестарта; минимум две партии в сутки.</p>
+          <p class="text-[10px] text-faint mt-2">Пишется в <code class="font-mono">~/.claude/ar-quota-schedule.json</code> — тот же файл читают часы и серверная автопроверка. Применяется без рестарта; у общего графика минимум две партии, у отдельной полосы можно одну.</p>
         </div>
 
         <div id="ar-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
@@ -6438,6 +6446,7 @@ window.finNavCount = async () => {
           <div id="ar-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
           </div>
+          <p class="text-[10px] text-faint mt-2">Claude и GPT Astra - лимитированные партии: вне налива их нет в каталоге. gpt-6.1-sol безлимитный и доступен весь день. Список показывает то, что доступно СЕЙЧАС; куда реально ведёт трафик - в тир-карте ниже.</p>
         </div>
 
         <!-- Model map (настраиваемый маппинг claude-тиров, как в GoRouter/Custom) -->
@@ -7374,6 +7383,160 @@ window.finNavCount = async () => {
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://kktoken.cc/sign-up?aff=Sog2" data-ref-link="kktoken" target="_blank" class="text-emerald hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="premier">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-amber">🅿️</span> <a href="https://ide.kgpix.bond/developers" target="_blank" rel="noopener" title="Кабинет Premier API" class="text-ink underline underline-offset-4 hover:text-amber">Premier</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">50 сообщений в день на Free · общий лимит API и чата · GitHub-вход · <code class="font-mono text-xs">:20189</code></p>
+            <p class="text-xs text-muted mt-1">Claude в каталоге текущего ключа нет. Названия тиров ниже выбирают модели Premier; успешная генерация ещё не проверена.</p>
+          </div>
+        </header>
+
+        <div id="pm-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Tier labels select actual Premier model IDs, not Claude models. -->
+        <div id="pm-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Тиры клиента - модели Premier</h2>
+            <button onclick="loadPmModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="pm-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Message quota: duplicate upstream calls are disabled. -->
+        <div id="pm-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20189 - без параллельных дублей</h2>
+            <button onclick="pmLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="pm-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="pm-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="pm-keepalive-maxhedges" type="number" min="0" max="0" step="1" placeholder="0" readonly title="Дубли выключены: тратят дневную квоту" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="pm-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="pm-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="pmApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="pmResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="pm-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="pm-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="pm-lat-chart" class="w-full"></div>
+              <div id="pm-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="pm-lat-windows"></div>
+          </div>
+          <div id="pm-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="pm-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="pm-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="pm-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="pm-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="pm-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="pm-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="pm-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="pm-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="pm-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model premier[1m]</code><button onclick='copyToClipboard("/model premier[1m]", "команда /model premier[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadPmModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="pm-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadPmSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadPmSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="pmCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💬 Квоты всех</button>
+          <button onclick="pmMapProfiles()" title="Проверить сохранённый вход Premier в профиле каждого аккаунта" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="pmShowAdd()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">➕ Добавить</button>
+          <button onclick="pmShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="pm-filter" oninput="newapiFilterChange('pm')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-amber/60">
+          <select id="pm-sort" onchange="newapiSortChange('pm')" title="Порядок строк; аккаунты без ключа всегда сверху" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-amber/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💬 остаток ↓</option>
+            <option value="bal-asc">💬 остаток ↑</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="pm-add-form" class="hidden rounded-xl bg-surface border border-amber/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="pm-add-email" oninput="newapiAddGhHint('pm')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-amber/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="pm-add-key" placeholder="prm_… или пусто для входа через GitHub" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
+            </label>
+            <button onclick="pmAdd()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('pm')" title="Выбрать GitHub и импортировать его сессию в профиль Premier; подтверждение доступа остаётся в браузере" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
+            <button onclick="pmShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="pm-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="pm-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="pmShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/premier уже залогинены).</p>
+          <textarea id="pm-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="pm-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="pmImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="pmShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="pm-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20189</code> keepalive → <code class="text-ink">ide.kgpix.bond</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">prm_…</code> - бери в кабинете разработчика после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>Квота читается с сервера, а не считается по локальным запросам.</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://ide.kgpix.bond/developers" target="_blank" rel="noopener" class="text-amber hover:underline">кабинет API</a>
         </div>
       </div>
     </div>
@@ -9304,9 +9467,9 @@ window.finNavCount = async () => {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-indigo">🔷</span> <a href="https://emtf.aipm9527.online/sign-up?aff=NS3L" data-ref-link="aipm" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-indigo">AIPM</a>
+              <span class="text-indigo">🔷</span> <a href="https://emtf.aipm9527.site/sign-up?aff=NS3L" data-ref-link="aipm" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-indigo">AIPM</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-indigo text-xs">emtf.aipm9527.online</code> · клик по ключу = активный (через keepalive <code class="font-mono text-indigo text-xs">:20163</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-indigo text-xs">emtf.aipm9527.site</code> · клик по ключу = активный (через keepalive <code class="font-mono text-indigo text-xs">:20163</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -9446,13 +9609,13 @@ window.finNavCount = async () => {
         </div>
 
         <div class="text-xs text-faint">
-          <span>base → <code class="text-ink">http://localhost:20163</code> keepalive → <code class="text-ink">emtf.aipm9527.online</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span>base → <code class="text-ink">http://localhost:20163</code> keepalive → <code class="text-ink">emtf.aipm9527.site</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://emtf.aipm9527.online/sign-up?aff=NS3L" data-ref-link="aipm" target="_blank" class="text-indigo hover:underline">регистрация по рефке</a>
+          <a href="https://emtf.aipm9527.site/sign-up?aff=NS3L" data-ref-link="aipm" target="_blank" class="text-indigo hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -11009,7 +11172,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -11042,7 +11205,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -11257,6 +11420,7 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'premier') { if (!state.loaded.premier) { state.loaded.premier = true; loadPmSessions(false); } pmLoadKeepalive(); }
   if (name === 'vani') { if (!state.loaded.vani) { state.loaded.vani = true; loadVnSessions(false); } vnLoadKeepalive(); vnVisionLoad(); }
   if (name === 'dacall') { if (!state.loaded.dacall) { state.loaded.dacall = true; loadDcSessions(false); } dcLoadKeepalive(); }
   if (name === 'cleanapis') { if (!state.loaded.cleanapis) { state.loaded.cleanapis = true; loadCpSessions(false); } cpLoadKeepalive(); }
@@ -11325,6 +11489,7 @@ function showTab(name) {
   // Тот же гвард по typeof, но по третьей причине: код вкладки живёт не в этом файле,
   // а во внешнем /vendor/models-tab.js. Он подключён в конце body, то есть на F5 с
   // открытой вкладкой «Модели» showTab отработает раньше, чем MODELS появится.
+  if (name === 'a6api' && typeof A6API !== 'undefined') { A6API.load(); }
   if (name === 'models' && typeof MODELS !== 'undefined' && MODELS.load) { MODELS.load(); }
   // Тот же гвард, что у «Моделей»: скрипт вкладки подключён в конце body, и на F5 с уже
   // открытой вкладкой showTab отработает раньше, чем PROXIES появится.
@@ -11347,9 +11512,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -11646,10 +11811,10 @@ async function loadRoutes(force) {
   const hidden = effectiveHiddenSet();
   // 🪤 Область ТА ЖЕ, что у effectiveHiddenSet() → getMainNavButtons(): только прямые
   // дети #main-nav. Через `#main-nav [data-tab]` (потомки) сюда попадали бы ещё пять
-  // кнопок из свёрнутой группы «Чтим память» — xpeach, seekai, truesota, notion,
+  // кнопок из свёрнутой группы «Чтим память» — xpeach, truesota, notion,
   // freemodel. Их hidden-set не перечисляет вовсе, поэтому они считались бы видимыми
   // и висели бы в шпаргалке навсегда: спрятать их через UI нельзя, менеджер вкладок
-  // их тоже не показывает. То есть пять мёртвых шлюзов в списке «куда слать».
+  // их тоже не показывает. То есть четыре мёртвых шлюза в списке «куда слать».
   const navTabs = new Set([...document.querySelectorAll('#main-nav > button[data-tab]')].map(b => b.dataset.tab));
   let hiddenCount = 0;
   const shown = [];
@@ -12835,7 +13000,7 @@ function popMenu(ev, items) {
 // Зеркало isRealKey() из transparent-proxy.js. Кроме `sk-` принимает форму vani
 // (`vani_` + 64 hex): у этой панели ключи так не начинаются, и без этого таблица
 // объявляла живой ключ отсутствующим (та же грабля, что у ZhiFlow).
-function isRealKey(k) { return /^sk-/.test(String(k || '')) || /^vani_[A-Za-z0-9]{40,}$/.test(String(k || '')); }
+function isRealKey(k) { return /^sk-/.test(String(k || '')) || /^vani_[A-Za-z0-9]{40,}$/.test(String(k || '')) || /^prm_[A-Za-z0-9_-]{40,}$/.test(String(k || '')); }
 
 // Плашка вместо кнопки-активации у аккаунта без ключа.
 //
@@ -15229,7 +15394,9 @@ function arOpenRunLogs() {
 // Тот же выбор, что во вкладке «Свои прокси» (одна ручка `POST /api/proxies/source`), но
 // рядом с местом, где он нужен: человек решает «через что забирать» в момент нажатия, а не
 // вспоминает, что где-то есть вкладка. Живёт в конфиге пула, переживает перезапуск.
-let arProxySrc = { source: 'auto', sources: ['auto', 'own', 'scraped', 'direct'] };
+// Дефолт - «свой пул», не `auto`: пока сервер не ответил, карточка не должна показывать
+// «свой+скрапер» (владелец 12.10.2026). Живое значение всё равно приезжает из пула.
+let arProxySrc = { source: 'own', sources: ['auto', 'own', 'scraped', 'direct'] };
 
 function arSourceName(s) {
   return { auto: 'свой+скрапер', own: 'свой пул', scraped: 'скрапер', direct: 'напрямую' }[s] || s;
@@ -15894,6 +16061,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  pm: '/__switch/api/pm/keepalive',
   vn: '/__switch/api/vn/keepalive',
   dc: '/__switch/api/dc/keepalive',
   cp: '/__switch/api/cp/keepalive',
@@ -16271,6 +16439,7 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const pmLoadKeepalive   = () => loadKeepaliveCard('pm', KEEPALIVE_API.pm);
 // Vision-мост (self-applying, как pooldropFill): тумблер и поле модели шлют патч сразу,
 // без общей кнопки «Применить» - иначе один зеркальный контрол затирал бы другой.
 async function vnVisionLoad() {
@@ -16333,6 +16502,7 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const pmApplyKeepalive  = () => applyKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnApplyKeepalive  = () => applyKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcApplyKeepalive  = () => applyKeepaliveCard('dc', KEEPALIVE_API.dc);
 const cpApplyKeepalive  = () => applyKeepaliveCard('cp', KEEPALIVE_API.cp);
@@ -16362,6 +16532,7 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const pmResetKeepalive  = () => resetKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnResetKeepalive  = () => resetKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcResetKeepalive  = () => resetKeepaliveCard('dc', KEEPALIVE_API.dc);
 const cpResetKeepalive  = () => resetKeepaliveCard('cp', KEEPALIVE_API.cp);
@@ -16400,6 +16571,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  premier: ['pm', '/__switch/api/pm/keepalive'],
   vani: ['vn', '/__switch/api/vn/keepalive'],
   dacall: ['dc', '/__switch/api/dc/keepalive'],
   cleanapis: ['cp', '/__switch/api/cp/keepalive'],
@@ -16520,7 +16692,9 @@ function newapiSortMode(prov) {
 // по балансу прятать его вниз нельзя — там он как раз самая содержательная строка.
 function newapiSortList(list, prov, opts = {}) {
   const mode = newapiSortMode(prov);
-  const cmp = NEWAPI_SORT_FNS[mode];
+  const cmp = prov === 'pm' && (mode === 'bal-desc' || mode === 'bal-asc')
+    ? (a, b) => pmQuotaCompare(a, b, mode) || cmpNewapiNewest(a, b)
+    : NEWAPI_SORT_FNS[mode];
   const flat = NEWAPI_SORT_FLAT.has(mode);
   const dateMode = mode === 'date-desc' || mode === 'date-asc';
   return (list || []).slice().sort((a, b) => {
@@ -16542,7 +16716,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -16641,7 +16815,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -17557,7 +17731,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, cp: null, ab: null, fx: null, bd: null, nv: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, pm: null, cp: null, ab: null, fx: null, bd: null, nv: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -17868,6 +18042,7 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
+  pm: { label: 'Premier',     host: 'ide.kgpix.bond',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
   cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
   ab: { label: 'Artbloom',     host: 'api.artbloom.tech',        color: 'pink', reload: () => loadAbSessions(), list: () => state.artbloom,  render: () => renderAb(), setKey: id => abSetKey(id), open: id => abOpenLk(id) },
   fx: { label: 'Fxqidian',     host: 'fxqidian.de5.net',        color: 'rose', reload: () => loadFxSessions(), list: () => state.fxqidian,  render: () => renderFx(), setKey: id => fxSetKey(id), open: id => fxOpenLk(id) },
@@ -17875,7 +18050,7 @@ const NEWAPI_SEED_PROV = {
   nv: { label: 'Nova',     host: 'nova.vcrauo.com',        color: 'cyan', reload: () => loadNvSessions(), list: () => state.nova,  render: () => renderNv(), setKey: id => nvSetKey(id), open: id => nvOpenLk(id) },
   tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb(), setKey: id => tbSetKey(id), open: id => tbOpenLk(id) },
   xp: { label: 'XPeach',      host: 'xpeach.codes',    color: 'rose',    reload: () => loadXpSessions(), list: () => state.xpeach,      render: () => renderXp(), setKey: id => xpSetKey(id), open: id => xpOpenLk(id) },
-  ap: { label: 'AIPM',         host: 'emtf.aipm9527.online', color: 'indigo', reload: () => loadApSessions(), list: () => state.aipm,        render: () => renderAp(), setKey: id => apSetKey(id), open: id => apOpenLk(id) },
+  ap: { label: 'AIPM',         host: 'emtf.aipm9527.site', color: 'indigo', reload: () => loadApSessions(), list: () => state.aipm,        render: () => renderAp(), setKey: id => apSetKey(id), open: id => apOpenLk(id) },
 };
 
 let ghSeedProv = null;   // какой провайдер открыл модалку
@@ -19421,6 +19596,526 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function pmQuotaFresh(q, now = Date.now()) {
+  const at = Date.parse(q && q.checkedAt), reset = Date.parse(q && q.resetAt);
+  return !!(q && q.unit === 'messages' && Number.isFinite(at) && now >= at - 60000
+    && now - at < 300000 && (!Number.isFinite(reset) || now < reset));
+}
+function pmQuotaCompare(a, b, mode) {
+  const value = s => !s.quotaError && pmQuotaFresh(s.quota)
+    ? (s.quota.unlimited ? Infinity : s.quota.remaining) : null;
+  const av = value(a), bv = value(b);
+  if (av === bv) return 0;
+  if (av == null) return 1;
+  if (bv == null) return -1;
+  return mode === 'bal-asc' ? av - bv : bv - av;
+}
+function pmPoolStats(sessions) {
+  const st = { total: 0, live: 0, dead: 0, unknown: 0, known: 0, unlimited: 0, remaining: 0, limit: 0, remPct: null };
+  const accounts = new Map();
+  for (const s of sessions || []) {
+    st.total++;
+    if (s.status === 'dead') { st.dead++; continue; }
+    if (!isRealKey(s.api_key)) { st.unknown++; continue; }
+    if (s.status === 'live') st.live++;
+    const q = s.quota;
+    if (s.quotaError || !pmQuotaFresh(q)) { st.unknown++; continue; }
+    const key = q.accountId || s.id || s.api_key;
+    const prev = accounts.get(key);
+    if (!prev || Date.parse(q.checkedAt) > Date.parse(prev.checkedAt)) accounts.set(key, q);
+  }
+  for (const q of accounts.values()) {
+    st.known++;
+    if (q.unlimited) st.unlimited++;
+    else { st.remaining += q.remaining; st.limit += q.limit; }
+  }
+  if (st.limit > 0) st.remPct = Math.round(st.remaining / st.limit * 100);
+  else if (st.known > st.unlimited) st.remPct = 0;
+  return st;
+}
+function renderPmGauge() {
+  const st = pmPoolStats(state.premier), box = $('pm-energy');
+  const summary = `${st.total} ключей · ${st.known} аккаунтов с квотой · ${st.unknown} без данных`;
+  if (st.remPct === null) {
+    box.innerHTML = `<h2 class="text-sm font-semibold">Premier · сообщения сегодня</h2><p class="text-ink mt-2">${st.unlimited ? 'Без лимита: ' + st.unlimited + ' аккаунтов' : 'Остаток неизвестен'}</p><p class="text-xs text-muted mt-2">${summary}. Войди в браузере аккаунта и нажми «Квоты всех».</p>`;
+    delete box.dataset.egSig;
+    return;
+  }
+  renderEnergyGauge(box, {
+    title: 'Premier · сообщения сегодня', pct: st.remPct, color: 'sky',
+    sub: `<span class="text-ink font-semibold">Осталось ${st.remaining} / ${st.limit} сообщений</span><span>${summary}</span>${st.unlimited ? `<span>без лимита: ${st.unlimited}</span>` : ''}`,
+    note: 'Общий лимит API и чата. Запрос списывает вес модели; один запрос не всегда равен одному сообщению. Без автоматической смены аккаунта по дневному лимиту.',
+  });
+}
+
+async function loadPmSessions(probe) {
+  if (probe) $('pm-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/pm/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.premier = data.sessions || [];
+    if ($('nav-count-premier')) $('nav-count-premier').textContent = state.premier.length;
+    await newapiEnsureGhNames(state.premier);
+    renderPm();
+    renderPmGauge();
+    loadPmModels();
+    loadPmModelMap();
+    if (probe) toast('✓ Premier: статусы обновлены', 'success');
+  } catch (e) {
+    $('pm-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadPmSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/pm/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.premier = data.sessions || [];
+    if ($('nav-count-premier')) $('nav-count-premier').textContent = state.premier.length;
+    renderPm();
+    renderPmGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadPmModels(force) {
+  const keys = state.premier
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('pm-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('pm-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/pm/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderPmModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('pm-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderPmModels(models) {
+  if (models) state.pmModels = models;
+  const list = state.pmModels || [];
+  let active = state.pmActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/pm/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.pmActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('pm-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — amber, а amber же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-amber/15 border border-amber/50 text-amber' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='pmSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + premier-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "premier")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderPmModelMap();
+}
+async function pmSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/pm/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.pmModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.pmActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderPmModels(state.pmModels);
+  } catch (e) { toast('pmSelectModel: ' + e.message, 'error'); }
+}
+
+function renderPm() {
+  const { list: all, total, q } = newapiRows(state.premier, 'pm');
+  if (!all.length) {
+    $('pm-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего - 0 из ${total}`
+      : 'пусто - добавь ключ или выбери GitHub из менеджера'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-amber text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-amber/5' : '';
+    const activeTag = active ? '<span class="text-amber mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = pmBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderPmModels.
+    const keyCell = noKey ? noKeyCell(`pmSetKey(${idJ})`) : `<button onclick='pmActivate(${kJ})' title="Сделать активным (keepalive :20189 → ide.kgpix.bond)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-amber/10 border-amber/50 text-amber' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'pm')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`pmCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`pmShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`pmSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`pmRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`pmActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`pmPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'pm', idJ)}
+        ${actBtn(`pmOpenLk(${idJ})`,    'Открыть Premier: вход, ключи и дневная квота', '🌐', 'violet')}
+        ${actBtn(`pmDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('pm-list').innerHTML = table(
+    [
+      { label: 'Аккаунт', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Статус', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Сообщения', align: 'center', w: 'w-40', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'pm', q),
+    { sortProv: 'pm', accent: 'amber' }
+  );
+}
+
+function pmBalanceCell(s, kJ) {
+  if (!isRealKey(s.api_key)) return '<span class="text-xs text-muted">нужен ключ</span>';
+  if (s.status === 'dead') return '<span class="text-xs text-muted">🔴 ключ отозван</span>';
+  const q = s.quota;
+  const check = `<button onclick='pmCheckBalance(${kJ})' title="Обновить серверную квоту сообщений" aria-label="Обновить квоту" class="px-2 py-1 text-muted hover:text-ink">↻</button>`;
+  const stamp = q && q.checkedAt ? new Date(q.checkedAt).toLocaleString('ru-RU') : '';
+  if (s.quotaError || !pmQuotaFresh(q)) {
+    const detail = s.quotaError || (q ? 'Данные устарели, обнови квоту' : 'Войди в браузере аккаунта');
+    return `<span class="inline-flex items-center text-xs text-muted" title="${esc(detail + (stamp ? ' · Проверено: ' + stamp : ''))}">${q ? '⚠ данные устарели' : 'остаток неизвестен'}${check}</span>`;
+  }
+  const reset = q.resetAt ? 'Сброс: ' + new Date(q.resetAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' МСК' : 'Время сброса не сообщено';
+  const label = q.unlimited ? 'Без лимита' : `${q.remaining} / ${q.limit} сообщений`;
+  const pct = q.limit > 0 ? Math.max(0, Math.min(100, q.remaining / q.limit * 100)) : 0;
+  const bar = q.unlimited ? '' : `<div role="meter" aria-label="Осталось сообщений сегодня" aria-valuemin="0" aria-valuemax="${q.limit}" aria-valuenow="${q.remaining}" class="w-full h-1.5 rounded bg-elevated overflow-hidden"><div class="h-full bg-sky rounded" style="width:${pct}%"></div></div>`;
+  return `<span class="inline-flex items-center gap-1 text-xs text-ink" title="${esc(reset + ' · Проверено: ' + stamp)}"><span class="flex flex-col gap-1 text-left"><span>${q.remaining === 0 && !q.unlimited ? '🪫 ' : ''}${label}</span>${bar}<span class="text-[10px] text-muted">сегодня</span></span>${check}</span>`;
+}
+
+function pmShowAdd(show = true) {
+  $('pm-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('pm');
+  if (show) { $('pm-add-email').value = ''; $('pm-add-key').value = ''; $('pm-add-email').focus(); }
+}
+async function pmAdd() {
+  const email = $('pm-add-email').value.trim();
+  const api_key = $('pm-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/pm/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.pm }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа - открываю вход Premier' : '✓ добавлен', 'success');
+      pmShowAdd(false);
+      loadPmSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) pmOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function pmDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/pm/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadPmSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function pmShare(id) {
+  const cur = state.premier.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/pm/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'Premier',
+      subtitle: (cur.email || cur.name || id) + ' ·' + note,
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function pmShowImport(show = true) {
+  $('pm-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('pm-import-text').value = '';
+    $('pm-import-preview').innerHTML = '';
+    $('pm-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function pmImport() {
+  const share = $('pm-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('pm-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/pm/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('pm-import-preview').innerHTML = '';
+    pmShowImport(false);
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}; квота обновится после входа`, 'success', 4000);
+    loadPmSessions(false);
+  } catch (e) {
+    $('pm-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли premier).
+async function pmSetKey(id) {
+  const cur = state.premier.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (в Premier: Developers после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Отмена - ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'prm_');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^prm_[A-Za-z0-9_-]{40,}$/.test(newKey)) return toast('Ожидается ключ Premier prm_…', 'warn');
+  try {
+    const res = await fetch('/__switch/api/pm/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadPmSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (pmSetKey).
+async function pmRename(id) {
+  const cur = state.premier.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/pm/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadPmSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function pmActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/pm/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'premier';
+      state.urls.premier = 'http://localhost:20189';
+      paintStatus();
+      loadPmSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function pmPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/pm/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.premier.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.premier[idx].status = data.status;
+    renderPm();
+    renderPmGauge();
+    const r = { 'live': ['🟢 ключ живой', 'success'], 'dead': ['🔴 ключ отозван', 'error'], 'no_key': ['нужен ключ', 'warn'] }[data.status] || ['⚪ статус неизвестен, повтори позже', 'warn'];
+    toast(r[0], r[1], 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function pmCheckBalance(api_key) {
+  try {
+    toast('↻ читаю квоту сообщений…', 'info', 2000);
+    const res = await fetch('/__switch/api/pm/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await loadPmSessionsLight();
+    toast(data.quota ? (data.quota.unlimited ? 'Без лимита' : `Осталось ${data.quota.remaining} / ${data.quota.limit} сообщений сегодня`)
+      : (data.error || 'Квота неизвестна'), data.quota ? 'success' : 'warn', 5000);
+  } catch (e) { toast('квота: ' + e.message, 'error'); }
+}
+async function pmCheckAllBalances() {
+  $('pm-list').innerHTML = `<div class="p-12 text-center text-muted text-xs">↻ читаю квоты аккаунтов…</div>`;
+  try {
+    const res = await fetch('/__switch/api/pm/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.premier = data.sessions || [];
+    renderPm(); renderPmGauge();
+    const st = pmPoolStats(state.premier);
+    toast(`Квота известна: ${st.known}; без данных: ${st.unknown}`, st.unknown ? 'warn' : 'success', 5000);
+  } catch (e) {
+    $('pm-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('квоты: ' + e.message, 'error');
+  }
+}
+
+function pmSetBalance(api_key) { return pmCheckBalance(api_key); }
+
+function pmMapProfiles() {
+  return newapiMapProfilesUI('pm', () => loadPmSessions(false));
+}
+
+async function pmOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/pm/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already ? '🌐 браузер этого аккаунта уже открыт' : '🌐 Premier открыт. Заверши GitHub-вход, если потребуется.', 'info', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function pmCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Tier aliases map to the models returned by this key's /v1/models.
+async function loadPmModelMap() {
+  try {
+    const res = await fetch('/__switch/api/pm/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.pmModelMap = data.modelMap || {};
+    renderPmModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderPmModelMap() {
+  const mm = state.pmModelMap || {};
+  const models = (state.pmModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /pm/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя premier-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="pm-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('pm-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='pmSaveModelMap()' class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function pmSaveModelMap() {
+  const mm = {
+    opus: $('pm-mm-opus')?.value || '',
+    sonnet: $('pm-mm-sonnet')?.value || '',
+    haiku: $('pm-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/pm/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.pmModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -25367,7 +26062,7 @@ async function ukSaveModelMap() {
 
 
 // ═══════════════════ KKTOKEN ════════════════════════════════════════
-// Провайдер emtf.aipm9527.online (тот же форк New-API, что gorouter/tabi/justwoker). Восьмой шлюз
+// Провайдер emtf.aipm9527.site (тот же форк New-API, что gorouter/tabi/justwoker). Восьмой шлюз
 // и структурная копия вкладки GoRouter: пул ключей + балансы + keepalive-активация
 // через прокси :20163 + share/import. Аккаунт идентифицируется id (не api_key).
 //
@@ -25414,7 +26109,7 @@ function renderApGauge() {
     ].filter(Boolean).join(''),
     note: st.withBalance && st.withBalance < st.total
       ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 🔷 у ключа = чек баланса.'
-      : 'Активация → keepalive http://localhost:20163 → emtf.aipm9527.online (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+      : 'Активация → keepalive http://localhost:20163 → emtf.aipm9527.site (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
   });
 }
 
@@ -25541,7 +26236,7 @@ function renderAp() {
     const activeTag = active ? '<span class="text-indigo mr-1" title="активный">🌟</span>' : '';
     const balanceCell = apBalanceCell(s, kJ);
     // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderApModels.
-    const keyCell = noKey ? noKeyCell(`apSetKey(${idJ})`) : `<button onclick='apActivate(${kJ})' title="Сделать активным (keepalive :20163 → emtf.aipm9527.online)"
+    const keyCell = noKey ? noKeyCell(`apSetKey(${idJ})`) : `<button onclick='apActivate(${kJ})' title="Сделать активным (keepalive :20163 → emtf.aipm9527.site)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-indigo/10 border-indigo/50 text-indigo' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
         ${activeTag}${esc(email)}
@@ -32109,6 +32804,7 @@ const GH_USE_META = {
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
   jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },
+  pm: { icon: '🅿️', short: 'PM', label: 'Premier',     badge: 'bg-amber/15 text-amber border-amber/40' },
   cp: { icon: '🧼', short: 'CP', label: 'Clean APIs',     badge: 'bg-blue/15 text-blue border-blue/40' },
   ab: { icon: '🌸', short: 'AB', label: 'Artbloom',     badge: 'bg-pink/15 text-pink border-pink/40' },
   fx: { icon: '🔮', short: 'FX', label: 'Fxqidian',     badge: 'bg-rose/15 text-rose border-rose/40' },
@@ -32165,7 +32861,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', pm: 'premier', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -34347,7 +35043,7 @@ const MONEY_AUTO_POLL_MS = 10000;
 const _moneyAutoAt = new Map();       // p → ts последнего запроса статуса
 
 function sideAutoKind() {
-  if (MONEY_PROVIDERS[state.current]) return 'money';
+  if (MONEY_PROVIDERS[state.current] && !MONEY_PROVIDERS[state.current].noAuto) return 'money';
   if (state.current === 'freemodel' || state.current === 'freemodel_rotator') return 'fm';
   return null;
 }
@@ -34560,6 +35256,7 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  premier:     { id: 'premier',     p: 'pm', stateKey: 'premier',     base: 0,   sym: '',   label: 'Premier',     icon: '🅿️', color: 'amber', noMoney: true, noAuto: true, reload: () => loadPmSessionsLight() },
   // 🪤 noMoney: у vani баланс - ПРОЦЕНТЫ (0-100), не деньги. Ротация у него есть, поэтому
   // запись в карте нужна (её читают sideAutoKind/moneyAutoFetch), а три ДЕНЕЖНЫХ места -
   // карточка сайдбара, купюра topUpWatch и общий энергобар - обязаны его пропускать:
@@ -38120,7 +38817,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'custom', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -38441,6 +39138,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'premier':       loadPmSessionsLight(); break;
       case 'vani':       loadVnSessionsLight(); break;
       case 'dacall':       loadDcSessionsLight(); break;
       case 'cleanapis':       loadCpSessionsLight(); break;
@@ -38467,6 +39165,7 @@ function autoRefreshTick() {
       case 'omniroute-pool': loadOmSessions(false); break;
       // Гвард по typeof — код вкладки во внешнем /vendor/models-tab.js, тик может
       // прийти раньше, чем файл разобран (см. тот же гвард в showTab).
+      case 'a6api': if (typeof A6API !== 'undefined') A6API.load(); break;
       case 'models': if (typeof MODELS !== 'undefined' && MODELS.load) MODELS.load(); break;
       // grok — свой autopoll (4s) уже отдельно
       // switcher/settings/plugins — статичные, не трогаем
@@ -38530,6 +39229,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'premier',     fn: () => loadPmSessionsLight() },
   { tab: 'vani',     fn: () => loadVnSessionsLight() },
   { tab: 'dacall',     fn: () => loadDcSessionsLight() },
   { tab: 'cleanapis',     fn: () => loadCpSessionsLight() },
@@ -38693,7 +39393,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
@@ -43994,6 +44694,26 @@ function sideOpenCurrentTab(ev) {
 .arq-snd:hover  { color: var(--arq-cc); }
 .arq-snd[aria-pressed="true"]  { color: var(--arq-cc); }
 .arq-snd[aria-pressed="false"] { color: var(--color-faint); opacity: .6; }
+/* Полосы: логотип вендора + состояние. Клик по чипу - проба своей полосы.
+   Цвет берёт переменную часов, поэтому полоса краснеет/зеленеет вместе с циферблатом. */
+.arq-lane      { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+                 border-radius: 8px; border: 1px solid var(--color-line-soft);
+                 color: color-mix(in oklab, var(--color-ink) 58%, var(--color-surface));
+                 font-size: 10px; font-family: var(--font-mono); background: transparent;
+                 cursor: pointer; }
+.arq-lane:hover { color: var(--color-ink); border-color: var(--arq-cc); }
+.arq-lane[data-state="available"] { color: var(--color-emerald); border-color: color-mix(in oklab, var(--color-emerald) 55%, transparent); }
+.arq-lane[data-state="exhausted"] { color: var(--color-amber); border-color: color-mix(in oklab, var(--color-amber) 55%, transparent); }
+.arq-lane[data-state="wait"]      { color: var(--color-amber); border-color: color-mix(in oklab, var(--color-amber) 35%, transparent); }
+.arq-lane[disabled] { opacity: .55; cursor: wait; }
+.arq-lane-ico  { display: inline-flex; width: 13px; height: 13px; }
+.arq-lane-ico svg { width: 13px; height: 13px; display: block; }
+/* Выноски на суточном круге: линия от метки к подписи снаружи. Подпись обводим
+   цветом поверхности, чтобы читалась поверх дуг и штрихов. */
+.arq-callout line { stroke: color-mix(in oklab, var(--color-ink) 30%, transparent); stroke-width: 1; }
+.arq-callout text { font-family: var(--font-mono); font-size: 8.5px; fill: var(--arq-cc);
+                    paint-order: stroke; stroke: var(--color-surface); stroke-width: 3px;
+                    stroke-linejoin: round; }
 </style>
 <script>
 (() => {
@@ -44014,8 +44734,22 @@ function sideOpenCurrentTab(ev) {
    Встроенный дефолт = объявление 18.09, поэтому часы верны сразу по F5, ещё до
    того как сервер отдаст файл. */
 const SCHED_FALLBACK = Object.freeze({ tz: 'Asia/Shanghai', times: ['10:00', '19:00'] });
-let SCHED = SCHED_FALLBACK;
+// Отдельные графики полос. Зеркало серверной поставки (`AR_POOL_SCHEDULE_DEFAULT`):
+// до F5-ответа ручки часы обязаны быть верны, а у opus-5-5 партия не в 10:00/19:00.
+const POOL_SCHED_FALLBACK = Object.freeze({
+  opus55: Object.freeze({ tz: 'Asia/Shanghai', times: ['09:00'] }),
+});
+let SCHED = SCHED_FALLBACK;        // общий график: opus и gpt
+let POOL_SCHED = {};               // переопределения с диска, по полосам
 let SCHED_SRC = 'fallback';        // 'file' | 'default' | 'fallback' — панель объясняет разницу
+/* Расписание полосы. Без полосы - общий график: так старые вызовы `batches(t)` и
+   сверка двух копий арифметики остаются валидными. */
+function schedFor(pool) {
+  if (!pool) return SCHED;
+  const o = POOL_SCHED[pool];
+  if (o && Array.isArray(o.times) && o.times.length) return o;
+  return POOL_SCHED_FALLBACK[pool] || SCHED;
+}
 
 /* Имя зоны смотрящего, а не «МСК» константой: времена вводятся в зоне шлюза, а
    показываются в той, где открыт дашборд. Здесь они совпадают. */
@@ -44054,8 +44788,8 @@ function zonedToUtc(y, mo, d, hh, mi, tz) {
    часам нужны `last`/`next`, виду «Сутки» — метки всех партий показанных суток.
    Трое суток берутся затем, чтобы обе точки были всегда, в том числе в день, когда
    расписание сменили. */
-function batches(now) {
-  const t = Number(now), s = SCHED;
+function batches(now, pool) {
+  const t = Number(now), s = schedFor(pool);
   if (!Number.isFinite(t) || !s || !Array.isArray(s.times) || !s.times.length) return null;
   const p = zonedParts(t, s.tz), all = [];
   for (const off of [-1, 0, 1]) {
@@ -44071,11 +44805,24 @@ function batches(now) {
   return { last, next, all };
 }
 /* Партии, попадающие в ЛОКАЛЬНЫЕ сутки показанного момента — метки вида «Сутки». */
-function batchesOfDay(ts) {
-  const b = batches(ts);
+function batchesOfDay(ts, pool) {
+  const b = batches(ts, pool);
   if (!b) return [];
   const d = new Date(ts), from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   return b.all.filter(x => x >= from && x < from + 86400000);
+}
+/* Общий суточный круг: все партии ВСЕХ полос за локальные сутки, схлопнутые по
+   времени. В одной точке может стоять несколько полос (opus и gpt наливают вместе),
+   поэтому возвращаем не момент, а момент + список полос для логотипов на метке. */
+function batchesOfDayAll(ts) {
+  const by = new Map();
+  for (const p of POOL_KEYS) {
+    for (const x of batchesOfDay(ts, p)) {
+      if (!by.has(x)) by.set(x, []);
+      if (!by.get(x).includes(p)) by.get(x).push(p);
+    }
+  }
+  return [...by.entries()].sort((a, b) => a[0] - b[0]).map(([at, lanes]) => ({ at, lanes }));
 }
 const fmtLocal = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 /* Поколение ключа 2: при переходе на тройную сетку (2026-09-12) сохранённый вид
@@ -44090,9 +44837,16 @@ const R = 84, CIRC = 2 * Math.PI * R;
 const pad = n => String(n).padStart(2, '0');
 const polar = (r, deg) => { const a = (deg - 90) * Math.PI / 180;
   return [100 + r * Math.cos(a), 100 + r * Math.sin(a)]; };
+// Полярные координаты вокруг произвольного центра: выноски живут в большом viewBox
+// 440x260, где центр круга - (220,130), а сам круг сдвинут группой на (120,30).
+const polarC = (cx, cy, r, deg) => { const a = (deg - 90) * Math.PI / 180;
+  return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; };
 
 function cyc(t) {
-  const b = batches(t);
+  // Общий циферблат считает до ближайшей партии ЛЮБОЙ полосы. Полоса запоминается
+  // в ответе: по ней красится циферблат и ставится знак у метки.
+  const n = nextLane(t);
+  const b = n ? n.b : null;
   // Без расписания (состояние, которого быть не должно) часы не падают и не пустуют:
   // показывают час до мнимой партии. Пустой циферблат хуже неточного.
   const last = b ? b.last : t, next = b ? b.next : t + 3600000;
@@ -44101,6 +44855,7 @@ function cyc(t) {
   // `p` — доля ПРОЙДЕННОГО промежутка, а не суток: на прежней сетке 8 ч это было
   // то же самое, теперь промежутки разные (9 ч и 15 ч), и все дуги считаются от него.
   return { t, el: t - last, rem, gap, p: (t - last) / gap, next: new Date(next),
+           pool: n ? n.pool : 'opus',
            h: pad(Math.floor(sec / 3600)), m: pad(Math.floor(sec / 60) % 60), s: pad(sec % 60) };
 }
 
@@ -44114,7 +44869,7 @@ const V = [
     <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?11:1}"/>
     ${m?'':'<g class="tk"></g>'}
     <path class="arq-arc" d="" stroke-width="${m?11:4}"/>
-    ${m?'':'<circle class="mk" r="5" fill="var(--color-surface)" stroke="var(--arq-cc)" stroke-width="2.5"/>'}
+    ${m?'':'<circle class="mk" r="5" fill="var(--color-surface)" stroke="var(--arq-cc)" stroke-width="2.5"/><g class="mk-logo"></g>'}
     <line class="arq-hand hh" x1="100" y1="100" x2="100" y2="54" stroke-width="${m?13:4.5}"
           stroke-linecap="round" stroke="var(--color-ink)"/>
     <line class="arq-hand mh" x1="100" y1="100" x2="100" y2="36" stroke-width="${m?8:2.5}"
@@ -44140,6 +44895,17 @@ const V = [
       sweep < 0.5 ? '' : `M ${sx} ${sy} A 84 84 0 ${sweep>180?1:0} 1 ${ex} ${ey}`);
     if (m) return;
     const mk = el.querySelector('.mk'); mk.setAttribute('cx', ex); mk.setAttribute('cy', ey);
+    // Знак полосы прямо у метки следующей партии. innerHTML меняем только при смене
+    // полосы: tick идёт раз в секунду, пересборка каждый тик мигала бы.
+    const ml = el.querySelector('.mk-logo');
+    if (ml) {
+      if (ml.dataset.pool !== c.pool) {
+        ml.dataset.pool = c.pool;
+        ml.innerHTML = `<svg x="-6" y="-6" width="12" height="12" viewBox="0 0 24 24"
+          aria-hidden="true" style="color: var(--arq-cc)">${LANE_ICON[c.pool]}</svg>`;
+      }
+      ml.setAttribute('transform', `translate(${ex},${ey})`);
+    }
     el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`; } },
 
 { id: 'ring', label: 'Кольцо',
@@ -44227,18 +44993,29 @@ const V = [
 /* Круг на 24 часа, а не на 12 — и это не украшение. На 12-часовом циферблате партия
    ложится в одну точку с беспартийным часом, и дуги между метками путаются. */
 { id: 'day', label: 'Сутки',
-  svg: m => `<svg class="arq-dial" width="${m?26:200}" height="${m?26:200}" viewBox="0 0 200 200">
-    <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="${m?13:6}"/>
-    <path class="hf" fill="none" stroke-width="${m?13:6}"
-          stroke="color-mix(in oklab, var(--arq-cc) 30%, var(--color-surface))"/>
-    <path class="arq-arc" fill="none" stroke-width="${m?13:6}" stroke-linecap="round"/>
-    ${m?'':'<g class="tk"></g>'}
-    <g class="mks"></g>
-    ${m?'':`<circle class="pt" r="4.5" fill="var(--color-ink)"/>
-    <text class="arq-num hero" x="100" y="94" text-anchor="middle" font-size="29"></text>
-    <text class="arq-cap" x="100" y="112" text-anchor="middle">до сброса</text>
-    <text class="arq-cap arq-capc ph" x="100" y="131" text-anchor="middle" font-size="10.5"></text>`}
-  </svg>`,
+  svg: m => m
+    ? `<svg class="arq-dial" width="26" height="26" viewBox="0 0 200 200">
+        <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="13"/>
+        <path class="hf" fill="none" stroke-width="13"
+              stroke="color-mix(in oklab, var(--arq-cc) 30%, var(--color-surface))"/>
+        <path class="arq-arc" fill="none" stroke-width="13" stroke-linecap="round"/>
+        <g class="mks"></g>
+      </svg>`
+    : `<svg class="arq-dial" width="440" height="260" viewBox="0 0 440 260">
+        <g transform="translate(120,30)">
+          <circle class="arq-track" cx="100" cy="100" r="84" stroke-width="6"/>
+          <path class="hf" fill="none" stroke-width="6"
+                stroke="color-mix(in oklab, var(--arq-cc) 30%, var(--color-surface))"/>
+          <path class="arq-arc" fill="none" stroke-width="6" stroke-linecap="round"/>
+          <g class="tk"></g>
+          <g class="mks"></g>
+          <circle class="pt" r="4.5" fill="var(--color-ink)"/>
+          <text class="arq-num hero" x="100" y="94" text-anchor="middle" font-size="29"></text>
+          <text class="arq-cap" x="100" y="112" text-anchor="middle">до сброса</text>
+          <text class="arq-cap arq-capc ph" x="100" y="131" text-anchor="middle" font-size="10.5"></text>
+        </g>
+        <g class="lbl arq-callout"></g>
+      </svg>`,
   init(el, m) {
     if (!m) { const g = el.querySelector('.tk');
       for (let h = 0; h < 24; h += 2) { const a = h * 15, big = h % 6 === 0;
@@ -44246,18 +45023,41 @@ const V = [
         g.insertAdjacentHTML('beforeend', `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"
           stroke-width="${big?2:1}" stroke="color-mix(in oklab, var(--color-ink) ${big?40:22}%, var(--color-surface))"/>`); } }
     const mk = el.querySelector('.mks');
-    /* Меток столько, сколько партий в расписании — две, три, четыре. Прежняя тройка
-       03/11/19 была зашита под сетку 8 ч и пережила её на день. Углы берутся по
-       ЛОКАЛЬНЫМ часам: круг суточный и нарисован в зоне того, кто смотрит, а времена
-       в расписании записаны в зоне шлюза — их сводит `batches()`. */
-    for (const ts of batchesOfDay(Date.now())) {
-      const d = new Date(ts), a = (d.getHours() + d.getMinutes()/60) * 15;
+    const call = el.querySelector('.lbl');
+    /* Метки — все партии ВСЕХ полос за сутки, схлопнутые по времени. На метке стоят
+       маленькие знаки вендоров; от метки идёт выноска наружу с именем полосы и временем,
+       чтобы не приходилось угадывать, чей это налив. Углы берутся по ЛОКАЛЬНЫМ часам:
+       круг суточный и нарисован в зоне того, кто смотрит, а времена в расписании -
+       в зоне шлюза. */
+    let i = 0;
+    for (const { at, lanes } of batchesOfDayAll(Date.now())) {
+      const d = new Date(at), a = (d.getHours() + d.getMinutes()/60) * 15;
       const [x,y] = polar(84, a), [lx,ly] = polar(68, a);
+      const logos = lanes.map((p, j) => {
+        const dx = (j - (lanes.length - 1) / 2) * 8;
+        return `<svg x="${x + dx - 5}" y="${y - 5}" width="10" height="10" viewBox="0 0 24 24"
+                     aria-hidden="true" style="color: var(--arq-cc)">${LANE_ICON[p]}</svg>`;
+      }).join('');
       mk.insertAdjacentHTML('beforeend',
-        `<circle cx="${x}" cy="${y}" r="${m?10:5.5}" fill="var(--color-surface)"
-                 stroke="var(--arq-cc)" stroke-width="${m?5:2.5}"/>` +
+        `<circle class="arq-mk" cx="${x}" cy="${y}" r="${lanes.length > 1 ? 9 : 7}"
+                 fill="var(--color-surface)" stroke="var(--arq-cc)" stroke-width="2"/>` + logos +
         (m ? '' : `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle"
                  class="arq-cap" font-size="9">${pad(d.getHours())}</text>`));
+      if (!m && call) {
+        // Выноска: линия от метки к подписи снаружи + знак вендора + «кого и когда».
+        // Радиус чередуется, чтобы 04:00 и 05:00 не наложились друг на друга.
+        const r = 108 + (i % 2 ? 12 : 0);
+        const [cx, cy] = polarC(220, 130, r, a);
+        const right = Math.cos((a - 90) * Math.PI / 180) >= 0;
+        const names = lanes.map(p => LANE_NAME[p]).join('+');
+        const label = `${names} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        call.insertAdjacentHTML('beforeend',
+          `<line x1="${x + 120}" y1="${y + 30}" x2="${cx}" y2="${cy}"/>` +
+          `<svg x="${cx - 6}" y="${cy - 6}" width="12" height="12" viewBox="0 0 24 24"
+                aria-hidden="true" style="color: var(--arq-cc)">${LANE_ICON[lanes[0]]}</svg>` +
+          `<text x="${cx + (right ? 10 : -10)}" y="${cy + 3}" text-anchor="${right ? 'start' : 'end'}">${label}</text>`);
+      }
+      i += 1;
     } },
   tick(el, c, m) {
     const d = new Date(c.t);
@@ -44269,7 +45069,7 @@ const V = [
        промежутке дуга с нулём разворачивается через соседний сектор — ровно та же
        грабля, что 12.09 чинили сменой знака на третьем круге. Полкруга (12 ч)
        симметрична и этот дефект не ловит, а 225° — ловит. */
-    const prev = batches(c.t), lastTs = prev ? prev.last : c.t;
+    const prev = batches(c.t, c.pool), lastTs = prev ? prev.last : c.t;
     const ld = new Date(lastTs);
     const fromA = (ld.getHours() + ld.getMinutes()/60) * 15;
     const [hx,hy] = polar(84, fromA), [ehx,ehy] = polar(84, toA);
@@ -44284,7 +45084,7 @@ const V = [
     el.querySelector('.hero').textContent = `${c.h}:${c.m}:${c.s}`;
     const hn = c.next.getHours();
     el.querySelector('.ph').textContent =
-      `${hn < 6 ? 'ночная' : hn < 12 ? 'утренняя' : hn < 18 ? 'дневная' : 'вечерняя'} партия · ${pad(hn)}:${pad(c.next.getMinutes())}`; } },
+      `${LANE_NAME[c.pool] || ''} · ${pad(hn)}:${pad(c.next.getMinutes())}`; } },
 ];
 
 /* Вид по умолчанию — «Сутки»: он один отвечает на вопрос «какая партия следующая»
@@ -44315,6 +45115,10 @@ function paint() {
   hosts.forEach(h => v.tick(h.el, c, h.mini));
   const txt = document.querySelector('#arq-mini .arq-txt');
   if (txt) txt.textContent = `${c.h}:${c.m} до долива`;
+  // Знак в сайдбаре - полоса ближайшей партии. Меняем только при смене полосы,
+  // иначе innerHTML переписывался бы каждую секунду.
+  const ml = document.getElementById('arq-mini-logo');
+  if (ml && ml.dataset.pool !== c.pool) { ml.innerHTML = LANE_LOGO[c.pool] || ''; ml.dataset.pool = c.pool; }
   stExpire(c.t);
 }
 /* 1 Гц, а не requestAnimationFrame: дашборд открыт постоянно, платить кадрами не за что.
@@ -44330,72 +45134,41 @@ document.addEventListener('visibilitychange', () => document.hidden ? stop() : s
 window.arqState = s => document.querySelectorAll('.arq').forEach(n => {
   if (s) n.dataset.arqState = s; else delete n.dataset.arqState; });
 
-/* ── Что реально отвечает ─────────────────────────────────────────────────
-   Состояние квоты — это «можно ли туда ходить», а не «куда ходим СЕЙЧАС».
-   Второе видно только по самой карте тиров, и когда владелец вернул её на
-   пуловую модель при пустом пуле, честный ответ — «карта на opus, запрос
-   сначала упрётся в 402». Ровно на этом он и запутался 16.09: панель маппинга
-   показывала claude-opus-5, а строка про фолбэк — deepseek, и оба были правы
-   про РАЗНЫЕ пути. */
-let AR_MAP = null;
-let FB = '';                           // куда пускать при пустом пуле (тот же ключ, что в карточке Keepalive)
-async function arMapSync() {
-  try {
-    const d = await (await fetch('/__switch/api/routes')).json();
-    const p = ((d && d.providers) || []).find(x => x && x.name === 'agentrouter');
-    AR_MAP = (p && p.gatewayTiers) || null;
-  } catch (e) { /* ручки нет — строку не рисуем, а не врём */ }
-}
-/* ── Куда пускать при пустом пуле ─────────────────────────────────────────
-   Тот же ключ, что в карточке Keepalive ниже (`poolFallbackModel`), и та же ручка:
-   два зеркала одного значения — так же, как тир-карта живёт и в карточке шлюза, и на
-   вкладке «Маршруты». Здесь он нужен потому, что вопрос «а куда оно идёт?» возникает
-   ровно там, где видно «пул пуст»: владелец 16.09 видел пометку и не понимал адреса. */
-// Куда пускать при пустом пуле — ЗНАЧЕНИЕ для строки состояния, а не орган управления.
-// 🪤 Селектор тут был и убран 16.09: два селектора одного ключа неизбежно разъезжаются
-// (сначала общий «Применить» затирал чужую правку, потом понадобилась синхронизация двух
-// зеркал). Настройка живёт там, где живёт сам ключ — в карточке Keepalive; часы только
-// НАЗЫВАЮТ адрес, чтобы вопрос «а куда оно идёт?» не оставался без ответа.
-async function arqFbSync() {
-  let v = null;
-  try {
-    const st = await (await fetch('/__switch/api/keepalive/state')).json();
-    v = String((st && st.cfg && st.cfg.poolFallbackModel) || '');
-  } catch (e) { return; }               // ручки нет — строку не портим, а не врём пустотой
-  if (v === FB) return;
-  FB = v;
-  stPoolLine(VIEW);
-}
-
-function stPoolLine(pool) {
-  const el = document.getElementById('arq-pool-state');
-  if (!el || pool !== VIEW) return;
-  const e = stLoad()[pool];
-  const fresh = stFresh(e, Date.now());
-  const arpool = POOL_MODEL[pool];
-  const serving = AR_MAP ? String(AR_MAP[pool] || '') : '';
-  const at = fresh ? (() => { const d = new Date(e.checkedAt); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; })() : '';
-  const why = e && e.source === 'drop' ? 'при фолбэке' : 'по проверке';
-  const name = POOLS[pool];
-  let txt, cls;
-  if (!fresh) {
-    txt = `${name}: про квоту неизвестно — нажми «Проверить ${pool === 'gpt' ? 'GPT' : 'Opus'}»`;
-    cls = 'text-muted';
-  } else if (e.state === 'exhausted' && serving && serving !== arpool) {
-    txt = `⛔ ${name}: квота кончилась ${at} (${why}) · отвечает ${serving}`;
-    cls = 'text-crimson';
-  } else if (e.state === 'exhausted') {
-    txt = `⚠️ ${name}: квота кончилась ${at} (${why}), а карта стоит на ${arpool} — поедет на ${FB || 'фолбэк'}, но каждый запрос сначала упрётся в 402`;
-    cls = 'text-amber';
-  } else if (serving && serving !== arpool) {
-    txt = `ℹ️ ${name}: квота есть, но трафик идёт на ${serving}`;
-    cls = 'text-muted';
-  } else {
-    txt = `✅ ${name}: квота есть (проверено ${at}) · отвечает ${arpool}`;
-    cls = 'text-emerald';
-  }
-  el.textContent = txt;
-  el.className = 'text-xs font-mono leading-tight text-center ' + cls;
+/* Одна строка состояния на все полосы. Каждый чип - кнопка проверки своей полосы,
+   поэтому отдельных «Проверить» больше нет. `PROBING` держит чип заблокированным,
+   пока ответ не пришёл, и переживает пересборку разметки. */
+function stChipsPaint() {
+  const box = document.getElementById('arq-pool-state');
+  if (!box) return;
+  const now = Date.now();
+  const html = POOL_KEYS.map(p => {
+    const e = stLoad()[p];
+    const fresh = stFresh(e, now, p);
+    const pm = probeMsgGet(p);
+    const probing = PROBING.has(p);
+    const alien = !fresh && stAlienGrid(e, p);
+    let state = 'unknown', label = 'неизв.';
+    if (probing) { state = 'wait'; label = 'проверяю…'; }
+    else if (alien) { state = 'wait'; label = 'F5'; }
+    else if (fresh) {
+      state = e.state === 'available' ? 'available' : 'exhausted';
+      label = e.state === 'available' ? 'есть' : 'пусто';
+    } else if (pm) {
+      state = pm.cls === 'text-crimson' ? 'unknown' : 'wait';
+      label = pm.short || 'нет канала';
+    }
+    const why = e && e.source === 'drop' ? 'при фолбэке' : 'по проверке';
+    const who = `${POOLS[p]} (${LANE_MODEL[p]})`;
+    const title = alien
+      ? `${who}: запись от прежней схемы партий - обнови страницу и проверь заново`
+      : fresh
+      ? `${who} · ${e.state === 'available' ? 'квота есть' : 'квота кончилась'} · ${why} · ${new Date(e.checkedAt).toLocaleTimeString()}`
+      : (pm ? `${who}: ${pm.title || pm.text}` : `${who}: нажми, чтобы проверить`);
+    return `<button type="button" class="arq-lane" data-pool="${p}" data-state="${state}" ` +
+      `onclick="arqCheckQuota('${p}')"${probing ? ' disabled' : ''} title="${esc(title)}">` +
+      `<span class="arq-lane-ico">${LANE_LOGO[p]}</span><span>${LANE_NAME[p]} · ${label}</span></button>`;
+  }).join('');
+  if (box.dataset.sig !== html) { box.innerHTML = html; box.dataset.sig = html; }
 }
 
 /* ── Кеш результата проверки ──────────────────────────────────────────────
@@ -44409,12 +45182,12 @@ function stPoolLine(pool) {
    Партию берём из того же расписания, что и циферблат: смена расписания обесценивает
    весь кеш разом, и это правильно — одна лишняя проба честнее прошлой схемы.
    Серверная копия логики — routing/lib/ar-quota-probe.js. */
-const dropAt = t => { const b = batches(t); return b ? b.last : t; };
-const stFresh = (e, now) => {
+const dropAt = (t, pool) => { const b = batches(t, pool); return b ? b.last : t; };
+const stFresh = (e, now, pool) => {
   if (!e || (e.state !== 'available' && e.state !== 'exhausted')) return false;
   const ch = Date.parse(e.checkedAt);
   if (!Number.isFinite(ch) || ch > now + 60000) return false;   // запись из будущего — часы уехали
-  return Date.parse(e.dropAt) === dropAt(now);
+  return Date.parse(e.dropAt) === dropAt(now, pool);
 };
 const stFresher = (a, b) => {
   const ta = a && Date.parse(a.checkedAt), tb = b && Date.parse(b.checkedAt);
@@ -44431,20 +45204,42 @@ const stFresher = (a, b) => {
    проверки квоты МОЛЧА, и владелец прочитал это как «кнопка не реагирует». Кнопка была
    исправна - ответ отбрасывала проверка свежести. Молчать тут нельзя: цена молчания -
    поиск поломки там, где её нет. */
-function stAlienGrid(e) {
+function stAlienGrid(e, pool) {
   const ch = e && Date.parse(e.checkedAt), dp = e && Date.parse(e.dropAt);
   if (!Number.isFinite(ch) || !Number.isFinite(dp)) return false;
-  return dropAt(ch) !== dp;
+  return dropAt(ch, pool) !== dp;
 }
-/* ── Две полосы ───────────────────────────────────────────────────────────
-   Claude и GPT наливают вместе (партии одни), но кончаются порознь: 15.09 пул
-   Opus был пуст, а GPT отдавался. Поэтому и кеш, и серверный файл — словарь по
-   полосам, а циферблат красится по ПОКАЗЫВАЕМОЙ: свести две полосы в один цвет
-   нечем. Вторая полоса видна строкой под своей кнопкой. */
-const KEY_POOL = 'ar-quota-pool';
-const POOLS = { opus: 'Opus 5', gpt: 'GPT Astra' };
-const POOL_MODEL = { opus: 'claude-opus-5', gpt: 'gpt-6-astra' };
-let VIEW = (() => { try { const v = localStorage.getItem(KEY_POOL); return POOLS[v] ? v : 'opus'; } catch (e) { return 'opus'; } })();
+/* ── Три полосы, один циферблат ───────────────────────────────────────────
+   Claude и GPT наливают вместе, но кончаются порознь; у opus55 с 21.10 своя
+   партия 09:00 Пекина. Циферблат ОДИН и общий: он считает до ближайшей партии
+   любой полосы, а логотипы полос стоят на нём и в одной строке состояния.
+   Переключателей нет - переключать нечего, состояние видно у всех сразу. */
+const POOL_KEYS = ['opus', 'opus55', 'gpt'];
+const POOLS = { opus: 'Opus 5', opus55: 'Opus 5.5', gpt: 'GPT Astra' };
+const LANE_NAME = { opus: 'Opus 5', opus55: 'Opus 5.5', gpt: 'GPT Astra' };
+// Точный id модели для подсказки: «GPT» без Astra читается как «какой ещё GPT».
+const LANE_MODEL = { opus: 'claude-opus-5', opus55: 'claude-opus-5-5', gpt: 'gpt-6-astra' };
+
+// Ближайшая партия среди ВСЕХ полос: её и считает общий циферблат.
+function nextLane(t) {
+  let best = null;
+  for (const p of POOL_KEYS) {
+    const b = batches(t, p);
+    if (!b) continue;
+    if (!best || b.next < best.b.next) best = { pool: p, b };
+  }
+  return best;
+}
+
+/* Маленькие монохромные знаки вендоров: Claude - искра, GPT - гексагон. Своих
+   цветов нет, только currentColor: знак красится той же переменной, что и полоса. */
+const LANE_ICON = {
+  opus: '<path d="M12 2.2l2.3 7.5 7.5 2.3-7.5 2.3L12 21.8l-2.3-7.5L2.2 12l7.5-2.3z" fill="currentColor"/>',
+  opus55: '<path d="M12 2.2l2.3 7.5 7.5 2.3-7.5 2.3L12 21.8l-2.3-7.5L2.2 12l7.5-2.3z" fill="currentColor"/><circle cx="20" cy="4.4" r="2.3" fill="currentColor"/>',
+  gpt: '<path d="M12 2.6l8.1 4.7v9.4L12 21.4l-8.1-4.7V7.3z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7.1l4.3 2.5v4.8L12 16.9l-4.3-2.5V9.6z" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+};
+const LANE_LOGO = Object.fromEntries(POOL_KEYS.map(p =>
+  [p, `<svg viewBox="0 0 24 24" aria-hidden="true">${LANE_ICON[p]}</svg>`]));
 
 function stLoad() {
   try {
@@ -44457,51 +45252,26 @@ function stSave(pool, e) {
   const d = stLoad();
   if (e) d[pool] = e; else delete d[pool];
   try { localStorage.setItem(KEY_ST, JSON.stringify(d)); } catch (e2) { /* живёт до перезагрузки */ } }
-const stEl = pool => document.getElementById(pool === 'gpt' ? 'arq-check-result-gpt' : 'arq-check-result');
+/* Последний ОТВЕТ ручной проверки, который не является состоянием квоты: 503 «канал
+   ещё не открыт» и прочие ошибки. Храним только в памяти страницы и только 15 минут:
+   это факт про момент, а не про квоту, и в файл/ localStorage он не едет. Без этого
+   строка жила до ближайшего тика `stSync` (30 с) и гасла в «—» - владелец видел
+   объяснение и терял его, не успев прочитать. */
+const PROBE_MSG = {};
+const PROBE_MSG_TTL = 15 * 60 * 1000;
+const PROBING = new Set();                 // полосы, по которым ответ ещё не пришёл
+const probeMsgSet = (pool, text, cls, title, short) => {
+  PROBE_MSG[pool] = { text, cls, title: title || '', short: short || '', at: Date.now() };
+};
+const probeMsgGet = pool => {
+  const m = PROBE_MSG[pool];
+  return m && Date.now() - m.at < PROBE_MSG_TTL ? m : null;
+};
 
-/* Показ одной полосы: своя строка + циферблат, если полоса показываемая.
-   Строка честно говорит, ОТКУДА состояние: «по проверке» — ручной клик,
-   «при фолбэке» — 402, который поймал keepalive. Это разные факты, и владелец
-   просил видеть именно второй. */
-function stPaint(pool) {
-  const e = stLoad()[pool];
-  const fresh = stFresh(e, Date.now());
-  const out = stEl(pool);
-  if (out) {
-    if (!fresh) {
-      if (stAlienGrid(e)) {
-        // Страница пережила смену расписания и говорит на другом календаре партий.
-        // Ответы сервера она принять не может - значит нужен F5, и сказать об этом надо.
-        out.className = 'text-xs text-amber font-mono';
-        out.textContent = 'запись от прежней схемы партий - обнови страницу и проверь заново';
-        out.title = `в записи партия ${e.dropAt}, а эта страница считает ${new Date(dropAt(Date.parse(e.checkedAt))).toISOString()}`;
-      } else {
-        out.className = 'text-xs text-faint font-mono'; out.textContent = '—'; out.title = '';
-      }
-    }
-    else {
-      const d = new Date(e.checkedAt);
-      const why = e.source === 'drop' ? 'при фолбэке' : 'по проверке';
-      out.className = e.state === 'available' ? 'text-xs text-emerald font-mono'
-                                              : 'text-xs text-amber font-mono';
-      out.title = '';
-      out.textContent = (e.state === 'available' ? 'Квота есть' : 'Квота закончилась')
-        + ` · ${why} · ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    }
-  }
-  if (pool === VIEW) { arqState(fresh ? (e.state === 'available' ? 'fresh' : 'burned') : ''); stPoolLine(pool); }
-}
-
-/* Переключение показываемой полосы. Кнопка проверки тоже зовёт это — нажал
-   «Проверить GPT», и циферблат перешёл на GPT. */
-function arqView(pool) {
-  if (!POOLS[pool]) return;
-  VIEW = pool;
-  try { localStorage.setItem(KEY_POOL, pool); } catch (e) { /* окно без хранилища */ }
-  const lbl = document.getElementById('arq-pool-name');
-  if (lbl) lbl.textContent = POOLS[pool];
-  Object.keys(POOLS).forEach(stPaint);
-}
+/* Состояние полосы больше не рисует свой циферблат: циферблат один и общий.
+   `stPaint` оставлен точкой перерисовки строки состояния, чтобы не менять всех
+   вызывающих. */
+function stPaint() { stChipsPaint(); }
 
 /* Гашение по наливу, пока вкладка открыта. Дашборд висит сутками, и без этого
    пересечение партии оставляло бы на часах цвет от прошлой — то есть ровно то
@@ -44512,10 +45282,16 @@ function stExpire(now) {
     const e = stLoad()[p];
     // Запись ЧУЖОЙ схемы не истекает - она объясняет себя. Стереть её здесь значило бы
     // вернуть то самое молчание, из-за которого кнопка проверки выглядела сломанной:
-    // stPaint рисует по ней подсказку, а не прочерк. Уйдёт она от первой же новой пробы.
-    if (e && !stFresh(e, now) && !stAlienGrid(e)) stSave(p, null);
-    stPaint(p);
+    // строка состояния рисует по ней подсказку, а не прочерк. Уйдёт она от новой пробы.
+    if (e && !stFresh(e, now, p) && !stAlienGrid(e, p)) stSave(p, null);
   });
+  stChipsPaint();
+  // Цвет общего циферблата - по полосе ближайшей партии: он один, и красить его
+  // состоянием чужой полосы значит врать.
+  const n = nextLane(now);
+  const e = n ? stLoad()[n.pool] : null;
+  const fresh = n ? stFresh(e, now, n.pool) : false;
+  arqState(fresh ? (e.state === 'available' ? 'fresh' : 'burned') : '');
 }
 
 /* Слои сверяются по checkedAt, а НЕ по приоритету слоя: иначе браузер с устаревшей
@@ -44524,9 +45300,6 @@ function stExpire(now) {
    Опрашивается и по таймеру, а не только при загрузке: фолбэк случается ПОСРЕДИ
    дня, и часы обязаны покраснеть сами, без F5 и без клика. */
 async function stSync() {
-  await arMapSync();                    // что отвечает СЕЙЧАС — из карты шлюза
-  await arqFbSync();                    // и куда пускать при пустом пуле — только для строки
-  Object.keys(POOLS).forEach(stPaint);
   let remote = {};
   try {
     const r = await fetch('/__switch/api/ar/quota-state');
@@ -44541,20 +45314,18 @@ async function stSync() {
     // сервера (та, что ходит на +2 и +20 минут), и только она работает при свёрнутом окне.
     await arqSndCheck(p, stLoad()[p]);
   }
+  stChipsPaint();
   // Налив по расписанию: не зависит от пробы и ключа, звенит даже когда ротация
   // занулила quota-state. Дедуп общий с arqSndCheck, так что дважды не звякнет.
   await arqSndScheduleUp();
 }
 
 window.arqCheckQuota = async function arqCheckQuota(pool) {
-  pool = POOLS[pool] ? pool : VIEW;
-  arqView(pool);                       // нажал «Проверить GPT» — циферблат перешёл на GPT
-  const btn = document.getElementById(pool === 'gpt' ? 'arq-check-gpt' : 'arq-check');
-  const out = stEl(pool);
-  if (!btn || !out || btn.disabled) return;
-  btn.disabled = true;
-  out.className = 'text-xs text-faint font-mono';
-  out.textContent = `проверяю ${POOL_MODEL[pool]}…`;
+  if (!POOLS[pool] || PROBING.has(pool)) return;
+  // Отдельных кнопок и строк результата больше нет: чип полосы сам показывает
+  // «проверяю…», потом результат. Один клик - одна полоса.
+  PROBING.add(pool);
+  stChipsPaint();
   try {
     const res = await fetch('/__switch/api/ar/quota-check', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -44562,11 +45333,12 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
     });
     const data = await res.json();
     if (data.state === 'available' || data.state === 'exhausted') {
+      delete PROBE_MSG[pool];          // доказанное состояние важнее прошлой ошибки
       const rec = { state: data.state, source: 'probe',
                     checkedAt: data.checkedAt || new Date().toISOString(),
-                    dropAt: data.dropAt || new Date(dropAt(Date.now())).toISOString() };
+                    dropAt: data.dropAt || new Date(dropAt(Date.now(), pool)).toISOString() };
       stSave(pool, rec);
-      stPaint(pool);
+      stChipsPaint();
       // Проверил руками и увидел ответ - звенит нечего, владелец и так смотрит на него.
       // Но партию помечаем просмотренной, иначе автопроба звякнет задним числом.
       // 🪤 Метим ТОЛЬКО совпавшее состояние: клик за минуту до партии вернёт `exhausted`,
@@ -44574,19 +45346,36 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
       // Ключ конца - с полосой, как и в arqSndCheck: у полос разные судьбы.
       if (data.state === 'available') arqSndMark(rec.dropAt, KEY_SND_DROP);
       else arqSndMark(rec.dropAt, KEY_SND_DRY + ':' + pool);
-      // Возврат тир-карты из бэкапа — факт этой же проверки: пул налили, и тиры
-      // снова боевые. Молчать об этом нельзя, иначе владелец не поймёт, почему
-      // трафик уехал обратно на пуловую модель.
-      if (data.restored) out.textContent += ' · карта возвращена';
-      else if (data.restored === false && data.restoredError) out.textContent += ' · карта не возвращена';
     } else {
+      const msg = String(data.error || '');
+      // 503 «无可用渠道» - это НЕ конец квоты и не поломка: канал на модель ещё не
+      // открыт до партии. Настоящий конец квоты - только 402.
+      if (/无可用渠道|no available channel/i.test(msg)) {
+        // В тексте шлюз называет группу: «当前分组 default 下…». Если модель включена
+        // только для svip/test, ждать партию бессмысленно - это не время, а доступ.
+        const grp = (msg.match(/当前分组\s+([^\s]+)\s+下/) || [])[1] || '';
+        if (pool === 'opus55' && grp && !/^(svip|test)$/i.test(grp)) {
+          probeMsgSet(pool, `нет доступа: 5-5 только для svip/test, а ключ в группе ${grp}`,
+                      'text-crimson', msg, `нет доступа (${grp})`);
+          stChipsPaint();
+          return;
+        }
+        const b = batches(Date.now(), pool);
+        const n = b ? new Date(b.next) : null;
+        const at = n ? `${pad(n.getHours())}:${pad(n.getMinutes())}` : '—';
+        probeMsgSet(pool, `канал ещё не открыт · следующая партия ${at} ${TZ_LABEL}`,
+                    'text-amber', msg, `ждёт ${at}`);
+        stChipsPaint();
+        return;
+      }
       throw new Error(data.error || `HTTP ${res.status}`);
     }
   } catch (e) {
-    out.className = 'text-xs text-crimson font-mono';
-    out.textContent = 'Ошибка проверки: ' + e.message;
+    probeMsgSet(pool, 'Ошибка проверки: ' + e.message, 'text-crimson', '', 'ошибка');
+    stChipsPaint();
   } finally {
-    btn.disabled = false;
+    PROBING.delete(pool);
+    stChipsPaint();
   }
 };
 
@@ -44612,8 +45401,8 @@ window.arqCheckQuota = async function arqCheckQuota(pool) {
 const KEY_SND = 'ar-quota-sound';            // '0' - приглушено; ключа нет - звук ВКЛ
 // Две метки, а не одна: налив и его конец - РАЗНЫЕ события одной партии, и каждое
 // звенит своим голосом по разу. Общая метка съела бы второе событие.
-const KEY_SND_DROP = 'ar-quota-sound-drop';  // партия, о наливе которой уже звенели
-const KEY_SND_DRY = 'ar-quota-sound-dry';    // партия, о конце которой уже звенели
+const KEY_SND_DROP = 'ar-quota-sound-drop'; // история партий, о наливе которых уже звенели
+const KEY_SND_DRY = 'ar-quota-sound-dry';   // история концов партий, отдельно по полосам
 const ARQ_OPENED_AT = Date.now();            // загрузка страницы: граница «звенит / молчит»
 let ARQ_AC = null;
 let ARQ_ARM = null;                          // resume() в полёте: второй вызов ждёт тот же, а не зовёт свой
@@ -44621,16 +45410,36 @@ let ARQ_ARM = null;                          // resume() в полёте: вто
 function arqSndMute() {
   try { return localStorage.getItem(KEY_SND) === '0'; } catch (e) { return false; }
 }
+const ARQ_SND_MEMORY = Object.create(null); // дедуп остаётся и при запрете localStorage
+const ARQ_SND_KEEP = 64;                    // больше всех партий за двое суток
+/* У полос разные последние партии. Одно число перетиралось 14:00 -> 04:00 -> 14:00,
+   и следующий тик снова звонил. История общая по времени налива, не по полосе.
+   Старое числовое значение читаем вместе с историей: F5 не забывает прошлый звонок. */
 function arqSndSeen(key) {
-  try { const v = Number(localStorage.getItem(key || KEY_SND_DROP)); return Number.isFinite(v) ? v : 0; }
-  catch (e) { return 0; }
+  key = key || KEY_SND_DROP;
+  let stored = [], legacy = 0;
+  try {
+    const raw = JSON.parse(localStorage.getItem(key + ':history'));
+    if (Array.isArray(raw)) stored = raw;
+    legacy = Number(localStorage.getItem(key));
+  } catch (e) { /* остаётся память этого окна */ }
+  const seen = [...new Set([...(ARQ_SND_MEMORY[key] || []), ...stored, legacy]
+    .filter(v => Number.isFinite(v) && v > 0))].sort((a, b) => a - b).slice(-ARQ_SND_KEEP);
+  ARQ_SND_MEMORY[key] = seen;
+  return seen;
 }
 /* Пометить партию просмотренной, ничего не играя. Зовут трое: ручная «Проверить
    квоту» (владелец смотрит на ответ сам), сам звук, уже прозвеневший, и звук о конце. */
 function arqSndMark(dropAt, key) {
   const ms = typeof dropAt === 'number' ? dropAt : Date.parse(dropAt);
-  if (!Number.isFinite(ms)) return;
-  try { localStorage.setItem(key || KEY_SND_DROP, String(ms)); } catch (e) { /* окно без хранилища */ }
+  if (!Number.isFinite(ms) || ms <= 0) return;
+  key = key || KEY_SND_DROP;
+  const seen = [...new Set([...arqSndSeen(key), ms])].sort((a, b) => a - b).slice(-ARQ_SND_KEEP);
+  ARQ_SND_MEMORY[key] = seen;
+  try {
+    localStorage.setItem(key + ':history', JSON.stringify(seen));
+    localStorage.setItem(key, String(ms)); // совместимость с ещё не обновлёнными окнами
+  } catch (e) { /* остаётся память этого окна */ }
 }
 
 /* Чистое решение «звенеть или нет». `want` - о каком состоянии речь: 'available' это
@@ -44642,7 +45451,8 @@ function arqSndMark(dropAt, key) {
 function arqSndDecide(rec, fresh, openedAt, seenDrop, want) {
   if (!rec || !fresh || rec.state !== (want || 'available')) return false;
   const drop = Date.parse(rec.dropAt);
-  if (seenDrop > 0 && drop === seenDrop) return false;              // об этой партии уже звенели
+  const seen = Array.isArray(seenDrop) ? seenDrop : [seenDrop];
+  if (!Number.isFinite(drop) || seen.includes(drop)) return false; // об этой партии уже звенели
   const checked = Date.parse(rec.checkedAt);
   // Запись старше этой загрузки страницы: событие случилось, пока дашборд был закрыт.
   // Молчим намеренно - страница, которая звенит на F5, хуже страницы без звука, а сам
@@ -44762,7 +45572,7 @@ async function arqSndPlay(kind) {
    проходит молча. Поэтому метка налива - партия, метка конца - полоса и партия.
    Возвращает, прозвенело ли, - регрессу это нужнее, чем человеку. */
 async function arqSndCheck(pool, rec) {
-  const fresh = stFresh(rec, Date.now());
+  const fresh = stFresh(rec, Date.now(), pool);
   if (arqSndDecide(rec, fresh, ARQ_OPENED_AT, arqSndSeen(KEY_SND_DROP), 'available')) {
     // Помечаем ТОЛЬКО прозвеневшее: не прозвенело (звук приглушён или не разбужен) -
     // не помечаем вовсе, и следующий тик попробует снова. Раньше метка ставилась
@@ -44789,12 +45599,20 @@ async function arqSndCheck(pool, rec) {
    молчит. Граница `> ARQ_OPENED_AT` та же, что у пробы: партия до открытия страницы не
    звенит (F5 молчит). Вниз сюда НЕ переносим: конец пула из расписания не виден. */
 async function arqSndScheduleUp(now) {
-  const d = dropAt(typeof now === 'number' ? now : Date.now());
-  if (!(d > ARQ_OPENED_AT)) return false;          // партия была до открытия страницы
-  if (arqSndSeen(KEY_SND_DROP) === d) return false; // об этой партии уже звенели (проба или мы)
-  if (!await arqSndPlay('in')) return false;        // не разбужен - попробуем на следующем тике
-  arqSndMark(d, KEY_SND_DROP);
-  return true;
+  const t = typeof now === 'number' ? now : Date.now();
+  let rang = false;
+  // По полосам, а не одним `dropAt`: у opus55 своя партия в 09:00 Пекина. Дедуп по
+  // самой метке времени общий: opus и gpt наливают вместе и дают один звонок, а 5-5
+  // со своей минутой - отдельный.
+  for (const p of Object.keys(POOLS)) {
+    const d = dropAt(t, p);
+    if (!(d > ARQ_OPENED_AT)) continue;          // партия была до открытия страницы
+    if (arqSndSeen(KEY_SND_DROP).includes(d)) continue; // уже звенели по пробе или расписанию
+    if (!await arqSndPlay('in')) return rang;    // не разбужен - попробуем на следующем тике
+    arqSndMark(d, KEY_SND_DROP);
+    rang = true;
+  }
+  return rang;
 }
 function arqSndBtn() {
   const b = document.getElementById('arq-snd');
@@ -44806,7 +45624,7 @@ function arqSndBtn() {
   b.title = mute
     ? 'звук выключен - нажми, чтобы включить'
     : armed
-      ? `звенит дважды на партию: вверх - когда налили (${SCHED.times.map(h => h).join(', ')} ${SCHED.tz}), вниз - когда пул выпит`
+      ? `звенит дважды на партию: вверх - когда налили (${schedGroups().map(g => `${g.lanes.map(p => LANE_NAME[p]).join('/')} ${g.s.times.join(', ')}`).join(' · ')}), вниз - когда пул выпит`
       : 'звук включён, но браузер ещё не разрешил звучать: оживёт после первого клика по странице';
 }
 window.arqSndToggle = function arqSndToggle() {
@@ -44827,29 +45645,41 @@ window.arqSndToggle = function arqSndToggle() {
 const SCHED_ROUTE = '/__switch/api/ar/quota-schedule';
 let schedTried = false;          // до первого ответа ручки молчим, а не пишем «не прочитано»
 let schedFormDirty = false;      // поля правит человек — не затираем их ответом сервера
-
-const schedSameZone = () => SCHED.tz === Intl.DateTimeFormat().resolvedOptions().timeZone;
+let schedEditPool = '';          // '' = общий график, иначе полоса с переопределением
+const schedEditSched = () => (schedEditPool ? schedFor(schedEditPool) : SCHED);
 
 /* Локальные времена партий без привязки к суткам: берём три дня кандидатов и
    схлопываем по «ЧЧ:ММ». Так строка не зависит от того, попала ли партия в текущие
    локальные сутки — а она может и не попасть, если зона шлюза сдвинута от твоей. */
-function schedLocalTimes() {
-  const b = batches(Date.now());
+function schedLocalTimes(pool) {
+  const b = batches(Date.now(), pool || 'opus');
   if (!b) return [];
   return [...new Set(b.all.map(fmtLocal))].sort();
 }
+/* Полосы, у которых расписание совпадает, называются одной группой: opus и gpt
+   наливают вместе, у opus55 своя точка. */
+function schedGroups() {
+  const groups = [];
+  for (const p of POOL_KEYS) {
+    const s = schedFor(p), key = schedKey(s);
+    let g = groups.find(x => x.key === key);
+    if (!g) { g = { key, s, lanes: [] }; groups.push(g); }
+    if (!g.lanes.includes(p)) g.lanes.push(p);
+  }
+  return groups;
+}
 function schedMiniTitle() {
-  const local = schedLocalTimes().join(', ');
-  return schedSameZone()
-    ? `Партии: ${SCHED.times.join(', ')}`
-    : `Партии: ${SCHED.times.join(', ')} (${SCHED.tz}) = ${local} ${TZ_LABEL}`;
+  return 'Партии: ' + schedGroups().map(g =>
+    `${g.lanes.map(p => LANE_NAME[p]).join(' и ')} ${g.s.times.join(', ')} ${g.s.tz}`).join(' · ');
 }
 function schedLine() {
-  const t = SCHED.times;
-  const word = t.length === 2 ? 'Две партии' : t.length === 3 ? 'Три партии' : `${t.length} партии`;
   const tail = ' Партия конечная — «用完即止», кончиться может раньше срока.';
-  if (schedSameZone()) return `${word} в сутки: ${t.join(' и ')}.${tail}`;
-  return `${word} в сутки: ${SCHED.tz} ${t.join(' и ')} = ${schedLocalTimes().join(' и ')} ${TZ_LABEL}.${tail}`;
+  const parts = schedGroups().map(g => {
+    const local = schedLocalTimes(g.lanes[0]).join(', ');
+    const names = g.lanes.map(p => LANE_NAME[p]).join(' и ');
+    return `${names}: ${g.s.tz} ${g.s.times.join(', ')} = ${local} ${TZ_LABEL}`;
+  });
+  return parts.join(' · ') + '.' + tail;
 }
 
 function schedPaint() {
@@ -44880,9 +45710,12 @@ function schedPaint() {
 function schedFill() {
   const ti = document.getElementById('arq-sched-times');
   const tz = document.getElementById('arq-sched-tz');
+  const sel = document.getElementById('arq-sched-pool');
   if (!ti || !tz || schedFormDirty) return;
-  ti.value = SCHED.times.join(', ');
-  tz.value = SCHED.tz;
+  if (sel && sel.value !== schedEditPool) sel.value = schedEditPool;
+  const s = schedEditSched();
+  ti.value = s.times.join(', ');
+  tz.value = s.tz;
   schedPreview();
 }
 const schedMsg = (cls, text) => {
@@ -44890,11 +45723,24 @@ const schedMsg = (cls, text) => {
   if (m) { m.className = `text-xs font-mono ${cls}`; m.textContent = text; }
 };
 
-const schedKey = s => s.tz + '|' + s.times.join(',');
+const schedKey = s => s ? s.tz + '|' + s.times.join(',') : '';
+const schedAllKey = () => [schedKey(SCHED),
+  ...Object.keys(POOL_SCHED).sort().map(p => p + ':' + schedKey(POOL_SCHED[p]))].join('|');
 function schedApply(j) {
   if (!j || !j.ok || !Array.isArray(j.times) || j.times.length < 2 || !j.tz) return false;
   SCHED = { tz: String(j.tz), times: j.times.map(String), updated: j.updated || '', note: j.note || '' };
   if (j.error) SCHED.error = j.error;
+  // Полосы приходят готовыми (`pools`), с уже посчитанными last/next. Если старая
+  // ручка их не отдала - остаёмся на встроенном дефолте opus55, а не теряем график.
+  const pools = j.pools && typeof j.pools === 'object' && !Array.isArray(j.pools) ? j.pools : {};
+  const next = {};
+  for (const p of Object.keys(pools)) {
+    const o = pools[p];
+    if (!o || !Array.isArray(o.times) || !o.times.length || !o.tz) continue;
+    next[p] = { tz: String(o.tz), times: o.times.map(String),
+                source: o.source || j.source || 'file', error: o.error || null };
+  }
+  POOL_SCHED = next;
   SCHED_SRC = j.source || 'file';
   return true;
 }
@@ -44904,8 +45750,8 @@ function schedApply(j) {
 function schedFetch() {
   return fetch(SCHED_ROUTE).then(r => (r.ok ? r.json() : null)).catch(() => null).then(j => {
     schedTried = true;
-    const before = schedKey(SCHED);
-    if (schedApply(j) && schedKey(SCHED) !== before) build();
+    const before = schedAllKey();
+    if (schedApply(j) && schedAllKey() !== before) build();
     paint(); schedFill(); schedPaint();
     return true;
   });
@@ -44919,14 +45765,16 @@ window.arqSchedSave = async function arqSchedSave() {
   try {
     const r = await fetch(SCHED_ROUTE, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ tz: tz.value.trim(), times: ti.value }),
+      body: JSON.stringify({ pool: schedEditPool || undefined, tz: tz.value.trim(), times: ti.value }),
     });
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || !j.ok) throw new Error((j && j.error) || `HTTP ${r.status}`);
     schedFormDirty = false;
     schedApply(j);
     build(); paint(); schedFill(); schedPaint();
-    schedMsg('text-emerald', 'записано · ' + schedMiniTitle());
+    schedMsg('text-emerald', 'записано · ' + (schedEditPool
+      ? `${schedEditPool}: ${schedFor(schedEditPool).tz} ${schedFor(schedEditPool).times.join(', ')}`
+      : schedMiniTitle()));
   } catch (e) {
     // Поля не трогаем: владелец видит, что именно не приняли, и правит текст, а не набирает заново.
     schedMsg('text-crimson', 'не записано: ' + e.message);
@@ -44944,7 +45792,7 @@ const TZ_SUGGEST = ['Asia/Shanghai', 'Europe/Moscow', 'UTC', 'Asia/Tokyo', 'Asia
 /* Разбор строки времён — та же грамматика, что у сервера (`arScheduleParseTimes`).
    Нужен только для ПРЕДПРОСМОТРА: что именно уйдёт на диск, видно до нажатия, а
    не после отказа. Пишет всё равно сервер — он же и валидирует. */
-function schedParseInput(raw) {
+function schedParseInput(raw, min = 2) {
   const out = [];
   for (const item of String(raw == null ? '' : raw).split(/[,;\s]+/)) {
     const s = item.trim();
@@ -44956,7 +45804,7 @@ function schedParseInput(raw) {
     const t = `${pad(hh)}:${pad(mi)}`;
     if (!out.includes(t)) out.push(t);
   }
-  if (out.length < 2) return { ok: false, error: 'нужно минимум две партии' };
+  if (out.length < min) return { ok: false, error: min >= 2 ? 'нужно минимум две партии' : 'нужно хотя бы одно время' };
   if (out.length > 8) return { ok: false, error: 'больше восьми партий не поддерживается' };
   out.sort();
   return { ok: true, times: out };
@@ -44969,7 +45817,7 @@ function schedPreview() {
   const out = document.getElementById('arq-sched-line2');
   if (!ti || !tz || !out) return;
   const zone = tz.value.trim();
-  const p = schedParseInput(ti.value);
+  const p = schedParseInput(ti.value, schedEditPool ? 1 : 2);
   const bad = msg => { out.className = 'text-xs text-amber mb-2'; out.textContent = msg; };
   if (!p.ok) return bad(p.error === 'нужно минимум две партии' ? 'нужно минимум две партии в сутки' : p.error);
   let ref;
@@ -44984,10 +45832,10 @@ function schedPreview() {
 }
 
 function init() {
-  const mini = document.querySelector('#arq-mini .arq-host');
-  const big  = document.querySelector('#arq-big .arq-host');
-  if (mini) hosts.push({ el: mini, mini: true });
-  if (big)  hosts.push({ el: big,  mini: false });
+  // Один циферблат - большой на вкладке. В сайдбаре остаётся строка со знаком
+  // полосы и отсчётом: второй такой же круг только дублировал картинку.
+  const big = document.querySelector('#arq-big .arq-host');
+  if (big) hosts.push({ el: big, mini: false });
   if (!hosts.length) return;
   const mrow = document.getElementById('arq-mini');
   if (mrow) mrow.classList.remove('hidden');
@@ -45002,7 +45850,7 @@ function init() {
   start();
   /* После build(): stPaint красит уже существующие узлы, а build() их пересобирает. */
   stSync();
-  arqView(VIEW);
+  stChipsPaint();
   arqSndBtn();      // 🔔 рисуем сразу: до первого жеста он честно говорит, что молчит
   /* Расписание: подписи и метки зависят от него, а до первого ответа ручки работают
      встроенные 10:00/19:00 Пекина — циферблат не пустует ни секунды. Опрос редкий:
@@ -45013,11 +45861,17 @@ function init() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', () => { schedFormDirty = true; schedPreview(); });
   }
+  const schedPoolSel = document.getElementById('arq-sched-pool');
+  if (schedPoolSel) schedPoolSel.addEventListener('change', () => {
+    schedEditPool = schedPoolSel.value;
+    schedFormDirty = false;
+    schedFill(); schedPreview();
+  });
   schedFill();
   schedPaint();
   schedFetch();
   setInterval(schedFetch, 120000);
-  /* Опрос обеих полос: фолбэк случается посреди дня, и часы обязаны покраснеть сами,
+  /* Опрос всех полос: фолбэк случается посреди дня, и часы обязаны покраснеть сами,
      без F5 и без клика. 30 с — вкладка открыта сутками, а ручка читает локальный файл,
      так что частить незачем. Возврат на вкладку опрашиваем сразу: пока её не было,
      состояние могло поменяться дважды. */
@@ -45233,6 +46087,7 @@ setTimeout(() => { ladProbeRole(); }, 2500);
 <!-- Вкладка «Модели» — весь её код (window.MODELS) снаружи. Подключаем последним, после
      всех инлайновых блоков: скрипт рассчитывает, что showTab и DOM панели уже есть. -->
 <script src="/vendor/models-tab.js"></script>
+<script src="/vendor/a6api-tab.js"></script>
 
 <!-- Вкладка «MEDIA» — тем же приёмом: весь код (window.MEDIA) во внешней паре файлов.
      Разбор — docs/MEDIA-TAB-SEAM.md, регресс — tools/check-media.js. -->

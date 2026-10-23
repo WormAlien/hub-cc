@@ -48,7 +48,7 @@ const SHAPES = {
     // when your referrals add funds». Пачка пустых регистраций реф-бонуса не даёт.
     getunikey:   { host: 'www.getunikey.ai',  path: '/sign-up?aff=',  label: 'UniKey' },
     aikeysapi:   { host: 'www.aikeysapi.com', path: '/register?aff=', label: 'AIKeysAPI' },
-    aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
+    aipm:        { host: 'emtf.aipm9527.site', path: '/sign-up?aff=',  label: 'AIPM' },
     // WisdomSatan (2026-09-10) — New API v0.11.5, но форма `/register?aff=`, как у
     // AgentRouter, а НЕ `/sign-up?aff=` восьми соседей. Не догадка: по ссылке этой формы
     // заведён живой аккаунт, и в его `/api/user/self` приехал `inviter_id` владельца —

@@ -1,6 +1,6 @@
 {
-  "opus": "gpt-6-astra",
+  "opus": "gpt-6.1-sol",
   "sonnet": "gpt-6-astra",
   "haiku": "gpt-6-astra",
-  "gpt": "gpt-6-astra"
+  "gpt": ""
 }

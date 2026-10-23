@@ -1,6 +1,6 @@
 {
-  "default": "anthropic/claude-opus-5-5",
-  "opus": "anthropic/claude-opus-5-5",
-  "sonnet": "anthropic/claude-opus-5-5",
-  "haiku": "anthropic/claude-opus-5-5"
+  "default": "deepseek/deepseek-v4.1-flash",
+  "opus": "deepseek/deepseek-v4.1-flash",
+  "sonnet": "deepseek/deepseek-v4.1-flash",
+  "haiku": "deepseek/deepseek-v4.1-flash"
 }

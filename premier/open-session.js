@@ -66,7 +66,10 @@ async function main() {
             const storage = await context.storageState();
             writeJsonSync(sessionFile, {
                 ...storage, seed: null, savedAt: new Date().toISOString(),
-                premierQuota: quota, premierUserId: String(state.user.id),
+                premierQuota: quota, premierUserId: api.accountIdentity(state),
+                // Key masks let the proxy prove which key the reading belongs to.
+                premierKeys: (Array.isArray(state.keys) ? state.keys : [])
+                    .map(k => ({ id: k && k.id != null ? String(k.id) : null, hint: k && k.hint || null })),
             });
             await capture.captureOnce(context, { quiet: true });
             if (!loggedIn) {

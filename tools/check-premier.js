@@ -35,17 +35,41 @@ test('Premier quota adapter exists', () => {
 });
 if (api) {
     const now = Date.parse('2026-10-23T01:00:00Z');
-    const state = { user: { id: 7 }, plan: { name: 'Free' }, usage: { limit: 50, used: 13, resets_at: Date.parse('2026-10-23T21:00:00Z') } };
+    // Live /api/dev/state (23.10.2026) returns user.name/email only - no user.id.
+    const state = { user: { name: 'owner', email: 'Owner@Example.com' }, plan: { name: 'Free' }, usage: { limit: 50, used: 13, resets_at: Date.parse('2026-10-23T21:00:00Z') } };
     test('server quota preserves message units and Moscow reset', () => {
         const q = api.normalizeState(state, now);
         assert.equal(q.remaining, 37); assert.equal(q.limit, 50); assert.equal(q.used, 13);
         assert.equal(q.unit, 'messages'); assert.equal(q.resetAt, '2026-10-23T21:00:00.000Z');
-        assert.equal(q.accountId, '7'); assert.equal(q.plan, 'Free');
+        assert.equal(q.accountId, 'email:owner@example.com'); assert.equal(q.plan, 'Free');
+    });
+    test('account identity falls back to id and prefers email', () => {
+        assert.equal(api.accountIdentity({ user: { id: 7 } }), 'id:7');
+        assert.equal(api.accountIdentity({ user: { id: 7, email: 'a@b.c' } }), 'email:a@b.c');
+        assert.equal(api.accountIdentity({ user: { name: 'no-id-no-email' } }), null);
+        assert.equal(api.normalizeState({ ...state, user: { id: 7 } }, now).accountId, 'id:7');
     });
     test('missing usage is unknown, not a free 50 messages', () => {
-        assert.equal(api.normalizeState({ user: { id: 7 } }, now), null);
+        assert.equal(api.normalizeState({ user: state.user }, now), null);
         assert.equal(api.normalizeState({ ...state, usage: { used: '13', limit: 50 } }, now), null);
         assert.equal(api.normalizeState({ ...state, usage: { used: 0 } }, now), null);
+    });
+    test('quota is bound only to a key listed by the same account', () => {
+        const key = 'prm_' + 'q'.repeat(43);
+        const mask = api.maskKey(key);
+        assert.equal(mask, 'prm_qqq\u2026qqqq');
+        const keys = [{ id: 'k1', hint: mask }, { id: 'k2', hint: 'prm_zzz\u2026zzzz' }];
+        const b = api.keyBindingFrom('email:owner@example.com', keys, key, now);
+        assert.equal(b.keyId, 'k1'); assert.equal(b.accountId, 'email:owner@example.com');
+        assert.equal(b.hint, mask);
+        assert.notEqual(b.fingerprint, key, 'the secret is never stored twice');
+        const q = api.normalizeState(state, now);
+        assert.equal(api.bindingMatches(b, key, q), true);
+        assert.equal(api.bindingMatches(b, 'prm_' + 'w'.repeat(43), q), false);
+        assert.equal(api.keyBindingFrom('email:owner@example.com', [{ id: 'k9', hint: 'prm_aaa\u2026aaaa' }], key), null);
+        assert.equal(api.keyBindingFrom('email:owner@example.com', [{ id: 'k1', hint: mask }, { id: 'k2', hint: mask }], key), null);
+        assert.equal(api.keyBindingFrom('email:owner@example.com', keys, 'no-key-placeholder'), null);
+        assert.equal(api.keyBindingFrom(null, keys, key), null);
     });
     test('unlimited quota differs from missing limit', () => {
         const q = api.normalizeState({ ...state, usage: { ...state.usage, limit: null } }, now);
@@ -62,6 +86,8 @@ if (api) {
         assert.equal(api.isAuthenticated({ user: null, github: true }), false);
         assert.equal(api.isAuthenticated({ user: {} }), false);
         assert.equal(api.isAuthenticated({ user: { id: 7 } }), true);
+        assert.equal(api.isAuthenticated({ user: { email: 'a@b.c' } }), true);
+        assert.equal(api.isAuthenticated({ user: { name: 'only-name' } }), false);
     });
     test('quota failures preserve key status and old reading without USD', () => {
         const q = api.normalizeState(state, now);
@@ -70,6 +96,15 @@ if (api) {
         assert.equal(row.status, 'live'); assert.equal(row.quota, q);
         assert.equal(row.quotaError, 'login required'); assert.equal(row.authRequired, true);
         assert.equal(row.balance, undefined); assert.equal(row.granted, undefined);
+    });
+    test('an unproven reading is dropped instead of kept as a number', () => {
+        const key = 'prm_' + 'q'.repeat(43);
+        const q = api.normalizeState(state, now);
+        const b = api.keyBindingFrom(q.accountId, [{ id: 'k1', hint: api.maskKey(key) }], key, now);
+        const row = { status: 'live', api_key: key, quota: q, quotaBinding: b };
+        api.applyResult(row, { unverified: true, error: 'владелец квоты не подтверждён' }, now + 1000);
+        assert.equal(row.quota, undefined); assert.equal(row.quotaBinding, undefined);
+        assert.match(row.quotaError, /владелец/); assert.equal(row.status, 'live');
     });
     test('applying zero quota does not kill a working key', () => {
         const row = { status: 'live' };
@@ -178,12 +213,45 @@ if (session) testAsync('session import scopes cookies and localStorage to their 
 });
 if (api) {
     testAsync('quota request sends cookies only to the fixed destination', async () => {
-        const r = await api.fetchQuota('sid=owned', { fetchImpl: async (url, opts) => {
+        const key = 'prm_' + 'z'.repeat(43);
+        const r = await api.fetchQuota('sid=owned', { apiKey: key, fetchImpl: async (url, opts) => {
             assert.equal(url, 'https://ide.kgpix.bond/api/dev/state');
             assert.equal(opts.headers.Cookie, 'sid=owned'); assert.equal(opts.redirect, 'error');
-            return { status: 200, ok: true, json: async () => ({ user: { id: 8 }, usage: { used: 1, limit: 50 } }) };
+            return { status: 200, ok: true, json: async () => ({
+                user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],
+                usage: { used: 1, limit: 50 },
+            }) };
         }});
         assert.equal(r.quota.remaining, 49);
+        assert.equal(r.binding.keyId, 'k1');
+    });
+    testAsync('a key missing from the account list gives unknown, not its quota', async () => {
+        const key = 'prm_' + 'z'.repeat(43);
+        const r = await api.fetchQuota('sid=owned', { apiKey: key, fetchImpl: async () => ({
+            status: 200, ok: true, json: async () => ({
+                user: { email: 'a@b.c' }, keys: [{ id: 'other', hint: 'prm_aaa\u2026aaaa' }],
+                usage: { used: 1, limit: 50 },
+            }) }),
+        });
+        assert.equal(r.quota, undefined); assert.equal(r.unverified, true);
+        assert.match(r.error, /владелец/);
+    });
+    testAsync('a state without a live account shape is not guessed', async () => {
+        const key = 'prm_' + 'z'.repeat(43);
+        const r = await api.fetchQuota('sid=owned', { apiKey: key, fetchImpl: async () => ({
+            status: 200, ok: true, json: async () => ({ user: { name: 'no-id' }, keys: [{ id: 'k1', hint: api.maskKey(key) }], usage: { used: 1, limit: 50 } }),
+        }) });
+        assert.equal(r.quota, undefined); assert.equal(r.unverified, true);
+    });
+    testAsync('a replaced key drops the old reading before any request', async () => {
+        const oldKey = 'prm_' + 'a'.repeat(43), newKey = 'prm_' + 'b'.repeat(43);
+        const at = Date.parse('2026-10-23T01:00:00Z');
+        const q = api.normalizeState({ user: { email: 'old@example.com' }, usage: { used: 1, limit: 50 } }, at);
+        const b = api.keyBindingFrom(q.accountId, [{ id: 'k1', hint: api.maskKey(oldKey) }], oldKey, at);
+        const row = { id: 'x!', api_key: newKey, quota: q, quotaBinding: b };
+        const r = await api.readQuota(row, {});
+        assert.equal(row.quota, undefined); assert.equal(row.quotaBinding, undefined);
+        assert.equal(r.authRequired, true);
     });
     for (const code of [401, 403, 429, 503]) testAsync('quota HTTP ' + code + ' never declares an API key dead', async () => {
         const r = await api.fetchQuota('sid=owned', { fetchImpl: async () => ({ status: code, ok: false }) });

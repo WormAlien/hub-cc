@@ -18388,9 +18388,12 @@ async function handlePmSessions(req, res) {
         let changed = false;
         for (const s of sessions) {
             const snap = premierApi.readSnapshot(s), q = snap && snap.premierQuota;
-            if (premierApi.quotaFresh(q) && (!s.quota || Date.parse(q.checkedAt) > Date.parse(s.quota.checkedAt))) {
+            // Same rule as a manual check: the account's own key list must contain this key.
+            const binding = snap && premierApi.keyBindingFrom(snap.premierUserId, snap.premierKeys, s.api_key);
+            if (!binding || !premierApi.quotaFresh(q) || binding.accountId !== q.accountId) continue;
+            if (!s.quota || Date.parse(q.checkedAt) > Date.parse(s.quota.checkedAt)) {
                 if (s.quota && s.quota.accountId !== q.accountId) continue;
-                pmApplyBalance(s, { quota: q }); changed = true;
+                pmApplyBalance(s, { quota: q, binding }); changed = true;
             }
         }
         if (changed) pmSave(sessions);
@@ -21596,7 +21599,13 @@ async function handlePmSetKey(req, res) {
             return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
         }
         const wasActive = !!target.active;
+        const prevKey = target.api_key;
         target.api_key = newKey;
+        // Квота и её привязка принадлежат прежнему ключу: новый ключ их не наследует.
+        if (prevKey !== newKey) {
+            delete target.quota; delete target.quotaBinding;
+            delete target.quotaError; delete target.quotaCheckedAt; delete target.authRequired;
+        }
         // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
         if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
         if (wasActive) {

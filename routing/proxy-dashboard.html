@@ -19825,7 +19825,9 @@ function pmBalanceCell(s, kJ) {
   const stamp = q && q.checkedAt ? new Date(q.checkedAt).toLocaleString('ru-RU') : '';
   if (s.quotaError || !pmQuotaFresh(q)) {
     const detail = s.quotaError || (q ? 'Данные устарели, обнови квоту' : 'Войди в браузере аккаунта');
-    return `<span class="inline-flex items-center text-xs text-muted" title="${esc(detail + (stamp ? ' · Проверено: ' + stamp : ''))}">${q ? '⚠ данные устарели' : 'остаток неизвестен'}${check}</span>`;
+    const unproven = /владелец/.test(s.quotaError || '');
+    const unknownLabel = unproven ? 'ключ не подтверждён' : (q ? '⚠ данные устарели' : 'остаток неизвестен');
+    return `<span class="inline-flex items-center text-xs text-muted" title="${esc(detail + (stamp ? ' · Проверено: ' + stamp : ''))}">${unknownLabel}${check}</span>`;
   }
   const reset = q.resetAt ? 'Сброс: ' + new Date(q.resetAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' МСК' : 'Время сброса не сообщено';
   const label = q.unlimited ? 'Без лимита' : `${q.remaining} / ${q.limit} сообщений`;

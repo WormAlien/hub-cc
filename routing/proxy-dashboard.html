@@ -12858,6 +12858,22 @@ function withCtxSuffix(id, gw) {
   return s;
 }
 
+// Бейдж «чем адресовать шлюз» для карточек маппинга. Один и тот же текст уходит и в
+// бейдж, и в буфер (copyToClipboard получает ту же переменную `cmd`): разойтись им
+// нельзя, иначе владелец видит `/model premier[1m]`, а вставляет другое.
+function gwCmdBadge(gw) {
+  const cmd = '/model ' + withCtxSuffix(gw, gw);
+  const label = cmd + ' скопирована';
+  const j = JSON.stringify(cmd).replace(/'/g, '&#39;');
+  const lj = JSON.stringify(label).replace(/'/g, '&#39;');
+  return `<span class="inline-flex items-center gap-1.5">
+      <code onclick='copyToClipboard(${j}, ${lj})' title="Клик = копировать ${esc(cmd)}"
+        class="cursor-pointer text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono hover:border-line">${esc(cmd)}</code>
+      <button onclick='copyToClipboard(${j}, ${lj})'
+        class="text-[11px] px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button>
+    </span>`;
+}
+
 async function copyModelCmd(id, gw) {
   // Копируем ВСЕГДА с суффиксом: юзер вставляет `/model claude-opus-5` без него и
   // молча получает 200k вместо 1M (реальная жалоба, 2026-08-17).
@@ -15693,7 +15709,10 @@ async function renderArModelMap() {
     return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}${hint ? ` <span class="text-faint/60">${hint}</span>` : ''}</span>
       <select id="ar-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
   };
-  $('ar-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+  $('ar-modelmap-sel').innerHTML = `<div class="w-full flex items-center gap-2 flex-wrap mb-1">
+    <span class="text-[10px] text-faint">адрес шлюза в /model:</span>${gwCmdBadge('agentrouter')}
+  </div>
+  <div class="flex gap-2 items-end flex-wrap">
     ${sel('opus')}${sel('sonnet')}${sel('haiku')}${sel('gpt', '(gpt-* → цель)')}
     <button onclick='arSaveModelMap()' class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">💾 Сохранить</button>
   </div>`;
@@ -20098,7 +20117,10 @@ async function renderPmModelMap() {
     return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
       <select id="pm-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
   };
-  $('pm-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+  $('pm-modelmap-sel').innerHTML = `<div class="w-full flex items-center gap-2 flex-wrap mb-1">
+    <span class="text-[10px] text-faint">адрес шлюза в /model:</span>${gwCmdBadge('premier')}
+  </div>
+  <div class="flex gap-2 items-end flex-wrap">
     ${sel('opus')}${sel('sonnet')}${sel('haiku')}
     <button onclick='pmSaveModelMap()' class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💾 Сохранить</button>
   </div>`;

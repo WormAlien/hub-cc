@@ -208,15 +208,25 @@ function poolDrop(file, markerFile, opts = {}) {
     const before = readTiers(file);
     // Бэкап — побайтово, ДО правки: восстановление обязано вернуть ровно то, что было,
     // а не пересобранный `JSON.stringify` (порядок ключей, отступы, хвостовой \n).
+    // `skipBackup` нужен, когда карт ДВЕ: бэкапы обеих снимаются заранее, до первой
+    // записи. Иначе зеркало тир-карт (`mirrorTierMapPair`) успевает переписать парную
+    // карту, и её бэкап фиксирует уже изменённое состояние - возврат вернёт не то.
     let backupFiles = [];
-    try {
-        const buf = fs.readFileSync(file);
-        fs.writeFileSync(bakFile, buf);
+    if (opts.skipBackup) {
+        if (!fs.existsSync(bakFile)) {
+            return { ok: false, changed: false, tiers: readTiers(file), error: 'бэкап не создан' };
+        }
         backupFiles = [bakFile];
-    } catch (e) {
-        // Карты нет (первый запуск) — опускать нечего. Молчаливой записи без бэкапа не
-        // делаем: без исходника кнопка «вернуть» не работает, а карта была бы испорчена.
-        return { ok: false, changed: false, tiers: before, error: `бэкап не создан: ${e.message}` };
+    } else {
+        try {
+            const buf = fs.readFileSync(file);
+            fs.writeFileSync(bakFile, buf);
+            backupFiles = [bakFile];
+        } catch (e) {
+            // Карты нет (первый запуск) — опускать нечего. Молчаливой записи без бэкапа не
+            // делаем: без исходника кнопка «вернуть» не работает, а карта была бы испорчена.
+            return { ok: false, changed: false, tiers: before, error: `бэкап не создан: ${e.message}` };
+        }
     }
 
     const patch = {};

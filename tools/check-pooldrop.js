@@ -57,6 +57,9 @@ const probeLib = require('../routing/lib/ar-quota-probe');
 const sandbox = new Function('fs', 'path', 'poolDropLib', 'logLine', '__dirname', 'CC_MODEL_PREFIX',
     'arQuotaPoolForModel', 'arQuotaPut', 'buildArQuotaCache', 'AR_ACTIVE_KEY_FILE', `
     ${extract('tierMapFile')}
+    const TIER_MIRROR_TIERS = ['opus', 'sonnet', 'haiku'];
+    let _tierMirrorBusy = false;
+    ${extract('mirrorTierMapPair')}
     ${extract('writeTierMap')}
     ${extract('resolveProviderKey')}
     ${extract('poolDropTiers')}
@@ -272,7 +275,7 @@ check('потерян один бэкап из двух — ошибка, мар
     assert.strictEqual(r.ok, false, 'полу-возврат не должен выглядеть успехом');
     assert.ok(/бэкап не найден/.test(String(r.error || '')), `ответ не про потерянный бэкап: ${r.error}`);
     assert.ok(poolDropLib.readMarker(marker), 'маркер снят при частичном возврате — карта брошена навсегда');
-    assert.deepStrictEqual(read(routes), { default: FB, opus: FB, haiku: 'glm-5.3' },
+    assert.deepStrictEqual(read(routes), { default: FB, opus: FB, haiku: 'glm-5.3', sonnet: 'gpt-5.6-sol' },
         'routes-карта уехала не туда: ожидалась опущенной (её бэкап потерян)');
     // Бэкап положили на место руками — возврат обязан доиграться, а не залипнуть.
     fs.writeFileSync(routesBak, lostBak);

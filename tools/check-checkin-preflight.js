@@ -82,10 +82,19 @@ check(!/\/api\/oauth\/state/.test(main.slice(0, main.indexOf('await doCheckinLog
 // ── 3. что делает отказ ──
 console.log('\n3. отказ предпроверки не гасит сессию и говорит об этом');
 check(/process\.exit\(8\)/.test(SESS), 'молчащий край → код 8');
-check(/process\.exit\(9\)/.test(SESS), 'мёртвая GitHub-сессия → код 9');
+// 🪤 Переписано 12.10.2026 с дословного `process.exit(9)` на «код достижим в ветке».
+// С автологином выход стал выражением (`… ? 11 : 9`), и точная строка исчезла, хотя
+// поведение то же. Дословное утверждение проверяло бы формулировку, а не смысл - ровно
+// тот класс, из-за которого тест уже однажды пропускал падающий код (см. вики
+// «AgentRouter — вкладка аккаунтов», § «Тест пинил ровно ту строку, которая падала»).
+const exitCodes = (text) => [...text.matchAll(/process\.exit\(([^)]*)\)/g)]
+    .flatMap(m => (m[1].match(/\d+/g) || []).map(Number));
+check(exitCodes(SESS).includes(9), 'мёртвая GitHub-сессия → код 9');
+check(exitCodes(SESS).includes(11), 'автологин упёрся в стенку → код 11 (человеческий вход)');
 {
     const beforeLogout = main.slice(0, main.indexOf('await doCheckinLogout(context, page)'));
-    check(/process\.exit\(8\)/.test(beforeLogout) && /process\.exit\(9\)/.test(beforeLogout),
+    const codes = exitCodes(beforeLogout);
+    check(codes.includes(8) && codes.includes(9),
         'оба отказа случаются ДО разлогина');
     check(/НЕ начат/.test(beforeLogout) && /цела/.test(beforeLogout),
         'в тексте сказано: прогон не начат, сессия аккаунта цела');

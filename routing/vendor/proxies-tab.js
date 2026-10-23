@@ -661,7 +661,7 @@
   // Источник прокси: что пул вообще берёт в работу. Это ВЫБОР человека, а не догадка пула -
   // решение владельца 20.09: свой пул уже есть, и скрапер больше не обязателен.
   function sourceSection(d) {
-    const cur = d.source || 'auto';
+    const cur = d.source || 'own';   // дефолт - свой пул, не `auto`: см. proxy-pool.js § 301
     const all = d.sources || ['auto', 'own', 'scraped', 'direct'];
     const name = {
       auto: 'свой, потом скрапер',

@@ -1,0 +1,240 @@
+'use strict';
+// Premier: regressions use the real dashboard helpers without live requests.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ROOT = path.join(__dirname, '..');
+let passed = 0, failed = 0;
+function test(name, fn) {
+    try { fn(); console.log('OK ' + name); passed++; }
+    catch (e) { console.error('FAIL ' + name + ': ' + e.message); failed++; }
+}
+function source(file) { return fs.readFileSync(path.join(ROOT, file), 'utf8'); }
+function keyCheck(file) {
+    const match = source(file).match(/function isRealKey\(k\)\s*\{[\s\S]*?;\s*\}/);
+    assert.ok(match, 'isRealKey exists');
+    return vm.runInNewContext('(' + match[0] + ')');
+}
+for (const file of ['routing/transparent-proxy.js', 'routing/proxy-dashboard.html']) {
+    test(file + ' accepts Premier keys', () => {
+        const check = keyCheck(file);
+        assert.equal(check('prm_' + 'A'.repeat(43)), true);
+        assert.equal(check('no-key-placeholder'), false);
+        assert.equal(check('prm_'), false);
+        assert.equal(check('prm_' + 'A'.repeat(43) + '!'), false);
+        assert.equal(check('sk-test'), true);
+        assert.equal(check('vani_' + 'b'.repeat(64)), true);
+    });
+}
+const apiFile = path.join(ROOT, 'routing/lib/premier-api.js');
+let api = null;
+test('Premier quota adapter exists', () => {
+    assert.ok(fs.existsSync(apiFile), 'missing premier-api.js');
+    api = require(apiFile);
+});
+if (api) {
+    const now = Date.parse('2026-10-23T01:00:00Z');
+    const state = { user: { id: 7 }, plan: { name: 'Free' }, usage: { limit: 50, used: 13, resets_at: Date.parse('2026-10-23T21:00:00Z') } };
+    test('server quota preserves message units and Moscow reset', () => {
+        const q = api.normalizeState(state, now);
+        assert.equal(q.remaining, 37); assert.equal(q.limit, 50); assert.equal(q.used, 13);
+        assert.equal(q.unit, 'messages'); assert.equal(q.resetAt, '2026-10-23T21:00:00.000Z');
+        assert.equal(q.accountId, '7'); assert.equal(q.plan, 'Free');
+    });
+    test('missing usage is unknown, not a free 50 messages', () => {
+        assert.equal(api.normalizeState({ user: { id: 7 } }, now), null);
+        assert.equal(api.normalizeState({ ...state, usage: { used: '13', limit: 50 } }, now), null);
+        assert.equal(api.normalizeState({ ...state, usage: { used: 0 } }, now), null);
+    });
+    test('unlimited quota differs from missing limit', () => {
+        const q = api.normalizeState({ ...state, usage: { ...state.usage, limit: null } }, now);
+        assert.equal(q.limit, null); assert.equal(q.remaining, null); assert.equal(q.unlimited, true);
+    });
+    test('zero messages is valid and expires at the server reset', () => {
+        const q = api.normalizeState({ ...state, usage: { ...state.usage, used: 55 } }, now);
+        assert.equal(q.remaining, 0);
+        assert.equal(api.quotaFresh(q, now + 1000), true);
+        assert.equal(api.quotaFresh(q, Date.parse(q.resetAt)), false);
+        assert.equal(api.quotaFresh(q, now + 10 * 60 * 1000), false);
+    });
+    test('GitHub-only state cannot prove Premier login', () => {
+        assert.equal(api.isAuthenticated({ user: null, github: true }), false);
+        assert.equal(api.isAuthenticated({ user: {} }), false);
+        assert.equal(api.isAuthenticated({ user: { id: 7 } }), true);
+    });
+    test('quota failures preserve key status and old reading without USD', () => {
+        const q = api.normalizeState(state, now);
+        const row = { status: 'live', quota: q, balance: 37, granted: 50 };
+        api.applyResult(row, { error: 'login required', authRequired: true }, now + 1000);
+        assert.equal(row.status, 'live'); assert.equal(row.quota, q);
+        assert.equal(row.quotaError, 'login required'); assert.equal(row.authRequired, true);
+        assert.equal(row.balance, undefined); assert.equal(row.granted, undefined);
+    });
+    test('applying zero quota does not kill a working key', () => {
+        const row = { status: 'live' };
+        const q = api.normalizeState({ ...state, usage: { ...state.usage, used: 50 } }, now);
+        api.applyResult(row, { quota: q }, now);
+        assert.equal(row.status, 'live'); assert.equal(row.quota.remaining, 0);
+    });
+    test('cookie header excludes Github and lookalike domains', () => {
+        const cookie = api.siteCookieHeader([
+            { domain: '.ide.kgpix.bond', name: 'sid', value: 'yes' },
+            { domain: 'github.com', name: 'user_session', value: 'no' },
+            { domain: 'ide.kgpix.bond.attacker.test', name: 'sid', value: 'no' },
+            { domain: 'ide.kgpix.bond', name: 'old', value: 'no', expires: now / 1000 - 1 },
+        ], now);
+        assert.equal(cookie, 'sid=yes');
+    });
+}
+test('Premier message billing disables hedged duplicate requests', () => {
+    const match = source('routing/keepalive-proxy.js').match(/const FLAT_RATE_HOSTS = new Set\((\[[^;]+\])\);/);
+    assert.ok(match);
+    assert.ok(vm.runInNewContext(match[1]).includes('ide.kgpix.bond'));
+});
+test('Premier is excluded from USD totals in both summaries', () => {
+    const front = source('routing/proxy-dashboard.html').split('\n').find(l => l.includes("id: 'premier'") && l.includes('stateKey:'));
+    assert.ok(front && front.includes('noMoney: true'));
+    const row = require('../internal/hub-balance').POOLS.find(p => p.id === 'pm');
+    assert.ok(row && row.noMoney);
+});
+test('message meters distinguish unknown and exhausted quotas', () => {
+    const html = source('routing/proxy-dashboard.html');
+    const start = html.indexOf('function pmQuotaFresh('), end = html.indexOf('\nasync function loadPmSessions', start);
+    assert.ok(start >= 0 && end > start, 'Premier quota UI missing');
+    const sandbox = { Date, isRealKey: keyCheck('routing/proxy-dashboard.html') };
+    vm.createContext(sandbox); vm.runInContext(html.slice(start, end), sandbox);
+    const key = 'prm_' + 'x'.repeat(43), checkedAt = new Date().toISOString();
+    const quota = { unit: 'messages', accountId: '7', checkedAt, limit: 50, used: 50, remaining: 0, resetAt: new Date(Date.now() + 3600000).toISOString() };
+    let st = sandbox.pmPoolStats([{ api_key: key, status: 'live' }]);
+    assert.equal(st.known, 0); assert.equal(st.unknown, 1); assert.equal(st.remPct, null);
+    st = sandbox.pmPoolStats([{ api_key: key, status: 'live', quota }]);
+    assert.equal(st.remaining, 0); assert.equal(st.limit, 50); assert.equal(st.remPct, 0);
+    st = sandbox.pmPoolStats([{ api_key: key, status: 'live', quota }, { api_key: key + 'y', status: 'live', quota }]);
+    assert.equal(st.limit, 50, 'two keys of one account must not double its quota');
+    assert.equal(sandbox.pmQuotaFresh({ ...quota, resetAt: '2026-01-01T00:00:00Z' }), false);
+});
+test('daily message exhaustion is not a retryable 429', () => {
+    const code = source('routing/keepalive-proxy.js');
+    const rules = code.slice(code.indexOf('const RETRY_NO ='), code.indexOf('// ── ПУЛ НАЛИВКИ'));
+    const start = code.indexOf('function isTransientBody('), end = code.indexOf('\n}\n', start) + 2;
+    const sandbox = { structuredRetry: () => null, retryAfterSec: () => null, log: () => {} };
+    vm.createContext(sandbox); vm.runInContext(rules + '\n' + code.slice(start, end), sandbox);
+    assert.equal(sandbox.isTransientBody(429, Buffer.from('{"error":{"message":"Daily message limit reached; it resets at 00:00 Moscow time."}}')), false);
+    assert.equal(sandbox.isTransientBody(429, Buffer.from('Too many requests, retry later')), true);
+});
+test('message quota sorting does not depend on dollar balances', () => {
+    const html = source('routing/proxy-dashboard.html');
+    const marker = 'function pmQuotaCompare(';
+    const start = html.indexOf(marker), end = html.indexOf('\n}\n', start) + 2;
+    assert.ok(start >= 0, 'message quota comparator missing');
+    const box = { pmQuotaFresh: q => !!q };
+    vm.createContext(box); vm.runInContext(html.slice(start, end), box);
+    const a = { quota: { remaining: 0 } }, b = { quota: { remaining: 30 } };
+    assert.ok(box.pmQuotaCompare(a, b, 'bal-asc') < 0);
+    assert.ok(box.pmQuotaCompare(a, b, 'bal-desc') > 0);
+    assert.ok(box.pmQuotaCompare({}, b, 'bal-asc') > 0);
+});
+test('gateway generator anchors message billing to the right registry', () => {
+    const spec = JSON.parse(source('tools/gateways.spec.json'));
+    assert.equal(spec.points.find(p => p.id === '3.2').within, 'const FLAT_RATE_HOSTS');
+    assert.equal(spec.inserts['3.2'].mode, 'inline');
+});
+test('prefix routing has a default actual model', () => {
+    const map = JSON.parse(source('routing/premier-routes-modelmap.json'));
+    assert.equal(map.default, 'qwen3.8-max-0902');
+});
+const asyncTests = [];
+function testAsync(name, fn) { asyncTests.push({ name, fn }); }
+let session = null;
+test('Premier browser module can be loaded without launching a browser', () => {
+    const file = path.join(ROOT, 'premier/open-session.js');
+    assert.ok(fs.existsSync(file), 'missing open-session.js');
+    session = require(file);
+});
+if (session) testAsync('session import scopes cookies and localStorage to their own origin', async () => {
+    let cookies = [], script = null, arg = null;
+    const context = {
+        addCookies: async list => { cookies = list; },
+        addInitScript: async (fn, payload) => { script = fn; arg = payload; },
+    };
+    await session.applyImportedSession(context, {
+        seed: 'github', cookies: [
+            { domain: 'github.com', name: 'user_session', value: 'owned-session', path: '/', secure: true, httpOnly: true },
+            { domain: 'other.test', name: 'secret', value: 'no', path: '/' },
+        ], origins: [
+            { origin: 'https://github.com', localStorage: [{ name: 'owned', value: 'yes' }] },
+            { origin: 'https://other.test', localStorage: [{ name: 'secret', value: 'no' }] },
+        ],
+    });
+    assert.equal(cookies.length, 1); assert.equal(cookies[0].httpOnly, true);
+    const run = origin => {
+        const stored = {};
+        vm.runInNewContext('(' + script.toString() + ')(payload)', { payload: arg, location: { origin }, localStorage: { setItem: (k, v) => { stored[k] = v; } } });
+        return stored;
+    };
+    assert.deepEqual(run('https://github.com'), { owned: 'yes' });
+    assert.deepEqual(run('https://ide.kgpix.bond'), {});
+});
+if (api) {
+    testAsync('quota request sends cookies only to the fixed destination', async () => {
+        const r = await api.fetchQuota('sid=owned', { fetchImpl: async (url, opts) => {
+            assert.equal(url, 'https://ide.kgpix.bond/api/dev/state');
+            assert.equal(opts.headers.Cookie, 'sid=owned'); assert.equal(opts.redirect, 'error');
+            return { status: 200, ok: true, json: async () => ({ user: { id: 8 }, usage: { used: 1, limit: 50 } }) };
+        }});
+        assert.equal(r.quota.remaining, 49);
+    });
+    for (const code of [401, 403, 429, 503]) testAsync('quota HTTP ' + code + ' never declares an API key dead', async () => {
+        const r = await api.fetchQuota('sid=owned', { fetchImpl: async () => ({ status: code, ok: false }) });
+        assert.equal(r.status, undefined); assert.equal(!!r.authRequired, code === 401);
+        assert.ok(r.error);
+    });
+}
+function backendFunction(name) {
+    const code = source('routing/transparent-proxy.js');
+    const start = code.search(new RegExp('^(?:async )?function ' + name + '\\(', 'm'));
+    const end = code.indexOf('\n}', start) + 2;
+    assert.ok(start >= 0 && end > start, 'missing handler ' + name);
+    return code.slice(start, end);
+}
+testAsync('quota refresh preserves accounts added while the request was pending', async () => {
+    const key = 'prm_' + 'a'.repeat(43);
+    let store = [{ id: 'pm_first', api_key: key, status: 'live' }];
+    const box = {
+        URL, LISTEN_PORT: 8200,
+        pmLoad: () => JSON.parse(JSON.stringify(store)), pmSave: list => { store = list; },
+        pmBalance: async () => {
+            store.push({ id: 'pm_added', api_key: 'prm_' + 'b'.repeat(43) });
+            return { quota: { remaining: 37 } };
+        },
+        pmApplyBalance: (row, result) => { row.quota = result.quota; },
+        jsonRes: () => {},
+    };
+    vm.createContext(box); vm.runInContext(backendFunction('handlePmBalance'), box);
+    await box.handlePmBalance({ url: '/__switch/api/pm/balance?api_key=' + key }, {});
+    assert.equal(store.length, 2, 'refresh must not save the stale pre-request pool');
+    assert.equal(store[0].quota.remaining, 37);
+});
+testAsync('bulk refresh also preserves concurrently added accounts', async () => {
+    let store = [{ id: 'pm_first', api_key: 'prm_' + 'a'.repeat(43), status: 'live' }];
+    const box = {
+        URL, LISTEN_PORT: 8200, jsonKeepalive: () => () => {},
+        pmLoad: () => JSON.parse(JSON.stringify(store)), pmSave: list => { store = list; },
+        pmBalance: async () => { store.push({ id: 'pm_added' }); return { quota: { remaining: 12 } }; },
+        pmApplyBalance: (row, result) => { row.quota = result.quota; },
+        pmReadActiveModel: () => null, jsonRes: () => {},
+    };
+    vm.createContext(box); vm.runInContext(backendFunction('handlePmSessions'), box);
+    await box.handlePmSessions({ url: '/__switch/api/pm/sessions?balance=1' }, {});
+    assert.equal(store.length, 2);
+    assert.equal(store[0].quota.remaining, 12);
+});
+(async () => {
+    for (const { name, fn } of asyncTests) {
+        try { await fn(); console.log('OK ' + name); passed++; }
+        catch (e) { console.error('FAIL ' + name + ': ' + e.message); failed++; }
+    }
+    console.log(`${passed} passed, ${failed} failed`);
+    process.exitCode = failed ? 1 : 0;
+})();

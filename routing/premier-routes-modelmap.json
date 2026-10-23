@@ -1,0 +1,6 @@
+{
+  "default": "qwen3.8-max-0902",
+  "opus": "qwen3.8-max-0902",
+  "sonnet": "qwen3.8-max-0902",
+  "haiku": "glm-5.3-flash"
+}

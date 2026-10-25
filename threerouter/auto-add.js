@@ -293,15 +293,90 @@ async function refillForm(page, addr, password) {
     } catch { return false; }
 }
 
+// Контекст окна регистрации. Вынесен из oneAccount: окно могли закрыть - поднимаем
+// заново с тем же прокси (showForm), и снимок в конце делается в новом контексте без
+// повторной капчи. Капча-токен к сессии не привязан: регистрация проходит голым HTTP
+// без кук, так что окно нужно для показа и снимка, а не для токена.
+function newSiteContext(browser) {
+    return (async () => {
+        const ctx = await browser.newContext({
+            userAgent: UA,
+            viewport: null,
+            locale: 'en-US',
+            ...(PROXY ? {
+                proxy: {
+                    server: `${PROXY.scheme}://${PROXY.hostname}:${PROXY.port}`,
+                    username: PROXY.user || undefined,
+                    password: PROXY.pass || undefined,
+                },
+            } : {}),
+        });
+        if (AGREEMENT_REV) {
+            await ctx.addInitScript(({ rev }) => {
+                try {
+                    const cur = localStorage.getItem('sub2api_login_agreement_consent');
+                    if (!cur || JSON.parse(cur).revision !== rev) {
+                        localStorage.setItem('sub2api_login_agreement_consent', JSON.stringify({ revision: rev, accepted_at: new Date().toISOString() }));
+                    }
+                } catch {}
+            }, { rev: AGREEMENT_REV });
+        }
+        return ctx;
+    })();
+}
+
+// Открыть форму регистрации: навигация, согласие, ожидание доступного поля email.
+// 🪤 Модалка условий держит поля `disabled`, и fill падает с «element is not enabled» -
+// выглядит как сломанный селектор. Ждём разблокировку и один раз снимаем ещё раз.
+async function showRegisterForm(page) {
+    await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+    await dismissAgreement(page);
+    await page.waitForSelector('input[type="email"], #email', { timeout: 30000 });
+    const enabled = await page.waitForFunction(() => {
+        const e = document.querySelector('input[type="email"], #email');
+        return !!e && !e.disabled;
+    }, null, { timeout: 15000 }).then(() => true).catch(() => false);
+    if (!enabled) await dismissAgreement(page);
+}
+
 // ───────────────────────────── один аккаунт ─────────────────────────────
 
 async function oneAccount(browser, n) {
     // Почта и панель - РАЗНЫЕ контексты: почта идёт напрямую, панель - через прокси аккаунта.
     // Регистрационный лимит площадки считается по IP: «1 аккаунт с адреса в сутки»,
     // поэтому браузер и HTTP-шаги аккаунта обязаны выходить с одного прокси.
-    const mailContext = await browser.newContext({ userAgent: UA, locale: 'en-US' });
-    const emailPage = await mailContext.newPage();
+    let mailContext = await browser.newContext({ userAgent: UA, locale: 'en-US' });
+    let emailPage = await mailContext.newPage();
     let siteContext = null;
+
+    // Окна закрывают руками: владелец убирает «лишнее» окно, пока решает капчу, или
+    // закрывает всё, когда кажется, что скрипт завис (живой случай 25.10 - падение на
+    // `page.waitForTimeout: Target page... closed` посреди createEmail). Пересоздаём
+    // молча: ящик нужен скрипту, а не человеку.
+    async function reopenMail() {
+        try {
+            emailPage = await mailContext.newPage();
+        } catch {
+            await mailContext.close().catch(() => {});
+            mailContext = await browser.newContext({ userAgent: UA, locale: 'en-US' });
+            emailPage = await mailContext.newPage();
+        }
+        return emailPage;
+    }
+    // Почтовая операция переживает закрытое окно: пересоздаём страницу и пробуем ещё раз.
+    // pollInbox ждёт письма минутами - если окно закрыли в этот момент, повтор уводит
+    // его снова в список, счётчик попыток у него свой.
+    async function mailOp(fn, ...args) {
+        if (emailPage.isClosed()) await reopenMail();
+        try { return await fn(emailPage, ...args); }
+        catch (e) {
+            if (!/Target (page|context or browser) has been closed|Target closed/i.test(String(e.message))) throw e;
+            log('окно почты закрыли - пересоздаю и пробую ещё раз');
+            await reopenMail();
+            return await fn(emailPage, ...args);
+        }
+    }
     try {
         // 1. Прокси - САМЫЙ долгий шаг (перебор + preflight), поэтому он ДО создания ящика.
         //    Адрес emailnator переиспользуемый: чем дольше он «висит» до регистрации, тем
@@ -323,36 +398,12 @@ async function oneAccount(browser, n) {
         // 🪤 24.10 08:03: капча больше НЕ стартует сама на пустой форме - на странице
         // висит кнопка `Click to start verification`, и `waitCaptchaToken` ждал ответ
         // верификации, которого без клика не будет. Жмём её сами, решает владелец.
-        siteContext = await browser.newContext({
-            userAgent: UA,
-            viewport: null,
-            locale: 'en-US',
-            ...(PROXY ? {
-                proxy: {
-                    server: `${PROXY.scheme}://${PROXY.hostname}:${PROXY.port}`,
-                    username: PROXY.user || undefined,
-                    password: PROXY.pass || undefined,
-                },
-            } : {}),
-        });
-        if (AGREEMENT_REV) {
-            await siteContext.addInitScript(({ rev }) => {
-                try {
-                    const cur = localStorage.getItem('sub2api_login_agreement_consent');
-                    if (!cur || JSON.parse(cur).revision !== rev) {
-                        localStorage.setItem('sub2api_login_agreement_consent', JSON.stringify({ revision: rev, accepted_at: new Date().toISOString() }));
-                    }
-                } catch {}
-            }, { rev: AGREEMENT_REV });
-        }
-        const sitePage = await siteContext.newPage();
+        siteContext = await newSiteContext(browser);
+        let sitePage = await siteContext.newPage();
         await sitePage.bringToFront();
 
         stage('register-form');
-        await sitePage.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' });
-        await sitePage.waitForTimeout(2000);
-        await dismissAgreement(sitePage);
-        await sitePage.waitForSelector('input[type="email"], #email', { timeout: 30000 });
+        await showRegisterForm(sitePage);
 
         stage('captcha-manual');
         const opened = await clickExactButton(sitePage, ['Click to start verification', 'Start verification', '点击开始验证', '开始验证']);
@@ -363,7 +414,7 @@ async function oneAccount(browser, n) {
         // адрес мог уйти другому. Поэтому ниже проверяем возраст и берём свежий;
         // коллизию на send-code скрипт и так лечит новым ящиком без новой капчи.
         const mailStartedAt = Date.now();
-        let mailPromise = en.createEmail(emailPage).catch(e => { log(`почта в фоне не удалась: ${e.message}`); return null; });
+        let mailPromise = mailOp(en.createEmail).catch(e => { log(`почта в фоне не удалась: ${e.message}`); return null; });
         log('✋ РЕШИ КАПЧУ В ОКНЕ (4 зелёных круга или ползунок). Дальше скрипт продолжит сам.');
         const captchaToken = await waitCaptchaToken(sitePage);
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
@@ -372,13 +423,22 @@ async function oneAccount(browser, n) {
         let addr = await mailPromise;
         if (addr && Date.now() - mailStartedAt > 120_000) {
             log('адрес emailnator висел дольше 2 мин - беру свежий');
-            addr = await en.createEmail(emailPage);
+            addr = await mailOp(en.createEmail);
         }
-        if (!addr) addr = await en.createEmail(emailPage);
+        if (!addr) addr = await mailOp(en.createEmail);
         if (!addr) throw new Error('emailnator не выдал адрес');
         log(`почта: ${addr}`);
-        let baseline = await inboxHrefs(emailPage);
+        let baseline = await mailOp(inboxHrefs);
         log(`baseline писем в ящике: ${baseline.length}`);
+        // Окно могли закрыть ПОКА решали капчу: поднимаем новое на том же прокси,
+        // форма открывается заново, капча не нужна - токен уже у нас.
+        if (sitePage.isClosed()) {
+            log('окно регистрации закрыли - поднимаю новое (капча не нужна)');
+            siteContext = await newSiteContext(browser);
+            sitePage = await siteContext.newPage();
+            await sitePage.bringToFront();
+            await showRegisterForm(sitePage);
+        }
         await sitePage.locator('input[type="email"], #email').first().fill(addr);
         await sitePage.locator('input[type="password"], #password').first().fill(password);
         await clickExactButton(sitePage, ['Continue', '继续', 'Продолжить']);
@@ -401,10 +461,10 @@ async function oneAccount(browser, n) {
                     retries++;
                     if (retries >= 4) throw new Error(`emailnator отдаёт занятые адреса подряд (${retries} попыток) - беру паузу, попробуй позже`);
                     log(`адрес ${addr} занят (${e.reason || e.message}) - беру новый ящик`);
-                    const next = await en.createEmail(emailPage);
+                    const next = await mailOp(en.createEmail);
                     if (!next) throw new Error('emailnator не выдал новый адрес');
                     addr = next;
-                    baseline = await inboxHrefs(emailPage);
+                    baseline = await mailOp(inboxHrefs);
                     log(`новый адрес: ${addr}, baseline ${baseline.length}`);
                     // 🪤 Прежде чем слать код на новый адрес - верни его в ФОРМУ окна:
                     // владелец видит там прежний (занятый) ящик и думает, что скрипт завис.
@@ -414,7 +474,7 @@ async function oneAccount(browser, n) {
                 throw e;
             }
             log('код отправлен, слежу за ящиком…');
-            code = await en.pollInbox(emailPage, addr, {
+            code = await mailOp(en.pollInbox, addr, {
                 timeout: OTP_TIMEOUT_MIN,
                 fromHint: FROM_HINT,
                 excludeHrefs: baseline,
@@ -439,10 +499,10 @@ async function oneAccount(browser, n) {
                     retries++;
                     if (retries >= 4) throw new Error(`emailnator отдаёт занятые адреса подряд (${retries} попыток) - беру паузу, попробуй позже`);
                     log(`регистрация: адрес ${addr} занят - беру новый ящик`);
-                    const next = await en.createEmail(emailPage);
+                    const next = await mailOp(en.createEmail);
                     if (!next) throw new Error('emailnator не выдал новый адрес');
                     addr = next;
-                    baseline = await inboxHrefs(emailPage);
+                    baseline = await mailOp(inboxHrefs);
                     await refillForm(sitePage, addr, password);
                     continue;
                 }

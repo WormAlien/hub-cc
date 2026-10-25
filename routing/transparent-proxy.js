@@ -23036,9 +23036,7 @@ const trAutoreg = {
     stdout: [], stderr: [], stage: null, result: null, exitCode: null, signal: null,
 };
 const TR_AUTOREG_PID = path.join(__dirname, '..', 'routing', 'threerouter-autoreg.pid');
-function trPidAlive(pid) {
-    try { process.kill(pid, 0); return true; } catch { return false; }
-}
+// trPidAlive уже объявлен рядом с keepalive-картами (блок pidAlive по образцу эталона).
 function trExternalPid() {
     try {
         const pid = Number(fs.readFileSync(TR_AUTOREG_PID, 'utf8').trim());

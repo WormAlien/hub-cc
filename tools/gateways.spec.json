@@ -2,7 +2,8 @@
   "_readme": [
     "Машиночитаемая спека вкладки шлюза ABUSE HUB. Источник — wiki/abuse-hub/ADDING-A-GATEWAY.md.",
     "Токены подстановки: %p% short (kk) · %P% UPPER (KK) · %x% Kk (для handleKk) · %full% (kktoken)",
-    "%NAME% (KKtoken) · %HOST% · %PORT% · %FOLDER% · %ICON% · %COLOR% · %REF%",
+    "%NAME% (KKtoken) · %HOST% · %PORT% · %FOLDER% · %ICON% · %COLOR% · %REF% · %KEYFILE% · %SESSIONSFILE%",
+    "%KEYFILE%/%SESSIONSFILE% по умолчанию — $PROF/.claude/<шлюз>-active-key.txt и $ROUTING/<шлюз>-sessions.json; иное задаётся в конфиге шлюза.",
     "",
     "kind (исполняются кодом; набор сверяет check-add-gateway.js с исходником):",
     "  must           — строка обязана присутствовать",
@@ -36,7 +37,8 @@
     "newapiAccount": "routing/lib/newapi-account.js",
     "hubBalance": "internal/hub-balance.js",
     "gitignore": ".gitignore",
-    "githubSession": "routing/lib/github-session.js"
+    "githubSession": "routing/lib/github-session.js",
+    "statusline": "routing/statusline-autoreger.sh"
   },
 
   "points": [
@@ -170,7 +172,10 @@
     { "id": "2.17",   "title": "Фронт: карта тег → полное имя (GitHub-usage)", "file": "frontend", "kind": "must", "expect": "%p%: '%full%'", "when": ["github"] },
     { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" },
     { "id": "2.19",   "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)", "file": "frontend", "kind": "must", "expect": "%full%: '%p%',", "within": "const CATALOG_EP" },
-    { "id": "2.20",   "title": "Фронт: возврат сохранённого порядка сортировки", "file": "frontend", "kind": "must", "expect": "'%p%',", "within": "// Выбранный порядок переживает F5", "note": "Цикл возврата сортировки перечисляет префиксы литерально: вкладка вне списка после F5 молча сбрасывает выбранный порядок." }
+    { "id": "2.20",   "title": "Фронт: возврат сохранённого порядка сортировки", "file": "frontend", "kind": "must", "expect": "'%p%',", "within": "// Выбранный порядок переживает F5", "note": "Цикл возврата сортировки перечисляет префиксы литерально: вкладка вне списка после F5 молча сбрасывает выбранный порядок." },
+    { "id": "5.1",    "title": "Статуслайн: шкала баланса", "file": "statusline", "kind": "must",
+      "expect": "elif [ \"$provider\" = \"%full%\" ] && [ -f \"%SESSIONSFILE%\" ]; then\n    gauge_from_balance_cache \"%SESSIONSFILE%\" \"%KEYFILE%\" \"%p%/balance\" 90",
+      "note": "Без этой точки вкладка живёт без баланса в статуслайне: модель и контекст есть, шкала пустая. Кеш пишет дашборд в <шлюз>-sessions.json." }
   ],
 
   "_source": "kktoken",
@@ -295,6 +300,7 @@
     "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },
     "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" },
     "2.19":  { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," },
-    "2.20":  { "mode": "inline", "ref": "'%p%',", "find": "'%p%',", "add": " '%p%'," }
+    "2.20":  { "mode": "inline", "ref": "'%p%',", "find": "'%p%',", "add": " '%p%'," },
+    "5.1":   { "ref": "elif [ \"$provider\" = \"%full%\" ] && [ -f \"$ROUTING/%full%-sessions.json\" ]; then", "span": "lines:2" }
   }
 }

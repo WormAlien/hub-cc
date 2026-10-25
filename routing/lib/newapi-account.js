@@ -243,6 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'api.threerouter.com': 'jwt',
     'ide.kgpix.bond': 'classic', // Custom site cookie; quota lives in premier-api, not New API billing.
     'api.vani.ai': 'jwt',
     'api-ru.dacall.ai': 'jwt',

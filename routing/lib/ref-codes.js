@@ -32,6 +32,10 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // ThreeRouter (2026-10-23) — форма СВОЯ: `/register?aff=`, как у AgentRouter, а не
+    // `/sign-up?aff=` эталона. Проверено живой ссылкой владельца (страница регистрации
+    // открывается, реф-код в форме). Хост — `www.`, API-хост `api.threerouter.com` регистрацию не отдаёт.
+    threerouter:     { host: 'www.threerouter.com',        path: '/register?aff=',  label: 'ThreeRouter' },
     // Artbloom (2026-09-28) — форма СВОЯ: `/signup?ref=`, без дефиса и с параметром `ref`,
     // а не `/sign-up?aff=` восьми соседей. Проверено живой ссылкой владельца: `/signup?ref=`
     // отвечает 200 (`/signup` рендерит кнопку «Continue with GitHub» c тем же ref), а

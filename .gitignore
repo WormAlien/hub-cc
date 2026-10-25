@@ -437,6 +437,11 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/threerouter-sessions.json
+# ThreeRouter: профили и снимки браузера (куки, localStorage, тысячи файлов кеша).
+threerouter/profiles/
+threerouter/sessions/
+threerouter/recordings/
 routing/premier-sessions.json
 premier/profiles/
 premier/sessions/
@@ -732,3 +737,4 @@ gemini/src/constants.js
 /tools/ar-model-probe.js
 /tools/ar-switch-opus55.js
 /vani/_probe_mail.py
+routing/threerouter-proxy-ledger.json

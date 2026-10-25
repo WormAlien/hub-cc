@@ -774,6 +774,11 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="threerouter" title="sub2api: панель /api/v1, шлюз /v1. Вход email+пароль, клик-капча. Каталог ключа: deepseek-v4-pro, glm-5.3, kimi-k3, minimax-m3, qwen3.8-max; Claude группой сейчас не обслуживается">
+        <span class="w-5 text-center text-[14px]">🧭</span>
+        <span class="flex-1">ThreeRouter</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-threerouter">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="premier" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">🅿️</span>
         <span class="flex-1">Premier</span>
@@ -4862,6 +4867,22 @@ window.finNavCount = async () => {
         #leagueTab .lgrow .lgv:nth-of-type(3),
         #leagueTab .lgrow .lgv:nth-of-type(4){display:none}
       }
+      /* ── Отметки шлюзов ────────────────────────────────────────────────────
+         Одна строка «что живо»: зелёные чипы и свёрнутый список лежащих. Своих величин
+         не заводим: радиус 999 и кегль 12.5 те же, что у .lgtgl рядом, а цвет — акцент
+         темы (emerald), поэтому панель едет за всеми 22 темами сама. */
+      #leagueTab .lggw{display:inline-flex;align-items:center;gap:7px;padding:7px 12px;
+        border-radius:999px;font:500 12.5px/1 var(--lg-mono);color:var(--lg-ink);
+        background:color-mix(in oklab,var(--lg-emerald) 12%,transparent);
+        border:1px solid color-mix(in oklab,var(--lg-emerald) 45%,transparent)}
+      #leagueTab .lggw i{width:7px;height:7px;border-radius:50%;background:var(--lg-emerald);
+        flex:none}
+      #leagueTab .lggw.off{color:var(--lg-faint);background:transparent;
+        border-color:var(--lg-line-soft)}
+      #leagueTab .lggw.off i{background:color-mix(in oklab,var(--lg-ink) 32%,var(--lg-surface))}
+      #leagueTab .lggwdown summary{cursor:pointer;color:var(--lg-faint);
+        font:600 10.5px/1 var(--lg-mono);letter-spacing:.13em;text-transform:uppercase}
+      #leagueTab .lggwdown[open] summary{margin-bottom:8px}
       #leagueTab .lgtgl{appearance:none;cursor:pointer;border-radius:999px;padding:6px 13px;
         font:500 12.5px/1 var(--lg-mono);color:var(--lg-muted);
         background:color-mix(in oklab,var(--lg-bg) 55%,transparent);
@@ -7383,6 +7404,192 @@ window.finNavCount = async () => {
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://kktoken.cc/sign-up?aff=Sog2" data-ref-link="kktoken" target="_blank" class="text-emerald hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="threerouter">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-sky">🧭</span> <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">ThreeRouter</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">api.threerouter.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20181</code>) · вход <b>email+пароль</b>, клик-капча руками · каталог ключа: <code class="font-mono text-xs">deepseek-v4-pro</code>, glm-5.3, kimi-k3, minimax-m3, qwen3.8-max · новому аккаунту <b>$10</b></p>
+          </div>
+        </header>
+
+        <div id="tr-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map. Тир-карта ThreeRouter: все три тира смотрят в deepseek-v4-pro.
+             Суффикс [1m] в запросе срезает keepalive; сырой API id с [1m] отвергает. -->
+        <div id="tr-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — по умолчанию все три → deepseek-v4-pro</h2>
+            <button onclick="loadTrModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="tr-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20181).
+             Ретраи — страховка от пауз thinking-моделей; на ThreeRouter частота отказов
+             НЕ замерялась (прежний текст про «каждый четвёртый 403» принадлежит эталону). -->
+        <div id="tr-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20181 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="trLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="tr-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="tr-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="tr-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="tr-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="tr-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="trApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="trResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="tr-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="tr-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="tr-lat-chart" class="w-full"></div>
+              <div id="tr-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="tr-lat-windows"></div>
+          </div>
+          <div id="tr-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="tr-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="tr-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="tr-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="tr-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="tr-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="tr-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="tr-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="tr-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="tr-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model threerouter[1m]</code><button onclick='copyToClipboard("/model threerouter[1m]", "команда /model threerouter[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadTrModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="tr-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadTrSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadTrSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="trCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="trMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="trShowAdd()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">➕ Добавить</button>
+          <button onclick="trAutoregToggle()" title="Запустить threerouter/auto-add.js: капчу решаешь руками в открывшемся окне" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🤖 Авторега</button>
+          <button onclick="trShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="tr-filter" oninput="newapiFilterChange('tr')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-sky/60">
+          <select id="tr-sort" onchange="newapiSortChange('tr')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-sky/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="tr-add-form" class="hidden rounded-xl bg-surface border border-sky/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="tr-add-email" oninput="newapiAddGhHint('tr')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-sky/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="tr-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60">
+            </label>
+            <button onclick="trAdd()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Сохранить</button>
+            <button onclick="trShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="tr-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Авторега с ручной капчей + поиск прокси скрапером -->
+        <div id="tr-autoreg-panel" class="hidden rounded-xl bg-surface border border-emerald/40 p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-semibold">🤖 Авторега ThreeRouter <span class="text-faint font-normal">- капчу решаешь руками в окне</span></h3>
+            <button onclick="trAutoregToggle(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1 w-24">
+              <span class="text-[10px] text-faint">аккаунтов</span>
+              <input id="tr-autoreg-count" type="number" min="1" max="50" value="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono">
+            </label>
+            <label class="flex items-center gap-2 text-xs text-muted mb-2">
+              <input id="tr-autoreg-proxy" type="checkbox" checked class="accent-emerald"> через прокси-пул
+            </label>
+            <button id="tr-autoreg-start-btn" onclick="trAutoregStart()" class="text-xs px-4 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">▶ Старт</button>
+            <button id="tr-autoreg-stop-btn" onclick="trAutoregStop()" class="text-xs px-3 py-2 bg-crimson/10 border border-crimson/50 text-crimson rounded-lg hover:bg-crimson/20 font-medium">■ Стоп</button>
+            <span id="tr-autoreg-state" class="text-xs text-faint font-mono">—</span>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap border-t border-line-soft pt-3">
+            <label class="flex flex-col gap-1 w-24">
+              <span class="text-[10px] text-faint">живых прокси</span>
+              <input id="tr-findproxy-want" type="number" min="1" max="30" value="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 font-mono">
+            </label>
+            <button onclick="trFindProxyStart()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🔎 Найти прокси</button>
+            <button onclick="trFindProxyStop()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">■ Стоп поиск</button>
+            <span id="tr-findproxy-state" class="text-xs text-faint font-mono">—</span>
+          </div>
+          <pre id="tr-autoreg-log" class="text-[11px] font-mono bg-elevated border border-line-soft rounded-lg p-3 max-h-56 overflow-auto whitespace-pre-wrap text-muted">—</pre>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="tr-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="trShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и снимком сессии панели.</p>
+          <textarea id="tr-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="tr-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="trImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="trShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="tr-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20181</code> keepalive → <code class="text-ink">api.threerouter.com</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — в кабинете после входа email+паролем</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 нативный <code class="text-ink">/v1/messages</code>; суффикс <code class="text-ink">[1m]</code> срезает keepalive, сырой API его отвергает</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -11172,7 +11379,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, threerouter: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -11205,7 +11412,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], threerouter: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -11420,6 +11627,7 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'threerouter') { if (!state.loaded.threerouter) { state.loaded.threerouter = true; loadTrSessions(false); } trLoadKeepalive(); }
   if (name === 'premier') { if (!state.loaded.premier) { state.loaded.premier = true; loadPmSessions(false); } pmLoadKeepalive(); }
   if (name === 'vani') { if (!state.loaded.vani) { state.loaded.vani = true; loadVnSessions(false); } vnLoadKeepalive(); vnVisionLoad(); }
   if (name === 'dacall') { if (!state.loaded.dacall) { state.loaded.dacall = true; loadDcSessions(false); } dcLoadKeepalive(); }
@@ -11512,9 +11720,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { a6api: 'a6api', apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', threerouter: 'ThreeRouter', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { a6api: 'text-azure bg-azure', apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', threerouter: 'text-sky bg-sky', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -15774,6 +15982,12 @@ function setStatText(id, txt, kind) {
 // Дефолты прокси отдаёт сам (/__state → defaults) — дашборд их НЕ хранит, иначе это
 // была бы пятая копия обкатанных цифр, которая once again разъедется с кодом.
 const KEEPALIVE_DEFAULTS = {};   // pfx → defaults, как их назвал прокси
+// Поставочные дефолты общие, но у части провайдеров свои правила. tr (sub2api): все
+// модели всегда доступны - фолбэк при пустом пуле не нужен; каждая копия платная,
+// поэтому дубли выключены; попытки и пре-коммит остаются поставочными.
+const KEEPALIVE_PRESET = {
+  tr: { hedgeMs: 0, maxHedges: 0, poolFallbackModel: '', poolDeadMs: 0 },
+};
 const KEEPALIVE_STATE = {};     // pfx → последний /__state (flatRate, paidHedgeLocked)
 const KEEPALIVE_PORTS = {};      // pfx → порт, как его назвал сервер (env'ный, не хардкод)
 
@@ -16055,8 +16269,9 @@ async function applyKeepaliveCard(pfx, api, retried) {
 // что keepalive-config-<PORT>.json приоритетнее кода — юзер, который однажды покрутил
 // ручки, останется на них навсегда и обновление прокси ему ничего не привезёт.
 async function resetKeepaliveCard(pfx, api) {
-  const d = KEEPALIVE_DEFAULTS[pfx];
-  if (!d) { toast('keepalive ещё не отвечал — нажми ↻ и попробуй снова', 'error'); return; }
+  const base = KEEPALIVE_DEFAULTS[pfx];
+  if (!base) { toast('keepalive ещё не отвечал — нажми ↻ и попробуй снова', 'error'); return; }
+  const d = { ...base, ...(KEEPALIVE_PRESET[pfx] || {}) };
   const set = (id, v) => { const el = $(id); if (el && typeof v !== 'undefined') el.value = String(v); };
   set(pfx + '-keepalive-hedge', Math.round((d.hedgeMs || 0) / 1000));
   set(pfx + '-keepalive-attempts', d.maxAttempts);
@@ -16080,6 +16295,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  tr: '/__switch/api/tr/keepalive',
   pm: '/__switch/api/pm/keepalive',
   vn: '/__switch/api/vn/keepalive',
   dc: '/__switch/api/dc/keepalive',
@@ -16458,6 +16674,7 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const trLoadKeepalive   = () => loadKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmLoadKeepalive   = () => loadKeepaliveCard('pm', KEEPALIVE_API.pm);
 // Vision-мост (self-applying, как pooldropFill): тумблер и поле модели шлют патч сразу,
 // без общей кнопки «Применить» - иначе один зеркальный контрол затирал бы другой.
@@ -16521,6 +16738,7 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const trApplyKeepalive  = () => applyKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmApplyKeepalive  = () => applyKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnApplyKeepalive  = () => applyKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcApplyKeepalive  = () => applyKeepaliveCard('dc', KEEPALIVE_API.dc);
@@ -16551,6 +16769,7 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const trResetKeepalive  = () => resetKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmResetKeepalive  = () => resetKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnResetKeepalive  = () => resetKeepaliveCard('vn', KEEPALIVE_API.vn);
 const dcResetKeepalive  = () => resetKeepaliveCard('dc', KEEPALIVE_API.dc);
@@ -16590,6 +16809,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  threerouter: ['tr', '/__switch/api/tr/keepalive'],
   premier: ['pm', '/__switch/api/pm/keepalive'],
   vani: ['vn', '/__switch/api/vn/keepalive'],
   dacall: ['dc', '/__switch/api/dc/keepalive'],
@@ -16735,7 +16955,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), tr: () => renderTr(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -16834,7 +17054,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'tr', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -17029,6 +17249,9 @@ const BAL_SRC = {
   // выглядели как «баланс не проверился» (вопрос владельца 21.09). Точность ниже, чем у
   // `self` (это не переспрос ЛК), но выше прикидки: цифру назвал тот же шлюз.
   gateway: { icon: '🔌', cls: 'text-amber',  label: 'от шлюза' },
+  // Остаток читается САМИМ КЛЮЧОМ (artbloom `/usage`, threerouter `/v1/usage`): это
+  // баланс аккаунта в долларах, но расход одного ключа к нему не прикладывается.
+  key:     { icon: '🔑', cls: 'text-sky',    label: 'по ключу'  },
 };
 
 // Подпись источника для тоста ручного чека баланса.
@@ -19615,6 +19838,633 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function trPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (TR_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderTrGauge() {
+  moneyAutoFetch('threerouter').then(() => moneyRotateToHistory('threerouter')).catch(() => {});
+  const st = trPoolStats(state.threerouter);
+  renderEnergyGauge($('tr-energy'), {
+    title: 'ThreeRouter · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-sky">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-sky">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20181 → api.threerouter.com (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadTrSessions(probe) {
+  if (probe) $('tr-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/tr/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.threerouter = data.sessions || [];
+    if ($('nav-count-threerouter')) $('nav-count-threerouter').textContent = state.threerouter.length;
+    await newapiEnsureGhNames(state.threerouter);
+    renderTr();
+    renderTrGauge();
+    loadTrModels();
+    loadTrModelMap();
+    if (probe) toast('✓ ThreeRouter: статусы обновлены', 'success');
+  } catch (e) {
+    $('tr-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadTrSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/tr/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.threerouter = data.sessions || [];
+    if ($('nav-count-threerouter')) $('nav-count-threerouter').textContent = state.threerouter.length;
+    renderTr();
+    renderTrGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadTrModels(force) {
+  const keys = state.threerouter
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('tr-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('tr-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/tr/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderTrModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('tr-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderTrModels(models) {
+  if (models) state.trModels = models;
+  const list = state.trModels || [];
+  let active = state.trActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/tr/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.trActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('tr-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — sky, а sky же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-sky/15 border border-sky/50 text-sky' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='trSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + threerouter-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "threerouter")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderTrModelMap();
+}
+async function trSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/tr/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.trModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.trActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderTrModels(state.trModels);
+  } catch (e) { toast('trSelectModel: ' + e.message, 'error'); }
+}
+
+function renderTr() {
+  const { list: all, total, q } = newapiRows(state.threerouter, 'tr');
+  if (!all.length) {
+    $('tr-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-sky text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-sky/5' : '';
+    const activeTag = active ? '<span class="text-sky mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = trBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderTrModels.
+    const keyCell = noKey ? noKeyCell(`trSetKey(${idJ})`) : `<button onclick='trActivate(${kJ})' title="Сделать активным (keepalive :20181 → api.threerouter.com)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-sky/10 border-sky/50 text-sky' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'tr')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`trCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`trShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`trSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`trRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`trActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`trPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'tr', idJ)}
+        ${actBtn(`trOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс threerouter)', '🌐', 'violet')}
+        ${actBtn(`trDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('tr-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'tr', q),
+    { sortProv: 'tr', accent: 'sky' }
+  );
+}
+
+// ── авторега tr: ручная капча, статус опросом ──
+let trAutoregTimer = null;
+let trFindProxyTimer = null;
+const TR_STAGE_RU = {
+    account: 'аккаунт', mail: 'почта', proxy: 'прокси', 'register-form': 'форма',
+    'captcha-manual': 'ЖДЁМ КАПЧУ', 'email-verify': 'код из письма',
+    'verify-code': 'подтверждение', key: 'ключ', 'probe-key': 'проверка ключа',
+    snapshot: 'снимок сессии', save: 'запись в пул',
+};
+function trAutoregToggle(show) {
+    const p = $('tr-autoreg-panel');
+    if (!p) return;
+    const on = show === undefined ? p.classList.contains('hidden') : !!show;
+    p.classList.toggle('hidden', !on);
+    if (on) { trAutoregRefresh(); trFindProxyRefresh(); }
+}
+function trAutoregRender(d) {
+    const st = $('tr-autoreg-state');
+    if (!st) return;
+    if (!d) { st.textContent = '—'; return; }
+    const stage = d.stage && d.stage.stage ? (TR_STAGE_RU[d.stage.stage] || d.stage.stage) : '';
+    st.textContent = d.running ? `идёт · ${stage || '…'}` : (d.exitCode == null ? '—' : `завершено · код ${d.exitCode}`);
+    const sb = $('tr-autoreg-start-btn'), pb = $('tr-autoreg-stop-btn');
+    if (sb) sb.disabled = !!d.running;
+    if (pb) pb.disabled = !d.running;
+    const log = $('tr-autoreg-log');
+    if (log) {
+        const lines = [...(d.stdout || []), ...(d.stderr || [])].slice(-40);
+        log.textContent = lines.length ? lines.join('\n') : '—';
+        log.scrollTop = log.scrollHeight;
+    }
+}
+async function trAutoregRefresh() {
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/status');
+        const d = await r.json();
+        trAutoregRender(d);
+        if (d.running) {
+            clearTimeout(trAutoregTimer);
+            trAutoregTimer = setTimeout(trAutoregRefresh, 2000);
+        } else if (d.result && d.result.ok) {
+            loadTrSessions(false);
+        }
+    } catch { /* панель переживёт недоступный статус */ }
+}
+async function trAutoregStart() {
+    const count = Number($('tr-autoreg-count').value) || 1;
+    const useProxy = $('tr-autoreg-proxy').checked;
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/start', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ count, useProxy }),
+        });
+        const d = await r.json();
+        if (!r.ok) return toast(d.error || 'старт не удался', 'error');
+        toast('авторега запущена - реши капчу в открывшемся окне', 'success', 9000);
+        trAutoregRefresh();
+    } catch (e) { toast('авторега: ' + e.message, 'error'); }
+}
+async function trAutoregStop() {
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/stop', { method: 'POST' });
+        const d = await r.json();
+        toast(d.stopped ? 'авторега остановлена' : (d.error || 'нечего останавливать'), d.stopped ? 'success' : 'warn');
+        trAutoregRefresh();
+    } catch (e) { toast('стоп: ' + e.message, 'error'); }
+}
+function trFindProxyRender(d) {
+    const st = $('tr-findproxy-state');
+    if (!st) return;
+    if (!d) { st.textContent = '—'; return; }
+    const found = d.result && typeof d.result.foundCount === 'number' ? ` · найдено ${d.result.foundCount}` : '';
+    st.textContent = `${d.phase || '—'}${found}${d.error ? ' · ' + d.error : ''}`;
+}
+async function trFindProxyRefresh() {
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/find-proxy');
+        const d = await r.json();
+        trFindProxyRender(d);
+        if (d.running) {
+            clearTimeout(trFindProxyTimer);
+            trFindProxyTimer = setTimeout(trFindProxyRefresh, 2000);
+        }
+    } catch { /* статус поиска не критичен */ }
+}
+async function trFindProxyStart() {
+    const want = Number($('tr-findproxy-want').value) || 3;
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/find-proxy', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ want }),
+        });
+        const d = await r.json();
+        if (!r.ok) return toast(d.error || 'поиск не запустился', 'error');
+        toast(`поиск ${want} живых прокси запущен`, 'success', 6000);
+        trFindProxyRefresh();
+    } catch (e) { toast('поиск прокси: ' + e.message, 'error'); }
+}
+async function trFindProxyStop() {
+    try {
+        const r = await fetch('/__switch/api/tr/autoreg/find-proxy/stop', { method: 'POST' });
+        const d = await r.json();
+        toast(d.stopped ? 'поиск остановлен' : (d.error || 'поиск не идёт'), d.stopped ? 'success' : 'warn');
+        trFindProxyRefresh();
+    } catch (e) { toast('стоп поиска: ' + e.message, 'error'); }
+}
+
+function trBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'tr'); }
+
+function trShowAdd(show = true) {
+  $('tr-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('tr');
+  if (show) { $('tr-add-email').value = ''; $('tr-add-key').value = ''; $('tr-add-email').focus(); }
+}
+async function trAdd() {
+  const email = $('tr-add-email').value.trim();
+  const api_key = $('tr-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/tr/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.tr }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      trShowAdd(false);
+      loadTrSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) trOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function trDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/tr/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadTrSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function trShare(id) {
+  const cur = state.threerouter.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/tr/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'ThreeRouter',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function trShowImport(show = true) {
+  $('tr-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('tr-import-text').value = '';
+    $('tr-import-preview').innerHTML = '';
+    $('tr-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function trImport() {
+  const share = $('tr-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('tr-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/tr/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('tr-import-preview').innerHTML = '';
+    trShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadTrSessions(false);
+  } catch (e) {
+    $('tr-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли threerouter).
+async function trSetKey(id) {
+  const cur = state.threerouter.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли threerouter после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/tr/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadTrSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (trSetKey).
+async function trRename(id) {
+  const cur = state.threerouter.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/tr/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadTrSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function trActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/tr/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'threerouter';
+      state.urls.threerouter = 'http://localhost:20181';
+      paintStatus();
+      loadTrSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function trPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/tr/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.threerouter.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.threerouter[idx].status = data.status;
+    renderTr();
+    renderTrGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function trCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/tr/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.threerouter.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderTr();
+    renderTrGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function trCheckAllBalances() {
+  $('tr-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/tr/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.threerouter = data.sessions || [];
+    renderTr();
+    renderTrGauge();
+    balanceBatchToast(state.threerouter);
+  } catch (e) {
+    $('tr-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function trSetBalance(api_key) {
+  return newapiSetBalanceUI('tr', api_key, () => state.threerouter, () => { renderTr(); renderTrGauge(); });
+}
+
+function trMapProfiles() {
+  return newapiMapProfilesUI('tr', () => loadTrSessions(false));
+}
+
+async function trOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/tr/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function trCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → threerouter-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadTrModelMap() {
+  try {
+    const res = await fetch('/__switch/api/tr/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.trModelMap = data.modelMap || {};
+    renderTrModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderTrModelMap() {
+  const mm = state.trModelMap || {};
+  const models = (state.trModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /tr/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя threerouter-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="tr-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('tr-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='trSaveModelMap()' class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function trSaveModelMap() {
+  const mm = {
+    opus: $('tr-mm-opus')?.value || '',
+    sonnet: $('tr-mm-sonnet')?.value || '',
+    haiku: $('tr-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/tr/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.trModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -35110,13 +35960,23 @@ function paintSideAuto() {
     // А вот ЦИФРЫ пула — только свои: чужие соврали бы про этот шлюз.
     lbl.textContent = `авторотация · rotate ${st && Number.isFinite(st.switches) ? st.switches : 0}`;
     const ready = st && typeof st.poolReady === 'number' ? st.poolReady : null;
+    // Единица пула приходит с бэкенда (`unit`): у Premier это сообщения, у остальных доллары.
+    // Считать их одной подписью нельзя - «$46.00 в пуле» на квоте сообщений врёт в разы.
+    const quotaUnit = !!(st && st.unit === 'messages') || !!mp.quotaUnit;
+    const poolTail = st && st.poolBalance != null
+      ? (quotaUnit ? ` (${st.poolBalance} сообщений в пуле)` : ` (${mp.sym || '$'}${st.poolBalance.toFixed(2)} в пуле)`) : '';
     title = `${mp.label}: авторотация аккаунтов внутри этого шлюза.\n`
-      + `Шлюз отказал «нет баланса» или ключ мёртв → прокси уходит на следующий аккаунт с деньгами и повторяет запрос, `
+      + (quotaUnit
+        ? `Шлюз отказал «сообщения на сегодня закончились» → прокси уходит на следующий аккаунт пула и повторяет запрос, `
+        : `Шлюз отказал «нет баланса» или ключ мёртв → прокси уходит на следующий аккаунт с деньгами и повторяет запрос, `)
       + `Claude Code ошибки не видит.\n`
-      + `Тумблер ОДИН на все денежные шлюзы: включил здесь — работает и на AgentRouter, GoRouter, JustWoker, Tabi, XPeach. Смена провайдера его не выключает.\n`
-      + `Порога по балансу нет — реагируем на отказ, а не на цифру в кеше (она обновляется раз в минуту и врёт).\n`
-      + `Кандидат — самый маленький баланс, которому хватает: доедаем огрызки, жирные аккаунты остаются в резерве.`
-      + (ready != null ? `\nГодных к подмене сейчас у ${mp.label}: ${ready}${st.poolBalance != null ? ` (${mp.sym || '$'}${st.poolBalance.toFixed(2)} в пуле)` : ''}.` : '')
+      + `Тумблер ОДИН на все шлюзы: включил здесь — работает и на AgentRouter, GoRouter, JustWoker, Tabi, XPeach, Premier. Смена провайдера его не выключает.\n`
+      + (quotaUnit
+        ? `Порога в долларах нет: цена запроса у Premier — одно сообщение, аккаунт берётся, пока остаток не ноль.\n`
+          + `Кандидат - тот, у кого меньше всего сообщений: доедаем почти пустые аккаунты, полные остаются в резерве.`
+        : `Порога по балансу нет — реагируем на отказ, а не на цифру в кеше (она обновляется раз в минуту и врёт).\n`
+          + `Кандидат — самый маленький баланс, которому хватает: доедаем огрызки, жирные аккаунты остаются в резерве.`)
+      + (ready != null ? `\nГодных к подмене сейчас у ${mp.label}: ${ready}${poolTail}.` : '')
       + (st && st.lastSwitch ? `\nПоследняя подмена: ${fmAgo(st.lastSwitch)}.` : '');
   } else {
     on = !!(fmAutoLast && fmAutoLast.enabled);
@@ -35280,7 +36140,11 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
-  premier:     { id: 'premier',     p: 'pm', stateKey: 'premier',     base: 0,   sym: '',   label: 'Premier',     icon: '🅿️', color: 'amber', noMoney: true, noAuto: true, reload: () => loadPmSessionsLight() },
+  threerouter:     { id: 'threerouter',     p: 'tr', stateKey: 'threerouter',     base: 5,   sym: '$',  label: 'ThreeRouter',     icon: '🧭', color: 'sky', reload: () => loadTrSessionsLight() },
+  // 🎯 noAuto снят 25.10: у Premier авторотация есть, только единица другая - дневные
+  // сообщения вместо долларов (бэкенд: `quotaMode`). `noMoney` остаётся: квота сообщений
+  // не деньги и в денежные итоги сайдбара/энергобара не входит.
+  premier:     { id: 'premier',     p: 'pm', stateKey: 'premier',     base: 0,   sym: '',   label: 'Premier',     icon: '🅿️', color: 'amber', noMoney: true, quotaUnit: true, reload: () => loadPmSessionsLight() },
   // 🪤 noMoney: у vani баланс - ПРОЦЕНТЫ (0-100), не деньги. Ротация у него есть, поэтому
   // запись в карте нужна (её читают sideAutoKind/moneyAutoFetch), а три ДЕНЕЖНЫХ места -
   // карточка сайдбара, купюра topUpWatch и общий энергобар - обязаны его пропускать:
@@ -38841,7 +39705,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -39162,6 +40026,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'threerouter':       loadTrSessionsLight(); break;
       case 'premier':       loadPmSessionsLight(); break;
       case 'vani':       loadVnSessionsLight(); break;
       case 'dacall':       loadDcSessionsLight(); break;
@@ -39189,7 +40054,9 @@ function autoRefreshTick() {
       case 'omniroute-pool': loadOmSessions(false); break;
       // Гвард по typeof — код вкладки во внешнем /vendor/models-tab.js, тик может
       // прийти раньше, чем файл разобран (см. тот же гвард в showTab).
-      case 'a6api': if (typeof A6API !== 'undefined') A6API.load(); break;
+      // Фоновый тик (раз в 15 с) идёт тихо: иначе каждая загрузка гасила кнопки и селекты
+      // на время запроса, и это читалось как «кнопки тухнут сами».
+      case 'a6api': if (typeof A6API !== 'undefined') A6API.load({ quiet: true }); break;
       case 'models': if (typeof MODELS !== 'undefined' && MODELS.load) MODELS.load(); break;
       // grok — свой autopoll (4s) уже отдельно
       // switcher/settings/plugins — статичные, не трогаем
@@ -39253,6 +40120,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'threerouter',     fn: () => loadTrSessionsLight() },
   { tab: 'premier',     fn: () => loadPmSessionsLight() },
   { tab: 'vani',     fn: () => loadVnSessionsLight() },
   { tab: 'dacall',     fn: () => loadDcSessionsLight() },
@@ -39417,7 +40285,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
@@ -41089,7 +41957,8 @@ setInterval(() => {
 // свою строку считает leagueSelf() на сервере, соседи приедут из league-peers.json,
 // когда поднимем приёмник. Пока их нет, вкладка честно говорит об этом и показывает
 // свою кривую — она и есть половина смысла, «как в Claude Code статистика».
-const LG = { data: null, metric: 'cc', range: 'd7', cum: false, plot: null, err: null, loading: false };
+const LG = { data: null, metric: 'cc', range: 'd7', cum: false, plot: null, err: null,
+  loading: false, gw: null };
 // Накопительный режим осмыслен только для потоковых метрик. У «аккаунтов» кривая — это
 // уже уровень счётчика, и суммировать его по дням значило бы складывать одно и то же
 // с собой; поэтому там режим не просто выключен, а недоступен.
@@ -42099,6 +42968,21 @@ const LG_SHELL = `
       <h1 class="text-2xl font-semibold tracking-tight">Лига ABUSE HUB</h1>
       <p class="text-sm text-muted mt-1 max-w-[72ch]" id="lg-lede"></p>
     </header>
+    <!-- Отметки шлюзов: что сейчас работает, решает админ в «Админке», а видят все
+         участники здесь. Панель не ждёт срез рейтинга — своя ручка, своя загрузка. -->
+    <section class="lgmat mt-5 p-4" id="lg-gws" hidden>
+      <div class="flex items-baseline gap-3 flex-wrap">
+        <h2 class="text-sm font-semibold tracking-tight">Шлюзы сейчас</h2>
+        <span class="lgcap" id="lg-gw-stamp"></span>
+        <span class="lgcap" id="lg-gw-by" style="margin-left:auto"></span>
+      </div>
+      <div id="lg-gw-up" class="flex flex-wrap gap-1.5 mt-3"></div>
+      <div id="lg-gw-note" class="text-xs text-faint mt-2.5"></div>
+      <details class="lggwdown mt-3" id="lg-gw-downbox" hidden>
+        <summary></summary>
+        <div id="lg-gw-down" class="flex flex-wrap gap-1.5"></div>
+      </details>
+    </section>
     <section class="lgmat mt-5 p-5">
       <div class="flex items-start gap-5 flex-wrap"><div id="lg-ptitle"></div>
         <div class="lglg ml-auto flex gap-4 flex-wrap items-center" id="lg-legend"></div></div>
@@ -44573,10 +45457,59 @@ function lgChatBoot() {
   lgChatWire(); lgChatGrow(); lgChatCount(); lgChatChip(); lgVoiceBar(); lgVoiceBtn(); lgChatPaint();
 }
 
+// ── Отметки шлюзов ──────────────────────────────────────────────────────────
+// Отдельная ручка, а не поле среза: срез считается по локальным журналам и может
+// считаться секунды, а панель обязана появиться сразу. Падение ручки не имеет права
+// ронять вкладку — тогда просто нечего показать.
+async function lgGatewaysLoad() {
+  try {
+    const r = await fetch('/__switch/api/league/gateways');
+    const j = await r.json().catch(() => null);
+    LG.gw = (r.ok && j && j.ok === true) ? j : null;
+  } catch (e) { LG.gw = null; }
+  lgGatewaysPaint();
+}
+function lgGatewaysPaint() {
+  const box = document.getElementById('lg-gws');
+  if (!box) return;
+  const gw = LG.gw;
+  const items = gw && Array.isArray(gw.items) ? gw.items : [];
+  // `hidden` + `style.display` вместе: у части тем и у Tailwind `display` приходит
+  // правилом, и один атрибут `hidden` его не перебивает.
+  box.hidden = !items.length; box.style.display = items.length ? '' : 'none';
+  if (!items.length) return;
+  const chip = x => `<span class="lggw${x.up ? '' : ' off'}"`
+    + ` title="${lgEsc(x.note || '')}"><i></i>${lgEsc(x.label || x.id)}</span>`;
+  const up = items.filter(x => x.up), down = items.filter(x => !x.up);
+  const upHost = document.getElementById('lg-gw-up');
+  if (upHost) upHost.innerHTML = up.length ? up.map(chip).join('')
+    : '<span class="text-xs text-faint">рабочих не отмечено</span>';
+  const stamp = document.getElementById('lg-gw-stamp');
+  if (stamp) stamp.textContent = gw.updated
+    ? 'обновлено ' + new Date(gw.updated).toLocaleString('ru-RU',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const by = document.getElementById('lg-gw-by');
+  if (by) by.textContent = gw.updatedBy ? 'админ: ' + gw.updatedBy : '';
+  const downBox = document.getElementById('lg-gw-downbox');
+  if (downBox) {
+    downBox.hidden = !down.length;
+    downBox.style.display = down.length ? '' : 'none';
+    const sum = downBox.querySelector('summary');
+    if (sum) sum.textContent = 'не работают · ' + down.length;
+  }
+  const downHost = document.getElementById('lg-gw-down');
+  if (downHost) downHost.innerHTML = down.map(chip).join('');
+  const note = document.getElementById('lg-gw-note');
+  if (note) note.textContent = up.length ? '' : 'админ ещё не отметил рабочие шлюзы';
+}
+
 // Загрузка среза. Зовётся при открытии вкладки И один раз на старте — мини-блок в
 // сайдбаре виден на всех вкладках, значит данные ему нужны без открытия «Лиги».
 async function lgLoad(force = false) {
   if (LG.loading) return;
+  // Панель шлюзов не зависит от среза: пускаем её рядом, не дожидаясь подсчёта журналов.
+  lgGatewaysLoad();
   if (LG.data && !force) { lgRender(); return; }
   LG.loading = true;
   try {
@@ -45914,7 +46847,8 @@ else init();
      по записи в `members.json`, а вкладка живёт по его ответу. Своя проверка была бы
      вторым источником правды — разъедется в тот день, когда права поменяются. -->
 <script>
-const LAD = { rows: [], admins: 0, err: '', loading: false, me: null };
+const LAD = { rows: [], admins: 0, err: '', loading: false, me: null,
+  gw: null, gwDirty: false };
 
 function ladEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g,
@@ -45964,6 +46898,10 @@ async function ladLoad() {
   } catch (e) { LAD.err = 'список не загрузился: ' + (e.message || 'запрос не ушёл'); }
   LAD.loading = false;
   ladRender();
+  // Отметки шлюзов грузим отдельно от участников: падение одной ручки не должно
+  // оставлять пустой другую. `ladGwLoad` сам рисует свою секцию и глотает свои ошибки.
+  // Несохранённые галочки не перетираем: ladLoad зовут и действия над участниками.
+  if (!LAD.gwDirty) ladGwLoad();
 }
 // Общий путь всех действий: POST → на успехе перечитать список целиком. Локально
 // править строку не пытаемся: одобрение меняет ещё и группы, а роль — счётчик админов,
@@ -45986,6 +46924,122 @@ async function ladAct(action, body, what) {
     return true;
   } catch (e) { toast('не отправлено: ' + (e.message || 'запрос не ушёл'), 'error'); return false; }
 }
+// ── Шлюзы в админке ─────────────────────────────────────────────────────────
+// Список вкладок берём из самого сайдбара, а не из константы: админ отмечает то, что
+// видит у себя. Вкладки, которые шлюзами не являются, пропускаем явным списком —
+// эвристика «по эмодзи» однажды назвала бы шлюзом «Финансы».
+const LAD_GW_SKIP = new Set(['league', 'ladmin', 'fin', 'github', 'outlook', 'google',
+  'gemini', 'telegram', 'anymodel', 'media', 'grok', 'plugins', 'settings', 'health',
+  'models', 'proxies', 'routes', 'claude']);
+function ladGwTabs() {
+  const out = [], seen = new Set();
+  for (const b of document.querySelectorAll('.nav-btn[data-tab]')) {
+    const id = b.getAttribute('data-tab');
+    if (!id || LAD_GW_SKIP.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    const lab = b.querySelector('span.flex-1');
+    out.push({ id, label: (lab ? lab.textContent : id).trim() || id });
+  }
+  return out;
+}
+async function ladGwLoad() {
+  try {
+    const r = await fetch('/__switch/api/league/gateways');
+    const j = await r.json().catch(() => null);
+    LAD.gw = (r.ok && j && j.ok === true)
+      ? { updated: j.updated || null, updatedBy: j.updatedBy || '',
+          items: (Array.isArray(j.items) ? j.items : []).map(x => ({
+            id: String(x.id || ''), label: String(x.label || x.id || ''),
+            up: x.up === true, note: String(x.note || '') })) }
+      : null;
+    LAD.gwDirty = false;
+  } catch (e) { LAD.gw = null; }
+  ladGwRender();
+}
+function ladGwRender() {
+  const host = document.getElementById('lad-gw-list');
+  if (!host) return;
+  const gw = LAD.gw;
+  const items = gw ? gw.items : [];
+  host.innerHTML = items.length ? items.map(x => {
+    const id = ladEsc(x.id);
+    return `<div class="rounded-lg border border-line-soft bg-surface px-3 py-2 flex items-center gap-3">
+      <span class="text-sm text-ink flex-1 truncate">${ladEsc(x.label || x.id)}</span>
+      <code class="font-mono text-[10px] text-faint">${id}</code>
+      <button type="button" data-gw-toggle="${id}" data-on="${x.up ? '1' : '0'}"
+        class="text-xs px-2 py-1 rounded border transition ${x.up
+          ? 'border-emerald/40 text-emerald hover:bg-emerald/10'
+          : 'border-line-soft text-muted hover:text-ink'}">${x.up ? 'работает' : 'лежит'}</button>
+      <button type="button" data-gw-del="${id}"
+        class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-crimson hover:border-crimson/40 transition">✕</button>
+    </div>`;
+  }).join('') : '<div class="text-xs text-faint px-1">ни одного шлюза не отмечено — добавь из списка ниже</div>';
+  const note = document.getElementById('lad-gw-note');
+  if (note) note.textContent = LAD.gwDirty ? 'есть несохранённые изменения'
+    : (gw && gw.updated ? 'обновлено ' + new Date(gw.updated).toLocaleString('ru-RU',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        + (gw.updatedBy ? ' · ' + gw.updatedBy : '') : '');
+  const sel = document.getElementById('lad-gw-add');
+  if (sel) {
+    const have = new Set(items.map(x => x.id));
+    const tabs = ladGwTabs().filter(t => !have.has(t.id));
+    sel.innerHTML = tabs.length
+      ? tabs.map(t => `<option value="${ladEsc(t.id)}">${ladEsc(t.label)}</option>`).join('')
+      : '<option value="">все вкладки уже в списке</option>';
+  }
+  for (const b of host.querySelectorAll('[data-gw-toggle]')) {
+    b.addEventListener('click', () => {
+      const id = b.getAttribute('data-gw-toggle');
+      const it = LAD.gw && LAD.gw.items.find(x => x.id === id);
+      if (!it) return;
+      it.up = !it.up; LAD.gwDirty = true; ladGwRender();
+    });
+  }
+  for (const b of host.querySelectorAll('[data-gw-del]')) {
+    b.addEventListener('click', () => {
+      const id = b.getAttribute('data-gw-del');
+      if (!LAD.gw) return;
+      LAD.gw.items = LAD.gw.items.filter(x => x.id !== id);
+      LAD.gwDirty = true; ladGwRender();
+    });
+  }
+  const add = document.getElementById('lad-gw-addbtn');
+  if (add) add.onclick = () => {
+    const s = document.getElementById('lad-gw-add');
+    const id = s && s.value;
+    if (!id || !LAD.gw) return;
+    const t = ladGwTabs().find(x => x.id === id);
+    LAD.gw.items.push({ id, label: t ? t.label : id, up: false, note: '' });
+    LAD.gwDirty = true; ladGwRender();
+  };
+  const all = document.getElementById('lad-gw-all');
+  if (all) all.onclick = () => {
+    if (!LAD.gw) return;
+    const have = new Set(LAD.gw.items.map(x => x.id));
+    for (const t of ladGwTabs()) if (!have.has(t.id)) {
+      LAD.gw.items.push({ id: t.id, label: t.label, up: false, note: '' });
+    }
+    LAD.gwDirty = true; ladGwRender();
+  };
+  const save = document.getElementById('lad-gw-save');
+  if (save) save.onclick = ladGwSave;
+}
+async function ladGwSave() {
+  if (!LAD.gw) return;
+  try {
+    const r = await fetch('/__switch/api/league/gateways', { method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: LAD.gw.items }) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.ok !== true) {
+      toast(ladWhy(r.status, j, 'сохранить шлюзы'), 'error', 6000);
+      return;
+    }
+    toast('✓ отметки шлюзов сохранены', 'success');
+    await ladGwLoad();
+    if (typeof lgGatewaysLoad === 'function') lgGatewaysLoad();
+  } catch (e) { toast('не отправлено: ' + (e.message || 'запрос не ушёл'), 'error'); }
+}
 const LAD_SHELL = `
   <div class="flex items-center gap-2 mb-4">
     <button id="lad-reload" type="button"
@@ -45997,9 +47051,26 @@ const LAD_SHELL = `
     <h2 class="text-sm font-semibold tracking-tight mb-2">Заявки</h2>
     <div id="lad-pending" class="space-y-1.5"></div>
   </section>
-  <section>
+  <section class="mb-6">
     <h2 class="text-sm font-semibold tracking-tight mb-2">Участники</h2>
     <div id="lad-members" class="space-y-1.5"></div>
+  </section>
+  <section>
+    <h2 class="text-sm font-semibold tracking-tight mb-2">Шлюзы</h2>
+    <p class="text-[11px] text-faint mb-2">Отметки «работает / лежит» видят все участники
+      на вкладке «Лига». Список живёт на приёмнике, правит его только админ.</p>
+    <div id="lad-gw-list" class="space-y-1.5"></div>
+    <div class="flex items-center gap-2 mt-3 flex-wrap">
+      <select id="lad-gw-add"
+        class="text-xs px-2 py-1 rounded border border-line-soft bg-surface text-ink"></select>
+      <button id="lad-gw-addbtn" type="button"
+        class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-ink hover:border-line transition">добавить</button>
+      <button id="lad-gw-all" type="button"
+        class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-ink hover:border-line transition">добавить все вкладки</button>
+      <button id="lad-gw-save" type="button"
+        class="text-xs px-2.5 py-1 rounded border border-emerald/40 text-emerald hover:bg-emerald/10 transition">сохранить</button>
+      <span id="lad-gw-note" class="text-[11px] text-faint"></span>
+    </div>
   </section>`;
 
 function ladRowPending(x) {

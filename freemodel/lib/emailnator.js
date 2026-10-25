@@ -51,11 +51,26 @@ const ADDRESS_SEL = '.mf-address-row .mf-mono, .mf-panel-address, .mf-mono';
 const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function dismissCookie(page) {
-  for (const label of ['Got it', 'Consent', 'Accept']) {
+  // 🪤 Google Funding Choices (fc-dialog) рисуется НЕ сразу: через 3-4 секунды после
+  // загрузки, поверх чипов. Его оверлей перехватывает клики, и clickChip молча падал
+  // по таймауту — снаружи это выглядело как «тумблеры не переключаются» (замер 23.10:
+  // все четыре остались ВКЛ, адрес пришёл @psnator.com, не gmail).
+  for (let i = 0; i < 3; i++) {
     try {
-      const b = page.locator('button', { hasText: label }).first();
-      if (await b.count()) { await b.click({ timeout: 2500 }); await page.waitForTimeout(600); return; }
-    } catch { /* баннера может не быть */ }
+      const fc = page.locator('button.fc-cta-consent, button.fc-button-label, button.fc-cta-do-not-consent').first();
+      if (await fc.count()) {
+        await fc.click({ timeout: 2500 }).catch(() => {});
+        await page.waitForTimeout(600);
+      }
+    } catch { /* оверлея может не быть */ }
+    for (const label of ['Got it', 'Consent', 'Accept']) {
+      try {
+        const b = page.locator('button', { hasText: label }).first();
+        if (await b.count()) { await b.click({ timeout: 2500 }); await page.waitForTimeout(600); return; }
+      } catch { /* баннера может не быть */ }
+    }
+    if (!(await page.locator('.fc-dialog-container').count().catch(() => 0))) return;
+    await page.waitForTimeout(1200);
   }
 }
 
@@ -109,9 +124,14 @@ async function chipState(page, label) {
 async function clickChip(page, label) {
   const b = page.locator('button.mf-chip').filter({ hasText: new RegExp('^' + escRe(label) + '$') }).first();
   if (!(await b.count())) return false;
-  await b.click({ timeout: 4000 }).catch(() => {});
+  let ok = await b.click({ timeout: 4000 }).then(() => true).catch(() => false);
+  if (!ok) {
+    // Оверлей согласия мог всплыть уже после первого dismissCookie — снимаем и пробуем ещё раз.
+    await dismissCookie(page);
+    ok = await b.click({ timeout: 4000 }).then(() => true).catch(() => false);
+  }
   await page.waitForTimeout(700);
-  return true;
+  return ok;
 }
 
 // Оставляем включённым ТОЛЬКО `.Gmail`. Мало нажать на него: чипы независимы, и на свежей
@@ -277,6 +297,12 @@ const inMessage = (url) => /\/inbox\/[^/]+\//.test(url);
 async function pollInbox(page, email, opts = {}) {
   const timeoutMin = opts.timeout || MAX_WAIT_MIN;
   const fromHint = (opts.fromHint || '').toLowerCase();
+  // Письма, лежавшие в ящике ДО начала операции. Адреса emailnator переиспользуются,
+  // поэтому «подходящее по отправителю» письмо может быть чужим и старым. Список href
+  // снимает вызывающий скрипт до отправки кода (см. threerouter/auto-add.js).
+  const excludeHrefs = new Set(opts.excludeHrefs || []);
+  // Свой извлекатель кода: у части панелей OTP не из шести цифр (ThreeRouter - 6 букв/цифр).
+  const extract = typeof opts.extract === 'function' ? opts.extract : extractCode;
   const maxAttempts = Math.max(1, Math.floor((timeoutMin * 60 * 1000) / POLL_INTERVAL_MS));
 
   console.log(`[emailnator] слежу за ${email} (${timeoutMin} мин макс)…`);
@@ -293,7 +319,7 @@ async function pollInbox(page, email, opts = {}) {
     // 🪤 Reload отсюда выбрасывает обратно в список — на этом и был бесконечный цикл.
     if (inMessage(url)) {
       const body = await readAllText(page);
-      const code = extractCode(body);
+      const code = extract(body);
       if (code) { console.log(`[emailnator] 🎉 код: ${code}`); return code; }
       console.log(`[emailnator] в письме кода нет (${body.replace(/\s+/g, ' ').length} симв.) — смотрю следующее`);
       await openInbox(page, email);         // вернуться в список — через вход, не Reload
@@ -345,6 +371,11 @@ async function pollInbox(page, email, opts = {}) {
       // Живой случай 13.09: взяли код 835302 из письма VerseIn трёхчасовой давности и
       // отправили его в rumeng → `invalid or expired verification code`. Берём только
       // свежие: «Just now» / «N mins ago». Часы и дни — чужое.
+      // Письма, снятые в baseline до операции, - чужие для нас, даже если отправитель совпал.
+      const href = await links.nth(j).getAttribute('href').catch(() => null);
+      if (href && excludeHrefs.has(href)) continue;
+      // Пустые/заглушки не открываем; свежесть проверяем по возрасту письма.
+      // 🪤 Здесь стоял литеральный BACKSPACE (U+0008) вместо ``, и фильтр не работал вовсе.
       if (/\d+\s*(hrs?|hours?|days?|d)\s*ago/i.test(t)) continue;
       if (opened.has(t)) continue;
       opened.add(t);

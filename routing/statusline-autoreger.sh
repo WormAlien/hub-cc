@@ -308,6 +308,8 @@ if [ -z "$raw_target" ]; then
         *127.0.0.1:20165*)        raw_target="aikeysapi" ;;
         *localhost:20166*)        raw_target="rumeng" ;;
         *127.0.0.1:20166*)        raw_target="rumeng" ;;
+        *localhost:20191*)        raw_target="a6api" ;;
+        *127.0.0.1:20191*)        raw_target="a6api" ;;
         *tabitoken.com*)          raw_target="tabi" ;;
         *gorouter.app*)           raw_target="gorouter" ;;
         *xpeach.codes*)           raw_target="xpeach" ;;
@@ -350,7 +352,14 @@ case "$raw_target" in
     hcnsec)                      provider="hcnsec" ;;
     aipm)                        provider="aipm" ;;
     wisdomsatan)                 provider="wisdomsatan" ;;
-    custom)                      provider="Custom🧪" ;;
+    custom)
+        # Custom-витрина: если её активный baseUrl — шлюз со своей вкладкой, показываем
+        # шлюз, а не «Custom». Иначе статуслайн не находит ни тир-карту, ни баланс.
+        custom_cfg=""; [ -f "$PROF/.claude/custom-active-provider.json" ] && custom_cfg="$(<"$PROF/.claude/custom-active-provider.json")"
+        case "$custom_cfg" in
+            *api.threerouter.com*) provider="threerouter" ;;
+            *)                     provider="Custom🧪" ;;
+        esac ;;
     "")                          provider="unknown" ;;
     *)                           provider="$raw_target" ;;
 esac
@@ -380,6 +389,8 @@ if [ -n "$provider" ] && [ "$model_id" != "unknown" ] \
     # показывал `claude-opus-5.5`, хотя запрос уезжал на `openai/gpt-6-astra`.
     # Владелец прочитал это как «идёт на опус». Добавил нового шлюза - СВЕРЬ оба списка.
     case "$provider" in
+        a6api)       map_prefix="a6api" ;;
+        threerouter) map_prefix="threerouter" ;;
         agentrouter) map_prefix="ar" ;;
         gorouter)    map_prefix="gorouter" ;;
         tabi)        map_prefix="tabi" ;;
@@ -565,6 +576,7 @@ gauge_from_balance_cache() {
     referral=0; [[ "$block" =~ \"referral\"[[:space:]]*:[[:space:]]*([0-9]+(\.[0-9]+)?) ]] && referral="${BASH_REMATCH[1]}"
     [[ "$bal" == -* ]] && bal=0
     avail_sum="$bal"
+    printf -v avail_sum '%.2f' "$avail_sum" 2>/dev/null || avail_sum="$bal"
     if [ "$provider" = "aikeysapi" ]; then
         pool_balance_total="$(grep -oE '"balance"[[:space:]]*:[[:space:]]*[0-9]+(\.[0-9]+)?' "$sessions_file" 2>/dev/null \
             | grep -oE '[0-9]+(\.[0-9]+)?' \
@@ -602,6 +614,35 @@ gauge_from_balance_cache() {
         # часами, а пинок уходил на каждом промпте. Дедуп и троттлинг — на сервере.
         ("$CURL_BIN" -s -m 1 "http://localhost:8200/__switch/api/$endpoint_path?api_key=$key&nudge=1" >/dev/null 2>&1 &) >/dev/null 2>&1
     fi
+}
+
+# a6api: один платный аккаунт, общий баланс. Кеш пишет дашборд при чтении вкладки
+# и при активации (`routing/lib/a6api-gateway.js` → `~/.secrets/a6api-balance.json`).
+# Гранта нет, шкала процентов не рисуется; показываем цифру и возраст.
+gauge_from_a6api_balance() {
+    local file="$1" raw chk now_s
+    have_gauge=0
+    [ -f "$file" ] || return 0
+    raw="$(<"$file")"
+    [[ "$raw" =~ \"balanceUsd\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\.[0-9]+)?) ]] || return 0
+    have_gauge=1
+    avail_sum="${BASH_REMATCH[1]}"
+    [[ "$avail_sum" == -* ]] && avail_sum=0
+    printf -v avail_sum '%.2f' "$avail_sum" 2>/dev/null || avail_sum=0
+    pct=100
+    balance_err=""
+    chk=""
+    [[ "$raw" =~ \"checkedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && chk="${BASH_REMATCH[1]}"
+    if [ -n "$chk" ]; then
+        now_s="$(date +%s)"
+        chk_ts="$(_iso_epoch "$chk")"
+        [ "$chk_ts" -gt 0 ] && stale_age_s=$(( now_s - chk_ts ))
+        [ "$stale_age_s" -lt 0 ] && stale_age_s=0
+    else
+        stale_age_s=91
+    fi
+    balance_age_s="$stale_age_s"
+    [ "$stale_age_s" -gt 90 ] && stale=1
 }
 
 if [ "$provider" = "freemodel" ] && [ -f "$LOGS/.freemodel_quota_cache.json" ] && [ -f "$LOGS/.freemodel_meta.json" ]; then
@@ -717,6 +758,10 @@ elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
 elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
+elif [ "$provider" = "threerouter" ] && [ -f "$ROUTING/threerouter-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/threerouter-sessions.json" "$PROF/.claude/threerouter-active-key.txt" "tr/balance" 90
+elif [ "$provider" = "a6api" ]; then
+    gauge_from_a6api_balance "$PROF/.secrets/a6api-balance.json"
 elif [ "$provider" = "aipm" ] && [ -f "$ROUTING/aipm-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/aipm-sessions.json" "$PROF/.claude/aipm-active-key.txt" "ap/balance" 90
 elif [ "$provider" = "aikeysapi" ] && [ -f "$ROUTING/aikeysapi-sessions.json" ]; then

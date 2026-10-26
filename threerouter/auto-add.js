@@ -283,14 +283,31 @@ function waitCaptchaToken(page) {
     });
 }
 
-// Вернуть форму регистрации к свежему адресу: страница остаётся на /register, владелец
-// видит текущий ящик, а не тот, что уже занят.
+// Вернуть окно к свежему адресу и заново прогнать шаг формы.
+//
+// 🔴 Заполнить поле НЕДОСТАТОЧНО (живой прогон 25.10): SPA уже увела окно на
+// `/email-verify` и ждёт код СО СТАРОГО адреса. Заполнение полей там ничего не меняет -
+// владелец видел «ждёт код со старой почты», хотя новый ящик уже создан.
+// Поэтому возвращаемся на /register и жмём Continue ЕЩЁ РАЗ: SPA кладёт новые креды в
+// `sessionStorage.register_data` и уходит на /email-verify уже с новым адресом.
+// Капча не нужна - токен уже получен и уходит в HTTP send-code.
 async function refillForm(page, addr, password) {
     try {
+        if (!/\/register/.test(page.url())) {
+            await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(1500);
+            await dismissAgreement(page);
+            await page.waitForSelector('input[type="email"], #email', { timeout: 20000 });
+        }
         await page.locator('input[type="email"], #email').first().fill(addr, { timeout: 8000 });
         await page.locator('input[type="password"], #password').first().fill(password, { timeout: 8000 });
+        await clickExactButton(page, ['Continue', '继续', 'Продолжить']);
+        await page.waitForTimeout(1200);
         return true;
-    } catch { return false; }
+    } catch (e) {
+        log(`⚠️ форму не удалось обновить на ${addr}: ${e.message.split('\n')[0]}`);
+        return false;
+    }
 }
 
 // Контекст окна регистрации. Вынесен из oneAccount: окно могли закрыть - поднимаем
@@ -348,6 +365,15 @@ async function oneAccount(browser, n) {
     // поэтому браузер и HTTP-шаги аккаунта обязаны выходить с одного прокси.
     let mailContext = await browser.newContext({ userAgent: UA, locale: 'en-US' });
     let emailPage = await mailContext.newPage();
+    // 🪤 Пустая вкладка видна владельцу как белое окно «about:blank»: emailnator грузится
+    // только по первому createEmail (после капчи), а пока контекст пуст - браузер держит
+    // пустую страницу. Держим её на реальной странице сайта, чтобы окно не выглядело
+    // зависшим; сам ящик появится после капчи.
+    // 🪤 Однако грузим её НЕ на глазах у владельца: страница панели поднимается сразу
+    // после, а emailnator догружается в фоне. Иначе видно «почта грузится только после
+    // сайта» и кажется, что скрипт встал (живой случай 25.10).
+    await emailPage.goto('https://www.emailnator.com/', { waitUntil: 'commit', timeout: 45000 })
+        .catch(() => log('⚠️ emailnator не открылся в фоне - откроется по createEmail'));
     let siteContext = null;
 
     // Окна закрывают руками: владелец убирает «лишнее» окно, пока решает капчу, или
@@ -408,28 +434,26 @@ async function oneAccount(browser, n) {
         stage('captcha-manual');
         const opened = await clickExactButton(sitePage, ['Click to start verification', 'Start verification', '点击开始验证', '开始验证']);
         if (opened) log(`капча открыта кнопкой «${opened}»`);
-        // Ящик создаём ПАРАЛЛЕЛЬНО с решением капчи: emailnator - отдельный контекст,
-        // панели он не мешает, а после капчи остаётся только заполнить форму.
-        // 🪤 Адреса emailnator переиспользуемые: если решение капчи заняло минуты,
-        // адрес мог уйти другому. Поэтому ниже проверяем возраст и берём свежий;
-        // коллизию на send-code скрипт и так лечит новым ящиком без новой капчи.
-        const mailStartedAt = Date.now();
-        let mailPromise = mailOp(en.createEmail).catch(e => { log(`почта в фоне не удалась: ${e.message}`); return null; });
+        // 🪤 Ящик создаётся ПОСЛЕ капчи, не параллельно (правка 25.10). Параллельное
+        // открытие emailnator показывало владельцу `about:blank` рядом с окном
+        // регистрации, а почта грузилась только после страницы провайдера - два контекста
+        // дрались за старт. От создания ящика до отправки кода проходят секунды.
         log('✋ РЕШИ КАПЧУ В ОКНЕ (4 зелёных круга или ползунок). Дальше скрипт продолжит сам.');
         const captchaToken = await waitCaptchaToken(sitePage);
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
 
         stage('mail');
-        let addr = await mailPromise;
-        if (addr && Date.now() - mailStartedAt > 120_000) {
-            log('адрес emailnator висел дольше 2 мин - беру свежий');
-            addr = await mailOp(en.createEmail);
-        }
-        if (!addr) addr = await mailOp(en.createEmail);
+        // Ящик создаётся ПЕРВЫМ делом после капчи и заполняется в форму сразу. Если он
+        // окажется занятым, refillForm вернёт окно на /register, впишет новый адрес и
+        // заново нажмёт Continue - иначе SPA остаётся ждать код со старой почты.
+        let addr = await mailOp(en.createEmail);
         if (!addr) throw new Error('emailnator не выдал адрес');
         log(`почта: ${addr}`);
         let baseline = await mailOp(inboxHrefs);
         log(`baseline писем в ящике: ${baseline.length}`);
+        // 🪤 Почта ещё грузится: поднимаем вкладку провайдера, чтобы владелец не смотрел
+        // на `about:blank` и не решал, что скрипт завис. Ящик нужен скрипту, не человеку.
+        await sitePage.bringToFront().catch(() => {});
         // Окно могли закрыть ПОКА решали капчу: поднимаем новое на том же прокси,
         // форма открывается заново, капча не нужна - токен уже у нас.
         if (sitePage.isClosed()) {

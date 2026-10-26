@@ -345,8 +345,25 @@ function newSiteContext(browser) {
 // Открыть форму регистрации: навигация, согласие, ожидание доступного поля email.
 // 🪤 Модалка условий держит поля `disabled`, и fill падает с «element is not enabled» -
 // выглядит как сломанный селектор. Ждём разблокировку и один раз снимаем ещё раз.
-async function showRegisterForm(page) {
-    await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded' });
+//
+// 🔴 Preflight VRAN: до площадки дошли, а страница через прокси не грузится (живой запуск
+// 25.10 - `page.goto: Timeout 30000ms exceeded` на socks5 после успешного preflight).
+// Preflight проверяет, что ПРОКСИ отвечает на `/api/v1/settings/public`, но полная
+// загрузка SPA тянет десятки ресурсов, и слабый адрес умирает на них. Поэтому по таймауту
+// навигации: берём ДРУГОЙ прокси и переоткрываем форму, а не роняем аккаунт.
+async function showRegisterForm(page, onProxyFail = null) {
+    const NAV_TIMEOUT = 30000;
+    try {
+        await page.goto(REGISTER_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+    } catch (e) {
+        // Только таймаут/сеть - ошибки разметки (протухший селектор) сюда не путаем.
+        const net = /Timeout|ERR_|net::|ECONN|socket|proxy/i.test(String(e.message));
+        if (!net || !onProxyFail) throw e;
+        const fresh = await onProxyFail(e);
+        if (!fresh) throw e;
+        await fresh.goto(REGISTER_URL, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
+        page = fresh;
+    }
     await page.waitForTimeout(2000);
     await dismissAgreement(page);
     await page.waitForSelector('input[type="email"], #email', { timeout: 30000 });
@@ -355,6 +372,7 @@ async function showRegisterForm(page) {
         return !!e && !e.disabled;
     }, null, { timeout: 15000 }).then(() => true).catch(() => false);
     if (!enabled) await dismissAgreement(page);
+    return page;
 }
 
 // ───────────────────────────── один аккаунт ─────────────────────────────
@@ -429,7 +447,19 @@ async function oneAccount(browser, n) {
         await sitePage.bringToFront();
 
         stage('register-form');
-        await showRegisterForm(sitePage);
+        // Страница не открылась через выданный прокси - меняем прокси и открываем заново.
+        // Preflight этого не ловит: он видит ответ API-ручки, а не полную загрузку SPA.
+        sitePage = await showRegisterForm(sitePage, async (err) => {
+            log(`страница не открылась через ${PROXY_LABEL} (${String(err.message).split('\n')[0]}) - беру другой прокси`);
+            PROXY = await acquireFreshProxy(`tr_rega_${Date.now()}_${n}_r`, 'www.threerouter.com');
+            PROXY_LABEL = PROXY.label || PROXY.id || 'прокси';
+            log(`новый выход: ${PROXY_LABEL}`);
+            await siteContext.close().catch(() => {});
+            siteContext = await newSiteContext(browser);
+            const p = await siteContext.newPage();
+            await p.bringToFront();
+            return p;
+        });
 
         stage('captcha-manual');
         const opened = await clickExactButton(sitePage, ['Click to start verification', 'Start verification', '点击开始验证', '开始验证']);

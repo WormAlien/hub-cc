@@ -153,7 +153,11 @@ ok('стрик берётся из активности Claude Code, а не и�
 ok('часовое окно отдаёт часы, дневные - дни', () => {
     const row = me({ ccStats: envelope() });
     const a = api('cc', 'h24', { me: row });
-    assert.deepStrictEqual(a.lgKeys(row, 'h24'), ['2026-09-16T10', '2026-09-16T11']);
+    // 26.10: ключи конвертируются в местное время смотрящего, поэтому ожидание собрано
+    // тем же преобразованием, а не константами.
+    const toLocal = (() => { const i = HTML.indexOf('function lgCcKeyToLocal');
+        return new Function('return ' + HTML.slice(i, HTML.indexOf('}', HTML.indexOf('return m ? base', i)) + 1))(); })();
+    assert.deepStrictEqual(a.lgKeys(row, 'h24'), ['2026-09-16T10', '2026-09-16T11'].map(toLocal));
     const d = api('cc', 'd30', { me: row });
     assert.deepStrictEqual(d.lgKeys(row, 'd30'), ['2026-09-14', '2026-09-15', '2026-09-16'],
         'месяц короче истории - берём что есть');
@@ -424,6 +428,20 @@ ok('мини-блок не смешивает канонический счёт�
     const body = HTML.slice(i, HTML.indexOf('// ═══════════════════ ЧАТ ЛИГИ', i));
     assert.ok(!body.includes('.tokW'), 'в мини-блоке нет обращения к tokW');
     assert.ok(body.includes('miniOf('), 'строки и отрыв считаются через miniOf');
+});
+
+// Часовые ключи счётчика UTC, ось - местная. Совмещение обязано переводить ключи, иначе
+// кривая уезжает на сдвиг часового пояса (26.10: тултип 462M против плитки 664M при +03:00).
+ok('ключи канонического счётчика переводятся в местное время смотрящего', () => {
+    const i = HTML.indexOf('function lgCcKeyToLocal');
+    assert.ok(i > 0, 'lgCcKeyToLocal найдена');
+    const fn = new Function('return ' + HTML.slice(i, HTML.indexOf('}', HTML.indexOf('return m ? base', i)) + 1))();
+    assert.strictEqual(fn('2026-10-26T00'), '2026-10-26T03', 'час UTC 00 при +03:00 -> 03 местного');
+    assert.strictEqual(fn('2026-10-25T21'), '2026-10-26T00', 'час через полночь UTC уезжает в следующие местные сутки');
+    const dk = fn('2026-10-26');
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(dk), 'дневной ключ остаётся датой: ' + dk);
+    // Совмещение использует перевод: строка-улика в lgAligned.
+    assert.ok(HTML.includes('map.set(lgCcKeyToLocal(k), v)'), 'lgAligned ставит значения по местным ключам');
 });
 
 finish();

@@ -42335,6 +42335,22 @@ function lgRows() {
   }
   return rows;
 }
+// 🪤 Часовые и дневные ключи канонического счётчика - UTC, а ось окна строит timeKeys по
+// МЕСТНОМУ времени смотрящего. Совмещение «в лоб» работало лишь случайно: строка лок «03»
+// ловила UTC-корзину «03» (= 06:00 МСК), а три UTC-часа перед окном не попадали на ось вовсе -
+// тултип на конце кривой показывал 462M против 664M в плитке (26.10). Поэтому ключи счётчика
+// переводятся в местное время смотрящего ДО совмещения: «2026-10-26T00» при +03:00 станет
+// «2026-10-26T03». Дни同理: UTC-день уходит в местный ровно одним сдвигом границы.
+function lgCcKeyToLocal(k) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2})$/.exec(k);
+  const ms = m ? Date.parse(m[1] + 'T' + m[2] + ':00:00.000Z') : Date.parse(k + 'T12:00:00.000Z');
+  if (!Number.isFinite(ms)) return k;
+  const d = new Date(ms);
+  const p2 = n => String(n).padStart(2, '0');
+  const base = d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate());
+  return m ? base + 'T' + p2(d.getHours()) : base;
+}
+
 // Ряды соседей выравниваем ПО КЛЮЧАМ, а не по индексу: у каждой установки своя дата
 // первого дня, и «всё время» у всех разной длины — совмещение по индексу сдвинуло бы
 // чужую кривую во времени, то есть соврало бы в самом графике.
@@ -42348,7 +42364,10 @@ function lgAligned(p, keys, metric) {
     const run = lgCcRun(p, LG.range) || lgLegacyRun(p, LG.range);
     if (!run) return keys.map(() => null);
     const map = new Map();
-    run.keys.forEach((k, i) => { const v = lgCcNum(run.values[i]); if (v !== null) map.set(k, v); });
+    run.keys.forEach((k, i) => {
+      const v = lgCcNum(run.values[i]);
+      if (v !== null) map.set(lgCcKeyToLocal(k), v);
+    });
     return keys.map(k => map.has(k) ? map.get(k) : null);
   }
   const own = ((p.keys || {})[LG.range]) || [];
@@ -42362,7 +42381,7 @@ function lgAligned(p, keys, metric) {
 function lgKeys(p, r) {
   if ((LG_M[LG.metric] || {}).source === 'cc') {
     const run = lgCcRun(p, r) || lgLegacyRun(p, r);
-    return run ? run.keys : [];
+    return run ? run.keys.map(lgCcKeyToLocal) : [];
   }
   return ((p && p.keys || {})[r]) || [];
 }

@@ -105,33 +105,74 @@ function proxyMarkUsed(id) {
 }
 const RUN_USED_PROXIES = new Set();
 
-// Свежий РАБОЧИЙ прокси: не из этого прогона, не из сегодняшнего журнала, и обязательно
-// с успешным preflight по API-пути площадки. Привязка пишется в пул (reassign), чтобы
-// снимок ЛК и баланс аккаунта потом ходили тем же адресом.
+// Глубокий прогон прокси: preflight «прошёл» его, а страница/API потом умирали (25.10).
+//
+// 🔴 Одного ответа `/api/v1/settings/public` МАЛО. Прокси, который отдаёт JSON, но
+// обрывается на полной загрузке SPA или через 30 секунд, для регистрации бесполезен -
+// именно так и умирали прогоны: `page.goto: Timeout 30000ms` и `Proxy connection timed
+// out` на первом же вызове API. Поэтому кандидат обязан пережить ТРИ проверки подряд:
+//   1) API-ручка площадки (`/api/v1/settings/public`);
+//   2) реальная загрузка страницы регистрации - весь HTML, JS и картинки (`/register`);
+//   3) повторная API-ручка уже ПОСЛЕ загрузки - прокси не должен умереть под нагрузкой.
+// Вердикт трёх проходов и есть «автотест набора», о котором просил владелец.
+async function deepProbe(proxy, host) {
+    const lib = pp;
+    const one = async (label, url, { minBytes = 0 } = {}) => {
+        const t0 = Date.now();
+        try {
+            const res = await lib.fetchVia(proxy, url, {
+                headers: { accept: '*/*', 'user-agent': UA, 'accept-encoding': 'identity' },
+                timeoutMs: 20000,
+            });
+            const text = await res.text();
+            const bytes = Buffer.byteLength(text, 'utf8');
+            const okStatus = res.status >= 200 && res.status < 400;
+            const enough = bytes >= minBytes;
+            return { ok: okStatus && enough, label, status: res.status, bytes, ms: Date.now() - t0 };
+        } catch (e) {
+            return { ok: false, label, status: 0, bytes: 0, ms: Date.now() - t0, error: (e && (e.message || String(e))) };
+        }
+    };
+    const api = await one('api', `https://${host}/api/v1/settings/public`);
+    // Ответ не 2xx/3xx или тело пустое - дальше не идём, страницу не тянем.
+    if (!api.ok) return { ok: false, steps: [api], error: api.error || `api HTTP ${api.status}` };
+    const page = await one('page', `https://${host}/register?aff=${REF}`, { minBytes: 20000 });
+    const api2 = await one('api2', `https://${host}/api/v1/settings/public`);
+    const steps = [api, page, api2];
+    const ok = api.ok && page.ok && api2.ok;
+    return {
+        ok, steps,
+        error: ok ? null : (steps.filter(s => !s.ok).map(s => `${s.label}: ${s.error || `HTTP ${s.status}, ${s.bytes}б`}`).join('; ')),
+    };
+}
+
+// Свежий РАБОЧИЙ прокси: не из этого прогона, не из сегодняшнего журнала, и прошедший
+// ГЛУБОКИЙ прогон (три проверки, см. deepProbe). Привязка пишется в пул (reassign),
+// чтобы снимок ЛК и баланс аккаунта потом ходили тем же адресом.
+// Свои адреса - первыми (решение владельца), затем скраперный ярус.
 async function acquireFreshProxy(key, host) {
     const used = new Set([...proxiesUsedToday(), ...RUN_USED_PROXIES]);
-    // Свои адреса - первыми (решение владельца), но когда они кончились, для автореги
-    // добираем скраперный ярус. `pp.pick()` здесь не годится: он уважает потолок
-    // «аккаунтов на адрес» и источник `own`, из-за чего на 4 своих адресах отвечает
-    // `saturated`, хотя 60 скраперных живы и проверяются preflight'ом.
+    // `pp.pick()` здесь не годится: он уважает потолок «аккаунтов на адрес» и источник
+    // `own`, из-за чего на 4 своих адресах отвечает `saturated`, хотя 60 скраперных живы.
     const pool = pp.pool();
     const list = [...(pool.own || []), ...(pool.scraped || [])];
     for (const cand of list) {
         const id = String(cand.id);
         if (used.has(id)) continue;
         used.add(id);
-        const pf = await pp.preflight(cand, { host, path: '/api/v1/settings/public' });
-        if (!pf.ok) {
-            log(`прокси ${cand.label || id} не прошёл preflight (${pf.error || pf.status})`);
+        const probe = await deepProbe(cand, host);
+        if (!probe.ok) {
+            log(`прокси ${cand.label || id} не прошёл автотест (${probe.error})`);
             continue;
         }
         RUN_USED_PROXIES.add(id);
         proxyMarkUsed(id);
         const bind = pp.reassign(key, id);
         if (!bind.ok) log(`⚠️ привязка ${id} не записалась: ${bind.error}`);
+        log(`прокси принят: ${cand.label || id} (3/3 прохода, ${probe.steps.map(s => s.ms + 'мс').join('/')})`);
         return cand;
     }
-    throw new Error('нет живого прокси под этот хост: все адреса уже использованы сегодня или не проходят preflight');
+    throw new Error('нет прокси, прошедшего автотест: все адреса использованы сегодня или не тянут загрузку');
 }
 
 function log(...a) { console.log('[tr-auto]', ...a); }

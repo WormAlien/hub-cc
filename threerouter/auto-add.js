@@ -149,28 +149,55 @@ async function deepProbe(proxy, host) {
 // Свежий РАБОЧИЙ прокси: не из этого прогона, не из сегодняшнего журнала, и прошедший
 // ГЛУБОКИЙ прогон (три проверки, см. deepProbe). Привязка пишется в пул (reassign),
 // чтобы снимок ЛК и баланс аккаунта потом ходили тем же адресом.
-// Свои адреса - первыми (решение владельца), затем скраперный ярус.
+//
+// 🔴 Параллельный отбор (правка 26.10). Перебор по одному занимал минуты: свободные прокси
+// живут минуты, и пока проверялся двадцатый адрес, первый уже умирал. Поэтому кандидаты
+// тестируются пачками по 6 и берётся первый прошедший; остальные - общий запас на
+// следующий аккаунт (их повторно не тестируем, только помечаем использованными).
+const PROXY_BATCH = 6;
+const PROXY_READY = [];   // проверенные адреса, готовые к следующему аккаунту
 async function acquireFreshProxy(key, host) {
-    const used = new Set([...proxiesUsedToday(), ...RUN_USED_PROXIES]);
+    const excluded = () => new Set([...proxiesUsedToday(), ...RUN_USED_PROXIES]);
+    const bind = (cand) => {
+        RUN_USED_PROXIES.add(String(cand.id));
+        proxyMarkUsed(String(cand.id));
+        const b = pp.reassign(key, String(cand.id));
+        if (!b.ok) log(`⚠️ привязка ${cand.id} не записалась: ${b.error}`);
+        return cand;
+    };
+    // Уже проверенный запас - сразу в бой.
+    while (PROXY_READY.length) {
+        const cand = PROXY_READY.shift();
+        if (excluded().has(String(cand.id))) continue;
+        log(`прокси из запаса: ${cand.label || cand.id}`);
+        return bind(cand);
+    }
+    const pool = pp.pool();
     // `pp.pick()` здесь не годится: он уважает потолок «аккаунтов на адрес» и источник
     // `own`, из-за чего на 4 своих адресах отвечает `saturated`, хотя 60 скраперных живы.
-    const pool = pp.pool();
-    const list = [...(pool.own || []), ...(pool.scraped || [])];
-    for (const cand of list) {
-        const id = String(cand.id);
-        if (used.has(id)) continue;
-        used.add(id);
-        const probe = await deepProbe(cand, host);
-        if (!probe.ok) {
-            log(`прокси ${cand.label || id} не прошёл автотест (${probe.error})`);
-            continue;
+    const queue = [...(pool.own || []), ...(pool.scraped || [])];
+    const tried = excluded();
+    while (queue.length) {
+        const batch = [];
+        while (batch.length < PROXY_BATCH && queue.length) {
+            const cand = queue.shift();
+            const id = String(cand.id);
+            if (tried.has(id)) continue;
+            tried.add(id);
+            batch.push(cand);
         }
-        RUN_USED_PROXIES.add(id);
-        proxyMarkUsed(id);
-        const bind = pp.reassign(key, id);
-        if (!bind.ok) log(`⚠️ привязка ${id} не записалась: ${bind.error}`);
-        log(`прокси принят: ${cand.label || id} (3/3 прохода, ${probe.steps.map(s => s.ms + 'мс').join('/')})`);
-        return cand;
+        if (!batch.length) break;
+        const results = await Promise.all(batch.map(async (cand) => ({ cand, probe: await deepProbe(cand, host) })));
+        const ok = results.filter(r => r.probe.ok);
+        for (const r of results) {
+            if (!r.probe.ok) log(`прокси ${r.cand.label || r.cand.id} не прошёл автотест (${r.probe.error})`);
+        }
+        if (!ok.length) continue;
+        // Первый рабочий - аккаунту, остальные - в запас, чтобы следующий не ждал.
+        const [first, ...rest] = ok;
+        PROXY_READY.push(...rest.map(r => r.cand));
+        log(`прокси принят: ${first.cand.label || first.cand.id} (3/3, ${first.probe.steps.map(s => s.ms + 'мс').join('/')}); в запасе ${PROXY_READY.length}`);
+        return bind(first.cand);
     }
     throw new Error('нет прокси, прошедшего автотест: все адреса использованы сегодня или не тянут загрузку');
 }
@@ -503,7 +530,18 @@ async function oneAccount(browser, n) {
         }
         log(`выход: ${PROXY_LABEL}`);
 
-        // 2. Окно панели и капча руками. Ящик создаём уже ПОСЛЕ неё.
+        // 1.5. Ящик - ПЕРВЫМ делом после прокси, параллельно с решением капчи.
+        // 🪤 Параллельное создание убирали 25.10, потому что владелец видел `about:blank`
+        // рядом с регистрацией, и почта «грузилась после сайта». Настоящая причина была в
+        // пустой вкладке и порядке фокуса, а не в параллельности. Теперь ящик создаётся
+        // сразу (сам по себе он не стареет - стареет только ВРЕМЯ до отправки кода), а
+        // следующий шаг займёт весь ручной ввод капчи.
+        stage('mail');
+        const mailReady = mailOp(en.createEmail)
+            .then(a => { if (a) { log(`почта: ${a}`); } return a; })
+            .catch(e => { log(`почта не создалась: ${e.message}`); return null; });
+
+        // 2. Окно панели и капча руками.
         // 🪤 24.10 08:03: капча больше НЕ стартует сама на пустой форме - на странице
         // висит кнопка `Click to start verification`, и `waitCaptchaToken` ждал ответ
         // верификации, которого без клика не будет. Жмём её сами, решает владелец.
@@ -529,25 +567,39 @@ async function oneAccount(browser, n) {
         stage('captcha-manual');
         const opened = await clickExactButton(sitePage, ['Click to start verification', 'Start verification', '点击开始验证', '开始验证']);
         if (opened) log(`капча открыта кнопкой «${opened}»`);
-        // 🪤 Ящик создаётся ПОСЛЕ капчи, не параллельно (правка 25.10). Параллельное
-        // открытие emailnator показывало владельцу `about:blank` рядом с окном
-        // регистрации, а почта грузилась только после страницы провайдера - два контекста
-        // дрались за старт. От создания ящика до отправки кода проходят секунды.
         log('✋ РЕШИ КАПЧУ В ОКНЕ (4 зелёных круга или ползунок). Дальше скрипт продолжит сам.');
         const captchaToken = await waitCaptchaToken(sitePage);
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
 
-        stage('mail');
-        // Ящик создаётся ПЕРВЫМ делом после капчи и заполняется в форму сразу. Если он
-        // окажется занятым, refillForm вернёт окно на /register, впишет новый адрес и
-        // заново нажмёт Continue - иначе SPA остаётся ждать код со старой почты.
-        let addr = await mailOp(en.createEmail);
-        if (!addr) throw new Error('emailnator не выдал адрес');
-        log(`почта: ${addr}`);
-        let baseline = await mailOp(inboxHrefs);
-        log(`baseline писем в ящике: ${baseline.length}`);
-        // 🪤 Почта ещё грузится: поднимаем вкладку провайдера, чтобы владелец не смотрел
-        // на `about:blank` и не решал, что скрипт завис. Ящик нужен скрипту, не человеку.
+        // Ящик уже создаётся с шага 1.5 - забираем результат. Если он не успел или упал,
+        // создаём здесь; занятый адрес дальше лечится `refillForm` (возврат на /register
+        // с новым адресом и повторным Continue), иначе SPA ждёт код со старой почты.
+        // 🔴 Адрес должен БЫТЬ, а не только иметь правильную форму (живой случай 26.10:
+        // emailnator выдал `a.eyacelosa@gmail.com`, но ящик оказался мёртв - открытие
+        // выбрасывало на чужой адрес, и прогон отсидел 10 минут впустую). Проверка
+        // живости идёт ПОСЛЕ создания и ДО отправки кода, через тот же page,
+        // иначе `openInbox` сверяет адрес со страницей, где уже открыт прошлый ящик.
+        let addr = await mailReady;
+        let baseline = [];
+        for (let i = 0; i < 3; i++) {
+            if (!addr) addr = await mailOp(en.createEmail);
+            if (!addr) throw new Error('emailnator не выдал адрес');
+            log(`почта: ${addr}`);
+            const alive = await mailOp(async (page) => {
+                try { await en.openInbox(page, addr); return true; }
+                catch (e) { log(`ящик ${addr} не наш: ${e.message.split('\n')[0]}`); return false; }
+            });
+            if (alive) {
+                baseline = await mailOp(inboxHrefs);
+                log(`baseline писем в ящике: ${baseline.length}`);
+                break;
+            }
+            log(`адрес ${addr} мёртв - беру новый`);
+            addr = null;
+        }
+        if (!addr) throw new Error('emailnator отдаёт мёртвые ящики подряд');
+        // 🪤 Вкладка панели остаётся сверху: ящик нужен скрипту, а не человеку, и владелец
+        // не должен смотреть на догружающийся emailnator вместо формы.
         await sitePage.bringToFront().catch(() => {});
         // Окно могли закрыть ПОКА решали капчу: поднимаем новое на том же прокси,
         // форма открывается заново, капча не нужна - токен уже у нас.

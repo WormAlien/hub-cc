@@ -571,33 +571,21 @@ async function oneAccount(browser, n) {
         const captchaToken = await waitCaptchaToken(sitePage);
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
 
-        // Ящик уже создаётся с шага 1.5 - забираем результат. Если он не успел или упал,
-        // создаём здесь; занятый адрес дальше лечится `refillForm` (возврат на /register
-        // с новым адресом и повторным Continue), иначе SPA ждёт код со старой почты.
-        // 🔴 Адрес должен БЫТЬ, а не только иметь правильную форму (живой случай 26.10:
-        // emailnator выдал `a.eyacelosa@gmail.com`, но ящик оказался мёртв - открытие
-        // выбрасывало на чужой адрес, и прогон отсидел 10 минут впустую). Проверка
-        // живости идёт ПОСЛЕ создания и ДО отправки кода, через тот же page,
-        // иначе `openInbox` сверяет адрес со страницей, где уже открыт прошлый ящик.
-        let addr = await mailReady;
-        let baseline = [];
-        for (let i = 0; i < 3; i++) {
-            if (!addr) addr = await mailOp(en.createEmail);
-            if (!addr) throw new Error('emailnator не выдал адрес');
-            log(`почта: ${addr}`);
-            const alive = await mailOp(async (page) => {
-                try { await en.openInbox(page, addr); return true; }
-                catch (e) { log(`ящик ${addr} не наш: ${e.message.split('\n')[0]}`); return false; }
-            });
-            if (alive) {
-                baseline = await mailOp(inboxHrefs);
-                log(`baseline писем в ящике: ${baseline.length}`);
-                break;
-            }
-            log(`адрес ${addr} мёртв - беру новый`);
-            addr = null;
-        }
-        if (!addr) throw new Error('emailnator отдаёт мёртвые ящики подряд');
+        // Ящик создаётся на шаге 1.5 - ДО капчи, и результат забираем здесь как есть.
+        // 🔴 НЕ создавать новый ящик на этом шаге (живой случай 26.10): владелец уже
+        // заполнил форму адресом из шага 1.5, а новый ящик после капчи означал, что код
+        // уходит на один адрес, а форма ждёт другой. Проверка живости только ПРОВЕРЯЕТ
+        // и НИКОГДА не меняет адрес: мёртвый ящик - это стоп, а не повод подменить.
+        const addr = await mailReady;
+        if (!addr) throw new Error('ящик не создался до капчи - прогон останавливаю, адрес в форме трогать нельзя');
+        log(`почта: ${addr}`);
+        const alive = await mailOp(async (page) => {
+            try { await en.openInbox(page, addr); return true; }
+            catch (e) { log(`ящик ${addr} не наш: ${e.message.split('\n')[0]}`); return false; }
+        });
+        if (!alive) throw new Error(`ящик ${addr} мёртв - письмо туда не придёт; форма уже заполнена этим адресом`);
+        const baseline = await mailOp(inboxHrefs);
+        log(`baseline писем в ящике: ${baseline.length}`);
         // 🪤 Вкладка панели остаётся сверху: ящик нужен скрипту, а не человеку, и владелец
         // не должен смотреть на догружающийся emailnator вместо формы.
         await sitePage.bringToFront().catch(() => {});

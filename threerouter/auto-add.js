@@ -161,16 +161,40 @@ function isIpLimit(e) {
     return /registration_ip_limit|registration limit|ip address has reached/.test(t);
 }
 
+// Сетевая ошибка прокси, а не ответ площадки. `fetchVia` бросает строкой вида
+// «Proxy connection timed out» / «Socket closed» / «Client network socket disconnected».
+function isProxyNetError(e) {
+    return /proxy|socket|ECONN|ETIMEDOUT|EHOSTUNREACH|fetch failed|network/i.test(String((e && e.message) || e));
+}
+
+// Один сетевой вызов через прокси с ОДНИМ повтором на другом прокси.
+// 🔴 Прокси живёт минуты: между preflight и запросом он успевает умереть (живой случай
+// 25.10 - «Proxy connection timed out» уже на send-verify-code). Меняем адрес и повторяем;
+// страница при этом остаётся открытой (для HTTP она не нужна), а привязка в пуле
+// обновляется - снимок ЛК пойдёт тем же выходом.
+async function withProxyRetry(fn, label) {
+    try {
+        return await fn();
+    } catch (e) {
+        if (!isProxyNetError(e) || NO_PROXY) throw e;
+        log(`${label}: прокси ${PROXY_LABEL} отвалился (${String(e.message).slice(0, 80)}) - беру другой`);
+        PROXY = await acquireFreshProxy(`tr_rega_${Date.now()}_${label}`, 'www.threerouter.com');
+        PROXY_LABEL = PROXY.label || PROXY.id || 'прокси';
+        log(`новый выход: ${PROXY_LABEL}`);
+        return await fn();
+    }
+}
+
 async function api(pathname, { method = 'GET', body, token } = {}) {
     const headers = { Accept: 'application/json', 'User-Agent': UA };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const r = await castFetch(`${API}${pathname}`, {
+    const r = await withProxyRetry(() => castFetch(`${API}${pathname}`, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-    });
+    }), 'api');
     let j = {};
     try { j = await r.json(); } catch { /* тело может быть пустым */ }
     if (!r.ok) {
@@ -586,10 +610,10 @@ async function oneAccount(browser, n) {
         log(`ключ ${keyRec.key.slice(0, 6)}…${keyRec.key.slice(-6)} (группа ${grp.name})`);
 
         stage('probe-key');
-        const probe = await castFetch(`${GATEWAY}/v1/models`, {
+        const probe = await withProxyRetry(() => castFetch(`${GATEWAY}/v1/models`, {
             headers: { Authorization: `Bearer ${keyRec.key}`, Accept: 'application/json', 'User-Agent': UA },
             signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
-        });
+        }), 'probe');
         if (probe.status !== 200) throw new Error(`ключ не прошёл /v1/models: HTTP ${probe.status}`);
 
         const user = auth.user || {};

@@ -1,71 +1,96 @@
-/* Uses the dashboard's existing light/dark theme tokens. No independent palette. */
-#a6api-root { padding: 30px 24px; color: var(--color-ink); font-size: 13px; max-width: 1650px; margin: 0 auto; }
+/* Existing dashboard theme tokens only. Main window leads; subagent models stay secondary. */
+#a6api-root { max-width: 1240px; margin: 0 auto; padding: 30px 24px; color: var(--color-ink); font-size: 13px; }
 #a6api-root * { box-sizing: border-box; }
 #a6api-root [hidden] { display: none !important; }
-#a6api-root h1 { font-size: 24px; font-weight: 600; letter-spacing: -.025em; margin: 0; }
-#a6api-root h2 { font-size: 14px; font-weight: 600; margin: 0; }
-#a6api-root p { margin: 5px 0 0; }
-.a6-head, .a6-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.a6-head { justify-content: space-between; margin-bottom: 18px; }
+#a6api-root h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -.025em; }
+#a6api-root h2 { margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; }
+#a6api-root p { margin: 6px 0 0; line-height: 1.5; }
 .a6-muted { color: var(--color-muted); }
-.a6-mono, .a6-price { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
-.a6-price { white-space: nowrap; }
-.a6-panel { background: var(--color-surface); border: 1px solid var(--color-line-soft); border-radius: 10px; padding: 16px; min-width: 0; }
-.a6-summary { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr); gap: 14px; margin-bottom: 14px; }
-.a6-controls { display: grid; grid-template-columns: minmax(140px, .65fr) minmax(200px, 1fr); gap: 10px; }
-.a6-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.a6-field > span { color: var(--color-muted); font-size: 11px; }
-.a6-btn, .a6-input, .a6-select { font: inherit; color: var(--color-ink); background: var(--color-elevated); border: 1px solid var(--color-line); border-radius: 7px; min-height: 36px; padding: 7px 10px; max-width: 100%; }
-.a6-input, .a6-select { width: 100%; min-width: 0; }
-.a6-btn { cursor: pointer; white-space: nowrap; }
+.a6-mono { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.a6-head, .a6-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.a6-head { justify-content: space-between; margin-bottom: 22px; }
+.a6-btn, .a6-select { font: inherit; color: var(--color-ink); background: var(--color-elevated); border: 1px solid var(--color-line); border-radius: 7px; padding: 9px 12px; min-height: 38px; max-width: 100%; }
+.a6-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; text-decoration: none; line-height: 1.35; text-align: center; }
 .a6-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--color-azure) 10%, var(--color-elevated)); border-color: var(--color-azure); }
-.a6-btn:disabled { cursor: not-allowed; opacity: .5; }
-.a6-btn:focus-visible, .a6-input:focus-visible, .a6-select:focus-visible, #a6api-root input[type=checkbox]:focus-visible { outline: 2px solid var(--color-azure); outline-offset: 3px; }
-.a6-primary { border-color: var(--color-azure); background: color-mix(in oklab, var(--color-azure) 12%, var(--color-surface)); }
-.a6-small { font-size: 11px; min-height: 28px; padding: 4px 7px; }
-.a6-facts { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 14px; }
-.a6-fact dt { font-size: 11px; color: var(--color-muted); }
-.a6-fact dd { margin: 3px 0 0; font-size: 17px; font-family: 'Geist Mono', ui-monospace, monospace; }
-.a6-fact dd.a6-fact-small { font-size: 12px; }
-.a6-key-line { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
-.a6-key-line code { overflow-wrap: anywhere; }
-.a6-route-strip { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin: 12px 0; min-height: 34px; }
-.a6-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-line); border-radius: 6px; padding: 5px 8px; background: var(--color-elevated); max-width: 100%; }
-.a6-chip span { overflow-wrap: anywhere; }
-.a6-route-controls { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(100px, 1fr); gap: 10px; }
-.a6-route-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--color-line-soft); }
-.a6-notice { border: 1px solid var(--color-line); border-radius: 7px; padding: 10px 12px; margin-bottom: 12px; color: var(--color-muted); }
+.a6-btn:disabled, .a6-select:disabled { cursor: not-allowed; opacity: .55; }
+.a6-btn:focus-visible, .a6-select:focus-visible { outline: 2px solid var(--color-azure); outline-offset: 3px; }
+.a6-select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.a6-select.a6-mono, .a6-btn.a6-mono { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; }
+.a6-primary { background: color-mix(in oklab, var(--color-azure) 13%, var(--color-surface)); border-color: var(--color-azure); font-weight: 600; }
+.a6-small { padding: 6px 10px; min-height: 32px; font-size: 12px; }
+.a6-notice { border: 1px solid var(--color-line); border-radius: 7px; padding: 11px 13px; margin-bottom: 14px; color: var(--color-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .a6-error { border-color: var(--color-crimson); color: var(--color-ink); }
-.a6-notice strong { color: var(--color-ink); }
-.a6-status { font-size: 11px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.a6-status[data-ok=true]::before { content: '✓'; color: var(--color-emerald); }
-.a6-status[data-ok=false]::before { content: '!'; color: var(--color-crimson); }
-.a6-status[data-ok=unknown]::before { content: '?'; color: var(--color-muted); }
-.a6-table-head { padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
-.a6-table-head .a6-input { width: 260px; }
-.a6-table-wrap { overflow-x: auto; border-top: 1px solid var(--color-line-soft); }
-.a6-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.a6-table th { text-align: left; background: var(--color-elevated); color: var(--color-muted); font-size: 10px; font-weight: 500; padding: 10px 12px; white-space: nowrap; }
-.a6-table td { padding: 11px 12px; border-top: 1px solid var(--color-line-soft); vertical-align: middle; }
-.a6-table td small { display: block; color: var(--color-muted); margin-top: 3px; font-size: 10px; }
-.a6-table tr[data-selected=true] { background: color-mix(in oklab, var(--color-azure) 5%, transparent); }
-.a6-table tr:hover { background: var(--color-elevated); }
-.a6-seller { min-width: 150px; max-width: 260px; overflow-wrap: anywhere; }
-.a6-table input[type=checkbox] { width: 17px; height: 17px; accent-color: var(--color-azure); cursor: pointer; }
-.a6-stack { display: flex; flex-direction: column; gap: 4px; }
-.a6-data { padding: 0; overflow: hidden; margin-bottom: 14px; }
-.a6-empty { padding: 20px 16px; color: var(--color-muted); }
-.a6-review { padding: 12px 0; border-top: 1px solid var(--color-line-soft); }
-.a6-review p { overflow-wrap: anywhere; white-space: pre-wrap; }
-#a6-reviews { margin-bottom: 14px; }
-#a6-draft-status { font-size: 11px; color: var(--color-muted); }
-@media (max-width: 900px) { .a6-summary { grid-template-columns: 1fr; } }
+.a6-account { display: flex; align-items: center; flex-wrap: wrap; gap: 18px 32px; border-top: 1px solid var(--color-line-soft); border-bottom: 1px solid var(--color-line-soft); padding: 16px 0; margin-bottom: 20px; }
+.a6-account > div { display: flex; flex-direction: column; gap: 5px; }
+.a6-account > div > .a6-muted { font-size: 11px; }
+.a6-balance { font-size: 25px; line-height: 1.1; font-weight: 500; letter-spacing: -.035em; }
+.a6-account-spend { align-self: center; }
+.a6-status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--color-muted); }
+.a6-status::before { content: ''; flex: 0 0 7px; width: 7px; height: 7px; border: 1px solid var(--color-muted); border-radius: 50%; }
+.a6-status[data-active=true]::before { border-color: var(--color-emerald); background: var(--color-emerald); }
+.a6-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.65fr); gap: 16px; }
+.a6-panel { min-width: 0; background: var(--color-surface); border: 1px solid var(--color-line-soft); border-radius: 10px; padding: 20px; }
+.a6-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.a6-field > span { font-size: 11px; color: var(--color-muted); }
+.a6-key-select { margin-top: 18px; }
+.a6-key-identity { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 11px; }
+.a6-key-identity code { overflow-wrap: anywhere; }
+.a6-key-facts { display: grid; gap: 12px; margin: 20px 0; }
+.a6-key-facts > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.a6-key-facts dt { color: var(--color-muted); font-size: 11px; }
+.a6-key-facts dd { margin: 0; text-align: right; font-size: 12px; overflow-wrap: anywhere; }
+#a6-key-note, #a6-active-key { font-size: 11px; overflow-wrap: anywhere; }
+.a6-main-field > span { color: var(--color-ink); font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
+.a6-select.a6-main-model { min-height: 54px; padding: 12px 14px; font-size: 16px; border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
+#a6-model-note { font-size: 11px; }
+.a6-subagents { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-line-soft); }
+.a6-tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.a6-tier-grid .a6-select { font-size: 11px; padding: 8px; }
+.a6-save-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+#a6-draft-status { font-size: 11px; }
+.a6-route-note { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--color-line-soft); }
+#a6api-root .a6-route-note p { margin: 0; font-size: 11px; flex: 1; }
+.a6-activation { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--color-line-soft); }
+#a6-activation-note { font-size: 11px; }
+.a6-command { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.a6-command > span { font-size: 11px; }
+.a6-command .a6-btn { font-size: 12px; }
+.a6-route-focus { outline: 2px solid var(--color-azure); outline-offset: 3px; }
+/* Команда /model под селектором модели. Кликабельна целиком: владельцу нужна готовая
+   строка для второго окна, а не инструкция «напиши сам». */
+.a6-cmd-row { margin-top: 6px; min-height: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.a6-cmd-row:empty { display: none; }
+/* Строка тиров чуть отступает от сетки селекторов и не раздувает панель: один ряд чипов. */
+.a6-cmd-tiers { margin-top: 8px; }
+.a6-cmd {
+  display: inline-block; cursor: pointer; font-size: 11px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--color-line-soft); background: var(--color-elevated);
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.a6-cmd:hover, .a6-cmd:focus-visible { border-color: var(--color-azure); outline: none; }
+@media (max-width: 900px) {
+  .a6-layout { grid-template-columns: 1fr; }
+  .a6-key-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .a6-key-facts > div { flex-direction: column; gap: 5px; }
+  .a6-key-facts dd { text-align: left; }
+}
 @media (max-width: 520px) {
   #a6api-root { padding: 18px 12px; }
-  .a6-controls, .a6-route-controls { grid-template-columns: 1fr; }
-  .a6-head { align-items: flex-start; }
-  .a6-facts { gap: 12px 22px; }
-  .a6-table-head .a6-input { width: 100%; }
-  .a6-table-head { align-items: flex-start; }
-  .a6-btn { min-height: 40px; }
+  .a6-head { align-items: flex-start; gap: 14px; }
+  .a6-panel { padding: 16px; }
+  .a6-account { gap: 16px 24px; }
+  .a6-status { margin-left: 0; flex-basis: 100%; }
+  .a6-key-facts { grid-template-columns: 1fr; }
+  .a6-key-facts > div { flex-direction: row; }
+  .a6-key-facts dd { text-align: right; }
+  .a6-tier-grid { grid-template-columns: 1fr; }
+  .a6-tier-grid .a6-select { font-size: 12px; }
+  .a6-btn, .a6-select { min-height: 42px; }
+  .a6-select.a6-main-model { min-height: 56px; font-size: 15px; }
+  .a6-save-row { align-items: flex-start; }
+  .a6-save-row .a6-btn { width: 100%; }
+  .a6-route-note { align-items: flex-start; flex-direction: column; }
+  .a6-activation > div { width: 100%; }
+  #a6-activate { width: 100%; }
 }

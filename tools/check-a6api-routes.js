@@ -64,51 +64,55 @@ async function test(name, fn) {
         assert.equal(journal([{ test: 'vision-red' }, { test: 'vision-blue' }, { channelId: 4, test: 'system' }])[3].vision, true);
     });
     let writes = 0;
-    const api = {
-        state: async () => ({ tokens: [{ id: 9, name: 'test', mask: 'sk-***' }], models: ['model'], account: { balanceUsd: 2 } }),
-        ownToken: async id => { if (id !== 9) throw Object.assign(new Error('no token'), { code: 'token_not_owned', status: 404 }); return { id: 9 }; },
-        listings: async model => ({ items: [{ model, channelId: 3 }], stale: true }),
-        route: async () => ({ id: 1, version: 2, channels: [] }),
-        logs: async () => ({ items: [] }), reviews: async () => ({ items: [], count: 0 }),
-        saveRoute: async body => { writes++; return { id: 1, version: 3, channels: body.channels }; },
-        enableModel: async () => { writes++; return { ok: true }; }, reveal: async () => { writes++; return 'sk-explicit-secret'; },
+    const gateway = {
+        state: async () => ({ tokens: [{ id: 9, name: 'test', mask: 'sk-***' }], models: ['model'], account: { balanceUsd: 2 }, selectedTokenId: 9, prepared: true, active: false,
+            modelMap: { default: 'model', opus: 'model', sonnet: 'model', haiku: 'model' }, routesMap: { default: 'other' } }),
+        models: async id => { assert.equal(id, 9); return ['model']; },
+        selectKey: async id => { assert.equal(id, 9); writes++; return { ok: true, selectedTokenId: id }; },
+        saveModels: async (id, patch) => { assert.equal(id, 9); writes++; return { ok: true, modelMap: patch, routesMap: { default: 'other' } }; },
+        activate: async id => { assert.equal(id, 9); writes++; return { ok: true, active: true }; },
     };
-    const router = createRoutes({ api, secretDir: dir });
+    const router = createRoutes({ gateway, api: {}, secretDir: dir });
     const server = http.createServer((req, res) => { if (!router.handle(req, res)) { res.statusCode = 404; res.end('other'); } });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const base = 'http://127.0.0.1:' + server.address().port + '/__switch/api/a6api/';
+    const post = (name, body) => fetch(base + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     try {
         await test('state GET is sanitized, no-store and never mutates', async () => {
             const r = await fetch(base + 'state?fresh=1'); const d = await r.json();
             assert.equal(r.status, 200); assert.equal(d.canWrite, true); assert.equal(d.tokens[0].mask, 'sk-***');
+            assert.equal(d.selectedTokenId, 9); assert.equal(d.prepared, true); assert.equal(d.active, false);
             assert.equal(r.headers.get('cache-control'), 'no-store'); assert.equal(writes, 0);
         });
-        await test('query string is parsed, not compared as part of pathname', async () => {
-            const r = await fetch(base + 'model?tokenId=9&model=model'); const d = await r.json();
-            assert.equal(r.status, 200); assert.equal(d.catalog.items[0].model, 'model'); assert.equal(writes, 0);
+        await test('per-key model catalog is read-only and needs no key in URL', async () => {
+            const r = await fetch(base + 'models?tokenId=9'); const d = await r.json();
+            assert.equal(r.status, 200); assert.deepEqual(d.models, ['model']); assert.equal(d.tokenId, 9); assert.equal(writes, 0);
         });
-        await test('GET can never reveal a key or change routes', async () => {
-            for (const name of ['reveal', 'route', 'enable-model']) assert.equal((await fetch(base + name)).status, 405);
+        await test('seller management and secret-reveal endpoints are removed', async () => {
+            for (const name of ['model', 'reviews', 'logs', 'route', 'enable-model', 'reveal']) {
+                assert.equal((await fetch(base + name + '?tokenId=9&model=model')).status, 404, name);
+                assert.equal((await post(name, { tokenId: 9 })).status, 404, name);
+            }
+            assert.equal(writes, 0);
+        });
+        await test('GET cannot select keys, save models or activate Claude Code', async () => {
+            for (const name of ['key', 'modelmap', 'activate']) assert.equal((await fetch(base + name)).status, 405);
             assert.equal(writes, 0);
         });
         await test('plain form and cross-origin writes are denied', async () => {
-            const r = await fetch(base + 'route', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' });
-            assert.equal(r.status, 415);
-            const foreign = await fetch(base + 'route', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' });
-            assert.equal(foreign.status, 403); assert.equal(writes, 0);
+            assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
+            assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' })).status, 403);
+            assert.equal(writes, 0);
         });
-        await test('JSON writes are explicit and return verified state', async () => {
-            const r = await fetch(base + 'route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokenId: 9, channels: [3] }) });
-            assert.equal(r.status, 200); assert.equal((await r.json()).route.version, 3); assert.equal(writes, 1);
-        });
-        await test('key reveal requires explicit POST', async () => {
-            const r = await fetch(base + 'reveal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"tokenId":9}' });
-            assert.equal((await r.json()).key, 'sk-explicit-secret'); assert.equal(writes, 2);
+        await test('key, modelmap and activate are distinct explicit operations', async () => {
+            let r = await post('key', { tokenId: 9 }); assert.equal((await r.json()).selectedTokenId, 9); assert.equal(writes, 1);
+            const patch = { default: 'model', opus: 'model', sonnet: 'model', haiku: 'model' };
+            r = await post('modelmap', { tokenId: 9, modelMap: patch }); assert.deepEqual((await r.json()).modelMap, patch); assert.equal(writes, 2);
+            r = await post('activate', { tokenId: 9 }); assert.equal((await r.json()).active, true); assert.equal(writes, 3);
         });
         await test('malformed JSON and oversized bodies do not mutate', async () => {
-            assert.equal((await fetch(base + 'route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' })).status, 400);
-            assert.equal((await fetch(base + 'route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ a: 'x'.repeat(70000) }) })).status, 413);
-            assert.equal(writes, 2);
+            assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' })).status, 400);
+            assert.equal((await post('key', { a: 'x'.repeat(70000) })).status, 413); assert.equal(writes, 3);
         });
         await test('unrelated routes remain untouched', async () => assert.equal((await fetch(base.replace('/a6api/', '/other/'))).status, 404));
     } finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); }

@@ -49,6 +49,8 @@
 //    DELETE /chat[/<seq>]               — Н: одно / все свои / `all=1`.
 //    DELETE /chat?gid=G[&mine=1|&all=1] — Л: то же в пределах группы.
 //    GET  /me             — Л: своя запись и свои группы.
+//    GET  /gateways       — Л: отметки «работает / лежит» (любой активный участник).
+//    PUT  /gateways       — Л, только админ: заменить список { items: [...] }.
 //    POST /invite         — Л: выдать одноразовый код (любой член группы).
 //    GET  /invite         — Л: свои непогашенные приглашения.
 //    DELETE /invite/<id>  — Л: погасить до размена (своё — автор, любое — создатель).
@@ -198,6 +200,10 @@ const CHAT_DIR = path.join(DATA, 'chat');
 const MEMBERS_FILE = path.join(DATA, 'members.json');
 const GROUPS_FILE = path.join(DATA, 'groups.json');
 const INVITES_FILE = path.join(DATA, 'invites.json');
+// Окно авто-переноса токенов с прежнего приёмника и список тех, кому перенос запрещён.
+// См. `adoptUnknown` ниже: это разовая миграция, а не второй способ входа.
+const ADOPT_UNTIL_FILE = path.join(DATA, 'adopt-until');
+const ADOPT_BANNED_FILE = path.join(DATA, 'adopt-banned.json');
 // Соль хеша адреса переехала в свой файл: единого секрета в процессе больше нет, а
 // раньше солью служил именно он — и любая смена доступа молча превращала учёт адресов
 // в мусор. Файл создаёт переход (`addr-salt`, 64 hex); пока его нет, солью остаётся
@@ -375,6 +381,21 @@ try {
     console.log('\n=== СЕКРЕТ ЛИГИ СОЗДАН, скопируй его в league-config.json каждого хаба ===');
     console.log(SECRET);
     console.log('=== больше он печататься не будет, лежит в ' + SECRET_FILE + ' ===\n');
+}
+
+// Идентичность ПРИЁМНИКА, а не участника: случайный hex, живёт в каталоге данных.
+// Зачем: после переезда на другую ноду у старых хабов остаётся токен, которого новый
+// приёмник не знает. Хаб видит 401 и должен переподключиться сам, без человека. Но тот
+// же 401 приходит и отозванному участнику на ТОЙ ЖЕ ноде, а ему переподключаться нельзя -
+// это был бы обход отзыва. Отсюда `instance` в `/health`: сменился - нода другая, можно
+// авто-джойн; тот же - токен отозван, не трогаем.
+const INSTANCE_FILE = path.join(DATA, 'instance-id');
+let INSTANCE = '';
+try { INSTANCE = String(fs.readFileSync(INSTANCE_FILE, 'utf8')).trim(); } catch { /* первый старт */ }
+if (!/^[a-f0-9]{16}$/.test(INSTANCE)) {
+    INSTANCE = crypto.randomBytes(8).toString('hex');
+    try { fs.writeFileSync(INSTANCE_FILE, INSTANCE + '\n', { mode: 0o600 }); }
+    catch (e) { console.error('instance-id не записался: ' + e.message); }
 }
 
 const log = m => console.log(`[${new Date().toISOString()}] ${m}`);
@@ -597,7 +618,10 @@ function healthBody() {
     if (healthCache.body && now - healthCache.at < HEALTH_TTL_MS) return healthCache.body;
     const all = allSlices();
     healthCache = { at: now, body: { ok: true, installs: all.length,
-        last: all.map(p => p.recvAt).sort().pop() || null } };
+        last: all.map(p => p.recvAt).sort().pop() || null,
+        // `instance` - идентичность ноды, не секрет. По нему хаб отличает «новый
+        // приёмник, старый токен» от «меня отозвали на этом же» (см. блок выше).
+        instance: INSTANCE } };
     return healthCache.body;
 }
 
@@ -1491,7 +1515,13 @@ function ccClean(v) {
         v: ccNum(v.v),
         available: v.available !== false,
         reason: CC_REASONS.has(v.reason) ? v.reason : null,
-        lifetime: ccNum(v.lifetime),
+        // Цифра на карточке - большее из итога (счётчик [CC] плюс прочие харнессы) и суммы
+        // подневного ряда в срезе: приёмник держит ряд только 400 дней, но именно его видит
+        // человек в тултипе, и карточка не имеет права показывать меньше своего же графика.
+        lifetime: (() => {
+            const lt = ccNum(v.lifetime), ds = ccNum(v.breakdown && v.breakdown.days);
+            return lt === null ? null : (ds === null ? lt : Math.max(lt, ds));
+        })(),
         lifetimeLower: ccNum(v.lifetimeLower),
         complete: !!v.complete,
         stale: !!v.stale,
@@ -1922,6 +1952,66 @@ function chartCfg() {
     } catch { return Object.assign({}, CHART_DEFAULT); }   // файла нет - значения по умолчанию
 }
 
+// ── Шлюзы: ручная отметка «работает / лежит» ────────────────────────────────
+// Владелец 24.10.2026: «вкладок дохуя, а рабочих шлюзов мало» - нужна одна панель,
+// где админ отмечает, что сейчас живо, и её видят все участники. Список живёт файлом
+// на ноде (как chart.json и ar-schedule.json), правит только админ, хаб - труба.
+// `id` это имя вкладки: оно уезжает в разметку на всех установках, поэтому пропускаем
+// только буквы, цифры, точку, дефис и подчёркивание. Подпись рисует клиент, но храним
+// и её: у соседа может быть сборка, где вкладки с таким id уже нет.
+const GATEWAYS_FILE = path.join(DATA, 'gateways.json');
+const GW_MAX = 80, GW_ID_MAX = 32, GW_LABEL_MAX = 40, GW_NOTE_MAX = 120;
+const GW_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}._-]{0,31}$/u;
+const gwText = (v, max) => String(v == null ? '' : v).replace(/[<>&"']/g, '')
+    .replace(/\s+/g, ' ').trim().slice(0, max);
+function gatewaysClean(d) {
+    const out = { updated: null, updatedBy: null, items: [] };
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return out;
+    const at = typeof d.updated === 'string' ? Date.parse(d.updated) : NaN;
+    if (Number.isFinite(at)) out.updated = new Date(at).toISOString();
+    if (typeof d.updatedBy === 'string') out.updatedBy = gwText(d.updatedBy, 40);
+    const seen = new Set();
+    for (const it of Array.isArray(d.items) ? d.items : []) {
+        if (!it || typeof it !== 'object') continue;
+        const id = String(it.id || '').trim();
+        if (id.length > GW_ID_MAX || !GW_ID_RE.test(id) || seen.has(id)) continue;
+        seen.add(id);
+        out.items.push({
+            id,
+            label: gwText(it.label, GW_LABEL_MAX) || id,
+            up: it.up === true,
+            ...(it.note ? { note: gwText(it.note, GW_NOTE_MAX) } : {}),
+        });
+        if (out.items.length >= GW_MAX) break;
+    }
+    return out;
+}
+function gatewaysCfg() {
+    try {
+        const raw = fs.readFileSync(GATEWAYS_FILE, 'utf8');
+        return gatewaysClean(JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw));
+    } catch { return gatewaysClean(null); }   // файла нет - ни один шлюз не отмечен
+}
+function handleGatewaysGet(req, res) {
+    json(res, 200, { ok: true, ...gatewaysCfg() });
+}
+function handleGatewaysPut(req, res, raw, me) {
+    if (!adminGate(res, me)) return;
+    let b;
+    try { b = JSON.parse(raw); } catch { return json(res, 400, { error: 'тело не JSON' }); }
+    if (!b || typeof b !== 'object' || !Array.isArray(b.items)) {
+        return json(res, 400, { error: 'нужен items - список шлюзов' });
+    }
+    const doc = gatewaysClean({ updated: new Date().toISOString(),
+        updatedBy: me.nick || '', items: b.items });
+    if (!writeState(GATEWAYS_FILE, doc)) {
+        return json(res, 507, { error: 'gateways.json не записался - ничего не изменено' });
+    }
+    log(`админ ${me.memberId}: шлюзы - работает ${doc.items.filter(x => x.up).length}`
+        + ` из ${doc.items.length}`);
+    json(res, 200, { ok: true, ...doc });
+}
+
 const PEER_PUBLIC = ['nick', 'recvAt', 'keys', 'tok', 'sp', 'tu', 'act', 'acc', 'tot', 'ccStats', 'legacyHeld'];
 function peerPublic(s) {
     const out = { rid: ridOf(s.installId) };
@@ -1943,8 +2033,15 @@ function handlePeers(req, res, u, me, identity) {
         .filter(p => p.installId !== mine)
         .filter(p => now - Date.parse(p.recvAt) < STALE_MS)
         .sort((a, b) => (Number((b.tot || {}).tokW) || 0) - (Number((a.tot || {}).tokW) || 0));
+    // Строки, залитые из кэша при переезде приёмника (`imported: true`), - подпорка на
+    // время, пока живой участник не сдал свой срез. Как только его настоящая строка
+    // пришла, подпорку с тем же ником не показываем: иначе человек видит двух себя и
+    // не понимает, какая из строк верна. Импортированных не пишет handleSlice, поэтому
+    // флаг переживает новые срезы и снимается только вместе с файлом.
+    const liveNicks = new Set(rows.filter(p => !p.imported).map(p => p.nick));
+    const visible = rows.filter(p => !p.imported || !liveNicks.has(p.nick));
     json(res, 200, { updated: new Date(now).toISOString(),
-        peers: identity ? rows.map(peerPublic) : rows });
+        peers: identity ? visible.map(peerPublic) : visible });
 }
 
 
@@ -2795,6 +2892,78 @@ function baseGroup() {
     rows.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     return rows[0];
 }
+// ── Авто-перенос токенов с прежнего приёмника ────────────────────────────────
+// Приёмник хранит токены только хешами, поэтому после переезда старые хабы получают
+// 401: их токены новому приёмнику неизвестны. Здесь выход без обновлений у участников:
+// хаб всё равно раз в 10 минут шлёт `/slice` с заголовком `X-League-Key` и своим
+// `installId`/ником в теле. Пока открыто окно `adopt-until`, незнакомый токен заводит
+// запись по его ХЕШУ (сам токен не сохраняется и в лог не попадает). Следующий тик
+// проходит уже с 200.
+// 🔴 Границы: запись не создаётся, если этот токен или этот installId уже есть в
+// members.json в ЛЮБОМ статусе (значит, человек отозван/ушёл - обходить это нельзя),
+// если installId лежит в adopt-banned.json (запись удалил админ) или если кончилось
+// окно. Файл `adopt-until` содержит ISO-время; удалить его - выключить перенос.
+function adoptUntilMs() {
+    try {
+        const t = Date.parse(String(fs.readFileSync(ADOPT_UNTIL_FILE, 'utf8')).trim());
+        return Number.isFinite(t) ? t : 0;
+    } catch { return 0; }
+}
+const adoptOn = () => Date.now() < adoptUntilMs();
+const adoptBanned = () => (readState(ADOPT_BANNED_FILE).map || {});
+function adoptBanAdd(rec) {
+    try {
+        const map = { ...adoptBanned() };
+        const key = rec.installId || ('hash:' + rec.tokenHash);
+        map[key] = { installId: rec.installId || '', tokenHash: rec.tokenHash || '',
+            at: new Date().toISOString() };
+        writeState(ADOPT_BANNED_FILE, map, 0o600);
+    } catch (e) { log(`adopt-banned не записался: ${e.message}`); }
+}
+// Возвращает запись, если перенос состоялся, иначе null (тогда ручка отвечает 401).
+function adoptUnknown(req, raw) {
+    if (!adoptOn()) return null;
+    const token = String(req.headers['x-league-key'] || '');
+    if (!TOKEN_RE.test(token)) return null;
+    const h = sha256(token);
+    let b;
+    try { b = JSON.parse(raw); } catch { return null; }
+    if (!b || typeof b !== 'object') return null;
+    const installId = String(b.installId || '');
+    // Форма среза: без installId и tot это не живой хаб, а случайный POST.
+    if (!idOk(installId) || !b.tot || typeof b.tot !== 'object') return null;
+    const st = membersState();
+    if (st.state !== 'ok') return null;
+    const rows = Object.values(st.map || {});
+    if (rows.some(r => r && (hashEq(r.tokenHash, h) || r.installId === installId))) return null;
+    const banned = adoptBanned();
+    if (banned[installId] || Object.values(banned).some(x => x && hashEq(x.tokenHash, h))) return null;
+    if (rows.length >= MAX_MEMBERS) return null;
+    if (!rateOk(addrRate, 'adopt:' + addrOf(req), 20, 86400_000)) return null;
+    const grp = baseGroup();
+    if (!grp) return null;
+    const nick = nickClean(b.nick) || ('hub-' + installId.slice(0, 4));
+    const members = { ...st.map };
+    let mid;
+    do { mid = crypto.randomBytes(8).toString('hex'); } while (members[mid]);
+    const now = new Date().toISOString();
+    members[mid] = { memberId: mid, tokenHash: h, installId, nick, groups: [grp.gid],
+        status: 'active', createdAt: now, invitedBy: null, role: 'member', canUpload: false,
+        joinedBy: 'adopt' };
+    if (!writeState(MEMBERS_FILE, members, 0o600)) return null;
+    const gmap = { ...groupsMap() };
+    const g = gmap[grp.gid];
+    if (g) {
+        const list = Array.isArray(g.members) ? g.members : [];
+        if (!list.includes(mid)) {
+            gmap[grp.gid] = { ...g, members: [...list, mid] };
+            if (!writeState(GROUPS_FILE, gmap)) log('groups.json не записался при авто-переносе');
+        }
+    }
+    log(`авто-перенос с прежнего приёмника: участник ${mid} (${nick}),`
+        + ` установка ${installId.slice(0, 8)}`);
+    return { memberId: mid, nick, gid: grp.gid };
+}
 function handleAutojoin(req, res, raw, addr) {
     if (!rateOk(keyRate, 'autojoin', AUTOJOIN_PER_DAY_ALL, 86400_000)
         || !rateOk(addrRate, 'autojoin:' + addr, AUTOJOIN_PER_DAY, 86400_000)) {
@@ -2833,7 +3002,8 @@ function handleAutojoin(req, res, raw, addr) {
         }
         return json(res, 200, { ok: true, repeat: true, memberId: rec.memberId || mid,
             status: rec.status || 'active', groups: Array.isArray(rec.groups) ? rec.groups : [],
-            role: isAdmin(rec) ? 'admin' : 'member', canUpload: mayUpload(rec) });
+            role: isAdmin(rec) ? 'admin' : 'member', canUpload: mayUpload(rec),
+            instance: INSTANCE });
     }
     if (Object.keys(members).length >= MAX_MEMBERS) {
         return json(res, 507, { error: `участников уже ${Object.keys(members).length}, новые не принимаются` });
@@ -2874,7 +3044,7 @@ function handleAutojoin(req, res, raw, addr) {
     }
     log(`автоподключение с ${addr}: участник ${memberId} (${nick}), установка ${installId.slice(0, 8)}`);
     json(res, 200, { ok: true, memberId, status: 'active', groups: [grp.gid],
-        role: 'member', canUpload: false,
+        role: 'member', canUpload: false, instance: INSTANCE,
         note: 'текст и картинки доступны сразу; файлы и голосовые — после того как владелец'
             + ' включит право на заливку' });
 }
@@ -2996,6 +3166,10 @@ function handleAdminRemove(req, res, body, me) {
         return json(res, 409, { error: 'это последний активный админ — удалить его нельзя',
             hint: 'сначала назначь админом кого-то ещё' });
     }
+    // Запоминаем удалённого, чтобы авто-перенос не вернул его обратно: после удаления
+    // записи в members.json его installId больше нигде не лежит, и без этого запрета
+    // следующий же тик его хаба создал бы новую запись.
+    adoptBanAdd(rec);
     const members = { ...st.map };
     delete members[mid];
     if (!writeState(MEMBERS_FILE, members, 0o600)) {
@@ -3281,12 +3455,42 @@ function handler(req, res) {
             return json(res, 403, { error: 'заявка ещё не одобрена',
                 hint: 'дождись решения админа; своё состояние видно в GET /me' });
         }
+        // Видно, стучатся ли старые хабы и открыто ли окно. Токен в лог не попадает —
+        // только адрес и состояние окна: без этой строки «друзья молчат» и «друзья
+        // стучатся, а перенос закрыт» выглядят одинаково.
+        if (req.method === 'POST' && u.pathname === '/slice') {
+            log(`/slice с незнакомым токеном: ${addrOf(req) || '?'}, перенос `
+                + (adoptOn() ? 'открыт' : 'закрыт'));
+        }
+        // Разовая миграция: пока открыто окно `adopt-until`, незнакомый токен из
+        // `POST /slice` заводит запись по своему хешу, и следующий тик хаба проходит.
+        // Тело читаем ТОЛЬКО здесь и только в окне: остальные 401 отвечают как раньше.
+        if (req.method === 'POST' && u.pathname === '/slice' && adoptOn()) {
+            return readBody(req, res, MAX_BODY, raw => {
+                const adopted = adoptUnknown(req, raw);
+                if (adopted) {
+                    return json(res, 401, {
+                        error: 'токен перенесён с прежнего приёмника',
+                        hint: 'следующий обмен через тик пройдёт; это разовая миграция',
+                        adopted: adopted.memberId });
+                }
+                return json(res, 401, { error: 'токен не принят: такой личности у приёмника нет'
+                        + ' либо она отозвана',
+                    hint: 'вход в лигу — заявка (POST /apply) либо приглашение админа (POST /join)' });
+            });
+        }
         return json(res, 401, { error: 'токен не принят: такой личности у приёмника нет'
                 + ' либо она отозвана',
             hint: 'вход в лигу — заявка (POST /apply) либо приглашение админа (POST /join)' });
     }
     if (req.method === 'DELETE' && u.pathname === '/me') return handleLeave(req, res, me);
     if (req.method === 'GET' && u.pathname === '/admin/members') return handleAdminMembers(req, res, me);
+    // Отметки шлюзов: читает любой принятый участник, пишет только админ. Права
+    // проверяет adminGate внутри PUT, а не эта строка: у GET их нет по замыслу.
+    if (req.method === 'GET' && u.pathname === '/gateways') return handleGatewaysGet(req, res);
+    if (req.method === 'PUT' && u.pathname === '/gateways') {
+        return readBody(req, res, MAX_BODY, raw => handleGatewaysPut(req, res, raw, me));
+    }
     if (req.method === 'POST' && u.pathname.startsWith('/admin/')) {
         const tail = u.pathname.slice(7);
         const fn = tail === 'approve' ? handleAdminApprove
@@ -3371,7 +3575,7 @@ function handlerLegacy(req, res, u) {
     }
     // Ручки личности в наследуемом режиме отвечают не «нет такой», а причиной: иначе выкат
     // новой сборки на непереведённые данные выглядит как сборка без этих ручек.
-    if (/^\/(me|invite|join|group)(\/|$)/.test(u.pathname)) {
+    if (/^\/(me|invite|join|group|gateways)(\/|$)/.test(u.pathname)) {
         return json(res, 409, { error: 'каталог данных ещё не переведён на личности:'
                 + ' members.json на ноде нет',
             hint: 'перевод делает tools/league-migrate.js отдельным шагом; до него приёмник'

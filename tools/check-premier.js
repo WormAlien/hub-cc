@@ -177,7 +177,14 @@ test('gateway generator anchors message billing to the right registry', () => {
 });
 test('prefix routing has a default actual model', () => {
     const map = JSON.parse(source('routing/premier-routes-modelmap.json'));
-    assert.equal(map.default, 'qwen3.8-max-0902');
+    // 🪤 Раньше здесь стояла литеральная модель (`qwen3.8-max-0902`), и тест краснел
+    // 25.10, когда владелец перевёл тиры на Flash: он кодировал выбор, а не свойство.
+    // Свойство, которое обязано держаться, - `default` это РЕАЛЬНАЯ модель шлюза, а не
+    // имя тира: иначе префиксный запрос уходит в никуда.
+    assert.equal(typeof map.default, 'string');
+    assert.ok(map.default.trim().length > 0, 'default пуст');
+    assert.ok(!/^(opus|sonnet|haiku)$/i.test(map.default), 'default не должен быть именем тира');
+    assert.ok(!/^claude[-_]/i.test(map.default), 'default не должен быть claude-тиром клиента');
 });
 const asyncTests = [];
 function testAsync(name, fn) { asyncTests.push({ name, fn }); }

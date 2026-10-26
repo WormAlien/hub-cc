@@ -1,21 +1,48 @@
-/* a6api: one key, per-model seller pools. No automatic paid checks. */
+/* a6api: local Claude Code controls. Reading or selecting never activates a gateway. */
 (() => {
   'use strict';
   const API = '/__switch/api/a6api/';
-  const DEFAULT_MODEL = 'deepseek-v4.1-flash-1017';
+  const COMMAND = '/model a6api[1m]';
+  const SLOTS = ['default', 'opus', 'sonnet', 'haiku'];
   const byId = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = (v, digits = 6) => v == null || !Number.isFinite(Number(v)) ? 'нет данных' : '$' + Number(v).toFixed(digits).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
-  const pct = v => v == null ? 'нет данных' : Number(v).toFixed(2).replace(/\.00$/, '') + '%';
-  const time = v => v ? new Date(typeof v === 'number' && v < 1e11 ? v * 1000 : v).toLocaleString('ru-RU', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'нет данных';
-  const status = (ok, label) => `<span class="a6-status" data-ok="${ok == null ? 'unknown' : !!ok}">${esc(label)}</span>`;
-  const S = { wired: false, loading: false, modelLoading: false, busy: false, sequence: 0, logSequence: 0, reviewSequence: 0,
-    state: null, tokenId: null, model: DEFAULT_MODEL, data: null, draft: null, dirty: false,
-    filter: '', selectedOnly: false, selectedKey: '', drafts: new Map() };
+  const money = v => v == null || !Number.isFinite(Number(v)) ? 'нет данных' : '$' + Number(v).toFixed(6).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
+  const time = v => {
+    if (v === -1 || v === 0) return 'Без срока';
+    if (v == null || v === '') return 'нет данных';
+    const d = new Date(typeof v === 'number' && v < 1e11 ? v * 1000 : v);
+    return Number.isFinite(d.getTime()) ? d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'нет данных';
+  };
+  const S = { wired: false, loading: false, modelLoading: false, busy: false, sequence: 0,
+    state: null, tokenId: null, models: [], modelsReady: false, drafts: new Map(), routeObserver: null, routeTimer: null };
+  const token = () => S.state?.tokens.find(t => t.id === S.tokenId);
+  // 🪤 В выпадашке только рабочие ключи. Выключенный (`status !== 1`) выбрать нельзя -
+  // кнопка «Использовать ключ» на нём остаётся серой, - но сама строка в списке читается
+  // как предложение и путает: 25.10 владелец показал в селекте служебный `a6-probe-…`.
+  // Оставляем ещё текущий и уже подготовленный ключ: если активный выключили в кабинете,
+  // он обязан остаться видимым, иначе селект молча покажет чужой.
+  function visibleTokens() {
+    const all = S.state?.tokens || [];
+    return all.filter(t => t.status === 1 || t.id === S.tokenId || t.id === S.state?.selectedTokenId);
+  }
+  const draft = () => S.drafts.get(S.tokenId);
+  const dirty = () => !!draft()?.dirty.size;
+  const locked = () => S.loading || S.modelLoading || S.busy;
+  const prepared = () => !!(S.tokenId && S.state?.prepared && S.state.selectedTokenId === S.tokenId);
+  const validMap = () => !!(draft() && S.modelsReady && SLOTS.every(slot => S.models.includes(draft().values[slot])));
+  function usableKey() {
+    const t = token();
+    return !!(t && t.status === 1 && (t.unlimited || t.remainingUsd == null || Number(t.remainingUsd) > 0) &&
+      (t.expires == null || Number(t.expires) <= 0 || Number(t.expires) * (Number(t.expires) < 1e11 ? 1000 : 1) > Date.now()));
+  }
+  const editable = () => !!(S.state?.canWrite && !locked() && S.modelsReady && S.models.length && usableKey());
+  const canUseKey = () => !!(S.state?.canWrite && !locked() && usableKey() && S.modelsReady && S.models.length && !prepared());
+  const canSave = () => editable() && prepared() && dirty() && validMap();
+  const canActivate = () => !!(S.state?.canWrite && !locked() && usableKey() && prepared() && validMap() && !dirty());
   async function api(name, body) {
     const r = await fetch(API + name, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
-    if (!r.ok || d.ok === false) throw Object.assign(new Error(d.error || 'a6api: HTTP ' + r.status), { code: d.code, writeAccepted: d.writeAccepted });
+    if (!r.ok || d.ok === false) throw new Error(d.error || 'a6api: HTTP ' + r.status);
     return d;
   }
   function error(text) { byId('a6-error').hidden = !text; byId('a6-error').textContent = text || ''; }
@@ -23,264 +50,268 @@
     if (S.wired) return;
     const root = byId('a6api-root'); if (!root) return;
     root.innerHTML = `
-      <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Модели, продавцы и маршрут вашего ключа</p></div>
-        <div class="a6-row"><button class="a6-btn" data-a6="refresh">↻ Обновить</button><a class="a6-btn" href="https://a6api.com/console" target="_blank" rel="noopener">Кабинет ↗</a></div></header>
+      <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Claude Code на одном платном аккаунте</p></div>
+        <div class="a6-row"><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.com/console" target="_blank" rel="noopener">Кабинет</a></div></header>
       <div id="a6-error" class="a6-notice a6-error" role="alert" hidden></div>
-      <div id="a6-local" class="a6-notice" hidden>Просмотр через сеть. Для изменения маршрута и копирования ключа откройте этот дашборд через localhost на основной машине.</div>
-      <div class="a6-summary">
-        <section class="a6-panel"><div class="a6-controls">
-          <label class="a6-field"><span>Ключ</span><select id="a6-token" class="a6-select"></select></label>
-          <label class="a6-field"><span>Модель</span><input id="a6-model" class="a6-input a6-mono" list="a6-model-list" autocomplete="off"><datalist id="a6-model-list"></datalist></label>
-        </div><div id="a6-key-info"></div><div class="a6-key-line"><button class="a6-btn a6-small" data-a6="copy-key">Копировать ключ</button><button class="a6-btn a6-small" data-a6="copy-model">Модель</button><button class="a6-btn a6-small" data-a6="copy-url">Адрес API</button></div>
-        <div class="a6-key-line"><span id="a6-whitelist" class="a6-muted"></span><button id="a6-enable" class="a6-btn a6-small" data-a6="enable" hidden>Разрешить модель</button></div></section>
-        <section class="a6-panel"><div class="a6-row"><h2>Маршрут модели</h2><span id="a6-route-mode" class="a6-muted"></span></div>
-          <div id="a6-pool" class="a6-route-strip"></div>
-          <div class="a6-route-controls"><label class="a6-field"><span>Порядок продавцов</span><select id="a6-strategy" class="a6-select"><option value="price_asc">Сначала дешевле</option><option value="latency_asc">Сначала быстрее</option><option value="success_desc">Сначала надёжнее</option><option value="user_priority_desc">Вручную</option></select></label>
-          <label class="a6-field"><span>Потолок входа, $ / 1M</span><input id="a6-input-cap" class="a6-input a6-mono" type="number" min="0" step="0.000001"></label>
-          <label class="a6-field"><span>Потолок выхода, $ / 1M</span><input id="a6-output-cap" class="a6-input a6-mono" type="number" min="0" step="0.000001"></label></div>
-          <div class="a6-route-foot"><span id="a6-draft-status"></span><div class="a6-row"><button class="a6-btn" data-a6="reset">Отменить правки</button><button id="a6-save" class="a6-btn a6-primary" data-a6="save">Сохранить маршрут</button></div></div>
-        </section></div>
-      <section class="a6-panel a6-data"><div class="a6-table-head"><div><h2>Продавцы</h2><p id="a6-catalog-info" class="a6-muted"></p></div>
-        <div class="a6-row"><input id="a6-filter" class="a6-input" placeholder="Поиск продавца или канала" aria-label="Поиск продавца"><label class="a6-row"><input id="a6-selected" type="checkbox"> Только пул</label></div></div>
-        <div class="a6-table-wrap"><table class="a6-table"><thead><tr><th>В пул</th><th>Продавец / канал</th><th>Вход / выход за 1M</th><th>Отзывы</th><th>Успешность</th><th>Первый токен</th><th>Наши пробы</th></tr></thead><tbody id="a6-sellers"></tbody></table></div>
-        <p class="a6-empty">Успешность запросов не равна аптайму. Отзывы и статистика площадки не гарантируют подлинность модели.</p></section>
-      <section id="a6-reviews" class="a6-panel" hidden><div class="a6-head"><h2>Отзывы о канале</h2><button class="a6-btn a6-small" data-a6="close-reviews">Закрыть</button></div><div id="a6-review-items"></div></section>
-      <section class="a6-panel a6-data"><div class="a6-table-head"><div><h2>Расход ключа</h2><p class="a6-muted">Последние запросы выбранной модели, по данным a6api</p></div><button class="a6-btn a6-small" data-a6="logs">Обновить журнал</button></div><div class="a6-table-wrap"><table class="a6-table"><thead><tr><th>Время</th><th>Канал</th><th>Вход / выход</th><th>Списано</th><th>Время ответа</th></tr></thead><tbody id="a6-log-rows"></tbody></table></div></section>`;
+      <div id="a6-local" class="a6-notice" hidden>Только просмотр. Чтобы изменить настройки, откройте дашборд через localhost на основной машине.</div>
+      <section class="a6-account" aria-label="Аккаунт a6api"><div><span class="a6-muted">Общий баланс</span><strong id="a6-balance" class="a6-balance a6-mono">нет данных</strong></div>
+        <div class="a6-account-spend"><span class="a6-muted">Расход аккаунта</span><span id="a6-account-spent" class="a6-mono">нет данных</span></div>
+        <span id="a6-connection" class="a6-status" role="status">Не подготовлен</span></section>
+      <div class="a6-layout">
+        <section class="a6-panel a6-key-panel" aria-labelledby="a6-key-title"><h2 id="a6-key-title">Ключ для Claude Code</h2>
+          <p id="a6-active-key" class="a6-muted"></p>
+          <label class="a6-field a6-key-select"><span>Ключ из кабинета</span><select id="a6-token" class="a6-select"></select></label>
+          <div id="a6-key-info"></div><button id="a6-use-key" class="a6-btn" data-a6="use-key">Использовать ключ</button>
+          <p id="a6-key-note" class="a6-muted">Подготовит a6api локально, не переключая Claude Code.</p></section>
+        <section class="a6-panel a6-model-panel" aria-labelledby="a6-main-title">
+          <label class="a6-field a6-main-field"><span id="a6-main-title">Основное окно</span><select id="a6-model-default" class="a6-select a6-main-model a6-mono" aria-describedby="a6-model-note"></select></label>
+          <div id="a6-cmd-default" class="a6-cmd-row"></div>
+          <p id="a6-model-note" class="a6-muted"></p>
+          <div class="a6-subagents"><h2>Субагенты</h2><div class="a6-tier-grid">${['opus', 'sonnet', 'haiku'].map(slot => `<label class="a6-field"><span>${slot[0].toUpperCase() + slot.slice(1)}</span><select id="a6-model-${slot}" class="a6-select a6-mono"></select></label>`).join('')}</div><div id="a6-cmd-tiers" class="a6-cmd-row a6-cmd-tiers"></div></div>
+          <div class="a6-save-row"><span id="a6-draft-status" class="a6-muted" role="status"></span><button id="a6-save" class="a6-btn" data-a6="save">Сохранить модели</button></div>
+          <div class="a6-route-note"><p id="a6-routes-hint" class="a6-muted">Субагенты идут тирами Opus, Sonnet и Haiku; они общие с вкладкой «Маршруты». Субагенты другого провайдера - через /model multi там же. Основная модель для /model настраивается отдельно.</p><button class="a6-btn a6-small" data-a6="routes">Маршруты</button></div>
+        </section>
+      </div>
+      <section class="a6-activation" aria-label="Подключение Claude Code"><div><button id="a6-activate" class="a6-btn a6-primary" data-a6="activate">Активировать для Claude Code</button><p id="a6-activation-note" class="a6-muted">Переключит текущий бэкенд Claude Code на a6api.</p></div>
+        <div class="a6-command"><span class="a6-muted">Для отдельного окна</span><button class="a6-btn a6-mono" data-a6="copy-command" aria-label="Скопировать /model a6api[1m]">/model a6api[1m]</button></div></section>`;
     root.addEventListener('click', e => {
       const b = e.target.closest('[data-a6]'); if (!b || b.disabled) return;
-      const action = b.dataset.a6;
-      const operations = { refresh: load, save, reset, enable, 'copy-key': copyKey, 'copy-model': () => copy(S.model), 'copy-url': () => copy('https://api.a6api.com/v1'), logs: loadLogs,
-        reviews: () => showReviews(Number(b.dataset.id)), 'close-reviews': () => { byId('a6-reviews').hidden = true; },
-        remove: () => toggleChannel(Number(b.dataset.id), false), up: () => move(Number(b.dataset.id), -1), down: () => move(Number(b.dataset.id), 1) };
-      return Promise.resolve(operations[action]?.()).catch(e => error(e.message));
+      // Команда у конкретной модели: текст берём из её же data-cmd, чтобы бейдж и
+      // буфер не могли разойтись.
+      if (b.dataset.a6 === 'copy-cmd') return copyRendered(b);
+      const actions = { refresh: load, 'use-key': useKey, save: saveModels, activate, routes: openRoutes, 'copy-command': copyCommand };
+      return Promise.resolve(actions[b.dataset.a6]?.()).catch(e => error(e.message));
     });
-    byId('a6-token').addEventListener('change', () => select(Number(byId('a6-token').value), S.model));
-    byId('a6-model').addEventListener('change', () => select(S.tokenId, byId('a6-model').value.trim()));
-    byId('a6-filter').addEventListener('input', () => { S.filter = byId('a6-filter').value; renderSellers(); });
-    byId('a6-selected').addEventListener('change', () => { S.selectedOnly = byId('a6-selected').checked; renderSellers(); });
-    byId('a6-sellers').addEventListener('change', e => { if (e.target.dataset.channel) toggleChannel(Number(e.target.dataset.channel), e.target.checked); });
-    for (const id of ['a6-strategy', 'a6-input-cap', 'a6-output-cap']) byId(id).addEventListener('input', capture);
+    byId('a6-token').addEventListener('change', () => selectToken(Number(byId('a6-token').value)));
+    for (const slot of SLOTS) byId('a6-model-' + slot).addEventListener('change', () => selectModel(slot));
     S.wired = true;
   }
-  function selectedToken() { return S.state?.tokens.find(t => t.id === S.tokenId); }
-  function restricted() { const t = selectedToken(); return !!(S.model && t?.restricted && !t.models.includes(S.model)); }
-  function editable() {
-    return !!(S.state?.canWrite && !S.busy && !S.loading && !S.modelLoading && S.data && S.data.canWrite !== false &&
-      !S.data.route.pin && S.draft?.tokenId === S.tokenId && S.draft?.model === S.model);
-  }
-  function renderControls() {
-    const locked = S.busy || S.loading;
-    byId('a6-token').disabled = locked || !S.state?.tokens.length;
-    byId('a6-model').disabled = locked || !S.tokenId || !S.state?.models.length;
-    for (const id of ['a6-strategy', 'a6-input-cap', 'a6-output-cap']) byId(id).disabled = !editable();
-    byId('a6-enable').disabled = locked || S.modelLoading || !S.state?.canWrite || !S.tokenId || !S.model;
-    for (const b of byId('a6api-root').querySelectorAll('[data-a6]')) {
-      if (b.dataset.a6 === 'refresh') b.disabled = locked;
-      if (b.dataset.a6 === 'reset') b.disabled = !editable() || !S.dirty;
-      if (b.dataset.a6 === 'copy-key') b.disabled = locked || !S.state?.canWrite || !S.tokenId;
-      if (b.dataset.a6 === 'copy-model' || b.dataset.a6 === 'logs') b.disabled = locked || S.modelLoading || !S.tokenId || !S.model;
+  function reconcileDraft() {
+    if (!S.tokenId || !S.modelsReady) return;
+    const saved = S.state?.modelMap || {};
+    let d = draft();
+    if (!d) {
+      const values = Object.fromEntries(SLOTS.map(slot => {
+        const value = typeof saved[slot] === 'string' ? saved[slot] : '';
+        return [slot, S.tokenId === S.state.selectedTokenId || S.models.includes(value) ? value : ''];
+      }));
+      d = { values, base: { ...values }, dirty: new Set() }; S.drafts.set(S.tokenId, d);
+    } else if (S.tokenId === S.state.selectedTokenId) {
+      for (const slot of SLOTS) {
+        const value = typeof saved[slot] === 'string' ? saved[slot] : '';
+        if (!d.dirty.has(slot)) d.values[slot] = value;
+        d.base[slot] = value;
+        if (d.values[slot] === value) d.dirty.delete(slot);
+      }
     }
   }
-  function capture(e) {
-    if (!editable()) return;
-    S.draft.strategy = byId('a6-strategy').value;
-    S.draft.caps.input_price_micros = Math.round(Number(byId('a6-input-cap').value) * 1e6);
-    S.draft.caps.output_price_micros = Math.round(Number(byId('a6-output-cap').value) * 1e6);
-    S.dirty = true;
-    if (e?.target.id === 'a6-strategy') renderPool(); else renderDraftStatus();
+  // ── Команда /model под каждым селектором ──────────────────────────────────
+  // Владельцу нужна готовая строка для второго окна конкретной модели, а не общая
+  // `/model a6api[1m]`: тир называть обязательно, иначе то же окно получит `default`.
+  // Основное окно адресуется явным именем модели (`a6api/<модель>`) - эта форма уже
+  // проверена в бою и не требует правки `default`. Тир - формой `a6api[<тир>]`, её
+  // понимает front-door и подменяет по тир-карте.
+  // 🪤 Форму `a6api/<тир>` (слэш + имя тира) НЕ предлагаем: keepalive возвращает её
+  // эхом как `<тир>[1m]`, [CC] такого имени не знает и рвёт поток - живой отказ 26.10.
+  function commandFor(slot, model) {
+    if (!model) return '';
+    return slot === 'default' ? '/model a6api/' + model : '/model a6api[' + slot + ']';
   }
-  function renderDraftStatus() {
-    byId('a6-draft-status').textContent = S.busy ? 'Сохранение...' : S.loading || S.modelLoading ? 'Загрузка маршрута...' :
-      S.dirty ? 'Не сохранено. Обновление не сбрасывает черновик.' : 'Только выбранные продавцы, без всего рынка';
-    byId('a6-save').disabled = !editable() || !S.dirty || restricted() || !S.draft?.channels.length;
-    renderControls();
+  // 🪤 Команда нужна НЕ под каждым селектором: четыре строки подряд съедали высоту
+  // панели (замер 26.10: вкладка выходила за потолок 850 px при ширине 1365 на 11 px).
+  // Поэтому одна строка под ОСНОВНЫМ окном (адрес отдельного окна) и одна общая
+  // строка под тирами: `a6api[sonnet]` - самый ходовой, остальные в подсказке.
+  function cmdChip(cmd) {
+    return `<code class="a6-cmd" data-a6="copy-cmd" data-cmd="${esc(cmd)}"
+        title="Клик = скопировать ${esc(cmd)}" role="button" tabindex="0">${esc(cmd)}</code>`;
   }
-  function renderKey() {
-    const t = selectedToken();
-    byId('a6-key-info').innerHTML = t ? `<div class="a6-key-line"><code class="a6-mono">${esc(t.mask || 'ключ скрыт')}</code>${status(t.status === 1, t.status === 1 ? 'Включён' : 'Выключен')}</div>
-      <dl class="a6-facts"><div class="a6-fact"><dt>Баланс аккаунта</dt><dd>${money(S.state.account?.balanceUsd, 4)}</dd></div><div class="a6-fact"><dt>Расход этого ключа</dt><dd>${money(t.spentUsd)}</dd></div><div class="a6-fact"><dt>Лимит ключа</dt><dd class="a6-fact-small">${t.unlimited ? 'В пределах баланса' : money(t.remainingUsd)}</dd></div><div class="a6-fact"><dt>Действует до</dt><dd class="a6-fact-small">${t.expires === -1 ? 'Без срока' : time(t.expires)}</dd></div></dl>` : '<p class="a6-muted">В кабинете нет ключей. Создайте ключ в a6api.</p>';
-    byId('a6-whitelist').textContent = !t || !S.model ? 'Выберите ключ и модель' : restricted() ? 'Модель не разрешена этому ключу' : 'Модель разрешена ключу';
-    byId('a6-enable').hidden = !restricted();
-    byId('a6-local').hidden = !!S.state?.canWrite;
-    renderControls();
+  function renderCmd(slot, model) {
+    const box = byId('a6-cmd-' + slot); if (!box) return;
+    const cmd = commandFor(slot, model);
+    box.innerHTML = cmd ? cmdChip(cmd) : '';
   }
-  function freshDraft(route) {
-    const channels = [...route.channels];
-    if (route.strategy === 'user_priority_desc') channels.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-    return { tokenId: S.tokenId, model: S.model, baselineId: route.id, baselineVersion: route.version,
-      strategy: route.strategy || 'price_asc', channels: channels.map(c => c.channelId), caps: { ...route.caps },
-      confirmedPrices: Object.fromEntries(S.data.catalog.items.map(x => [x.channelId, { ...x.prices }])) };
+  function renderTierCmds() {
+    const box = byId('a6-cmd-tiers'); if (!box) return;
+    const d = draft(); if (!d) { box.innerHTML = ''; return; }
+    // Показываем только те тиры, что заполнены, одной строкой через пробел.
+    const cmds = ['sonnet', 'opus', 'haiku'].filter(t => d.values[t]).map(t => commandFor(t, d.values[t]));
+    box.innerHTML = cmds.length ? cmds.map(cmdChip).join('') : '';
   }
-  function renderPool() {
-    if (!S.draft || !S.data) {
-      byId('a6-route-mode').textContent = '';
-      byId('a6-pool').textContent = S.loading || S.modelLoading ? 'Загрузка маршрута...' : 'Нет данных маршрута';
-      byId('a6-pool').innerHTML = `<span class="a6-muted">${esc(byId('a6-pool').textContent)}</span>`;
-      byId('a6-strategy').value = S.draft?.strategy || 'price_asc';
-      byId('a6-input-cap').value = S.draft?.caps.input_price_micros ? S.draft.caps.input_price_micros / 1e6 : '';
-      byId('a6-output-cap').value = S.draft?.caps.output_price_micros ? S.draft.caps.output_price_micros / 1e6 : '';
-      renderDraftStatus(); return;
+  async function copyRendered(el) {
+    const cmd = el?.dataset?.cmd;
+    if (!cmd) return;
+    try { await navigator.clipboard.writeText(cmd); window.toast?.('📋 ' + cmd, 'success', 2500); }
+    catch { error('Буфер обмена недоступен. Скопируйте вручную: ' + cmd); }
+  }
+
+  function renderModels() {
+    const d = draft();
+    for (const slot of SLOTS) {
+      const select = byId('a6-model-' + slot), value = d?.values[slot] || '';
+      const missing = value && !S.models.includes(value);
+      select.innerHTML = '<option value="">Выберите модель</option>' +
+        (missing ? `<option value="${esc(value)}" disabled>${esc(value)} (${S.modelsReady ? 'недоступна' : 'черновик'})</option>` : '') +
+        S.models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+      select.value = value; select.disabled = !editable();
+      renderCmd(slot, value);
     }
-    const route = S.data.route;
-    byId('a6-route-mode').textContent = route.pin ? 'Закреп #' + route.pin.channelId + ' обходит пул' : route.autoPool || route.fallback ? 'Есть широкий маршрут в кабинете' : 'Ручной пул';
-    byId('a6-pool').innerHTML = S.draft.channels.length ? S.draft.channels.map((id, i) => {
-      const x = S.data.catalog.items.find(x => x.channelId === id) || route.channels.find(x => x.channelId === id) || {};
-      return `<div class="a6-chip"><span>${esc(x.supplier || x.name || 'Канал')} <small class="a6-muted">#${id}</small></span>${S.draft.strategy === 'user_priority_desc' ? `<button class="a6-btn a6-small" data-a6="up" data-id="${id}" aria-label="Выше в очереди" ${!editable() || i === 0 ? 'disabled' : ''}>↑</button><button class="a6-btn a6-small" data-a6="down" data-id="${id}" aria-label="Ниже в очереди" ${!editable() || i === S.draft.channels.length - 1 ? 'disabled' : ''}>↓</button>` : ''}<button class="a6-btn a6-small" data-a6="remove" data-id="${id}" aria-label="Убрать из пула" ${!editable() ? 'disabled' : ''}>×</button></div>`;
-    }).join('') : '<span class="a6-muted">Отметьте продавцов в таблице ниже</span>';
-    byId('a6-strategy').value = S.draft.strategy;
-    byId('a6-input-cap').value = S.draft.caps.input_price_micros ? S.draft.caps.input_price_micros / 1e6 : '';
-    byId('a6-output-cap').value = S.draft.caps.output_price_micros ? S.draft.caps.output_price_micros / 1e6 : '';
-    for (const id of ['a6-strategy', 'a6-input-cap', 'a6-output-cap']) byId(id).disabled = !editable();
-    renderDraftStatus();
+    renderTierCmds();
+    byId('a6-model-note').textContent = S.modelLoading || S.loading ? 'Загрузка разрешённых моделей...' : !S.tokenId ? 'Выберите ключ из кабинета.' :
+      !S.modelsReady ? 'Модели недоступны. Обновите данные.' : !S.models.length ? 'У ключа нет разрешённых моделей. Настройте их в кабинете.' :
+      SLOTS.some(slot => d?.values[slot] && !S.models.includes(d.values[slot])) ? 'В черновике есть недоступные модели. Выберите разрешённые.' : 'Только модели, разрешённые выбранному ключу.';
+    byId('a6-draft-status').textContent = S.busy ? 'Сохранение...' : dirty() ? 'Не сохранено. Черновик переживёт обновление.' :
+      !d || !validMap() ? 'Выберите разрешённые модели' : prepared() ? 'Модели сохранены' : 'Выбор моделей для этого ключа';
+    byId('a6-activation-note').textContent = !prepared() ? 'Сначала нажмите «Использовать ключ».' : dirty() || !validMap() ?
+      'Перед активацией сохраните разрешённые модели.' : 'Переключит текущий бэкенд Claude Code на a6api.';
+    byId('a6-save').disabled = !canSave();
+    byId('a6-activate').disabled = !canActivate();
   }
-  function renderSellers() {
-    if (!S.data) {
-      byId('a6-catalog-info').textContent = '';
-      byId('a6-sellers').innerHTML = `<tr><td colspan="7" class="a6-empty">${S.loading || S.modelLoading ? 'Загрузка продавцов...' : 'Нет данных для выбранного ключа и модели'}</td></tr>`;
+  function render() {
+    byId('a6-balance').textContent = money(S.state?.account?.balanceUsd);
+    byId('a6-account-spent').textContent = money(S.state?.account?.spentUsd);
+    byId('a6-local').hidden = !S.state || !!S.state.canWrite;
+    const connection = byId('a6-connection');
+    connection.textContent = S.state?.active ? 'Активен в Claude Code' : S.state?.prepared ? 'Подготовлен, не активен' : 'Не подготовлен';
+    connection.dataset.active = String(!!S.state?.active);
+    const savedToken = S.state?.tokens.find(t => t.id === S.state.selectedTokenId);
+    byId('a6-active-key').textContent = savedToken ? 'Используется: ' + savedToken.name : 'Ключ ещё не выбран';
+    const shown = visibleTokens();
+    byId('a6-token').innerHTML = shown.map(t => `<option value="${t.id}">${esc(t.name)} #${t.id}${t.status === 1 ? '' : ' - выключен'}</option>`).join('');
+    byId('a6-token').value = S.tokenId ? String(S.tokenId) : '';
+    byId('a6-token').disabled = S.busy || S.loading || !shown.length;
+    const t = token();
+    byId('a6-key-info').innerHTML = t ? `<div class="a6-key-identity"><code class="a6-mono">${esc(t.mask || 'ключ скрыт')}</code><span class="a6-muted">${t.status === 1 ? 'Включён' : 'Выключен'}</span></div>
+      <dl class="a6-key-facts"><div><dt>Расход ключа</dt><dd class="a6-mono">${money(t.spentUsd)}</dd></div><div><dt>Остаток лимита</dt><dd>${t.unlimited ? 'В пределах баланса' : money(t.remainingUsd)}</dd></div><div><dt>Действует до</dt><dd>${time(t.expires)}</dd></div></dl>` : '<p class="a6-muted">Ключей нет. Создайте ключ в кабинете a6api.</p>';
+    byId('a6-use-key').disabled = !canUseKey();
+    byId('a6-key-note').textContent = prepared() ? 'Этот ключ подготовлен для a6api.' : 'Подготовит a6api локально, не переключая Claude Code.';
+    byId('a6-refresh').disabled = S.busy || S.loading;
+    renderModels();
+  }
+  function acceptModels(models) {
+    if (!Array.isArray(models) || models.some(m => typeof m !== 'string' || !m)) throw new Error('Не удалось прочитать разрешённые модели');
+    S.models = [...new Set(models)]; S.modelsReady = true; reconcileDraft();
+  }
+  async function loadModels() {
+    const sequence = ++S.sequence, tokenId = S.tokenId;
+    S.models = []; S.modelsReady = false; S.modelLoading = !!tokenId; render();
+    if (!tokenId) return;
+    try {
+      const d = await api('models?' + new URLSearchParams({ tokenId }));
+      if (sequence !== S.sequence || tokenId !== S.tokenId) return;
+      if (d.tokenId !== tokenId) throw new Error('Ответ моделей относится к другому ключу. Обновите данные.');
+      acceptModels(d.models);
+    } catch (e) { if (sequence === S.sequence) error(e.message); }
+    finally { if (sequence === S.sequence) { S.modelLoading = false; render(); } }
+  }
+  async function selectToken(tokenId) {
+    if (S.busy || S.loading) { render(); return; }
+    if (!S.state?.tokens.some(t => t.id === tokenId)) { render(); error('Выберите ключ из списка'); return; }
+    S.tokenId = tokenId; error(''); await loadModels();
+  }
+  function selectModel(slot) {
+    if (!editable() || !draft()) { renderModels(); return; }
+    const value = byId('a6-model-' + slot).value;
+    if (!S.models.includes(value)) { renderModels(); error('Выберите разрешённую модель из списка'); return; }
+    const d = draft(); d.values[slot] = value;
+    if (value === d.base[slot]) d.dirty.delete(slot); else d.dirty.add(slot);
+    error(''); renderModels();
+  }
+  // opts.quiet - фоновое обновление с тика дашборда (раз в 15 с).
+  // 🪤 Обычная загрузка ставит `S.loading = true`, а `locked()` считает это занятостью,
+  // и на время запроса (state идёт ~1 с, models ещё 0.4 с) гаснут ВСЕ кнопки и селекты.
+  // Пока вкладка открыта, тик делал это каждые 15 секунд - со стороны выглядело как
+  // «кнопки тухнут сами» (владелец показал 25.10). Тихий режим обновляет только цифры и
+  // список ключей: управление не блокирует, модели не перечитывает, выбор ключа не меняет.
+  // 🪤 Тихий прогон НЕ трогает `S.sequence`: этот счётчик обрывает чужую загрузку моделей,
+  // а её `finally` при смене счётчика не снимает `modelLoading` - вкладка залипла бы
+  // навсегда в состоянии «идёт загрузка», то есть ровно в том же «кнопки серые».
+  async function load(opts = {}) {
+    shell(); if (!S.wired || S.loading || S.busy) return;
+    if (opts.quiet && S.state && S.modelsReady && !S.modelLoading) {
+      try {
+        const d = await api('state');
+        if (!Array.isArray(d.tokens)) return;
+        S.state = d;
+        if (!S.busy) render();
+      } catch (e) { /* сбой тихого прогона не рисуем: следующий тик повторит */ }
       return;
     }
-    const q = S.filter.toLowerCase();
-    const rows = S.data.catalog.items.filter(x => (!q || `${x.supplier} ${x.channel} ${x.channelId}`.toLowerCase().includes(q)) && (!S.selectedOnly || S.draft?.channels.includes(x.channelId)));
-    byId('a6-catalog-info').textContent = `${rows.length} каналов · ${S.data.catalog.stale ? 'Кеш площадки' : 'Данные площадки'} · ${time(S.data.catalog.snapshot || Date.now())}`;
-    byId('a6-sellers').innerHTML = rows.length ? rows.map(x => {
-      const picked = S.draft?.channels.includes(x.channelId), p = S.data.probes?.[x.channelId];
-      return `<tr data-selected="${!!picked}"><td><input type="checkbox" data-channel="${x.channelId}" aria-label="Добавить ${esc(x.supplier)} в пул" ${picked ? 'checked' : ''} ${!editable() || !x.available ? 'disabled' : ''}></td>
-        <td class="a6-seller">${esc(x.supplier)}<small>${esc(x.channel)} · #${x.channelId}</small>${!x.available ? status(false, 'Недоступен') : ''}</td>
-        <td class="a6-price">${money(x.inputUsd)} / ${money(x.outputUsd)}<small>кэш ${money(x.cacheUsd)}</small></td>
-        <td>${x.reviews ? `<button class="a6-btn a6-small" data-a6="reviews" data-id="${x.listingId}">${x.rating == null ? '?' : esc(x.rating)} / 5 · ${x.reviews}</button>` : '<span class="a6-muted">нет отзывов</span>'}</td>
-        <td class="a6-price">${pct(x.success24h)}<small>за 24 ч</small><small>последние: ${pct(x.recentSuccess)} · n=${x.samples ?? '?'}</small></td>
-        <td class="a6-price">${x.ttftMs ? (x.ttftMs / 1000).toFixed(1) + ' с' : 'нет данных'}</td>
-        <td><div class="a6-stack">${status(p?.tools, 'tools')}${status(p?.vision, 'vision')}${status(p?.combined, 'вместе')}</div>${p?.at ? `<small>${time(p.at)}</small>` : '<small>не проверяли</small>'}</td></tr>`;
-    }).join('') : '<tr><td colspan="7" class="a6-empty">Нет каналов по выбранному фильтру</td></tr>';
-  }
-  function toggleChannel(id, checked) {
-    if (!editable() || !S.draft) return;
-    if (checked && !S.draft.channels.includes(id)) {
-      const x = S.data.catalog.items.find(x => x.channelId === id && x.available); if (!x) return;
-      S.draft.channels.push(id); S.draft.confirmedPrices[id] = { ...x.prices };
-      for (const k of ['input_price_micros', 'output_price_micros']) S.draft.caps[k] = Math.max(S.draft.caps[k] || 0, x.prices[k] || 0);
-    } else if (!checked) S.draft.channels = S.draft.channels.filter(x => x !== id);
-    S.dirty = true; renderPool(); renderSellers();
-  }
-  function move(id, delta) {
-    if (!editable()) return;
-    const i = S.draft.channels.indexOf(id), j = i + delta;
-    if (i < 0 || j < 0 || j >= S.draft.channels.length) return;
-    [S.draft.channels[i], S.draft.channels[j]] = [S.draft.channels[j], S.draft.channels[i]];
-    S.dirty = true; renderPool();
-  }
-  function rememberDraft() {
-    if (S.selectedKey && S.dirty && S.draft) S.drafts.set(S.selectedKey, { draft: S.draft, dirty: true });
-  }
-  function activateSelection(tokenId, model) {
-    const key = tokenId && model ? tokenId + '|' + model : '';
-    if (key !== S.selectedKey) {
-      rememberDraft();
-      const saved = S.drafts.get(key);
-      S.draft = saved?.draft || null; S.dirty = !!saved?.dirty; S.data = null;
-    }
-    S.tokenId = tokenId; S.model = model; S.selectedKey = key;
-    byId('a6-model').value = model; byId('a6-token').value = tokenId ? String(tokenId) : '';
-  }
-  async function select(tokenId, model) {
-    if (S.busy || S.loading) {
-      byId('a6-model').value = S.model; byId('a6-token').value = S.tokenId ? String(S.tokenId) : ''; return;
-    }
-    if (!S.state?.models.includes(model) || !S.state.tokens.some(t => t.id === tokenId)) {
-      byId('a6-model').value = S.model; byId('a6-token').value = S.tokenId ? String(S.tokenId) : '';
-      error('Выберите ключ и модель из каталога'); return;
-    }
-    error(''); activateSelection(tokenId, model); renderKey();
-    await loadModel();
-  }
-  async function loadModel() {
-    const sequence = ++S.sequence, tokenId = S.tokenId, model = S.model;
-    ++S.logSequence; ++S.reviewSequence;
-    byId('a6-reviews').hidden = true;
-    byId('a6-log-rows').innerHTML = '<tr><td colspan="5" class="a6-empty">Выберите ключ и модель</td></tr>';
-    S.data = null; S.modelLoading = !!(tokenId && model); renderPool(); renderSellers();
-    if (!S.modelLoading) return;
+    S.loading = true; S.modelLoading = false; S.modelsReady = false;
+    const sequence = ++S.sequence; error(''); render();
     try {
-      const d = await api('model?' + new URLSearchParams({ tokenId, model }));
+      const d = await api('state');
       if (sequence !== S.sequence) return;
-      S.data = d; if (!S.dirty || !S.draft) S.draft = freshDraft(d.route);
-      S.modelLoading = false; renderPool(); renderSellers(); await loadLogs();
-    } catch (e) { if (sequence === S.sequence) error(e.message); }
-    finally {
-      if (sequence === S.sequence) { S.modelLoading = false; renderPool(); renderSellers(); }
+      if (!Array.isArray(d.tokens)) throw new Error('Не удалось прочитать ключи a6api');
+      S.state = d;
+      if (!d.tokens.some(t => t.id === S.tokenId)) S.tokenId = d.tokens.find(t => t.id === d.selectedTokenId)?.id || d.tokens.find(t => t.status === 1)?.id || d.tokens[0]?.id || null;
+      if (S.tokenId && S.tokenId === d.selectedTokenId) acceptModels(d.models);
+      else await loadModels();
+    } catch (e) { error(e.message); }
+    finally { S.loading = false; render(); }
+  }
+  async function useKey() {
+    if (!canUseKey()) return;
+    if (S.state.selectedTokenId && S.state.selectedTokenId !== S.tokenId &&
+      !window.confirm(`Использовать ключ «${token().name}» для всех запросов a6api?\nТекущий ключ будет заменён. Бэкенд Claude Code не переключится.`)) return;
+    const tokenId = S.tokenId; S.busy = true; error(''); render();
+    let success = false;
+    try {
+      const d = await api('key', { tokenId });
+      if (d.selectedTokenId !== tokenId) throw new Error('Сервер не подтвердил выбранный ключ. Обновите данные.');
+      S.state.selectedTokenId = tokenId; S.state.prepared = false; success = true;
+    } catch (e) { error(e.message); }
+    finally { S.busy = false; render(); }
+    if (success) await load();
+  }
+  async function saveModels() {
+    if (!canSave()) return;
+    const tokenId = S.tokenId, modelMap = { ...draft().values };
+    S.busy = true; error(''); render();
+    try {
+      const d = await api('modelmap', { tokenId, modelMap });
+      if (!d.modelMap || SLOTS.some(slot => d.modelMap[slot] !== modelMap[slot]) ||
+        !d.routesMap || ['opus', 'sonnet', 'haiku'].some(slot => d.routesMap[slot] !== modelMap[slot])) {
+        throw new Error('Сервер не подтвердил модели. Черновик сохранён, обновите данные.');
+      }
+      S.state.modelMap = d.modelMap; S.state.routesMap = d.routesMap;
+      const current = draft(); current.base = { ...modelMap }; current.dirty.clear();
+      window.toast?.('Модели сохранены', 'success');
+    } catch (e) { error(e.message); }
+    finally { S.busy = false; render(); }
+  }
+  async function activate() {
+    if (!canActivate()) return;
+    if (!window.confirm(`Переключить Claude Code на a6api с ключом «${token().name}»?\nОсновное окно: ${draft().values.default}\nТекущий бэкенд будет заменён.`)) return;
+    const tokenId = S.tokenId; S.busy = true; error(''); render();
+    try {
+      const d = await api('activate', { tokenId });
+      if (d.active !== true) throw new Error('Сервер не подтвердил активацию');
+      S.state.active = true; window.toast?.('a6api активирован для Claude Code', 'success');
+    } catch (e) { error(e.message); }
+    finally { S.busy = false; render(); }
+  }
+  async function copyCommand() {
+    try { await navigator.clipboard.writeText(COMMAND); window.toast?.('Команда скопирована', 'success'); }
+    catch { error('Буфер обмена недоступен. Скопируйте команду /model a6api[1m] вручную.'); }
+  }
+  function openRoutes() {
+    if (typeof window.showTab !== 'function') return error('Вкладка «Маршруты» недоступна');
+    S.routeObserver?.disconnect(); clearTimeout(S.routeTimer);
+    window.showTab('routes');
+    const highlight = () => {
+      const row = byId('routes-row-a6api'); if (!row) return false;
+      row.scrollIntoView({ block: 'center' }); row.classList.add('a6-route-focus');
+      setTimeout(() => row.classList.remove('a6-route-focus'), 2200); return true;
+    };
+    highlight();
+    const target = byId('routes-box');
+    if (target && window.MutationObserver) {
+      S.routeObserver = new window.MutationObserver(highlight);
+      S.routeObserver.observe(target, { childList: true, subtree: true });
+      S.routeTimer = setTimeout(() => S.routeObserver.disconnect(), 5000);
     }
   }
-  async function load() {
-    shell(); if (!S.wired || S.loading || S.busy) return;
-    S.loading = true; S.modelLoading = false; ++S.sequence; ++S.logSequence; ++S.reviewSequence;
-    error(''); renderPool(); renderSellers();
-    try {
-      S.state = await api('state');
-      const tokenId = S.state.tokens.some(t => t.id === S.tokenId) ? S.tokenId : (S.state.tokens.find(t => t.name === 'deepseek') || S.state.tokens[0])?.id || null;
-      const model = S.state.models.includes(S.model) ? S.model : S.state.models.includes(DEFAULT_MODEL) ? DEFAULT_MODEL : (S.state.models[0] || '');
-      byId('a6-token').innerHTML = S.state.tokens.map(t => `<option value="${t.id}">${esc(t.name)} #${t.id}</option>`).join('');
-      byId('a6-model-list').innerHTML = S.state.models.map(m => `<option value="${esc(m)}"></option>`).join('');
-      activateSelection(tokenId, model); renderKey(); await loadModel();
-    } catch (e) { error(e.message); }
-    finally { S.loading = false; renderPool(); renderSellers(); }
-  }
-  async function loadLogs() {
-    const sequence = ++S.logSequence, tokenId = S.tokenId, model = S.model;
-    if (!tokenId || !model) return;
-    byId('a6-log-rows').innerHTML = '<tr><td colspan="5" class="a6-empty">Загрузка журнала...</td></tr>';
-    const current = () => sequence === S.logSequence && tokenId === S.tokenId && model === S.model;
-    try {
-      const d = await api('logs?' + new URLSearchParams({ tokenId, model }));
-      if (!current()) return;
-      byId('a6-log-rows').innerHTML = d.items.length ? d.items.map(x => `<tr><td>${time(x.at)}</td><td>#${esc(x.channelId ?? '?')}</td><td class="a6-mono">${esc(x.input ?? '?')} / ${esc(x.output ?? '?')}</td><td class="a6-price">${money(x.usd)}</td><td>${x.duration == null ? 'нет данных' : esc(x.duration) + ' с'}</td></tr>`).join('') : '<tr><td colspan="5" class="a6-empty">У этого ключа пока нет запросов выбранной модели</td></tr>';
-    } catch (e) { if (current()) byId('a6-log-rows').innerHTML = `<tr><td colspan="5" class="a6-empty">Журнал недоступен: ${esc(e.message)}</td></tr>`; }
-  }
-  function reset() {
-    if (!editable()) return;
-    S.draft = freshDraft(S.data.route); S.dirty = false; S.drafts.delete(S.selectedKey); error(''); renderPool(); renderSellers();
-  }
-  async function save() {
-    if (!editable() || !S.dirty || restricted()) return;
-    if (!S.draft.channels.length) return error('Оставьте хотя бы одного продавца');
-    const before = S.data.route.channels.map(x => '#' + x.channelId).join(', ') || 'маршрут по умолчанию';
-    const after = S.draft.channels.map(x => '#' + x).join(', ');
-    if (!window.confirm(`Сохранить маршрут ${S.model}?\n${before} → ${after}\nВход до ${money(S.draft.caps.input_price_micros / 1e6)}, выход до ${money(S.draft.caps.output_price_micros / 1e6)} за 1M.\nАвтопул и выход на весь рынок будут выключены.`)) return;
-    S.busy = true; renderPool(); renderSellers(); error('');
-    try {
-      const d = await api('route', S.draft); S.data.route = d.route; S.dirty = false; S.drafts.delete(S.selectedKey);
-      S.draft = freshDraft(d.route); window.toast?.('Маршрут сохранён и проверен', 'success');
-    } catch (e) { error(e.message + (e.writeAccepted ? ' Запись была принята сервером; обновите данные перед повтором.' : '')); }
-    finally { S.busy = false; renderPool(); renderSellers(); }
-  }
-  async function enable() {
-    if (!S.state?.canWrite || S.busy || S.loading || S.modelLoading || !restricted()) return;
-    if (!window.confirm(`Разрешить ${S.model} ключу ${selectedToken().name}? Старые модели останутся.`)) return;
-    S.busy = true; error(''); renderPool(); renderSellers();
-    let enabled = false;
-    try { await api('enable-model', { tokenId: S.tokenId, model: S.model }); enabled = true; }
-    catch (e) { error(e.message); }
-    finally { S.busy = false; renderPool(); renderSellers(); }
-    if (enabled) await load();
-  }
-  async function copy(text) {
-    try { await navigator.clipboard.writeText(text); window.toast?.('Скопировано', 'success'); }
-    catch { error('Буфер обмена недоступен. Откройте дашборд через localhost.'); }
-  }
-  async function copyKey() {
-    if (!S.state?.canWrite || !S.tokenId) return error('Копирование ключа доступно только через localhost');
-    if (!window.confirm('Скопировать полный API-ключ в буфер обмена?')) return;
-    const d = await api('reveal', { tokenId: S.tokenId }); await copy(d.key);
-  }
-  async function showReviews(listingId) {
-    const sequence = ++S.reviewSequence;
-    byId('a6-reviews').hidden = false; byId('a6-review-items').textContent = 'Загрузка отзывов...';
-    try {
-      const d = await api('reviews?' + new URLSearchParams({ listingId }));
-      if (sequence !== S.reviewSequence) return;
-      byId('a6-review-items').innerHTML = d.items.length ? d.items.map(x => `<article class="a6-review"><div class="a6-row"><strong>${esc(x.rating)} / 5</strong><span class="a6-muted">${esc(x.user)} · ${time(x.at)}</span></div><p>${esc(x.text || 'Оценка без текста')}</p>${x.reply ? `<p class="a6-muted">Продавец: ${esc(x.reply)}</p>` : ''}</article>`).join('') : '<p class="a6-muted">Отзывов пока нет</p>';
-    } catch (e) { if (sequence === S.reviewSequence) byId('a6-review-items').textContent = e.message; }
-  }
-  window.A6API = { load, save, toggleChannel };
+  window.A6API = { load };
   const boot = () => { if (document.querySelector('[data-tab-content="a6api"].active')) load(); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

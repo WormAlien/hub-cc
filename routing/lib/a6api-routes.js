@@ -80,49 +80,41 @@ function probeSummary(secretDir, model) {
     finally { if (fd !== undefined) fs.closeSync(fd); }
     return result;
 }
-function createRoutes({ api = createClient(), secretDir = SECRET_DIR } = {}) {
-    const cache = new Map();
-    async function cached(key, fn) {
-        const hit = cache.get(key); if (hit && hit.until > Date.now()) return hit.promise;
-        const promise = fn().catch(e => { cache.delete(key); throw e; });
-        cache.set(key, { until: Date.now() + 15000, promise });
-        if (cache.size > 20) cache.delete(cache.keys().next().value);
-        return promise;
-    }
+function createRoutes({ gateway = require('./a6api-gateway').createGateway(), secretDir = SECRET_DIR } = {}) {
     async function dispatch(req, res, url) {
         const action = url.pathname.slice(PREFIX.length);
         if (req.method === 'GET') {
-            if (['route', 'enable-model', 'reveal'].includes(action)) return json(res, 405, { error: 'Нужен явный POST' });
-            if (action === 'state') return json(res, 200, { ok: true, ...await cached('state', () => api.state()), canWrite: canWrite(req) });
-            if (action === 'model') {
-                const tokenId = idOf(url.searchParams.get('tokenId')), model = modelOf(url.searchParams.get('model'));
-                await api.ownToken(tokenId);
-                const [catalog, route] = await Promise.all([cached(tokenId + ':' + model, () => api.listings(model, tokenId)), api.route(tokenId, model)]);
-                return json(res, 200, { ok: true, catalog, route, probes: probeSummary(secretDir, model), canWrite: canWrite(req) });
+            if (['key', 'modelmap', 'activate'].includes(action)) return json(res, 405, { error: 'Нужен явный POST' });
+            if (action === 'state') return json(res, 200, { ok: true, ...await gateway.state(), canWrite: canWrite(req) });
+            if (action === 'balance') {
+                // Статусбар живёт доли секунды: с `nudge=1` отвечаем сразу, а чтение
+                // баланса делает хаб в своём процессе. Без nudge - синхронно.
+                if (url.searchParams.get('nudge') === '1') {
+                    gateway.balance().catch(() => {});
+                    return json(res, 200, { ok: true, queued: true });
+                }
+                return json(res, 200, await gateway.balance());
             }
-            if (action === 'reviews') return json(res, 200, { ok: true, ...await cached('reviews:' + idOf(url.searchParams.get('listingId')), () => api.reviews(idOf(url.searchParams.get('listingId')))) });
-            if (action === 'logs') return json(res, 200, { ok: true, ...await api.logs(idOf(url.searchParams.get('tokenId')), modelOf(url.searchParams.get('model'))) });
+            if (action === 'models') {
+                const tokenId = idOf(url.searchParams.get('tokenId'));
+                return json(res, 200, { ok: true, tokenId, models: await gateway.models(tokenId) });
+            }
             return json(res, 404, { error: 'Ручка a6api не найдена' });
         }
         if (req.method !== 'POST') return json(res, 405, { error: 'Метод не разрешён' });
-        if (!canWrite(req)) return json(res, 403, { error: 'Управление ключом доступно только через localhost на этой машине', code: 'local_only' });
+        if (!canWrite(req)) return json(res, 403, { error: 'Управление Claude Code доступно только через localhost на этой машине', code: 'local_only' });
         if (!/^application\/json(?:;|$)/i.test(String(req.headers['content-type'] || ''))) return json(res, 415, { error: 'Нужен Content-Type application/json' });
-        if (!['route', 'enable-model', 'reveal'].includes(action)) return json(res, 404, { error: 'Ручка a6api не найдена' });
-        const body = await readBody(req);
-        const tokenId = idOf(body.tokenId);
-        if (action === 'route') {
-            const route = await api.saveRoute({ ...body, tokenId }); cache.clear(); return json(res, 200, { ok: true, route });
-        }
-        if (action === 'enable-model') {
-            const result = await api.enableModel(tokenId, modelOf(body.model)); cache.clear(); return json(res, 200, result);
-        }
-        return json(res, 200, { ok: true, key: await api.reveal(tokenId) });
+        if (!['key', 'modelmap', 'activate'].includes(action)) return json(res, 404, { error: 'Ручка a6api не найдена' });
+        const body = await readBody(req), tokenId = idOf(body.tokenId);
+        if (action === 'key') return json(res, 200, await gateway.selectKey(tokenId));
+        if (action === 'modelmap') return json(res, 200, await gateway.saveModels(tokenId, body.modelMap));
+        return json(res, 200, await gateway.activate(tokenId));
     }
     function handle(req, res) {
         let url; try { url = new URL(req.url, 'http://localhost'); } catch { return false; }
         if (!url.pathname.startsWith(PREFIX)) return false;
-        dispatch(req, res, url).catch(e => json(res, e instanceof ApiError ? e.status : (e.status || 500), {
-            ok: false, code: e.code || 'a6api_error', error: e instanceof ApiError ? e.message : 'Не удалось выполнить запрос a6api',
+        dispatch(req, res, url).catch(e => json(res, e instanceof ApiError ? e.status : 500, {
+            ok: false, code: e instanceof ApiError ? e.code : 'a6api_error', error: e instanceof ApiError ? e.message : 'Не удалось выполнить запрос a6api',
             writeAccepted: e.writeAccepted === true,
         }));
         return true;
@@ -130,8 +122,9 @@ function createRoutes({ api = createClient(), secretDir = SECRET_DIR } = {}) {
     return { handle };
 }
 let routes;
+function setGateway(gateway) { routes = createRoutes({ gateway }); }
 function handle(req, res) {
     if (!req.url.startsWith(PREFIX)) return false;
     if (!routes) routes = createRoutes(); return routes.handle(req, res);
 }
-module.exports = { createRoutes, canWrite, handle, probeSummary };
+module.exports = { createRoutes, canWrite, handle, setGateway, probeSummary };

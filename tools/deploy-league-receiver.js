@@ -68,8 +68,13 @@ const opt = (n, d) => {
   return hit === undefined ? d : hit.slice(p.length);
 };
 
-// Погашенная копия: сюда выкатывать нечего, и сказать это надо ДО первого изменения на ноде.
-const PENSIONED_ALIASES = { ch: 'снята с автозапуска 10.09.2026, срезы не приходят с 09.09; боевой приёмник на de' };
+// Погашенные копии: сюда выкатывать нечего, и сказать это надо ДО первого изменения на ноде.
+// 24.10.2026 приёмник переехал с DE на FI: DE (Waicore) недоступна с 22.10, а CH погашена
+// ещё 10.09. Оба адреса теперь только по явному `--force-alias`.
+const PENSIONED_ALIASES = {
+  ch: 'снята с автозапуска 10.09.2026, срезы не приходят с 09.09; боевой приёмник на fi',
+  de: 'нода Waicore недоступна с 22.10.2026, приёмник переехал на fi 24.10',
+};
 const ROOT = path.join(__dirname, '..');
 const DRY = has('dry-run');
 const ROLLBACK = has('rollback');
@@ -94,10 +99,11 @@ const C = {
   port: opt('port', '333'),
   user: opt('user', 'root'),
   key: opt('key', path.join(os.homedir(), '.ssh', process.env.LEAGUE_SSH_KEY || 'id_ed25519')),
-  // Дефолт был 'ch' - ШВЕЙЦАРСКАЯ копия, снятая с автозапуска 10.09.2026: лигу она не
-  // обслуживает с 9 сентября, а выкат на неё рапортовал успех (дважды 23.09.2026). Боевой
-  // приёмник живёт на DE. Если цель действительно 'ch' - только явным `--force-alias`.
-  alias: opt('alias', 'de'),
+  // Дефолт был 'de', пока приёмник жил на немецкой ноде. 24.10.2026 он переехал на FI:
+  // DE недоступна с 22.10. Если цель действительно DE или CH - только `--force-alias`,
+  // иначе выкат уйдёт на машину, которая никого не обслуживает (этой ловушкой уже
+  // дважды ловились 23.09.2026).
+  alias: opt('alias', 'fi'),
   remote: opt('remote', '/opt/league/league-receiver.js'),
   data: opt('data', '/opt/league/data'),     // сверяется с живым юнитом
   backups: opt('backups', '/opt/league/backup'),
@@ -110,7 +116,7 @@ const C = {
 };
 if (PENSIONED_ALIASES[C.alias] && !has('force-alias')) {
   console.error('алиас «' + C.alias + '» - погашенная копия: ' + PENSIONED_ALIASES[C.alias]);
-  console.error('   Боевой выкат: node tools/deploy-league-receiver.js --alias=de');
+  console.error('   Боевой выкат: node tools/deploy-league-receiver.js --alias=fi');
   console.error('   Осознанно на эту копию: --force-alias');
   process.exit(1);
 }

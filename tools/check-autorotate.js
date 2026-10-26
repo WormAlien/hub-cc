@@ -110,6 +110,13 @@ const parts = [
     cutFn(src, 'function moneyKeyUsable('),
     // `moneyRank`/`moneyRotate` зовут `moneyMinBal` (планка годности, у каждого шлюза своя).
     cutFn(src, 'function moneyMinBal('),
+    // 25.10: единица остатка перестала быть только долларом - у Premier это сообщения.
+    // `moneyLeft`/`moneyBar`/`moneyFmt` вырезаем вместе с остальными: без них песочница
+    // падает одной строкой `moneyLeft is not defined`, то есть регресс молчит ЦЕЛИКОМ
+    // (та же ловушка, что была с `moneyKeyUsable` 17.09).
+    cutFn(src, 'function moneyLeft('),
+    cutFn(src, 'function moneyBar('),
+    cutFn(src, 'function moneyFmt('),
     cutFn(src, 'function moneyUsable('),
     cutFn(src, 'function moneyRank('),
     cutFn(src, 'function moneySwitchKey('),
@@ -127,20 +134,30 @@ function makeWorld(opts = {}) {
         active: false,
         status: 'live',
     }, s));
+    const pmPool = (opts.pmPool || []).map((s, i) => Object.assign({
+        id: 'pm_' + i,
+        email: s.name,
+        api_key: s.key || ('prm_' + s.name),
+        active: false,
+        status: 'live',
+    }, s));
     const world = {
-        pool, saves: 0, probes: [], logs: [],
-        keyFile: { 'go.txt': opts.activeKey || (pool.find(s => s.active) || {}).api_key || '' },
+        pool, pmPool, saves: 0, probes: [], logs: [],
+        keyFile: {
+            'go.txt': opts.activeKey || (pool.find(s => s.active) || {}).api_key || '',
+            'pm.txt': opts.activePmKey || (pmPool.find(s => s.active) || {}).api_key || '',
+        },
     };
     const deps = {
         fs: {
             readFileSync: (f) => {
-                if (f !== 'go.txt') throw new Error('ENOENT ' + f);
-                return world.keyFile['go.txt'];
+                if (f !== 'go.txt' && f !== 'pm.txt') throw new Error('ENOENT ' + f);
+                return world.keyFile[f];
             },
             writeFileSync: (f, v) => { world.keyFile[f] = v; },
         },
         logLine: (m) => world.logs.push(m),
-        isRealKey: (k) => /^sk-/.test(String(k || '').trim()),
+        isRealKey: (k) => /^sk-/.test(String(k || '').trim()) || /^prm_/.test(String(k || '').trim()),
         round2: (v) => Math.round(Number(v) * 100) / 100,
         MONEY_GW: {
             go: {
@@ -158,6 +175,24 @@ function makeWorld(opts = {}) {
                     return { status: 'live', balance: live === undefined ? target.balance : live };
                 },
                 applyFn: (target, bal) => { target.balance = bal.balance; target.status = bal.status; },
+            },
+            // Premier (25.10): та же ротация, но остаток считают в сообщениях. Пул - свой
+            // файл, нужен для сцен квоты; живой чек возвращает quota.remaining.
+            pm: {
+                tag: 'premier', label: 'Premier', host: 'ide.kgpix.bond', keyFile: 'pm.txt',
+                quotaMode: true,
+                load: () => world.pmPool,
+                save: () => { world.saves += 1; },
+                balanceFn: async (target) => {
+                    world.probes.push(target.email);
+                    const live = (opts.liveQuota || {})[target.email];
+                    const remaining = live === undefined ? (target.quota && target.quota.remaining) : live;
+                    return { quota: { unit: 'messages', remaining, limit: 50, used: 50 - remaining, resetAt: null }, status: 'live' };
+                },
+                applyFn: (target, bal) => {
+                    if (bal.quota) target.quota = bal.quota;
+                    if (bal.status) target.status = bal.status;
+                },
             },
         },
         Date,
@@ -824,6 +859,65 @@ async function main() {
             'тот же текст в конверте Anthropic (второй вид тела у того же шлюза)');
         check(rotate(403, Buffer.from('{"error":{"message":"quota exceeded for this model"}}')) === null,
             '«нет прав на модель» ротацию НЕ запускает — пул не крутится зря');
+    }
+
+    // 20. Premier (25.10): отказ по ДНЕВНОЙ КВОТЕ, а не по деньгам. До этой правки ротация
+    //     была выключена целиком (`noAuto`), и 429 «Сообщения на сегодня закончились» уезжал
+    //     клиенту при живых аккаунтах в пуле. Проверяем то, что нельзя проверить текстом:
+    //     отбор кандидата по остатку сообщений, обнуление ушедшего и сухой пул.
+    {
+        const q = (remaining, limit = 50) => ({ unit: 'messages', remaining, limit, used: limit - remaining, checkedAt: new Date().toISOString() });
+        // Кандидат — с наименьшим остатком, которому хватает хотя бы одного сообщения.
+        const w = makeWorld({
+            pmPool: [
+                { name: 'exhausted', quota: q(0), active: true },
+                { name: 'almost', quota: q(3) },
+                { name: 'full', quota: q(50) },
+            ],
+        });
+        w.api.moneyState('pm').enabled = true;
+        const r = await w.api.moneyRotate('pm', { reason: 'out-of-balance', fromKey: 'prm_exhausted' });
+        check(r.ok && w.keyFile['pm.txt'] === 'prm_almost',
+            `premier: подмена ушла на аккаунт с наименьшим живым остатком (получили ${r.email})`);
+        check(w.pmPool.find(s => s.email === 'exhausted').quota.remaining === 0,
+            'premier: у ушедшего по квоте остаток обнулён — в кандидаты он не вернётся');
+        check(w.pmPool.filter(s => s.active).length === 1 && w.pmPool.find(s => s.active).email === 'almost',
+            'premier: активен ровно один аккаунт, и это выбранный');
+
+        // Сухой пул: все остатки нулевые — честный отказ, а не выдуманный кандидат.
+        const dry = makeWorld({
+            pmPool: [{ name: 'a', quota: q(0), active: true }, { name: 'b', quota: q(0) }],
+        });
+        dry.api.moneyState('pm').enabled = true;
+        const rd = await dry.api.moneyRotate('pm', { reason: 'out-of-balance', fromKey: 'prm_a' });
+        check(!rd.ok && rd.error === 'pool-dry' && dry.keyFile['pm.txt'] === 'prm_a',
+            'premier: пустой пул отдаёт pool-dry и активный ключ не меняет');
+
+        // Аккаунт без квоты (чек ещё не проходил) кандидатом не считается: цифры нет.
+        const noData = makeWorld({
+            pmPool: [{ name: 'a', quota: q(0), active: true }, { name: 'unknown' }, { name: 'live', quota: q(10) }],
+        });
+        noData.api.moneyState('pm').enabled = true;
+        const rn = await noData.api.moneyRotate('pm', { reason: 'out-of-balance', fromKey: 'prm_a' });
+        check(rn.ok && noData.keyFile['pm.txt'] === 'prm_live',
+            `premier: аккаунт без прочитанной квоты пропущен (получили ${rn.email})`);
+
+        // Живой чек важнее кеша: кеш обещал 30 сообщений, чек показал 0 — идём дальше.
+        const stale = makeWorld({
+            pmPool: [{ name: 'a', quota: q(0), active: true },
+                { name: 'lying', quota: q(30) }, { name: 'real', quota: q(5) }],
+            liveQuota: { lying: 0 },
+        });
+        stale.api.moneyState('pm').enabled = true;
+        const rl = await stale.api.moneyRotate('pm', { reason: 'out-of-balance', fromKey: 'prm_a' });
+        check(rl.ok && stale.keyFile['pm.txt'] === 'prm_real',
+            `premier: живой чек отменил врущий кеш (получили ${rl.email}, проб ${stale.probes.length})`);
+
+        // Ротация у Premier включается тем же общим тумблером, что у денежных шлюзов.
+        const off = makeWorld({ pmPool: [{ name: 'a', quota: q(0), active: true }, { name: 'b', quota: q(9) }] });
+        await off.api.moneyRotate('pm', { reason: 'manual', fromKey: 'prm_a' });
+        check(off.api.moneyState('pm').enabled === false,
+            'premier: тумблер остаётся выключенным по умолчанию, ротация не включает его сама');
     }
 
     // Итог

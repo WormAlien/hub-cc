@@ -186,7 +186,8 @@ if (fs.existsSync(MOD)) {
                 main({ ts: '2026-09-16T01:00:00.000Z', u: usage(10, 4, 100, 20) }),
         };
         const s = A.computeCcStats({ fs: build(files), root: ROOT, now: NOON });
-        assert.strictEqual(s.lifetimeCC, 1134, 'кеш 1000 плюс сутки хвоста 134 целиком');
+        // 26.10: пройденный хвост к `modelUsage` НЕ прибавляется - те же дни там уже есть.
+        assert.strictEqual(s.lifetimeCC, 1134, 'итог - большее из общего счётчика и суммы дней; хвост в кеш не прибавляется');
         assert.strictEqual(s.lifetimeBreakdown.tail, 134);
         assert.strictEqual(s.completeLifetime, true, 'с кешем итог полный: хвост измерен четырьмя категориями');
         assert.strictEqual(s.daily.basis['2026-09-16'], 'transcript');
@@ -364,9 +365,9 @@ if (fs.existsSync(MOD)) {
         const e = A.envelopeFrom(s, '2026-09-16T12:00:00.000Z');
         assert.strictEqual(e.v, 1, 'версия определения едет в срез');
         assert.strictEqual(e.available, true);
-        assert.strictEqual(e.lifetime, 1100, 'кеш 1000 плюс сутки 100');
+        assert.strictEqual(e.lifetime, 1100, 'итог - большее из счётчика и дней, прочих нет');
         assert.strictEqual(e.complete, true);
-        assert.strictEqual(e.totals.d7, 1100);
+        assert.strictEqual(e.totals.d7, 1100, 'окно суток - снимок внутреннего ряда, без повторного хвоста');
         assert.strictEqual(typeof e.totals.h24, 'number');
         assert.deepStrictEqual(e.days.keys.slice(-1), ['2026-09-16']);
         assert.strictEqual(e.days.values[e.days.values.length - 1], 100);
@@ -440,8 +441,22 @@ if (fs.existsSync(MOD)) {
         const oc = s.sources.find(x => x.h === 'opencode');
         assert.strictEqual(oc.tokens, 503_000, 'вход+выход двух записей');
         assert.strictEqual(s.otherTokens, 503_007, 'сумма прочих');
-        assert.strictEqual(s.lifetimeCC, 1000, 'счётчик Claude Code не тронут');
+        assert.strictEqual(s.lifetimeCC, 1000, 'счётчик [CC] по дням, а не по журнальному claude-code');
         assert.strictEqual(s.lifetime, 1000 + 503_007, 'итог = Claude Code + прочие');
+    });
+
+    ok('итог не складывает пройденный хвост с общим счётчиком: карточка равна своей кривой', () => {
+        // Живой случай 26.10: modelUsage уже содержит дни после watermark, и старый код
+        // прибавлял к нему те же дни ещё раз (76,74 + 15,85 = 92,59 при сумме дней 83,05).
+        const files = {
+            [ROOT + '/projects/p1/s1.jsonl']:
+                main({ ts: '2026-09-16T01:00:00.000Z', u: usage(10, 0, 100, 0) }) + '\n' +
+                main({ ts: '2026-09-17T01:00:00.000Z', u: usage(5, 0, 50, 0) }),
+        };
+        const s = A.computeCcStats({ fs: build(files), root: ROOT, now: NOON });
+        assert.strictEqual(s.lifetimeBreakdown.tail, 110, 'хвост посчитан');
+        assert.strictEqual(s.lifetimeCC, 1110, 'итог - большее из счётчика 1000 и дней 1000+110, без сложения их вместе');
+        assert.notStrictEqual(s.lifetimeCC, 1000 + 110 + 1000, 'двойного счёта нет');
     });
 
     ok('записи журнала раскладываются по UTC-дням и окнам', () => {
@@ -486,7 +501,7 @@ if (fs.existsSync(MOD)) {
         const journal = jline({ h: 'opencode', in: 400_000, out: 2_000 }) + '\n';
         const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
         const e = A.envelopeFrom(s);
-        assert.strictEqual(e.lifetime, 1000 + 402_000, 'итог с прочими');
+        assert.strictEqual(e.lifetime, 402_000 + 1000, 'итог с прочими: кеш от 26.10 плюс журнал');
         assert.strictEqual(e.sources.length, 2, 'два источника в срезе');
         const cc = e.sources.find(x => x.h === 'claude-code');
         const oc = e.sources.find(x => x.h === 'opencode');
@@ -630,7 +645,7 @@ if (fs.existsSync(MOD)) {
             root: ROOT, now: () => NOON,
         });
         return cache.refresh().then(a => {
-            assert.strictEqual(a.lifetimeCC, 1005, 'кеш 1000 плюс хвост 5');
+            assert.strictEqual(a.lifetimeCC, 1005, 'большее из кеша и суммы дней');
             broken = true;
             return cache.refresh().then(b => {
                 assert.strictEqual(b.lifetimeCC, a.lifetimeCC, 'снимок остался прежним');

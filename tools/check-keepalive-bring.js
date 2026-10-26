@@ -73,6 +73,12 @@ function makeWorld(opts) {
         killed: 0, spawns: 0, probes: 0, sleeps: 0, logs: [],
     };
     const deps = {
+        A6_KEEPALIVE_PORT: 20191, A6_CONVERTER_PORT: 20192,
+        a6Gateway: {
+            spawn: async () => { world.spawns++; return { ok: true, pid: 6001 }; },
+            restart: async () => { world.spawns++; world.killed++; return { ok: true, pid: 6002 }; },
+        },
+        stopPortSoftly: async () => { world.killed++; world.listening = false; world.deadProbes = 0; return 1; },
         napMs: async () => { world.sleeps += 1; },
         logLine: (m) => world.logs.push(m),
         killPortListeners: () => { world.killed += 1; world.listening = false; world.deadProbes = 0; return 1; },
@@ -99,7 +105,7 @@ function makeWorld(opts) {
         Date,
     };
     const factory = new Function('deps', `
-        const { napMs, logLine, killPortListeners, portIsFree, keepaliveInstances, fetch, AbortSignal } = deps;
+        const { napMs, logLine, killPortListeners, stopPortSoftly, portIsFree, keepaliveInstances, fetch, AbortSignal, A6_KEEPALIVE_PORT, A6_CONVERTER_PORT, a6Gateway } = deps;
         ${parts.join('\n')}
         return { keepaliveBring, portAnswers, probeStatus };
     `);
@@ -108,6 +114,13 @@ function makeWorld(opts) {
 }
 
 async function main() {
+    {
+        const w = makeWorld({ listening: true });
+        const ensured = await w.api.keepaliveBring(20191);
+        check(ensured.ok && w.spawns === 1 && w.killed === 0 && w.probes === 0, 'a6api: own pair ensure, no generic kill');
+        const restarted = await w.api.keepaliveBring(20191, { force: true });
+        check(restarted.ok && w.spawns === 2 && w.killed === 1, 'a6api: explicit restart delegates to pair lifecycle');
+    }
     // 1. Живой прокси не трогаем: ни спавна, ни убийства.
     {
         const w = makeWorld({ listening: true });

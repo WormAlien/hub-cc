@@ -586,7 +586,9 @@ async function oneAccount(browser, n) {
         // заполнил форму адресом из шага 1.5, а новый ящик после капчи означал, что код
         // уходит на один адрес, а форма ждёт другой. Проверка живости только ПРОВЕРЯЕТ
         // и НИКОГДА не меняет адрес: мёртвый ящик - это стоп, а не повод подменить.
-        const addr = await mailReady;
+        // let, а не const: адрес меняет ТОЛЬКО ветка EMAIL_EXISTS (там форма заново
+        // открывается на /register). Проверка живости ниже его не трогает.
+        let addr = await mailReady;
         if (!addr) throw new Error('ящик не создался до капчи - прогон останавливаю, адрес в форме трогать нельзя');
         log(`почта: ${addr}`);
         const alive = await mailOp(async (page) => {
@@ -594,7 +596,7 @@ async function oneAccount(browser, n) {
             catch (e) { log(`ящик ${addr} не наш: ${e.message.split('\n')[0]}`); return false; }
         });
         if (!alive) throw new Error(`ящик ${addr} мёртв - письмо туда не придёт; форма уже заполнена этим адресом`);
-        const baseline = await mailOp(inboxHrefs);
+        let baseline = await mailOp(inboxHrefs);
         log(`baseline писем в ящике: ${baseline.length}`);
         // 🪤 Вкладка панели остаётся сверху: ящик нужен скрипту, а не человеку, и владелец
         // не должен смотреть на догружающийся emailnator вместо формы.

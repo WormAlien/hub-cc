@@ -45,7 +45,7 @@ const SESSIONS_DIR = path.join(__dirname, 'sessions');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
 const FROM_HINT = 'threerouter';
 const OTP_TIMEOUT_MIN = 10;
-const CAPTCHA_TIMEOUT_MS = 5 * 60 * 1000;
+const CAPTCHA_TIMEOUT_MS = 10 * 60 * 1000;
 const HTTP_TIMEOUT_MS = 45 * 1000;
 
 const COUNT = Math.max(1, Number(process.argv[2]) || 1);
@@ -70,6 +70,12 @@ let AGREEMENT_REV = '';
 // выходом: браузер и HTTP-шаги обязаны быть с ОДНОГО адреса.
 let PROXY = null;
 let PROXY_LABEL = 'напрямую';
+// 🔴 Капча-токен привязан к IP, который её решил. Живой прогон 26.10: прокси умер
+// между капчей и send-verify-code, `withProxyRetry` сменил адрес - и площадка ответила
+// «registration click captcha token invalid or expired». После решения капчи прокси
+// НЕ меняется: если он умер, аккаунт теряется вместе с капчей, и это говорится прямо,
+// а не маскируется новым прокси и непонятной ошибкой токена.
+let CAPTCHA_LOCKED = false;
 
 async function castFetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
     if (!PROXY) return fetch(url, { method, headers, body, signal });
@@ -245,6 +251,9 @@ async function withProxyRetry(fn, label) {
         return await fn();
     } catch (e) {
         if (!isProxyNetError(e) || NO_PROXY) throw e;
+        if (CAPTCHA_LOCKED) {
+            throw new Error(`прокси ${PROXY_LABEL} умер после капчи (${String(e.message).slice(0, 60)}); токен привязан к IP - нужен новый прогон с капчей`);
+        }
         log(`${label}: прокси ${PROXY_LABEL} отвалился (${String(e.message).slice(0, 80)}) - беру другой`);
         PROXY = await acquireFreshProxy(`tr_rega_${Date.now()}_${label}`, 'www.threerouter.com');
         PROXY_LABEL = PROXY.label || PROXY.id || 'прокси';
@@ -393,8 +402,8 @@ async function refillForm(page, addr, password) {
         }
         await page.locator('input[type="email"], #email').first().fill(addr, { timeout: 8000 });
         await page.locator('input[type="password"], #password').first().fill(password, { timeout: 8000 });
-        await clickExactButton(page, ['Continue', '继续', 'Продолжить']);
-        await page.waitForTimeout(1200);
+        // Continue не жмём - см. пояснение у основного заполнения: код отправляет только
+        // наш HTTP-вызов, иначе два письма гасят друг друга.
         return true;
     } catch (e) {
         log(`⚠️ форму не удалось обновить на ${addr}: ${e.message.split('\n')[0]}`);
@@ -569,6 +578,7 @@ async function oneAccount(browser, n) {
         if (opened) log(`капча открыта кнопкой «${opened}»`);
         log('✋ РЕШИ КАПЧУ В ОКНЕ (4 зелёных круга или ползунок). Дальше скрипт продолжит сам.');
         const captchaToken = await waitCaptchaToken(sitePage);
+        CAPTCHA_LOCKED = true;
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
 
         // Ящик создаётся на шаге 1.5 - ДО капчи, и результат забираем здесь как есть.
@@ -600,7 +610,9 @@ async function oneAccount(browser, n) {
         }
         await sitePage.locator('input[type="email"], #email').first().fill(addr);
         await sitePage.locator('input[type="password"], #password').first().fill(password);
-        await clickExactButton(sitePage, ['Continue', '继续', 'Продолжить']);
+        // 🔴 Continue НЕ жмём: SPA отправила бы свой код тем же токеном, и два письма
+        // (её и наш HTTP send-code) гасят друг друга - прочитанный код оказывается
+        // недействительным. Код отправляем только сами, одним запросом.
 
         // Дальше - ЧИСТЫЙ HTTP: токен капчи уже есть, а адрес emailnator может быть занят
         // (адреса переиспользуются). Тогда берём новый ящик и повторяем БЕЗ новой капчи:
@@ -758,6 +770,7 @@ async function oneAccount(browser, n) {
         await mailContext.close().catch(() => {});
         PROXY = null;
         PROXY_LABEL = 'напрямую';
+        CAPTCHA_LOCKED = false;
     }
 }
 

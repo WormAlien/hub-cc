@@ -387,7 +387,7 @@ function snapshotFrom(agg, meta) {
     // транскрипты), а у журнальных харнессов - только то, что уцелело в журнале.
     const sources = [{
         h: 'claude-code',
-        tokens: doc ? Math.max(lifetimeCache, cacheDaysSum) : null,
+        tokens: doc ? cacheDaysSum : null,
         lowerBound: doc ? null : tailGross,
         coverage: doc ? 'full' : 'lower-bound',
     }];
@@ -406,14 +406,15 @@ function snapshotFrom(agg, meta) {
         // Причина остаётся и при живых данных: она объясняет, почему total неизвестен.
         reason: doc ? null : (cacheExists ? reason : 'no-cache'),
 
-        // 🔴 Итог - что больше: общий счётчик `modelUsage` или сумма подневного ряда. Общий не
-        // складывается с хвостом транскриптов (те дни в нём уже есть, см. `tailGross`), но и
-        // одному ему верить нельзя: в тот же час 26.10 он дал 92,32 против 83,08 по дням, хотя
-        // 16.09 оба числа сходились с `/stats`. Взять меньшее - сделать цифру на карточке
-        // меньше суммы её же кривой. Взять большее - не потерять оценимые стародавние дни.
-        lifetimeCC: doc ? Math.max(lifetimeCache, cacheDaysSum) : null,
+        // 🔴 Итог - СУММА ПОДНЕВНОГО РЯДА, а не общий счётчик `modelUsage` (решение владельца
+        // 26.10: «83,09 - дни кеша»). Тогда цифра на карточке равна сумме своей же кривой и
+        // тултипу; общий счётчик к тому времени обгонял дни на 9,2 млрд (92,32 против 83,08),
+        // хотя 16.09 оба сходились с `/stats`, - то есть доверия к нему меньше. Хвост
+        // транскриптов входит в дни сам (см. `tailGross`) и второй раз не прибавляется.
+        // Сам `modelUsage` остаётся в `lifetimeBreakdown.cache` для сверки с `/stats`.
+        lifetimeCC: doc ? cacheDaysSum : null,
         // Итог для человека: Claude Code плюс всё, что видел журнал по прочим харнессам.
-        lifetime: doc ? Math.max(lifetimeCache, cacheDaysSum) + otherTokens : null,
+        lifetime: doc ? knownDaysSum : null,
         // Без кеша общий итог неизвестен, а сумма по сохранившимся транскриптам плюс журнал -
         // нижняя граница: истории старше первой уцелевшей сессии в ней нет по построению.
         lifetimeLowerBound: doc ? null : tailGross + otherTokens,

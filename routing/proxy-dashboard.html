@@ -43335,6 +43335,11 @@ function lgPaintMini(rows, mi) {
   // Мини-блок отвечает про КАНОНИЧЕСКИЙ счётчик, как и вкладка: он висит на всех вкладках,
   // и цифра обязана быть той же величины, что в шапке Лиги. Нет счётчика - прочерк, а не
   // цифра другой метрики под той же подписью.
+  // 🪤 Строки блока считались ПРЕЖНИМ полем `tokW`, а заголовок - каноническим счётчиком,
+  // и в одном блоке стояли два разных числа об одних сутках (26.10: 5,66 в шапке против
+  // 6,11 в своей же строке). Теперь и строки, и отрыв идут через `lgTotal` - тем же путём,
+  // что и список вкладки: канонический счётчик, а у участника без него - прежние числа.
+  const miniOf = p => { const v = lgTotal(p, 'd7'); return v === null ? 0 : v; };
   const ccRun = lgCcRun(me, 'd7');
   const ccVal = lgCcTotal(me, 'd7');
   const val = ccVal === null ? null : ccVal;
@@ -43374,7 +43379,7 @@ function lgPaintMini(rows, mi) {
     <div class="flex items-center gap-1.5 text-xs ${p.isMe ? 'text-ink' : 'text-muted'}">
       <span class="font-mono text-[11px] text-faint w-3.5">${from + k + 1}</span>
       ${lgAv(p.nick, 18, p.avatar)}<span class="truncate">${lgEsc(lgNm(p))}</span>
-      <span class="ml-auto font-mono text-[11.5px] ${p.isMe ? 'text-ink' : 'text-dim'}">${lgTok(Number((p.tot || {}).tokW) || 0)}</span>
+      <span class="ml-auto font-mono text-[11.5px] ${p.isMe ? 'text-ink' : 'text-dim'}">${lgTok(miniOf(p))}</span>
     </div>`).join('') + (solo ? `
     <div class="flex items-center gap-1.5 text-xs text-faint">
       <span class="font-mono text-[11px] w-3.5">—</span>
@@ -43384,8 +43389,8 @@ function lgPaintMini(rows, mi) {
   gap.innerHTML = solo
     ? lgEsc(lgReceiverState().short)
     : mi === 0
-      ? `отрыв от второго <b class="text-muted font-medium">${lgTok(val - (Number((rows[1].tot || {}).tokW) || 0))}</b>`
-      : `до 1-го места <b class="text-muted font-medium">${lgTok((Number((rows[0].tot || {}).tokW) || 0) - val)}</b>`;
+      ? `отрыв от второго <b class="text-muted font-medium">${lgTok(val - miniOf(rows[1]))}</b>`
+      : `до 1-го места <b class="text-muted font-medium">${lgTok(miniOf(rows[0]) - val)}</b>`;
   box.classList.remove('hidden');
 }
 // ═══════════════════ ЧАТ ЛИГИ (по группам) ════════════════════════════════

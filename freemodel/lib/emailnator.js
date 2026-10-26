@@ -134,16 +134,18 @@ async function clickChip(page, label) {
   return ok;
 }
 
-// Оставляем включённым ТОЛЬКО `.Gmail`. Мало нажать на него: чипы независимы, и на свежей
-// загрузке включены все четыре — тогда адрес придёт с плюс-алиасом.
-async function selectDotGmail(page) {
+// Оставляем включённым ТОЛЬКО один чип. Мало нажать на него: чипы независимы, и на
+// свежей загрузке включены все четыре — тогда адрес придёт с плюс-алиасом.
+// `wantChip` по умолчанию `.Gmail`; `GoogleMail` даёт второй, менее выжженный домен
+// (@googlemail.com тоже в вайтлисте ThreeRouter).
+async function selectOnlyChip(page, wantChip = WANT_CHIP) {
   const state = {};
   for (const c of CHIPS) state[c] = await chipState(page, c);
   console.log('[emailnator] тумблеры на входе:', CHIPS.map(c => `${c}:${state[c] ? 'ВКЛ' : 'выкл'}`).join('  '));
 
   for (const c of CHIPS) {
     if (state[c] === null) continue;                 // чипа нет — не наша забота
-    const shouldBeOn = (c === WANT_CHIP);
+    const shouldBeOn = (c === wantChip);
     if (state[c] !== shouldBeOn) {
       await clickChip(page, c);
       console.log(`[emailnator] ${shouldBeOn ? 'включаю' : 'гашу'} ${c}`);
@@ -152,13 +154,19 @@ async function selectDotGmail(page) {
   const after = {};
   for (const c of CHIPS) after[c] = await chipState(page, c);
   console.log('[emailnator] тумблеры после:', CHIPS.map(c => `${c}:${after[c] ? 'ВКЛ' : 'выкл'}`).join('  '));
-  return after[WANT_CHIP] === true;
+  return after[wantChip] === true;
 }
+
+// Совместимость: старые вызовы ждут именно `.Gmail`.
+function selectDotGmail(page) { return selectOnlyChip(page, WANT_CHIP); }
 
 // Один вызов = один рабочий Gmail. Настраиваем тумблеры под канон, генерируем и
 // ПРОВЕРЯЕМ результат по адресу: тумблеры могут перерисоваться, а адрес не соврёт.
-async function createEmail(page) {
-  console.log('[emailnator] открываю сайт…');
+async function createEmail(page, opts = {}) {
+  const wantChip = CHIPS.includes(opts.chip) ? opts.chip : WANT_CHIP;
+  const domain = wantChip === 'GoogleMail' ? 'googlemail.com' : 'gmail.com';
+  const addrRe = wantChip === 'GoogleMail' ? /@googlemail\.com$/i : /@gmail\.com$/i;
+  console.log(`[emailnator] открываю сайт… (домен ${domain})`);
   await page.goto(SITE, { timeout: 45000, waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
   await dismissCookie(page);
@@ -167,13 +175,13 @@ async function createEmail(page) {
   const gen = page.locator('button', { hasText: /Generate New/i }).first();
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    await selectDotGmail(page);
+    await selectOnlyChip(page, wantChip);
     if (await gen.count()) await gen.click({ timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(4000);
 
     const addr = await readAddress(page);
     console.log(`[emailnator] попытка ${attempt} → ${addr || '(пусто)'}`);
-    if (addr && /@gmail\.com$/i.test(addr) && !addr.includes('+')) {
+    if (addr && addrRe.test(addr) && !addr.includes('+')) {
       // 🎯 ПОРЯДОК ВЛАДЕЛЬЦА, и он же рабочий: галочки → Generate New → **GO**.
       //
       // 🔴 Раньше GO стоял отдельно, уже на шаге кода (в openInbox), и адрес уходил
@@ -194,12 +202,12 @@ async function createEmail(page) {
       console.log(`[emailnator] ✅ Gmail: ${addr}`);
       return addr;
     }
-    if (addr && /@gmail\.com$/i.test(addr)) {
+    if (addr && addrRe.test(addr)) {
       // Плюс-алиас: тумблеры не встали как надо с первого раза — повторяем настройку
       console.log('[emailnator] адрес с плюс-алиасом — перенастраиваю тумблеры и пробую снова');
     }
   }
-  throw new Error('emailnator не выдал точечный адрес @gmail.com за 3 попытки');
+  throw new Error(`emailnator не выдал точечный адрес @${domain} за 3 попытки`);
 }
 
 // Клик по кнопке с точным ВИДИМЫМ текстом.

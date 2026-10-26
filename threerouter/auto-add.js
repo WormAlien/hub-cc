@@ -522,6 +522,18 @@ async function oneAccount(browser, n) {
             return await fn(emailPage, ...args);
         }
     }
+    // Два домена emailnator: `.Gmail` и `GoogleMail`. Адреса @gmail.com массово уже
+    // зарегистрированы на площадке (EMAIL_EXISTS пачками), @googlemail.com - второй
+    // вайтлистовый домен и заметно чище. Чередуем: занятый адрес -> следующий домен.
+    let mailChipIdx = 0;
+    const MAIL_CHIPS = ['.Gmail', 'GoogleMail'];
+    function createMailbox() {
+        const chip = MAIL_CHIPS[mailChipIdx % MAIL_CHIPS.length];
+        mailChipIdx++;
+        log(`ящик: домен ${chip === 'GoogleMail' ? '@googlemail.com' : '@gmail.com'}`);
+        return mailOp((page) => en.createEmail(page, { chip }));
+    }
+
     try {
         // 1. Прокси - САМЫЙ долгий шаг (перебор + preflight), поэтому он ДО создания ящика.
         //    Адрес emailnator переиспользуемый: чем дольше он «висит» до регистрации, тем
@@ -539,30 +551,33 @@ async function oneAccount(browser, n) {
         }
         log(`выход: ${PROXY_LABEL}`);
 
-        // 1.5. Ящик - ПЕРВЫМ делом после прокси, параллельно с решением капчи.
-        // 🪤 Параллельное создание убирали 25.10, потому что владелец видел `about:blank`
-        // рядом с регистрацией, и почта «грузилась после сайта». Настоящая причина была в
-        // пустой вкладке и порядке фокуса, а не в параллельности. Теперь ящик создаётся
-        // сразу (сам по себе он не стареет - стареет только ВРЕМЯ до отправки кода), а
-        // следующий шаг займёт весь ручной ввод капчи.
+        // 1.5. Ящик: создать, нажать GO и дождаться привязки - строго ДО формы и капчи.
+        // 🔴 Порядок важен (жалоба владельца 26.10): почта должна быть ГОТОВА и привязана
+        // к ящику раньше, чем её адрес попадёт в форму. Иначе на экране адрес есть, а
+        // ящик ещё не открыт - и любая смена адреса выглядит как «вписал, потом сгенерил».
         stage('mail');
-        const mailReady = mailOp(en.createEmail)
-            .then(a => { if (a) { log(`почта: ${a}`); } return a; })
-            .catch(e => { log(`почта не создалась: ${e.message}`); return null; });
+        let addr = await createMailbox();
+        if (!addr) throw new Error('emailnator не выдал адрес');
+        log(`почта: ${addr}`);
+        const alive = await mailOp(async (page) => {
+            try { await en.openInbox(page, addr); return true; }
+            catch (e) { log(`ящик ${addr} не наш: ${e.message.slice(0, 120)}`); return false; }
+        });
+        if (!alive) throw new Error(`ящик ${addr} мёртв - письмо туда не придёт`);
+        let baseline = await mailOp(inboxHrefs);
+        log(`baseline писем в ящике: ${baseline.length}`);
 
-        // 2. Окно панели и капча руками.
-        // 🪤 24.10 08:03: капча больше НЕ стартует сама на пустой форме - на странице
-        // висит кнопка `Click to start verification`, и `waitCaptchaToken` ждал ответ
-        // верификации, которого без клика не будет. Жмём её сами, решает владелец.
+        // 2. Окно панели: форма заполняется ЭТИМ адресом, и только потом капча.
+        // 🪤 24.10 08:03: капча не стартует сама - висит кнопка `Click to start
+        // verification`, жмём её сами, решает владелец.
         siteContext = await newSiteContext(browser);
         let sitePage = await siteContext.newPage();
         await sitePage.bringToFront();
 
         stage('register-form');
         // Страница не открылась через выданный прокси - меняем прокси и открываем заново.
-        // Preflight этого не ловит: он видит ответ API-ручки, а не полную загрузку SPA.
         sitePage = await showRegisterForm(sitePage, async (err) => {
-            log(`страница не открылась через ${PROXY_LABEL} (${String(err.message).split('\n')[0]}) - беру другой прокси`);
+            log(`страница не открылась через ${PROXY_LABEL} (${String(err.message).slice(0, 120)}) - беру другой прокси`);
             PROXY = await acquireFreshProxy(`tr_rega_${Date.now()}_${n}_r`, 'www.threerouter.com');
             PROXY_LABEL = PROXY.label || PROXY.id || 'прокси';
             log(`новый выход: ${PROXY_LABEL}`);
@@ -572,6 +587,8 @@ async function oneAccount(browser, n) {
             await p.bringToFront();
             return p;
         });
+        await sitePage.locator('input[type="email"], #email').first().fill(addr);
+        await sitePage.locator('input[type="password"], #password').first().fill(password);
 
         stage('captcha-manual');
         const opened = await clickExactButton(sitePage, ['Click to start verification', 'Start verification', '点击开始验证', '开始验证']);
@@ -581,40 +598,20 @@ async function oneAccount(browser, n) {
         CAPTCHA_LOCKED = true;
         log(`капча решена, токен ${captchaToken.slice(0, 8)}…`);
 
-        // Ящик создаётся на шаге 1.5 - ДО капчи, и результат забираем здесь как есть.
-        // 🔴 НЕ создавать новый ящик на этом шаге (живой случай 26.10): владелец уже
-        // заполнил форму адресом из шага 1.5, а новый ящик после капчи означал, что код
-        // уходит на один адрес, а форма ждёт другой. Проверка живости только ПРОВЕРЯЕТ
-        // и НИКОГДА не меняет адрес: мёртвый ящик - это стоп, а не повод подменить.
-        // let, а не const: адрес меняет ТОЛЬКО ветка EMAIL_EXISTS (там форма заново
-        // открывается на /register). Проверка живости ниже его не трогает.
-        let addr = await mailReady;
-        if (!addr) throw new Error('ящик не создался до капчи - прогон останавливаю, адрес в форме трогать нельзя');
-        log(`почта: ${addr}`);
-        const alive = await mailOp(async (page) => {
-            try { await en.openInbox(page, addr); return true; }
-            catch (e) { log(`ящик ${addr} не наш: ${e.message.split('\n')[0]}`); return false; }
-        });
-        if (!alive) throw new Error(`ящик ${addr} мёртв - письмо туда не придёт; форма уже заполнена этим адресом`);
-        let baseline = await mailOp(inboxHrefs);
-        log(`baseline писем в ящике: ${baseline.length}`);
-        // 🪤 Вкладка панели остаётся сверху: ящик нужен скрипту, а не человеку, и владелец
-        // не должен смотреть на догружающийся emailnator вместо формы.
-        await sitePage.bringToFront().catch(() => {});
-        // Окно могли закрыть ПОКА решали капчу: поднимаем новое на том же прокси,
-        // форма открывается заново, капча не нужна - токен уже у нас.
+        // Окно могли закрыть ПОКА решали капчу: поднимаем новое на том же прокси и
+        // заново заполняем ТЕМ ЖЕ адресом (капча не нужна - токен уже у нас).
         if (sitePage.isClosed()) {
             log('окно регистрации закрыли - поднимаю новое (капча не нужна)');
             siteContext = await newSiteContext(browser);
             sitePage = await siteContext.newPage();
             await sitePage.bringToFront();
             await showRegisterForm(sitePage);
+            await sitePage.locator('input[type="email"], #email').first().fill(addr);
+            await sitePage.locator('input[type="password"], #password').first().fill(password);
         }
-        await sitePage.locator('input[type="email"], #email').first().fill(addr);
-        await sitePage.locator('input[type="password"], #password').first().fill(password);
-        // 🔴 Continue НЕ жмём: SPA отправила бы свой код тем же токеном, и два письма
-        // (её и наш HTTP send-code) гасят друг друга - прочитанный код оказывается
-        // недействительным. Код отправляем только сами, одним запросом.
+        await sitePage.bringToFront().catch(() => {});
+        // Continue НЕ жмём: SPA отправила бы свой код тем же токеном, и два письма
+        // (её и наш HTTP send-code) гасят друг друга. Код отправляем только сами.
 
         // Дальше - ЧИСТЫЙ HTTP: токен капчи уже есть, а адрес emailnator может быть занят
         // (адреса переиспользуются). Тогда берём новый ящик и повторяем БЕЗ новой капчи:
@@ -634,7 +631,7 @@ async function oneAccount(browser, n) {
                     retries++;
                     if (retries >= 4) throw new Error(`emailnator отдаёт занятые адреса подряд (${retries} попыток) - беру паузу, попробуй позже`);
                     log(`адрес ${addr} занят (${e.reason || e.message}) - беру новый ящик`);
-                    const next = await mailOp(en.createEmail);
+                    const next = await createMailbox();
                     if (!next) throw new Error('emailnator не выдал новый адрес');
                     addr = next;
                     baseline = await mailOp(inboxHrefs);
@@ -672,7 +669,7 @@ async function oneAccount(browser, n) {
                     retries++;
                     if (retries >= 4) throw new Error(`emailnator отдаёт занятые адреса подряд (${retries} попыток) - беру паузу, попробуй позже`);
                     log(`регистрация: адрес ${addr} занят - беру новый ящик`);
-                    const next = await mailOp(en.createEmail);
+                    const next = await createMailbox();
                     if (!next) throw new Error('emailnator не выдал новый адрес');
                     addr = next;
                     baseline = await mailOp(inboxHrefs);

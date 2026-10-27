@@ -1185,8 +1185,15 @@ function randomThemeId() {
     justify-items:center;align-items:end;min-width:0;padding-bottom:16px}
   #finTab .fig{position:relative;max-width:100%} #finTab .fig canvas{position:absolute;inset:0}
   /* Слой графа: во весь экран, без рамки, сквозной для мыши. Узлы ловятся
-     слушателями на документе — см. makeGraph. */
-  #finTab .gLayer{position:fixed;inset:0;z-index:4;pointer-events:none}
+     слушателями на документе — см. makeGraph.
+     ⚠ `width/height:100%` — не для красоты. Canvas — replaced-элемент: без
+     CSS-размера он разворачивается до интринсик-размера, а тот равен пикселям
+     атрибута, то есть `innerWidth × DPR`. Вдобавок рисование идёт через
+     `ctx.setTransform(DPR, …)`. Получается двойной масштаб: при DPR ≠ 1 всё
+     нарисованное встаёт в DPR раз дальше от левого верхнего угла, и облако
+     уезжает от своей фигуры (на 125 % — на 322 px вправо). При 100 % дефект
+     невидим, поэтому «на 2K ровно, на остальных уезжает». */
+  #finTab .gLayer{position:fixed;inset:0;width:100%;height:100%;z-index:4;pointer-events:none}
   /* Переключатель вида правой фигуры лежит ВНУТРИ неё, абсолютом. Это не лень:
      ряд фигур в сцене общий (subgrid), и любая полоска над канвасом подняла бы
      правую фигуру относительно левой, то есть сломала общий пол — грабля 24.
@@ -7608,6 +7615,29 @@ window.finNavCount = async () => {
 
         <div id="pm-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
+        <!-- Реф-ссылка аккаунта. Код = user.id на Premier; новый аккаунт, заведённый
+             с этой ссылкой, зачтётся приглашённым. Счётчик обновляется открытием окна. -->
+        <div id="pm-ref" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-sm font-semibold tracking-tight">🤝 Реф-ссылка новорегов</h2>
+            <span id="pm-ref-stats" class="text-[11px] font-mono text-faint">—</span>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1 flex-1 min-w-[260px]">
+              <span class="text-[10px] text-faint">под каким аккаунтом зачитывать приглашённых</span>
+              <select id="pm-ref-owner" onchange="pmRefLoad()" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60"></select>
+            </label>
+            <div class="flex-1 min-w-[260px] flex flex-col gap-1">
+              <span class="text-[10px] text-faint">ссылка (копируется в форму «Добавить»)</span>
+              <div class="flex gap-2">
+                <input id="pm-ref-link" readonly placeholder="— открой окно аккаунта (🌐), чтобы узнать код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none">
+                <button onclick="pmRefCopy()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Копировать</button>
+                <button onclick="pmRefToAdd()" title="Подставить эту ссылку в форму «Добавить»" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">В добавить</button>
+              </div>
+            </div>
+          </div>
+          <p id="pm-ref-note" class="text-[11px] text-dim mt-2 min-h-[16px]"></p>
+        </div>
 
         <!-- Tier labels select actual Premier model IDs, not Claude models. -->
         <div id="pm-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
@@ -7709,6 +7739,10 @@ window.finNavCount = async () => {
             <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
               <span class="text-[10px] text-faint">api_key — можно пустым</span>
               <input id="pm-add-key" placeholder="prm_… или пусто для входа через GitHub" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[320px]">
+              <span class="text-[10px] text-faint" title="Под каким аккаунтом зачесть приглашение. Код = user.id, ссылка — ide.kgpix.bond/r/&lt;код&gt;">реф-ссылка — пусто = код по умолчанию</span>
+              <input id="pm-add-ref" placeholder="https://ide.kgpix.bond/r/… или код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
             </label>
             <button onclick="pmAdd()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить</button>
             <button onclick="newapiAddPickGithub('pm')" title="Выбрать GitHub и импортировать его сессию в профиль Premier; подтверждение доступа остаётся в браузере" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
@@ -20534,6 +20568,7 @@ async function loadPmSessions(probe) {
     renderPmGauge();
     loadPmModels();
     loadPmModelMap();
+    pmRefFillOwners();
     if (probe) toast('✓ Premier: статусы обновлены', 'success');
   } catch (e) {
     $('pm-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
@@ -20705,19 +20740,88 @@ function pmBalanceCell(s, kJ) {
   return `<span class="inline-flex items-center gap-1 text-xs text-ink" title="${esc(reset + ' · Проверено: ' + stamp)}"><span class="flex flex-col gap-1 text-left"><span>${q.remaining === 0 && !q.unlimited ? '🪫 ' : ''}${label}</span>${bar}<span class="text-[10px] text-muted">сегодня</span></span>${check}</span>`;
 }
 
+// Реф-ссылка на вкладке Premier. Код аккаунта = его user.id на Premier; известен
+// только если окно аккаунта хоть раз открывали (кэш входа в premier/sessions/*.json).
+// Отсюда берётся ссылка для формы «Добавить»: новорег, заведённый с ней, зачтётся.
+let PM_REF = null;
+function pmRefFillOwners() {
+  const sel = $('pm-ref-owner');
+  if (!sel) return;
+  const prev = sel.value || localStorage.getItem('pm:ref-owner') || '';
+  const list = (state.premier || []).filter(s => s.id);
+  sel.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.email || s.name || s.id)}${s.ref ? ' · своя ссылка' : ''}</option>`).join('')
+    || '<option value="">нет аккаунтов</option>';
+  if (prev && list.some(s => s.id === prev)) sel.value = prev;
+  else if ((state.premier || []).find(s => s.active)) sel.value = state.premier.find(s => s.active).id;
+  pmRefLoad();
+}
+async function pmRefLoad(id) {
+  const sel = $('pm-ref-owner');
+  const acct = id || (sel && sel.value);
+  const link = $('pm-ref-link'), stats = $('pm-ref-stats'), note = $('pm-ref-note');
+  if (!acct) { if (link) { link.value = ''; } if (stats) stats.textContent = '—'; return; }
+  if (sel && sel.value !== acct) sel.value = acct;
+  localStorage.setItem('pm:ref-owner', acct);
+  try {
+    const sep = acct.indexOf(':');
+    const base = sep > 0 ? acct.slice(0, sep) : 'id';
+    const val = sep > 0 ? acct.slice(sep + 1) : acct;
+    const res = await fetch('/__switch/api/pm/ref', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [base]: val }),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'http ' + res.status);
+    PM_REF = d;
+    if (link) link.value = d.link || '';
+    const rf = d.referral;
+    if (stats) {
+      stats.textContent = rf ? `активных ${rf.active} · ждут 3-го сообщения ${rf.pending}` : 'счётчик неизвестен';
+      stats.title = rf && rf.next ? `до тира ${rf.next.n}: ещё ${rf.next.need}` : '';
+    }
+    if (note) note.textContent = d.link
+      ? (d.source === 'own' ? 'своя ссылка аккаунта' : 'код по умолчанию из «Настроек» (💩) или ref-codes.default.json')
+        + (rf ? '' : ' · счётчик появится после открытия окна аккаунта (🌐)')
+      : 'код ещё неизвестен — открой окно аккаунта через 🌐, войдя в него, он станет известен';
+  } catch (e) {
+    if (link) link.value = '';
+    if (stats) stats.textContent = '—';
+    if (note) note.textContent = 'реф-ссылка: ' + e.message + ' (после правки нужен рестарт :8200)';
+  }
+}
+function pmRefCopy() {
+  const v = $('pm-ref-link') && $('pm-ref-link').value;
+  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  copyToClipboard(v, 'реф-ссылка скопирована');
+}
+function pmRefToAdd() {
+  const v = $('pm-ref-link') && $('pm-ref-link').value;
+  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  pmShowAdd(true);
+  if ($('pm-add-ref')) $('pm-add-ref').value = v;
+  toast('реф-ссылка подставлена в «Добавить»', 'info', 2500);
+}
+
 function pmShowAdd(show = true) {
   $('pm-add-form').classList.toggle('hidden', !show);
   newapiAddGhReset('pm');
-  if (show) { $('pm-add-email').value = ''; $('pm-add-key').value = ''; $('pm-add-email').focus(); }
+  if (show) {
+    $('pm-add-email').value = ''; $('pm-add-key').value = '';
+    // Новый аккаунт по умолчанию регистрируется под общим кодом рефки (💩 в «Настройках»),
+    // но здесь можно дать свою ссылку — например, собирать тиры на одном аккаунте.
+    if ($('pm-add-ref')) $('pm-add-ref').value = '';
+    $('pm-add-email').focus();
+  }
 }
 async function pmAdd() {
   const email = $('pm-add-email').value.trim();
   const api_key = $('pm-add-key').value.trim();
+  const ref = $('pm-add-ref') ? $('pm-add-ref').value.trim() : '';
   if (!email) return toast('email обязателен', 'warn');
   try {
     const res = await fetch('/__switch/api/pm/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, api_key, ghId: ghAddPick.pm }),
+      body: JSON.stringify({ email, api_key, ref, ghId: ghAddPick.pm }),
     });
     const data = await res.json();
     if (data.ok) {

@@ -443,6 +443,26 @@ function routeByModel(method, body, reg) {
     if (typeof j.model !== 'string') return null;
     const slash = j.model.indexOf('/');
 
+    // ── Префиксное окно помнит свой шлюз для субагентов этой же сессии ──────────
+    // Claude Code запускает Agent/Workflow с `claude-opus-5`, `claude-sonnet-5` и т.п.
+    // без имени родительского провайдера. Пока родитель говорил `a6api/gpt-6-sol`, явный
+    // префикс выбирал a6api, но следующий запрос агента был без префикса и шёл на active
+    // backend (Premier/DeepSeek). session_id из metadata.user_id связывает эти запросы
+    // ТОЛЬКО внутри окна; переменной уровня процесса и глобального SUBAGENT_MODEL нет.
+    if (slash < 0) {
+        const bareAgent = j.model.trim().replace(/\s*\[[^\]]*\]\s*$/, '');
+        const tier = tierOfRequest(bareAgent);
+        const sessionState = sessionRouteFor(j);
+        if (sessionState && /^(claude[-_](?:opus|sonnet|haiku))\b/i.test(bareAgent)) {
+            const mm = routesMapFor(sessionState);
+            const target = mm && String(mm[tier] || '').trim();
+            if (!target) return { state: sessionState, prefix: 'session', from: bareAgent, to: null, tier, body,
+                noTarget: true, noMap: !mm, sessionRoute: true };
+            return { state: sessionState, prefix: 'session', from: bareAgent, to: target, tier, sessionRoute: true,
+                body: Buffer.from(JSON.stringify(Object.assign({}, j, { model: target })), 'utf8') };
+        }
+    }
+
     // ── Имя БЕЗ слэша: назван только шлюз, модель выбирает routes-карта ──────────
     // `/model agentrouter` (заявка владельца 12.09). Раньше этот случай уходил в
     // `return null`, то есть запрос молча ехал на АКТИВНЫЙ шлюз — тихий уход на чужой
@@ -497,6 +517,9 @@ function routeByModel(method, body, reg) {
     }
     const state = reg.get(j.model.slice(0, slash).toLowerCase());
     if (!state) return null;                           // чужое имя — не наше дело
+    // Явный `/provider/model` - это выбор окна, запоминаем его для будущих агентов.
+    // Это не меняет active-backend и не смешивает соседние окна: ключом служит session_id.
+    rememberSessionRoute(j, state);
     const model = j.model.slice(slash + 1);
     if (!model) return null;                           // `aipm/` без модели
     return {
@@ -531,11 +554,39 @@ function apiError(res, code, message) {
     res.end(body);
 }
 
-// Счётчики префиксного роутинга. Идентификатора окна/сессии в запросе нет (ни хедера,
-// ни отличий в UA между окнами Claude Code), поэтому «кто где сидит» наблюдаемо ровно
-// как «на каком провайдере был последний запрос с таким префиксом».
+// Счётчики префиксного роутинга и привязка окна к провайдеру.
+// Claude Code запускает субагента с моделью `claude-opus-5`, без префикса родительского
+// шлюза. Поэтому одного modelmap недостаточно: unprefixed запрос иначе попадает на
+// активный backend (или в Premier) и падает до нужной карты. Session id приходит в
+// metadata.user_id как JSON-строка. Запоминаем только явный выбор `/model <provider>/<model>`
+// и используем его для последующих субагентов этого же окна. Другие окна не смешиваются.
 const routedCounts = Object.create(null);
 const routedLast = Object.create(null);
+const sessionRoutes = new Map();
+const SESSION_ROUTE_TTL_MS = Number(process.env.SESSION_ROUTE_TTL_MS || 12 * 60 * 60 * 1000);
+const SESSION_ROUTE_MAX = 2048;
+function sessionIdOf(body) {
+    const metadata = body && body.metadata;
+    const raw = metadata && (metadata.session_id || metadata.sessionId || metadata.user_id);
+    if (!raw) return '';
+    if (typeof raw === 'string') {
+        try { const parsed = JSON.parse(raw); return String(parsed.session_id || parsed.sessionId || '').trim(); }
+        catch { return ''; }
+    }
+    return String(raw || '').trim();
+}
+function rememberSessionRoute(body, state) {
+    const id = sessionIdOf(body);
+    if (!id || !state) return;
+    sessionRoutes.set(id, { state, at: Date.now() });
+    while (sessionRoutes.size > SESSION_ROUTE_MAX) sessionRoutes.delete(sessionRoutes.keys().next().value);
+}
+function sessionRouteFor(body) {
+    const id = sessionIdOf(body), hit = id && sessionRoutes.get(id);
+    if (!hit) return null;
+    if (Date.now() - hit.at > SESSION_ROUTE_TTL_MS) { sessionRoutes.delete(id); return null; }
+    return hit.state;
+}
 
 function statusPayload() {
     const s = readState();
@@ -1000,6 +1051,25 @@ if (process.argv[2] === 'selftest') {
     const err = JSON.parse(captured);
     assert.strictEqual(err.type, 'error', 'тело ошибки в форме Anthropic');
     assert.ok(err.error.message.includes('тест'), 'сообщение доезжает до клиента');
+
+    // 3d. Сессия окна -> провайдер: агент без префикса наследует карту именно окна,
+    // а не active-backend. Две сессии одновременно не смешиваются.
+    const sessionA = JSON.stringify({ model: 'a6api/gpt-6-sol', metadata: { user_id: JSON.stringify({ session_id: 'window-a' }) } });
+    const sessionB = JSON.stringify({ model: 'premier/free-deepseek-4.1-flash', metadata: { user_id: JSON.stringify({ session_id: 'window-b' }) } });
+    const stateA = parseStateDoc({ backend: 'a6api', upstream: 'http://127.0.0.1:29191', modelmap: 'a6api-modelmap.json' });
+    const stateB = parseStateDoc({ backend: 'premier', upstream: 'http://127.0.0.1:29192', modelmap: 'premier-modelmap.json' });
+    rememberSessionRoute(JSON.parse(sessionA), stateA); rememberSessionRoute(JSON.parse(sessionB), stateB);
+    assert.strictEqual(sessionRouteFor({ metadata: { user_id: JSON.stringify({ session_id: 'window-a' }) } }).backend, 'a6api', 'окно A помнит a6api');
+    assert.strictEqual(sessionRouteFor({ metadata: { user_id: JSON.stringify({ session_id: 'window-b' }) } }).backend, 'premier', 'окно B помнит Premier');
+    assert.strictEqual(sessionRouteFor({ metadata: { user_id: JSON.stringify({ session_id: 'unknown' }) } }), null, 'чужая сессия не наследует провайдера');
+    assert.ok(sessionIdOf({ metadata: { user_id: JSON.stringify({ session_id: 'window-a' }) } }) === 'window-a', 'session_id извлекается из user_id');
+    const sessionReg = new Map([['a6api', stateA], ['premier', stateB]]);
+    const childA = routeByModel('POST', bodyOf({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ session_id: 'window-a' }) } }), sessionReg);
+    const childB = routeByModel('POST', bodyOf({ model: 'claude-opus-5', metadata: { user_id: JSON.stringify({ session_id: 'window-b' }) } }), sessionReg);
+    assert.strictEqual(childA.state.backend, 'a6api', 'агент окна A идёт в a6api');
+    assert.strictEqual(childB.state.backend, 'premier', 'агент окна B идёт в Premier');
+    assert.equal(JSON.parse(childA.body).model, readModelMap('a6api-routes-modelmap.json').opus, 'агент A получает тир-карту a6api');
+    assert.equal(JSON.parse(childB.body).model, readModelMap('premier-routes-modelmap.json').opus, 'агент B получает тир-карту Premier');
 
     console.log('selftest OK');
     process.exit(0);

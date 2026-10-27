@@ -21782,6 +21782,63 @@ async function handleTrAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+// Реф-код Premier из поля на вкладке. Принимаем и голый код, и ссылку
+// `https://ide.kgpix.bond/r/<код>`. Мусор → null, то есть «взять общий код рефки».
+const PM_REF_DEFAULT_HOST = 'https://ide.kgpix.bond';
+async function handlePmRef(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = pmLoad();
+        const row = sessions.find(s => s.id === id);
+        if (!row) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const set = body.set === undefined ? null : pmRefCode(body.set);
+        if (body.set !== undefined && String(body.set).trim() && !set) {
+            return jsonRes(res, 400, { error: 'не код и не ссылка ide.kgpix.bond/r/<код>' });
+        }
+        // Сохранение — только по явному set. Пустая строка снимает свою ссылку:
+        // аккаунт вернётся к общему коду из ref-codes.js.
+        if (set !== null || String(body.set || '').trim() === '') {
+            if (set) row.ref = set; else delete row.ref;
+            pmSave(sessions);
+            logLine(`premier ref: ${row.email || row.name || id} → ${set ? set : 'общий код рефки'}`);
+        }
+        // id аккаунта на Premier и есть реф-код: он уже есть в кэше входа, а в
+        // `/api/dev/state` его нет. Пока окно не открывали — код неизвестен, не угадываем.
+        let code = null, referral = null;
+        try {
+            const st = JSON.parse(fs.readFileSync(path.join(PM_SESSIONS_DIR, 'acct_' + id + '.json'), 'utf8'));
+            referral = st.premierReferral || null;
+            const raw = String(st.premierUserId || '');
+            if (/^\d{6,}$/.test(raw)) code = raw; else if (/^id:(\d{6,})$/.test(raw)) code = raw.slice(3);
+        } catch {}
+        const own = row.ref || null;
+        const effective = own || (() => { try { return require('./lib/ref-codes.js').code('premier'); } catch { return null; } })();
+        return jsonRes(res, 200, {
+            ok: true,
+            id,
+            ref: own,
+            code: code || own,
+            link: effective ? `${PM_REF_DEFAULT_HOST}/r/${encodeURIComponent(effective)}` : null,
+            source: own ? 'own' : (effective ? 'shared' : 'none'),
+            referral,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+function pmRefCode(raw) {
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return null;
+    let code = s;
+    try {
+        const u = new URL(s);
+        if (!/(^|\.)kgpix\.bond$/i.test(u.hostname)) return null;
+        const m = u.pathname.match(/^\/r\/([A-Za-z0-9_-]+)\/?$/);
+        if (!m) return null;
+        code = m[1];
+    } catch { /* не URL — значит код */ }
+    return /^[A-Za-z0-9_-]{2,32}$/.test(code) ? code : null;
+}
 async function handlePmAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -21796,6 +21853,10 @@ async function handlePmAdd(req, res) {
         const id = 'pm_' + Date.now() + '_' + sessions.length;
         const nick = String(name || '').trim() || mail.split('@')[0];
         const link = ghLinkForNew(body, mail, nick);
+        // Своя реф-ссылка для этого аккаунта: код из ссылки или вписанное число. Пусто —
+        // open-session берёт код владельца/пользователя из ref-codes.js. Храним на записи,
+        // а не на профиле: профиль — Chromium, его ключи не читаются снаружи.
+        const ref = pmRefCode(body.ref);
         sessions.push({
             id,
             email: mail,
@@ -21804,6 +21865,7 @@ async function handlePmAdd(req, res) {
             active: false,
             status: noKey ? 'no_key' : 'unknown',
             created: new Date().toISOString(),
+            ...(ref ? { ref } : {}),
             ...(link.ghId ? { ghId: link.ghId } : {}),
         });
         pmSave(sessions);
@@ -36376,6 +36438,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/session/open') return handleTrSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/session/open') return handlePmSessionOpen(req, res);
+    // Поле реф-ссылки на вкладке: ссылка на аккаунт + последний известный счётчик.
+    // Отдельный роут, а не строка таблицы: цифра обновляется только открытием окна
+    // (`/api/billing` требует cookie кабинета, Bearer-ключ там 401).
+    if (req.method === 'POST' && req.url === '/__switch/api/pm/ref') return handlePmRef(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/session/open') return handleVnSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/session/open') return handleDcSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/session/open') return handleCpSessionOpen(req, res);

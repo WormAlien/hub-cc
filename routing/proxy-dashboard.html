@@ -43344,27 +43344,29 @@ function lgMovement(rank, total) {
   catch (e) { /* приватный режим - обойдёмся без стрелки */ }
   return mv;
 }
-// Мини-блок в сайдбаре. Метрика у него ЗАФИКСИРОВАНА — токены за 7 дней: он висит на
-// всех вкладках, и если бы он ездил за переключателем «Лиги», цифра в сайдбаре меняла
-// бы смысл незаметно для того, кто на другой вкладке.
+// Мини-блок в сайдбаре. Едет за выбранным окном и метрикой, как и вкладка: владелец 27.10
+// - «когда листаешь неделя/сутки/месяц, виджет не меняется». Подпись под цифрой всегда
+// называет текущее окно, поэтому для того, кто на другой вкладке, смысл не уезжает вслепую.
 function lgPaintMini(rows, mi) {
   const box = document.getElementById('league-mini');
   if (!box || !LG.data) return;
   const me = LG.data.me, solo = rows.length < 2;
-  // Мини-блок отвечает про КАНОНИЧЕСКИЙ счётчик, как и вкладка: он висит на всех вкладках,
-  // и цифра обязана быть той же величины, что в шапке Лиги. Нет счётчика - прочерк, а не
-  // цифра другой метрики под той же подписью.
-  // 🪤 Строки блока считались ПРЕЖНИМ полем `tokW`, а заголовок - каноническим счётчиком,
-  // и в одном блоке стояли два разных числа об одних сутках (26.10: 5,66 в шапке против
-  // 6,11 в своей же строке). Теперь и строки, и отрыв идут через `lgTotal` - тем же путём,
-  // что и список вкладки: канонический счётчик, а у участника без него - прежние числа.
-  const miniOf = p => { const v = lgTotal(p, 'd7'); return v === null ? 0 : v; };
-  const ccRun = lgCcRun(me, 'd7');
-  const ccVal = lgCcTotal(me, 'd7');
-  const val = ccVal === null ? null : ccVal;
+  // 🪤 26.10: строки блока считались ПРЕЖНИМ полем `tokW` и окно было зашито в 'd7', а
+  // порядок доски ехал за выбранным окном - поэтому два верхних стояли как вкопанные,
+  // а третий менялся (27.10: air 864 M на неделе против harder0ck 759 M в месяце).
+  // Теперь значение, строки, отрыв и спарклайн идут через `lgTotal` с ТЕМ ЖЕ окном, что
+  // и доска: канонический счётчик, а у участника без него - прежние числа.
+  const miniOf = p => { const v = lgTotal(p); return v === null ? 0 : v; };
+  const val = lgTotal(me);
+  const unitEl = document.getElementById('league-mini-unit');
+  if (unitEl) unitEl.textContent = `${LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}`;
+  // Ряд для спарклайна: канонический счётчик - свои ключи, прежние метрики - свои.
+  const miniRun = (LG_M[LG.metric] || {}).source === 'cc'
+    ? lgCcRun(me, LG.range)
+    : { values: ((me[LG.metric] || {})[LG.range]) || [] };
   const nav = document.getElementById('nav-count-league');
   if (nav) nav.textContent = solo ? '1' : `${mi + 1} / ${rows.length}`;
-  const ranked = lgTotal(me) === null;
+  const ranked = val === null;
   document.getElementById('league-mini-place').textContent = ranked ? '—' : (solo ? '1' : String(mi + 1));
   document.getElementById('league-mini-of').textContent = ranked ? 'нет счётчика'
     : solo ? 'один в лиге' : 'из ' + rows.length;
@@ -43378,7 +43380,7 @@ function lgPaintMini(rows, mi) {
   document.getElementById('league-mini-val').textContent = val === null ? '—' : lgTok(val);
   // Спарклайн - свой недельный ряд тем же монотонным сплайном, что на большой витрине.
   // Неизвестные дни пропускаем, а не рисуем нулями: см. lgAligned.
-  const v = (ccRun ? ccRun.values.map(lgCcNum).filter(x => x !== null) : []);
+  const v = (miniRun ? (miniRun.values || []).map(lgCcNum).filter(x => x !== null) : []);
   const W = 240, H = 26, mx = Math.max(...v, 1);
   const pts = v.map((x, i) => [i * (W / Math.max(v.length - 1, 1)), H - (x / mx) * (H - 3) - 1.5]);
   const line = v.length > 1 ? lgSpline(pts) : '';

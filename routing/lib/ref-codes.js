@@ -32,6 +32,10 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // ThreeRouter (2026-10-23) — форма СВОЯ: `/register?aff=`, как у AgentRouter, а не
+    // `/sign-up?aff=` эталона. Проверено живой ссылкой владельца (страница регистрации
+    // открывается, реф-код в форме). Хост — `www.`, API-хост `api.threerouter.com` регистрацию не отдаёт.
+    threerouter:     { host: 'www.threerouter.com',        path: '/register?aff=',  label: 'ThreeRouter' },
     // Artbloom (2026-09-28) — форма СВОЯ: `/signup?ref=`, без дефиса и с параметром `ref`,
     // а не `/sign-up?aff=` восьми соседей. Проверено живой ссылкой владельца: `/signup?ref=`
     // отвечает 200 (`/signup` рендерит кнопку «Continue with GitHub» c тем же ref), а
@@ -42,13 +46,22 @@ const SHAPES = {
     budsin:     { host: 'apichat.budsin.dev',        path: '/sign-up?aff=',  label: 'BudsAI' },
     nova:     { host: 'nova.vcrauo.com',        path: '/sign-up?aff=',  label: 'Nova' },
     bai:     { host: 'chat.b.ai',        path: '/chat?invite_code=', label: 'B.AI' },   // форма СВОЯ: приглашение в чат, не /sign-up
+    // Premier (2026-10-27) — форма СВОЯ: `/r/<код>`, код = user.id из `/api/auth/me`.
+    // Сервер отдаёт 302 на `/login?ref=<код>`, страница кладёт код в
+    // `localStorage['premier:ref']`, после входа `POST /api/referrals/bind {code, fp}`.
+    // 🪤 Дедуп по IP, не по fp: второй бинд с того же адреса → `409 «С этого адреса
+    // уже был приглашён другой человек»`. Смена fp не помогает — нужен отдельный прокси
+    // на каждый бинд. Награды рефереру по активным (3 сообщения у приглашённого):
+    // 3 → +50 сообщений, 10/25/50/100 → Pro 7/14/30 дней, Max. Приглашённый получает
+    // +50 сообщений сразу при бинде. Разбор — вика «Premier - вкладка и квота сообщений».
+    premier:     { host: 'ide.kgpix.bond',   path: '/r/',           label: 'Premier' },
     // getunikey (2026-09-15) — New API, форма `/sign-up?aff=`. Реф-программа у площадки
     // ЕСТЬ (админ-настройки QuotaForInviter/QuotaForInvitee, живая карточка «Referral
     // Program» в кошельке), но начисляется от ПОПОЛНЕНИЯ приглашённого: «Earn rewards
     // when your referrals add funds». Пачка пустых регистраций реф-бонуса не даёт.
     getunikey:   { host: 'www.getunikey.ai',  path: '/sign-up?aff=',  label: 'UniKey' },
     aikeysapi:   { host: 'www.aikeysapi.com', path: '/register?aff=', label: 'AIKeysAPI' },
-    aipm:        { host: 'emtf.aipm9527.online', path: '/sign-up?aff=',  label: 'AIPM' },
+    aipm:        { host: 'emtf.aipm9527.site', path: '/sign-up?aff=',  label: 'AIPM' },
     // WisdomSatan (2026-09-10) — New API v0.11.5, но форма `/register?aff=`, как у
     // AgentRouter, а НЕ `/sign-up?aff=` восьми соседей. Не догадка: по ссылке этой формы
     // заведён живой аккаунт, и в его `/api/user/self` приехал `inviter_id` владельца —

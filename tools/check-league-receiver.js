@@ -2035,6 +2035,58 @@ const bye = await iq('DELETE', '/me', undefined, AJ_TOKEN);
   check('битый файл расписания ручку не роняет', (await iq('GET', '/schedule')).st === 200);
   try { fs.rmSync(schFile); } catch { /* не создался - и хорошо */ }
 
+  // ── Отметки шлюзов: панель «что сейчас работает» ─────────────────────────────
+  // Владелец 24.10.2026: «вкладок дохуя, а рабочих шлюзов мало». Читает любой
+  // участник, пишет только админ, мусорные id не доезжают до чужой разметки.
+  // AJ_TOKEN к этому месту уже отозван (DELETE /me выше), поэтому заводим отдельного
+  // участника: проверка «пишет только админ» должна падать на живом члене, а не на 401.
+  const GW_TOKEN = crypto.randomBytes(24).toString('base64url');
+  await iq('POST', '/autojoin', {
+    installId: crypto.randomBytes(8).toString('hex'), nick: 'шлюзовой', token: GW_TOKEN,
+  }, null);
+  const gw0 = await iq('GET', '/gateways');
+  check('шлюзы: без файла - пустой список',
+    gw0.st === 200 && gw0.j.ok === true && Array.isArray(gw0.j.items) && gw0.j.items.length === 0, gw0.j);
+  const gw1 = await iq('PUT', '/gateways', { items: [
+    { id: 'a6api', label: 'a6api', up: true },
+    { id: 'premier', label: 'Premier', up: false },
+    { id: 'bad id', label: 'плохой', up: true },
+  ] });
+  check('шлюзы: админ сохраняет, мусорный id отсекается',
+    gw1.st === 200 && gw1.j.ok === true && gw1.j.items.length === 2
+    && gw1.j.items[0].up === true, gw1.j);
+  check('шлюзы: участник видит те же отметки',
+    JSON.stringify((await iq('GET', '/gateways', undefined, GW_TOKEN)).j.items)
+      === JSON.stringify(gw1.j.items));
+  check('шлюзы: участнику писать нельзя', (await iq('PUT', '/gateways',
+    { items: [] }, GW_TOKEN)).st === 403);
+  check('шлюзы: без ключа не читаются', (await iq('GET', '/gateways', undefined, null)).st === 401);
+
+  // ── Авто-перенос токенов с прежнего приёмника ───────────────────────────────
+  // Переезд 24.10: у хабов остались токены, которых новый приёмник не знает (на старом
+  // лежали только их хеши). Пока открыто окно, незнакомый токен из /slice заводится по
+  // хешу и следующий обмен проходит. Отозванного/удалённого перенос возвращать не смеет.
+  const ADOPT_UNTIL = path.join(IDDATA, 'adopt-until');
+  fs.writeFileSync(ADOPT_UNTIL, new Date(Date.now() + 3600_000).toISOString() + '\n');
+  const LTOK = crypto.randomBytes(24).toString('base64url');
+  const LID = crypto.randomBytes(8).toString('hex');
+  const a1 = await iq('POST', '/slice', mkSlice(LID, 'старый друг'), LTOK);
+  check('перенос: незнакомый токен заводит запись по хешу',
+    a1.st === 401 && !!a1.j.adopted, a1.j);
+  const a2 = await iq('POST', '/slice', mkSlice(LID, 'старый друг'), LTOK);
+  check('перенос: следующий обмен тем же токеном проходит', a2.st === 200, a2.st);
+  const rm2 = await iq('POST', '/admin/remove', { memberId: a1.j.adopted });
+  check('перенос: админ удаляет перенесённого', rm2.st === 200, rm2.j);
+  const a3 = await iq('POST', '/slice', mkSlice(LID, 'старый друг'), LTOK);
+  check('перенос: удалённого не возвращает даже в окне',
+    a3.st === 401 && !a3.j.adopted, a3.j);
+  try { fs.rmSync(ADOPT_UNTIL); } catch { /* не создался - уже хорошо */ }
+  const LTOK2 = crypto.randomBytes(24).toString('base64url');
+  const a4 = await iq('POST', '/slice',
+    mkSlice(crypto.randomBytes(8).toString('hex'), 'поздний'), LTOK2);
+  check('перенос: вне окна незнакомый токен не заводится',
+    a4.st === 401 && !a4.j.adopted, a4.j);
+
   idchild.kill();
 
   child.kill();

@@ -243,6 +243,8 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'api.threerouter.com': 'jwt',
+    'ide.kgpix.bond': 'classic', // Custom site cookie; quota lives in premier-api, not New API billing.
     'api.vani.ai': 'jwt',
     'api-ru.dacall.ai': 'jwt',
     'cleanapis.com': 'jwt',
@@ -277,10 +279,10 @@ const HOST_AUTH = {
     // пока не найдена ручка точного остатка. Промах сюда дешёвый — kindEff поднимет
     // classic до jwt по куке профиля, если панель окажется jwt-веткой.
     'chat.b.ai': 'classic',
-    // emtf.aipm9527.online — classic: кука `session`, как у agentrouter и gorouter.
+    // emtf.aipm9527.site — classic: кука `session`, как у agentrouter и gorouter.
     // Проверено живой пробой 09.09: в профиле acct_ap_..._0 лежит cookie `session`,
     // `new_api_refresh` нет. Первоначально стояло `jwt` от клона kktoken-шаблона.
-    'emtf.aipm9527.online': 'classic',
+    'emtf.aipm9527.site': 'classic',
     // api.hcnsec.cn — ключ С ПОДДОМЕНОМ (панель и API на одном хосте). Схема НЕ
     // ПРОВЕРЕНА живым входом (2026-08-31): это ДОГАДКА по поколению сборки — в
     // `/api/status` есть `passkey_login`, а такой набор флагов встречается только у

@@ -1,5 +1,5 @@
 {
-  "opus": "anthropic/claude-sonnet-4-6",
-  "sonnet": "anthropic/claude-sonnet-4-6",
-  "haiku": "anthropic/claude-sonnet-4-6"
+  "opus": "deepseek/deepseek-v4.1-flash",
+  "sonnet": "deepseek/deepseek-v4.1-flash",
+  "haiku": "deepseek/deepseek-v4.1-flash"
 }

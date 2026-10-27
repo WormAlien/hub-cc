@@ -298,7 +298,12 @@ function config() {
     const cooldownMs = Number.isFinite(coolRaw) && coolRaw >= 0 ? coolRaw : COOLDOWN_MS_DEFAULT;
 
     // Источник прокси: auto (свои, потом скрапер - как было) | own | scraped | direct.
-    const srcRaw = String(e.PROXY_POOL_SOURCE || doc.source || 'auto').toLowerCase();
+    // 🪤 Дефолт - `own`, а не `auto` (владелец 12.10.2026: «сделай кнопку свои прокси по
+    // умолчанию, а то там скраппер по умолчанию»). `auto` пускал скрапер как фолбэк молча,
+    // и по недонастроенному пулу прогоны уезжали на чужие адреса без единого решения
+    // человека. Свой пул кончился или в отстое - ЖДЁМ его; в скрапер переливаем только
+    // явным выбором `scraped`.
+    const srcRaw = String(e.PROXY_POOL_SOURCE || doc.source || 'own').toLowerCase();
     const source = ['auto', 'own', 'scraped', 'direct'].includes(srcRaw) ? srcRaw : 'auto';
 
     // Отсутствующий НЕОБЯЗАТЕЛЬНЫЙ own-proxies.txt не включает пустой пул на чистой

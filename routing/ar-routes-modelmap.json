@@ -1,7 +1,7 @@
 {
-  "default": "deepseek-v4-flash",
-  "opus": "deepseek-v4-flash",
-  "sonnet": "deepseek-v4-flash",
-  "haiku": "deepseek-v4-flash",
+  "default": "gpt-5.6-sol",
+  "opus": "gpt-5.6-sol",
+  "sonnet": "gpt-5.6-sol",
+  "haiku": "gpt-5.6-sol",
   "gpt": ""
 }

@@ -24,9 +24,12 @@
 //             auto (по умолчанию): чистый профиль = register, иначе console.
 //
 // Коды возврата: 0 = готово (оба чек-ин-режима печатают маркер AUTOCHECKIN_RESULT {...}),
-//   2 = таймаут ожидания GitHub-логина, 3 = GitHub-сессия в профиле мертва (нужен
-//   ручной вход, пароль и 2FA автоматика не вводит), 5 = шлюз отверг OAuth (state/код),
-//   1 = прочая ошибка. Про вход через GitHub кодов ДВА, и путать их нельзя:
+//   2 = таймаут ожидания GitHub-логина, 3 = GitHub-сессия в профиле мертва и автологин не
+//   помог (пароль и 2FA автоматика вводит с 12.10.2026, см. § «Автологин GitHub»),
+//   11 = то же, но причина названа своя: GitHub потребовал подтверждение устройства или
+//   капчу — это человеческий вход, и почты купленного аккаунта у нас нет,
+//   5 = шлюз отверг OAuth (state/код), 1 = прочая ошибка. Про вход через GitHub кодов ДВА,
+//   и путать их нельзя:
 //   4 = страница входа действительно переделана: кнопки GitHub нет, а живой /api/status
 //       ОТВЕТИЛ — просто без github_client_id (или /api/oauth/state отказал словами).
 //       Тут чинить нечего до тех пор, пока не посмотришь вёрстку глазами;
@@ -40,6 +43,7 @@
 
 const { chromium } = require('playwright');
 const { raiseBrowserWindow } = require('../routing/lib/focus-window.js');
+const { fillGithubLogin } = require('../routing/lib/gh-login.js');
 const fs = require('fs');
 const path = require('path');
 
@@ -1257,15 +1261,20 @@ async function preflightEdge(page) {
       };
     });
     if (r && r.clientId) return { ok: true };
+    // 🪤 `r` не пришёл вовсе — это НЕ ответ пустой страницы, а «страница не ответила».
+    if (!r) return { ok: false, transport: true, detail: 'страница не вернула ответ' };
     return {
       ok: false,
-      detail: r
-        ? `/api/status → HTTP ${r.status}, тело ${r.len} Б, github_client_id нет`
-        : 'страница не вернула ответ',
+      detail: `/api/status → HTTP ${r.status}, тело ${r.len} Б, github_client_id нет`,
     };
   } catch (e) {
-    // Обрыв запроса из страницы — тоже отказ края: до вёрстки дело не дошло.
-    return { ok: false, detail: e.message };
+    // 🔴 Обрыв запроса из страницы — это про НАШ АДРЕС, а не про шлюз, и разводить их
+    // обязательно. Пустое тело при живом адресе = рейт-лимит/WAF по IP (код 8, родитель
+    // по нему тормозит всю пачку). А тут до шлюза вообще не доехали: мёртвый прокси,
+    // снятый инбаунд, отсутствующий VPN. Раньше оба случая уходили кодом 8, и два
+    // мёртвых адреса подряд ГАСИЛИ ВСЮ ПАЧКУ - как 14.10, когда ротация выдала первыми
+    // две дохлые строки из `own-proxies.txt` (разбор - вики «Автоподарок AgentRouter»).
+    return { ok: false, transport: true, detail: e.message };
   }
 }
 
@@ -1280,6 +1289,102 @@ async function ensureGithubSession(context, why) {
   const seeded = await seedFromSharedSnapshot(context, why);
   if (await alive()) return { ok: true, seeded };
   return { ok: false, seeded };
+}
+
+// ───── Автологин GitHub: логин, пароль, код 2FA ───────────────────────────────
+// Живая проба 12.10.2026 показала: шлюз пускает по паролю и TOTP, кода на почту и капчи
+// GitHub не спросил (шёл с адреса ноды). До этого дня мёртвая GitHub-сессия означала
+// человеческий вход (коды 3 и 9), а живёт сессия 14 суток - то есть пул упирался во
+// владельца раз в две недели. Карта формы и разбор - wiki «Автоподарок AgentRouter -
+// очередь и GitHub-сессия».
+//
+// 🔴 Креды НЕ передаём ни argv, ни через env: и то, и другое видно в списке процессов
+// машины вместе с паролем. Читаем из хранилища по ghId прямо здесь - тем же файлом,
+// которым пользуется родитель, когда отдаёт записи в дашборд.
+const GH_ACCOUNTS_FILE = path.join(__dirname, '..', 'routing', 'github-accounts.json');
+const GH_LOGIN_BUDGET_MS = 90000;
+
+function githubCredsForLabel() {
+  try {
+    const ghId = ghIdForThisLabel();
+    if (!ghId) return null;
+    const raw = fs.readFileSync(GH_ACCOUNTS_FILE, 'utf8');
+    const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    const rec = (Array.isArray(arr) ? arr : []).find(a => a && a.id === ghId);
+    if (!rec) return null;
+    return {
+      ghId,
+      login: String(rec.login || rec.nickname || '').trim(),
+      password: String(rec.password || ''),
+      totpSecret: String(rec.totpSecret || '').trim().toUpperCase(),
+    };
+  } catch { return null; }
+}
+
+// Значение куки `user_session` в контексте (или null). Нужно ИМЕННО значение, а не факт
+// наличия: «кука есть» ничего не говорит о том, принимает ли её GitHub.
+async function githubSessionValue(context) {
+  const ck = await context.cookies('https://github.com').catch(() => []);
+  const c = ck.find(x => x.name === 'user_session' && x.value);
+  return c ? c.value : null;
+}
+
+// Живость GitHub-сессии - тем же признаком, что у предпроверки: кука в контексте.
+// ⚠️ Это «кука есть», а не «GitHub её принял» - проверить последнее без запроса нельзя.
+async function githubSessionAlive(context) {
+  return !!(await githubSessionValue(context));
+}
+
+// Автологин ОТДЕЛЬНОЙ страницей: консоль аккаунта остаётся нетронутой, а куки GitHub
+// падают в тот же контекст, то есть в профиль - оттуда их и читает предпроверка.
+// Адрес у этого окна уже есть: контекст поднят через прокси аккаунта (см. proxySeed).
+async function tryGithubLogin(context, why) {
+  const creds = githubCredsForLabel();
+  if (!creds || !creds.login || !creds.password) {
+    console.log(`🐙 автологин невозможен (${why}): к записи не привязан GitHub с логином и паролем`);
+    return { ok: false, wall: 'no_creds', why: 'в хранилище нет логина и пароля для этого GitHub' };
+  }
+  console.log(`🐙 GitHub-сессия мертва (${why}) - вхожу сам: ${creds.ghId} (${creds.login})`);
+  // 🔴 Сравниваем со значением ДО входа. «Кука есть» недостаточно: в профиле может лежать
+  // старая, сервером уже отвергнутая `user_session` - и проба, которой хватает наличия,
+  // объявит вход состоявшимся, НЕ вписав ни логина, ни кода. Ровно это случилось 16-18.10:
+  // пять «✅ автологин прошёл» без единой строки о вводе, а гейт тут же снова видел /login.
+  const beforeSession = await githubSessionValue(context);
+  const p = await context.newPage().catch(() => null);
+  if (!p) return { ok: false, wall: null, why: 'не удалось открыть страницу для входа' };
+  try {
+    await p.goto('https://github.com/login', { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const res = await fillGithubLogin(p, creds, {
+      budgetMs: GH_LOGIN_BUDGET_MS,
+      sessionProbe: async () => {
+        const now = await githubSessionValue(context);
+        return !!now && now !== beforeSession;
+      },
+      log: (s) => console.log(s),
+    });
+    if (res.ok) {
+      console.log('✅ автологин прошёл: GitHub-сессия создана заново');
+      // 🔴 Снимок обязан обновиться ЗДЕСЬ ЖЕ. Иначе профиль живой, а
+      // `github/sessions/<ghId>.json` остаётся старым - и метка `gh_dead` в пуле не
+      // снимается (`arCheckinBlockActive` требует снимок, снятый ПОЗЖЕ отказа), то есть
+      // аккаунт выпадает из пачек, хотя вход уже есть. Живой случай 17.10: `backmountai`
+      // и `bewitchedpr` - автологин прошёл, снимок 8,3 дн, метка осталась, аккаунты
+      // выпали из сбора.
+      try {
+        const { makeCapture } = require('../routing/lib/gh-live-capture.js');
+        const cap = makeCapture({ label, moduleDir: __dirname, poolFile: AR_POOL_FILE });
+        const fresh = await cap.captureOnce(context);
+        console.log(fresh
+          ? '🐙 снимок сессии обновлён после автологина: новые профили заселятся этой сессией'
+          : '🐙 снимок уже был от этой сессии — общий досылается сам, если разошёлся');
+      } catch (e) {
+        console.log(`⚠️  снимок после автологина не записался: ${e.message}`);
+      }
+    } else console.error(`❌ автологин не прошёл: ${res.why}`);
+    return res;
+  } finally {
+    await p.close().catch(() => {});
+  }
 }
 
 async function main() {
@@ -1396,19 +1501,39 @@ async function main() {
       await page.goto(CONSOLE_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
       const edge = await preflightEdge(page);
       if (!edge.ok) {
+        await context.close().catch(() => {});
+        if (edge.transport) {
+          // 🔴 Код 12: отвечает не шлюз, а НАШ АДРЕС. Родитель по нему метит адрес мёртвым
+          // в кеше здоровья и ставит задание заново - оно уйдёт через другой адрес. Пачку
+          // это останавливать не должно: сдохшая строка в списке своих прокси - не лимит
+          // по IP и не повод бросить остальные сорок девять аккаунтов.
+          console.error(`🛑 Прогон НЕ начат, сессия аккаунта цела: АДРЕС прогона не донёс трафик (${edge.detail}).`);
+          console.error('   Это про наш прокси (мёртвый инбаунд, нет VPN), а не про шлюз: страница не открылась');
+          console.error('   вовсе. Родитель пометит адрес мёртвым и повторит задание через другой.');
+          process.exit(12);
+        }
         console.error(`🛑 Прогон НЕ начат, сессия аккаунта цела: край не отвечает (${edge.detail}).`);
         console.error('   Это рейт-лимит или WAF по IP, а не сломанная вёрстка. Гасить сессию');
         console.error('   вслепую нельзя: не сумев войти, аккаунт остался бы разлогиненным.');
-        await context.close().catch(() => {});
         process.exit(8);
       }
       if (auto) {
-        const ghPre = await ensureGithubSession(context, 'предпроверка входа');
+        let ghPre = await ensureGithubSession(context, 'предпроверка входа');
+        if (!ghPre.ok) {
+          // 🔑 Самое дешёвое место, чтобы войти самому: сессия аккаунта ещё цела, и отказ
+          // здесь стоит один прогон, а не аккаунт. Ниже той же дорогой идём после разлогина.
+          const attempt = await tryGithubLogin(context, 'предпроверка входа');
+          ghPre = attempt.ok
+            ? await ensureGithubSession(context, 'после автологина')
+            : { ...ghPre, autologin: attempt };
+        }
         if (!ghPre.ok) {
           console.error(`🛑 Прогон НЕ начат, сессия аккаунта цела: GitHub-сессия ${ghNameForError(ghPre.seeded)} мертва.`);
-          console.error('   Пароль и 2FA автоматика не вводит — возьми 🐙 «готовый GitHub» заново.');
+          console.error(ghPre.autologin
+            ? `   Автологин пробовал и не смог: ${ghPre.autologin.why}`
+            : '   Возьми 🐙 «готовый GitHub» заново.');
           await context.close().catch(() => {});
-          process.exit(9);
+          process.exit(ghPre.autologin && ghPre.autologin.wall ? 11 : 9);
         }
       }
 
@@ -1419,12 +1544,18 @@ async function main() {
         // Страховка на случай, если сессия отвалилась ПОСЛЕ выхода (GitHub умеет гасить
         // её сам, если тем же аккаунтом вошли в другом месте). Основная проверка уже
         // прошла до разлогина — сюда попадаем только с тем, что изменилось по дороге.
-        const gh = await ensureGithubSession(context, 'в профиле нет user_session');
+        let gh = await ensureGithubSession(context, 'в профиле нет user_session');
+        if (!gh.ok) {
+          const attempt = await tryGithubLogin(context, 'сессия отпала после разлогина');
+          gh = attempt.ok ? await ensureGithubSession(context, 'после автологина') : { ...gh, autologin: attempt };
+        }
         if (!gh.ok) {
           console.error(`❌ GitHub-сессия ${ghNameForError(gh.seeded)} мертва (нет user_session).`);
-          console.error('   Пароль и 2FA автоматика не вводит: возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+          console.error(gh.autologin
+            ? `   Автологин пробовал и не смог: ${gh.autologin.why}`
+            : '   Войди руками кнопкой 🎁.');
           await context.close().catch(() => {});
-          process.exit(3);
+          process.exit(gh.autologin && gh.autologin.wall ? 11 : 3);
         }
 
         const target = await clickGithubLogin(context, page);
@@ -1462,11 +1593,38 @@ async function main() {
             const again = await clickGithubLogin(context, page);
             gate = again ? await passGithubGate(again) : 'dead';
           }
+          let attempt = null;
+          if (gate === 'dead') {
+            // Автологин: креды у нас есть, а проба 12.10 показала, что шлюз пускает по
+            // паролю и TOTP. Попытка одна - вторая тут была бы циклом.
+            attempt = await tryGithubLogin(context, 'GitHub попросил пароль/2FA');
+          }
+          if (attempt && attempt.ok && target && !target.isClosed()) {
+            // 🪤 Попап стоит на странице входа с тем же `return_to`, и с живой сессией
+            // перезагрузка доводит его до authorize/колбэка. Второй РАЗ кнопку входа на
+            // шлюзе не жмём: успешный второй клик перевыпускает `POST /api/oauth/state`
+            // и обнуляет state уже летящего входа (разбор гонки - в Debug Reference).
+            //
+            // 🔴 СО ОДНОЙ перезагрузки сдаваться нельзя. 17.10: автологин прошёл, а гейт
+            // в ту же секунду прочитал ЕЩЁ старый экран `/login` и вернул 'dead' - прогон
+            // записал аккаунту «сессия не годится» при живой сессии (backmountai,
+            // bewitchedpr). Даём адресу три попытки с паузой и называем url, если не поехало.
+            for (let i = 0; i < 3 && gate === 'dead'; i++) {
+              if (i) await target.waitForTimeout(1500);
+              await target.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+              await target.waitForTimeout(1000);
+              gate = await passGithubGate(target);
+              if (gate !== 'dead') break;
+              console.log(`   ↻ после автологина гейт всё ещё dead (url=${target.url()})`);
+            }
+          }
           if (gate === 'dead') {
             console.error(`❌ GitHub попросил пароль/2FA — сессия ${ghNameForError(seeded)} уже не годится.`);
-            console.error('   Возьми 🐙 «готовый GitHub» заново или войди руками кнопкой 🎁.');
+            console.error(attempt && attempt.why
+              ? `   Автологин пробовал и не смог: ${attempt.why}`
+              : '   Возьми 🐙 «готовый GitHub» заново.');
             await context.close().catch(() => {});
-            process.exit(3);
+            process.exit(attempt && attempt.wall ? 11 : 3);
           }
         }
         console.log(`🔄 GitHub-часть: ${gate}`);

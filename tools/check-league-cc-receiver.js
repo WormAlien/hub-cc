@@ -243,7 +243,8 @@ if (ccApi) {
 
     ok('слишком длинный список источников обрезается, итог не трогается', () => {
         const many = Array.from({ length: 40 }, (_, i) => ({ h: 'h' + i, tokens: i + 1, coverage: 'journal' }));
-        const out = ccApi.ccClean(envelope({ lifetime: 777, sources: many }));
+        // 26.10: карточка не ниже суммы своего ряда, поэтому фикстура даёт и `breakdown.days`.
+        const out = ccApi.ccClean(envelope({ lifetime: 777, sources: many, breakdown: { days: 700 } }));
         assert.ok(out.sources.length <= ccApi.CC_SOURCES_MAX, 'список ограничен: ' + out.sources.length);
         assert.strictEqual(out.lifetime, 777, 'итог отдельный и не пострадал');
     });

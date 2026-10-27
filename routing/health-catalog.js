@@ -151,7 +151,7 @@ const MONEY_GW_FALLBACK = [
     { key: 'sk', bk: 'seekai', label: 'SeekAi', host: 'seekai.cc' },
     { key: 'ts', bk: 'truesota', label: 'TrueSOTA', host: 'true-sota.com' },
     { key: 'kk', bk: 'kktoken', label: 'KKtoken', host: 'kktoken.cc' },
-    { key: 'ap', bk: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.online' },
+    { key: 'ap', bk: 'aipm', label: 'AIPM', host: 'emtf.aipm9527.site' },
     { key: 'hn', bk: 'hcnsec', label: 'HCNsec', host: 'api.hcnsec.cn' },
 ];
 
@@ -194,10 +194,10 @@ function parseMoneyGw(warnings) {
 // ── Тариф: плоско за запрос или по токенам ───────────────────────────────────────
 // Источник — `keepalive-proxy.js:479`, восемь хостов:
 //   const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes',
-//     'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online']);
+//     'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.site']);
 // 🪤 Список НЕ равен «тариф плоский»: два хоста внесены по другой причине — см. NOTES.
 const FLAT_RATE_FALLBACK = ['tabitoken.com', 'gorouter.app', 'xpeach.codes',
-    'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online'];
+    'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.site'];
 
 function parseFlatRateHosts(warnings) {
     try {
@@ -317,7 +317,7 @@ const GW_NOTES = {
     }, {
         note: 'Каталог снят с домена .xyz, а host шлюза .online — к шлюзу он не отнесён',
         details: 'В custom-models-cache.json есть `https://emtf.aipm9527.xyz/v1` (8 моделей), а host в '
-            + 'MONEY_GW — `emtf.aipm9527.online`. Домены РАЗНЫЕ, склеивать их молча нельзя: каталог '
+            + 'MONEY_GW — `emtf.aipm9527.site`. Домены РАЗНЫЕ, склеивать их молча нельзя: каталог '
             + 'отнесён только к bk=custom. Если это один сервис — поправь реестр или пересними каталог.',
     }],
     gorouter: [{
@@ -423,7 +423,7 @@ function catalog() {
     // host → bk денежного шлюза. Каталог, снятый с хоста шлюза, принадлежит шлюзу.
     const bkByHost = new Map(gwList.map(g => [g.host, g.bk]));
 
-    // 🪤 Хост AIPM в реестре — `emtf.aipm9527.online`, а каталог снят с
+    // 🪤 Хост AIPM в реестре — `emtf.aipm9527.site`, а каталог снят с
     // `emtf.aipm9527.xyz`. Разные домены; молча склеивать их нельзя (это было бы
     // выдумкой), но и промолчать о таком совпадении нельзя.
     const gwHosts = new Set(bkByHost.keys());

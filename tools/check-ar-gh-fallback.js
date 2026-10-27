@@ -60,7 +60,10 @@ check(/seedFromSharedSnapshot\(/.test(restore),
     'цепочка восстановления: куки «до» → своя копия → общий снимок');
 {
     const auto = SESS.slice(SESS.indexOf('      if (auto) {'), SESS.indexOf('🔄 GitHub-часть'));
-    check(/seedFromSharedSnapshot\([\s\S]*?process\.exit\(3\)/.test(auto),
+    // 🪤 Регулярка допускает выбор кода (`… ? 11 : 3`): с автологином 12.10.2026 выход
+    // стал выражением, и дословное `process.exit(3)` исчезло при том же поведении.
+    // Проверяем смысл - «перед тем как сдаться кодом 3, снимок пробуется», - а не форму.
+    check(/seedFromSharedSnapshot\([\s\S]*?process\.exit\([^)]*\b3\b/.test(auto),
         'перед выходом с кодом 3 (нет user_session) снимок пробуется');
     check(/seedFromSharedSnapshot\(/.test(cutFn(SESS, 'async function ensureGithubSession(')),
         'дверь «нет user_session» пробует общий снимок — вынесена в общий хелпер обеих проверок');

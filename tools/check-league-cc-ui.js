@@ -153,7 +153,11 @@ ok('стрик берётся из активности Claude Code, а не и�
 ok('часовое окно отдаёт часы, дневные - дни', () => {
     const row = me({ ccStats: envelope() });
     const a = api('cc', 'h24', { me: row });
-    assert.deepStrictEqual(a.lgKeys(row, 'h24'), ['2026-09-16T10', '2026-09-16T11']);
+    // 26.10: ключи конвертируются в местное время смотрящего, поэтому ожидание собрано
+    // тем же преобразованием, а не константами.
+    const toLocal = (() => { const i = HTML.indexOf('function lgCcKeyToLocal');
+        return new Function('return ' + HTML.slice(i, HTML.indexOf('}', HTML.indexOf('return m ? base', i)) + 1))(); })();
+    assert.deepStrictEqual(a.lgKeys(row, 'h24'), ['2026-09-16T10', '2026-09-16T11'].map(toLocal));
     const d = api('cc', 'd30', { me: row });
     assert.deepStrictEqual(d.lgKeys(row, 'd30'), ['2026-09-14', '2026-09-15', '2026-09-16'],
         'месяц короче истории - берём что есть');
@@ -412,6 +416,44 @@ ok('порядок доски - по числу, а не по определен
     const rows = a.lgSort([canon0, legacyBig, bare]);
     assert.deepStrictEqual(rows.map(r => r.nick), ['прежний-миллиард', 'канон-ноль', 'без-числа'],
         'большее число выше, ноль ниже него, кто без числа - в конец');
+});
+
+
+// Мини-блок сайдбара живёт вне витрины и требует DOM, поэтому здесь сторож по источнику:
+// строки и отрыв обязаны идти через `lgTotal` (канонический счётчик), а не через прежнее
+// поле `tokW`. 26.10 на этом разъехались шапка (5,66) и своя же строка (6,11) об одних сутках.
+ok('мини-блок не смешивает канонический счётчик с прежним полем tokW', () => {
+    const i = HTML.indexOf('function lgPaintMini');
+    assert.ok(i > 0, 'lgPaintMini найдена');
+    const body = HTML.slice(i, HTML.indexOf('// ═══════════════════ ЧАТ ЛИГИ', i));
+    assert.ok(!body.includes('.tokW'), 'в мини-блоке нет обращения к tokW');
+    assert.ok(body.includes('miniOf('), 'строки и отрыв считаются через miniOf');
+});
+
+// 27.10: владелец - «когда листаешь неделя/сутки/месяц, виджет не меняется». Строки
+// обязаны ехать за выбранным окном, а не стоять на вшитой неделе: иначе два верхних
+// стоят как вкопанные, а третий меняется из-за порядка доски.
+ok('мини-блок ездит за выбранным окном, а не стоит на вшитой неделе', () => {
+    const i = HTML.indexOf('function lgPaintMini');
+    const body = HTML.slice(i, HTML.indexOf('// ═══════════════════ ЧАТ ЛИГИ', i));
+    const code = body.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+    assert.ok(!code.includes(`'d7'`), 'окно не зашито в мини-блоке');
+    assert.ok(body.includes('LG.range'), 'значения берутся по текущему окну');
+    assert.ok(body.includes('LG_M[LG.metric].lb} · ${LG_R[LG.range].lb}'), 'подпись называет окно');
+});
+
+// Часовые ключи счётчика UTC, ось - местная. Совмещение обязано переводить ключи, иначе
+// кривая уезжает на сдвиг часового пояса (26.10: тултип 462M против плитки 664M при +03:00).
+ok('ключи канонического счётчика переводятся в местное время смотрящего', () => {
+    const i = HTML.indexOf('function lgCcKeyToLocal');
+    assert.ok(i > 0, 'lgCcKeyToLocal найдена');
+    const fn = new Function('return ' + HTML.slice(i, HTML.indexOf('}', HTML.indexOf('return m ? base', i)) + 1))();
+    assert.strictEqual(fn('2026-10-26T00'), '2026-10-26T03', 'час UTC 00 при +03:00 -> 03 местного');
+    assert.strictEqual(fn('2026-10-25T21'), '2026-10-26T00', 'час через полночь UTC уезжает в следующие местные сутки');
+    const dk = fn('2026-10-26');
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(dk), 'дневной ключ остаётся датой: ' + dk);
+    // Совмещение использует перевод: строка-улика в lgAligned.
+    assert.ok(HTML.includes('map.set(lgCcKeyToLocal(k), v)'), 'lgAligned ставит значения по местным ключам');
 });
 
 finish();

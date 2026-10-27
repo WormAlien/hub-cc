@@ -1,0 +1,96 @@
+/* Existing dashboard theme tokens only. Main window leads; subagent models stay secondary. */
+#a6api-root { max-width: 1240px; margin: 0 auto; padding: 30px 24px; color: var(--color-ink); font-size: 13px; }
+#a6api-root * { box-sizing: border-box; }
+#a6api-root [hidden] { display: none !important; }
+#a6api-root h1 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 600; letter-spacing: -.025em; }
+#a6api-root h2 { margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; }
+#a6api-root p { margin: 6px 0 0; line-height: 1.5; }
+.a6-muted { color: var(--color-muted); }
+.a6-mono { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.a6-head, .a6-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.a6-head { justify-content: space-between; margin-bottom: 22px; }
+.a6-btn, .a6-select { font: inherit; color: var(--color-ink); background: var(--color-elevated); border: 1px solid var(--color-line); border-radius: 7px; padding: 9px 12px; min-height: 38px; max-width: 100%; }
+.a6-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; text-decoration: none; line-height: 1.35; text-align: center; }
+.a6-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--color-azure) 10%, var(--color-elevated)); border-color: var(--color-azure); }
+.a6-btn:disabled, .a6-select:disabled { cursor: not-allowed; opacity: .55; }
+.a6-btn:focus-visible, .a6-select:focus-visible { outline: 2px solid var(--color-azure); outline-offset: 3px; }
+.a6-select { width: 100%; min-width: 0; text-overflow: ellipsis; }
+.a6-select.a6-mono, .a6-btn.a6-mono { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; }
+.a6-primary { background: color-mix(in oklab, var(--color-azure) 13%, var(--color-surface)); border-color: var(--color-azure); font-weight: 600; }
+.a6-small { padding: 6px 10px; min-height: 32px; font-size: 12px; }
+.a6-notice { border: 1px solid var(--color-line); border-radius: 7px; padding: 11px 13px; margin-bottom: 14px; color: var(--color-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.a6-error { border-color: var(--color-crimson); color: var(--color-ink); }
+.a6-account { display: flex; align-items: center; flex-wrap: wrap; gap: 18px 32px; border-top: 1px solid var(--color-line-soft); border-bottom: 1px solid var(--color-line-soft); padding: 16px 0; margin-bottom: 20px; }
+.a6-account > div { display: flex; flex-direction: column; gap: 5px; }
+.a6-account > div > .a6-muted { font-size: 11px; }
+.a6-balance { font-size: 25px; line-height: 1.1; font-weight: 500; letter-spacing: -.035em; }
+.a6-account-spend { align-self: center; }
+.a6-status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--color-muted); }
+.a6-status::before { content: ''; flex: 0 0 7px; width: 7px; height: 7px; border: 1px solid var(--color-muted); border-radius: 50%; }
+.a6-status[data-active=true]::before { border-color: var(--color-emerald); background: var(--color-emerald); }
+.a6-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.65fr); gap: 16px; }
+.a6-panel { min-width: 0; background: var(--color-surface); border: 1px solid var(--color-line-soft); border-radius: 10px; padding: 20px; }
+.a6-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.a6-field > span { font-size: 11px; color: var(--color-muted); }
+.a6-key-select { margin-top: 18px; }
+.a6-key-identity { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 11px; }
+.a6-key-identity code { overflow-wrap: anywhere; }
+.a6-key-facts { display: grid; gap: 12px; margin: 20px 0; }
+.a6-key-facts > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.a6-key-facts dt { color: var(--color-muted); font-size: 11px; }
+.a6-key-facts dd { margin: 0; text-align: right; font-size: 12px; overflow-wrap: anywhere; }
+#a6-key-note, #a6-active-key { font-size: 11px; overflow-wrap: anywhere; }
+.a6-main-field > span { color: var(--color-ink); font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
+.a6-select.a6-main-model { min-height: 54px; padding: 12px 14px; font-size: 16px; border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
+#a6-model-note { font-size: 11px; }
+.a6-subagents { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-line-soft); }
+.a6-tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+.a6-tier-grid .a6-select { font-size: 11px; padding: 8px; }
+.a6-save-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+#a6-draft-status { font-size: 11px; }
+.a6-route-note { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--color-line-soft); }
+#a6api-root .a6-route-note p { margin: 0; font-size: 11px; flex: 1; }
+.a6-activation { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; margin-top: 22px; padding-top: 20px; border-top: 1px solid var(--color-line-soft); }
+#a6-activation-note { font-size: 11px; }
+.a6-command { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.a6-command > span { font-size: 11px; }
+.a6-command .a6-btn { font-size: 12px; }
+.a6-route-focus { outline: 2px solid var(--color-azure); outline-offset: 3px; }
+/* Команда /model под селектором модели. Кликабельна целиком: владельцу нужна готовая
+   строка для второго окна, а не инструкция «напиши сам». */
+.a6-cmd-row { margin-top: 6px; min-height: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.a6-cmd-row:empty { display: none; }
+/* Строка тиров чуть отступает от сетки селекторов и не раздувает панель: один ряд чипов. */
+.a6-cmd-tiers { margin-top: 8px; }
+.a6-cmd {
+  display: inline-block; cursor: pointer; font-size: 11px; padding: 3px 8px; border-radius: 6px;
+  border: 1px solid var(--color-line-soft); background: var(--color-elevated);
+  font-family: 'Geist Mono', ui-monospace, Consolas, monospace; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.a6-cmd:hover, .a6-cmd:focus-visible { border-color: var(--color-azure); outline: none; }
+@media (max-width: 900px) {
+  .a6-layout { grid-template-columns: 1fr; }
+  .a6-key-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .a6-key-facts > div { flex-direction: column; gap: 5px; }
+  .a6-key-facts dd { text-align: left; }
+}
+@media (max-width: 520px) {
+  #a6api-root { padding: 18px 12px; }
+  .a6-head { align-items: flex-start; gap: 14px; }
+  .a6-panel { padding: 16px; }
+  .a6-account { gap: 16px 24px; }
+  .a6-status { margin-left: 0; flex-basis: 100%; }
+  .a6-key-facts { grid-template-columns: 1fr; }
+  .a6-key-facts > div { flex-direction: row; }
+  .a6-key-facts dd { text-align: right; }
+  .a6-tier-grid { grid-template-columns: 1fr; }
+  .a6-tier-grid .a6-select { font-size: 12px; }
+  .a6-btn, .a6-select { min-height: 42px; }
+  .a6-select.a6-main-model { min-height: 56px; font-size: 15px; }
+  .a6-save-row { align-items: flex-start; }
+  .a6-save-row .a6-btn { width: 100%; }
+  .a6-route-note { align-items: flex-start; flex-direction: column; }
+  .a6-activation > div { width: 100%; }
+  #a6-activate { width: 100%; }
+}

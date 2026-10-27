@@ -90,6 +90,9 @@ const tp = fs.readFileSync(TP_FILE, 'utf8');
 const dashSrc = [
     cutBraced(tp, 'const CC_MODEL_PREFIX = {'),      // таблица ИМЁН провайдеров, не префиксов
     cutFn(tp, 'function tierMapFile('),
+    "const TIER_MIRROR_TIERS = ['opus', 'sonnet', 'haiku'];",
+    'let _tierMirrorBusy = false;',
+    cutFn(tp, 'function mirrorTierMapPair('),
     cutFn(tp, 'function writeTierMap('),
     cutFn(tp, 'function resolveProviderKey('),
     cutFn(tp, 'function poolDropTiers('),

@@ -30,14 +30,19 @@ const AR_QUOTA_BODY = Object.freeze({
 // /v1/models; для gpt это `gpt-6-astra`.
 const AR_QUOTA_POOLS = Object.freeze({
     opus: 'claude-opus-5',
+    opus55: 'claude-opus-5-5',
     gpt: 'gpt-6-astra',
 });
 const AR_QUOTA_DEFAULT_POOL = 'opus';
 
 // Полоса по имени модели. `null` = модель беспуловая (deepseek-*, glm-*): она
 // пулу не подчинена, и записывать ей состояние квоты нечего.
+// С 21.10.2026 `claude-opus-5-5` выдаётся ОТДЕЛЬНО от остальных Claude, поэтому у
+// него своя полоса и своё расписание. Суффикс окна (`[1m]`) снимаем: это та же
+// модель, а не другой пул.
 function arQuotaPoolForModel(id) {
-    const s = String(id || '');
+    const s = String(id || '').replace(/\s*\[[^\]]*\]\s*$/, '');
+    if (/^claude[-_]opus[-_]5[-_.]5(?:$|[^0-9])/i.test(s)) return 'opus55';
     if (/^claude[-_]/i.test(s)) return 'opus';
     if (/^gpt[-_]/i.test(s)) return 'gpt';
     return null;
@@ -87,6 +92,18 @@ const AR_SCHEDULE_DEFAULT = Object.freeze({
     note: 'объявление 2026-09-18: две партии, Пекин 10:00 и 19:00',
 });
 
+// Отдельные графики полос. `claude-opus-5-5` объявлен 21.10.2026 как отдельная
+// лимитированная выдача: раз в сутки, Пекин 09:00 (01:00 UTC, 04:00 МСК).
+// Одна партия здесь законна: `batches()` считает `last` и `next` за трое суток,
+// поэтому дуга идёт от вчерашнего налива к сегодняшнему, а не вырождается в точку.
+const AR_POOL_SCHEDULE_DEFAULT = Object.freeze({
+    opus55: Object.freeze({
+        tz: 'Asia/Shanghai',
+        times: Object.freeze(['09:00']),
+        note: 'объявление 2026-10-21: claude-opus-5-5 отдельно, Пекин 09:00',
+    }),
+});
+
 // Путь переопределяется переменной окружения — так регресс гоняет расписание на
 // временном файле, не трогая живое `~/.claude`.
 function arScheduleFile() {
@@ -104,8 +121,9 @@ function arScheduleTzOk(tz) {
 // «10:00, 19:00» или ['10:00','19:00'] → нормализованный список. Терпимо к разделителям
 // и к «9» вместо «09:00», но не к мусору: молча проглоченная опечатка сдвинула бы
 // налив на сутки, и заметить это было бы нечем.
-function arScheduleParseTimes(raw) {
+function arScheduleParseTimes(raw, opts = {}) {
     const list = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).split(/[,;\s]+/);
+    const min = Number.isFinite(opts.min) ? Math.max(1, Math.floor(opts.min)) : 2;
     const out = [];
     for (const item of list) {
         const s = String(item || '').trim();
@@ -118,9 +136,13 @@ function arScheduleParseTimes(raw) {
         const t = `${String(hh).padStart(2, '0')}:${String(mi).padStart(2, '0')}`;
         if (!out.includes(t)) out.push(t);
     }
-    // Минимум две: на одной партии дуга «от прошлой до следующей» вырождается в
-    // полный круг, а SVG дугу с совпавшими концами не рисует вообще — молча.
-    if (out.length < 2) return { ok: false, error: 'нужно минимум две партии в сутки' };
+    // Минимум две у общего графика: на одной партии дуга «от прошлой до следующей»
+    // выродилась бы в полный круг, а SVG дугу с совпавшими концами не рисует вообще.
+    // У отдельной полосы одна партия законна: `last` и `next` всё равно разные
+    // (вчера и сегодня), и полный круг рисуется честно.
+    if (out.length < min) {
+        return { ok: false, error: min >= 2 ? 'нужно минимум две партии в сутки' : 'нужно хотя бы одно время' };
+    }
     if (out.length > 8) return { ok: false, error: 'больше восьми партий не поддерживается' };
     out.sort();   // «HH:MM» лексикографически = хронологически
     return { ok: true, times: out };
@@ -132,17 +154,51 @@ function arScheduleParseTimes(raw) {
 function arScheduleNormalize(doc) {
     // Отсутствие файла — это не ошибка, а поставка. Пустой объект в файле — ошибка:
     // кто-то правил руками и стёр содержимое, и молчать об этом нельзя.
-    if (doc === null || doc === undefined) return { ...AR_SCHEDULE_DEFAULT, source: 'default' };
+    if (doc === null || doc === undefined) return { ...AR_SCHEDULE_DEFAULT, source: 'default', pools: {}, poolErrors: {} };
     const d = typeof doc === 'object' ? doc : {};
     const tz = typeof d.tz === 'string' ? d.tz.trim() : '';
     const parsed = arScheduleParseTimes(d.times);
     let error = null;
-    if (!parsed.ok) error = parsed.error;
-    else if (!arScheduleTzOk(tz)) error = `неизвестная зона: «${tz || '—'}»`;
-    if (error) return { ...AR_SCHEDULE_DEFAULT, source: 'default', error };
-    return { tz, times: parsed.times, source: 'file',
+    let base;
+    if (!parsed.ok) {
+        error = parsed.error;
+        base = { ...AR_SCHEDULE_DEFAULT };
+    } else if (!arScheduleTzOk(tz)) {
+        error = `неизвестная зона: «${tz || '—'}»`;
+        base = { ...AR_SCHEDULE_DEFAULT };
+    } else {
+        base = { tz, times: parsed.times };
+    }
+    // Переопределения по полосам. Одна партия здесь допустима (см. объявление
+    // 21.10 про opus-5-5), поэтому `min: 1`. Битое переопределение не роняет
+    // общий график: оно пропускается и называется в `poolErrors`.
+    const pools = {};
+    const poolErrors = {};
+    if (d.pools && typeof d.pools === 'object' && !Array.isArray(d.pools)) {
+        for (const p of Object.keys(AR_QUOTA_POOLS)) {
+            const raw = d.pools[p];
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+            const ptz = typeof raw.tz === 'string' ? raw.tz.trim() : '';
+            const pp = arScheduleParseTimes(raw.times, { min: 1 });
+            let perr = null;
+            if (!pp.ok) perr = pp.error;
+            else if (!arScheduleTzOk(ptz)) perr = `неизвестная зона: «${ptz || '—'}»`;
+            if (perr) { poolErrors[p] = perr; continue; }
+            pools[p] = {
+                tz: ptz,
+                times: pp.times,
+                note: typeof raw.note === 'string' ? raw.note.slice(0, 200) : '',
+                updated: typeof raw.updated === 'string' ? raw.updated.slice(0, 40) : '',
+            };
+        }
+    }
+    if (error) {
+        return { ...AR_SCHEDULE_DEFAULT, source: 'default', error, pools, poolErrors };
+    }
+    return { ...base, source: 'file',
              note: typeof d.note === 'string' ? d.note.slice(0, 200) : '',
-             updated: typeof d.updated === 'string' ? d.updated.slice(0, 40) : '' };
+             updated: typeof d.updated === 'string' ? d.updated.slice(0, 40) : '',
+             pools, poolErrors };
 }
 
 // Текущее расписание с кешем по mtime: зовётся на каждом тике автопроверки, а
@@ -167,6 +223,24 @@ function arQuotaSchedule() {
         }
     }
     AR_SCHED_CACHE = { file, mtimeMs, doc };
+    return doc;
+}
+
+// Расписание ОДНОЙ полосы. Общий график остаётся общим для opus и gpt; отдельная
+// полоса (`opus55`) берёт переопределение из файла, а если его нет - поставку из
+// объявления 21.10. Так часы не врут: у 5-5 своя партия, а не 10:00/19:00.
+function arQuotaPoolSchedule(pool) {
+    const doc = arQuotaSchedule();
+    const p = String(pool || '').trim().toLowerCase();
+    const o = p && doc.pools && doc.pools[p];
+    if (o && Array.isArray(o.times) && o.times.length) {
+        return { ...o, source: doc.source, error: doc.error || null };
+    }
+    const knownErr = p && doc.poolErrors && doc.poolErrors[p];
+    const d = p && AR_POOL_SCHEDULE_DEFAULT[p];
+    if (d) {
+        return { ...d, source: 'default', updated: '', error: knownErr || null };
+    }
     return doc;
 }
 
@@ -252,14 +326,14 @@ function arQuotaKeyTail(key) {
 
 // Запись кеша из результата пробы. `error` не кешируется вообще: это факт про
 // сеть в тот момент, а не про квоту, и показывать его завтра бессмысленно.
-function buildArQuotaCache(result, key, now) {
+function buildArQuotaCache(result, key, now, pool) {
     const state = result && result.state;
     if (state !== 'available' && state !== 'exhausted') return null;
     const ts = Number.isFinite(Number(now)) ? Number(now) : Date.now();
     return {
         state,
         checkedAt: new Date(ts).toISOString(),
-        dropAt: new Date(arQuotaDropAt(ts)).toISOString(),
+        dropAt: new Date(arQuotaDropAt(ts, pool ? arQuotaPoolSchedule(pool) : null)).toISOString(),
         keyTail: arQuotaKeyTail(key),
     };
 }
@@ -268,13 +342,14 @@ function buildArQuotaCache(result, key, now) {
 // партия — ответ актуален сколько угодно долго; как только случился налив, запись
 // мертва (показывать «квота закончилась» после нового налива хуже, чем молчать).
 // Смена активного ключа тоже убивает запись: состояние привязано к аккаунту.
-function isArQuotaCacheFresh(entry, now, keyTail) {
+function isArQuotaCacheFresh(entry, now, keyTail, pool) {
     if (!entry || (entry.state !== 'available' && entry.state !== 'exhausted')) return false;
     const ts = Number.isFinite(Number(now)) ? Number(now) : Date.now();
     const checked = Date.parse(entry.checkedAt);
     if (!Number.isFinite(checked) || checked > ts + 60_000) return false;   // запись из будущего — часы уехали
     const drop = Date.parse(entry.dropAt);
-    if (!Number.isFinite(drop) || drop !== arQuotaDropAt(ts)) return false;
+    const expected = arQuotaDropAt(ts, pool ? arQuotaPoolSchedule(pool) : null);
+    if (!Number.isFinite(drop) || drop !== expected) return false;
     if (keyTail && entry.keyTail && entry.keyTail !== keyTail) return false;
     return true;
 }
@@ -309,17 +384,38 @@ function classifyArQuotaProbe(status, rawBody) {
 // секунду осталась бы незамеченной, и панель показала бы старое расписание.
 function arQuotaScheduleSave(patch) {
     const d = patch && typeof patch === 'object' ? patch : {};
+    const pool = String(d.pool == null ? '' : d.pool).trim().toLowerCase();
     const tz = String(d.tz == null ? '' : d.tz).trim();
-    const parsed = arScheduleParseTimes(d.times);
+    // Общий график требует минимум две партии; отдельной полосе одной хватает.
+    const parsed = arScheduleParseTimes(d.times, { min: pool ? 1 : 2 });
     if (!parsed.ok) return { ok: false, error: parsed.error };
     if (!arScheduleTzOk(tz)) return { ok: false, error: `неизвестная зона: «${tz}»` };
-    const doc = {
-        tz,
-        times: parsed.times,
-        updated: new Date().toISOString().slice(0, 10),
-        note: typeof d.note === 'string' ? d.note.slice(0, 200) : '',
-    };
+    if (pool && !AR_QUOTA_POOLS[pool]) return { ok: false, error: `неизвестная полоса: ${pool}` };
+
     const file = arScheduleFile();
+    let cur = {};
+    try { cur = JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch { /* файла нет — начинаем с поставки */ }
+    const base = arScheduleNormalize(cur);       // берём только валидную базу, битую заменяем поставкой
+    const rawPools = (cur.pools && typeof cur.pools === 'object' && !Array.isArray(cur.pools)) ? cur.pools : {};
+    const today = new Date().toISOString().slice(0, 10);
+    const doc = {
+        tz: base.tz,
+        times: base.times.slice(),
+        updated: today,
+        note: typeof d.note === 'string' ? d.note.slice(0, 200) : (base.note || ''),
+        pools: { ...rawPools },
+    };
+    if (pool) {
+        doc.pools[pool] = {
+            tz,
+            times: parsed.times,
+            updated: today,
+            note: typeof d.note === 'string' ? d.note.slice(0, 200) : '',
+        };
+    } else {
+        doc.tz = tz;
+        doc.times = parsed.times;
+    }
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         durableWriteJson(file, doc);
@@ -327,13 +423,14 @@ function arQuotaScheduleSave(patch) {
         return { ok: false, error: `не записано: ${e.message}` };
     }
     AR_SCHED_CACHE = null;
-    return { ok: true, schedule: arQuotaSchedule() };
+    return { ok: true, schedule: arQuotaSchedule(), pool: pool || null };
 }
 
 module.exports = {
     AR_QUOTA_BODY,
     AR_QUOTA_POOLS,
     AR_QUOTA_DEFAULT_POOL,
+    AR_POOL_SCHEDULE_DEFAULT,
     arQuotaPoolForModel,
     arQuotaBodyFor,
     arQuotaReadPools,
@@ -342,6 +439,7 @@ module.exports = {
     arScheduleTzOk,
     arScheduleParseTimes,
     arQuotaSchedule,
+    arQuotaPoolSchedule,
     arQuotaScheduleSave,
     arQuotaBatches,
     arZonedParts,

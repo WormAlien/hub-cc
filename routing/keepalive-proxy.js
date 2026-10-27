@@ -45,6 +45,7 @@ const { PassThrough } = require('stream');
 const evStore = require('./event-store.js');
 
 const PORT = Number(process.env.PORT || 8787);
+const PAID_SINGLE_KEY = process.env.PAID_SINGLE_KEY === '1';
 const UPSTREAM = process.env.UPSTREAM || 'https://agentrouter.org';
 const IDLE_MS = Number(process.env.IDLE_MS || 5000);
 // Файл лога ЭТОГО инстанса — всегда по порту. Это не косметика, а две разные поломки.
@@ -114,6 +115,23 @@ const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
 const activeKeyLib = require('./lib/active-key');
 
 let poolKeyLogged = '';                       // чтобы «взял из пула» не сыпалось в лог каждый запрос
+// Свободный ключ того же пула для ОДНОГО субагентского запроса. Активный файл не трогаем.
+// Предпочитаем наибольший остаток, исключаем уже опробованные и мёртвые.
+function spareKeyFor(current, tried) {
+    if (!SESSIONS_FILE) return '';
+    const rows = activeKeyLib.poolAccounts(SESSIONS_FILE)
+        .filter(x => x && x.api_key && String(x.api_key).trim() && x.status !== 'dead');
+    const keys = [...new Set(rows.map(x => String(x.api_key).trim()))]
+        .filter(k => k !== current && !(tried && tried.has(k)));
+    if (!keys.length) return '';
+    const bal = k => {
+        const row = rows.find(x => String(x.api_key).trim() === k);
+        const n = Number(row && row.balance);
+        return Number.isFinite(n) ? n : 0;
+    };
+    return keys.sort((a, b) => bal(b) - bal(a))[0];
+}
+
 function activeKeyNow() {
     const r = activeKeyLib.resolveKey({ keyFile: AR_ACTIVE_KEY_FILE, sessionsFile: SESSIONS_FILE });
     if (r.source === 'pool' && poolKeyLogged !== r.key) {
@@ -322,6 +340,50 @@ function stripFakeThinking(body, all) {
 }
 // Текст отказа, ради которого всё это: его же ловит ветка лечения на 400.
 const SIG_ERR_RE = /Invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
+
+// ── Premier: хвост истории должен быть обычным пользовательским ходом ─────────
+// Живой отказ 25.10 (тело fail-perm-2026-10-25T08-03-12-186Z.json):
+// `400 This reasoning model requires previous reasoning_content in multi-turn requests`.
+// Догадка «виноваты чужие подписи thinking» замером ОТВЕРГНУТА - проба
+// tools/probe-premier-reasoning.js прогнала варианты подписи, tool-цикла и роли system,
+// все 200. Двоичный поиск по живому телу показал настоящую причину: КОНЕЦ запроса.
+//   конец = user с одним tool_result            -> 400 (это и есть каждый агентский ход)
+//   конец = тот же ход + текст "Continue."      -> 200
+//   конец = role:system (клиент так шлёт напоминания) -> 400
+//   конец = system + любой user-текст           -> 200
+// То есть шлюз склеивает tool_result в роль `tool`, а его апстрим в reasoning-режиме
+// требует, чтобы разговор заканчивался пользовательским текстом. Текст берём
+// минимальный: он платный по квоте сообщений, но не по токенам смысла.
+// 🎯 Только Premier (иде.kgpix.bond): у остальных шлюзов хвост и так проходит, а лишний
+// текст в истории - это подмена запроса клиента, такую правку нельзя делать «на всякий».
+const PREMIER_TAIL_TEXT = 'Continue.';
+// Рубильник: PREMIER_TAIL=0 выключает дописку, гейт по хосту считается в PREMIER_TAIL ниже.
+// PREMIER_TAIL_HOST - только для тестов: регресс поднимает настоящий прокси против
+// локального макета, и подменить хост иначе нечем.
+const PREMIER_TAIL_HOST = process.env.PREMIER_TAIL_HOST || 'ide.kgpix.bond';
+const REASONING_REQ_RE = /requires previous reasoning_content|must be passed back to the API/i;
+function hasTextBlock(c) {
+    if (typeof c === 'string') return c.trim().length > 0;
+    return Array.isArray(c) && c.some(b => b && b.type === 'text' && String(b.text || '').trim());
+}
+// Возвращает {body, added} или null, если хвост уже в порядке.
+function ensureTrailingUserText(body) {
+    try {
+        const j = JSON.parse(body.toString('utf8') || '{}');
+        if (!Array.isArray(j.messages) || !j.messages.length) return null;
+        const last = j.messages[j.messages.length - 1];
+        if (last && last.role === 'user' && hasTextBlock(last.content)) return null;
+        if (last && last.role === 'user') {
+            // Ход с одним tool_result: текст кладём В ТОТ ЖЕ ход, роли остаются чередоваться.
+            const block = { type: 'text', text: PREMIER_TAIL_TEXT };
+            if (Array.isArray(last.content)) last.content.push(block);
+            else last.content = [{ type: 'text', text: String(last.content || '') }, block];
+        } else {
+            j.messages.push({ role: 'user', content: [{ type: 'text', text: PREMIER_TAIL_TEXT }] });
+        }
+        return { body: Buffer.from(JSON.stringify(j), 'utf8'), added: true };
+    } catch (e) { return null; }
+}
 // 🪤 Срезка image-блоков (была 11.09) СНЯТА 12.09 по прямой пробе зрения
 // (probe-vision.js): канал glm-5.3 снова принимает картинки и модель честно
 // отвечает «НЕ ВИЖУ ИЗОБРАЖЕНИЕ», а deepseek-v4-flash РЕАЛЬНО ВИДИТ и описывает
@@ -505,6 +567,8 @@ function echoModelFor(clientModel) {
 }
 
 const upstream = new URL(UPSTREAM);
+// Дописка хвоста включена только у Premier: см. ensureTrailingUserText.
+const PREMIER_TAIL = process.env.PREMIER_TAIL !== '0' && upstream.hostname === PREMIER_TAIL_HOST;
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
 const upBase = upstream.pathname.replace(/\/+$/, '');
 // Пул исходящих коннектов. В глобальном агенте Node 24 keepAlive уже включён, но
@@ -528,6 +592,20 @@ const MAX_SOCKETS = Number(process.env.MAX_SOCKETS || 256);
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: MAX_SOCKETS });
 const agentFor = requester => (requester === https.request ? httpsAgent : httpAgent);
+// Пул keep-alive: край/туннель закрывает простаивающее соединение за 10-15 с.
+// Замер стенда 20.10.2026 (LTE через CDN): простой 10 с - сокет жив, 15 с - EOF за
+// 0-6 мс. Если взять такой сокет из пула, запрос уходит в мёртвую трубу и ждёт до
+// upstreamTimeoutMs (300 с), а клиент видит минуты тишины. Сбрасываем ТОЛЬКО
+// свободные сокеты - активные стримы не трогаем.
+const IDLE_FLUSH_MS = Number(process.env.IDLE_FLUSH_MS || 10000);
+function flushFreeSockets(requester) {
+  const a = agentFor(requester || upRequester);
+  let n = 0;
+  for (const list of Object.values(a.freeSockets || {})) {
+    for (const s of list) { try { s.destroy(); n += 1; } catch (e) { /* уже мёртв */ } }
+  }
+  return n;
+}
 // ── Трассировка исходящего соединения: почему первый запрос после простоя тормозит ──
 // Симптом (28.08): после АФК активный шлюз «не раздупляет», и лечит только перезапуск
 // процесса — значит портится состояние ЗДЕСЬ, а не у шлюза (Cloudflare и квота от
@@ -1001,7 +1079,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'emtf.aipm9527.online', 'www.aikeysapi.com']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1083,6 +1161,14 @@ function clampPaidHedge(why) {
     + `сколько сам ответ. maxHedges ${cfg.maxHedges} → 0 (перебить: ALLOW_PAID_HEDGE=1)`);
   cfg.maxHedges = 0;
   return true;
+}
+function clampSingleKey() {
+  if (!PAID_SINGLE_KEY) return false;
+  const limits = { maxAttempts: 1, maxHedges: 0, hedgeMs: 0, holdMs: 0,
+    emptyStreamMs: 0, catalogTtlMs: 0, poolFallbackModel: '', poolDeadMs: 0, visionBridge: false };
+  const changed = Object.entries(limits).some(([k, v]) => cfg[k] !== v);
+  Object.assign(cfg, limits);
+  return changed;
 }
 function loadConfig() {
   let raw;
@@ -1194,7 +1280,8 @@ function applyPatch(p) {
   if ('visionModel' in p && typeof p.visionModel === 'string') {
     cfg.visionModel = p.visionModel.trim() || 'deepseek-v4-flash';
   }
-  const clamped = clampPaidHedge('патч конфига');
+  const singleClamped = clampSingleKey();
+  const clamped = clampPaidHedge('патч конфига') || singleClamped;
   saveConfig();
   log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? `${cfg.holdMs}ms` : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? `${cfg.emptyStreamMs}ms` : 'выкл'}, каталог ${cfg.catalogTtlMs ? `${cfg.catalogTtlMs}ms` : 'выкл'}, JSON-удержание ${cfg.jsonHoldMs ? `${cfg.jsonHoldMs}ms` : 'выкл'}, вставший поток ${cfg.stallMs ? `${cfg.stallMs}ms` : 'выкл'}, фолбэк пула ${cfg.poolFallbackModel ? `${cfg.poolFallbackModel} (память ${cfg.poolDeadMs ? `${cfg.poolDeadMs}ms` : 'выкл'})` : 'выкл'}`);
   return clamped;
@@ -1230,7 +1317,7 @@ function publicState() {
 // winBy — КТО принёс ответ: `первый` / `мульти-запрос` / `ретрай`. Это единственная цифра,
 // по которой можно настраивать hedgeMs не наугад: если `мульти-запрос` почти нулевой, дубли
 // только грузят шлюз (его WAF чувствителен к пачкам) и hedgeMs надо ПОДНИМАТЬ.
-const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, holds: 0, rotations: 0, byStatus: {}, byModel: {}, winBy: {} };
+const stats = { requests: 0, remaps: 0, keepalives: 0, hedges: 0, errors: 0, retries: 0, holds: 0, rotations: 0, keyFallbacks: 0, byStatus: {}, byModel: {}, winBy: {} };
 const startedAt = Date.now();
 // ── Мягкая остановка ────────────────────────────────────────────────────────────
 // Рестарт хаба гасит прокси, и каждый запрос в полёте превращается для клиента в
@@ -1615,6 +1702,7 @@ function isTransientBody(status, buf) {
   // Bedrock-канал AgentRouter прислал свой model identifier — повтор пойдёт на другой канал.
   // Проверяем ДО RETRY_NO, потому что `bad request` из RETRY_NO ловит и Bedrock-ответ.
   if (status === 400 && /ValidationException|model identifier|InvokeModel|Bedrock/i.test(s)) return true;
+  if (status === 429 && /daily message limit reached|сообщения на сегодня закончились/i.test(s)) return false;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -1674,7 +1762,13 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // другой. 403 доезжал до клиента, и Claude Code показывал владельцу «Please run /login» вместо
 // того, чтобы молча сменить аккаунт. 🪤 Ловим ФРАЗУ, а не слово `quota`: рядом живёт
 // `quota exceeded for this model` («нет прав на модель»), на которой ротация крутила бы пул зря.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan/i;
+// 🪤 Хвост `daily message limit|сообщения … закончились` добавлен 25.10: Premier на исчерпанную
+// дневную квоту отвечает 429 текстом «Сообщения на сегодня закончились (50 на тарифе Free…) /
+// Daily message limit reached», и НИ ОДНА прежняя метка его не ловила. Снаружи это выглядело
+// как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
+// была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
+// обычный «too many requests» по-прежнему аккаунт не меняет.
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -1731,6 +1825,8 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'api.threerouter.com': 'tr',
+  'ide.kgpix.bond': 'pm',
   'api.vani.ai': 'vn',
   'api-ru.dacall.ai': 'dc',
   'cleanapis.com': 'cp',
@@ -1742,7 +1838,7 @@ const GW_BY_HOST = {
   'odysseyapi.tech': 'od',
   'chat.b.ai': 'bai',
   'www.getunikey.ai': 'uk',
-  'emtf.aipm9527.online': 'ap',
+  'emtf.aipm9527.site': 'ap',
   'www.aikeysapi.com': 'ak',
   // api.hcnsec.cn — ключ С ПОДДОМЕНОМ, как у justwoker: панель и API на одном хосте,
   // `hcnsec.cn` без `api.` не наш адрес вовсе. 🪤 Забыть эту строку = молча выключенная
@@ -1762,11 +1858,16 @@ const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
 const ROTATE_PROVIDER = process.env.ROTATE_PROVIDER || ROTATE_P;
 const DASH_URL = process.env.DASHBOARD_URL || `http://127.0.0.1:${process.env.SWITCHER_PORT || 8200}`;
 // Не наш шлюз (или AUTOROTATE=0) → фича спит, поведение прежнее.
-const ROTATE_ON = process.env.AUTOROTATE !== '0' && !!ROTATE_PROVIDER;
+const ROTATE_ON = !PAID_SINGLE_KEY && process.env.AUTOROTATE !== '0' && !!ROTATE_PROVIDER;
 // Потолок цепочки на ОДИН запрос. Владелец выбрал стратегию «самый маленький
 // достаточный»: на маленьком может не хватить, тогда идём дальше. Без потолка
 // единственный запрос мог бы прокрутить весь пул.
 const MAX_ROTATIONS = Number(process.env.MAX_ROTATIONS || 5);
+// Сколько РАЗНЫХ ключей пула можно попробовать в ОДНОМ субагентском запросе при 429.
+// Активный ключ при этом не меняется: основной остаётся выбранным (у владельца там
+// основной баланс), а свободный берётся только на этот запрос.
+const MAX_KEY_FALLBACKS = Number(process.env.MAX_KEY_FALLBACKS || 3);
+function isTierModelName(m) { return /(^|[-_/])(opus|sonnet|haiku)([-_/]|$)/i.test(String(m || '')); }
 
 // Просьба к дашборду сменить активный ключ. Возвращает {ok, already?, email, mask}.
 // Таймаут - потолок НАД бюджетом дашборда (`MONEY_ROTATE_BUDGET_MS`, 25 с): на той стороне
@@ -2092,6 +2193,10 @@ const server = http.createServer((req, res) => {
   // умирал бы ровно там, где ротация начала работать. Потолок — MAX_ROTATIONS.
   let rotations = 0;
   let bonusAttempts = 0;
+  // Субагентский запрос: при 429 пробуем ДРУГОЙ ключ пула, не меняя активный файл.
+  let keyOverride = '';
+  let keyFallbacks = 0;
+  const triedKeys = new Set();
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
   // Удержание запроса, пока лежит путь до шлюза (см. DEFAULT_CFG.holdMs). Бюджет свой,
   // отдельно и от maxAttempts, и от ротации: он мерит не «сколько раз спросили», а
@@ -2908,9 +3013,10 @@ const server = http.createServer((req, res) => {
     // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
     {
-      const arKey = activeKeyNow();
+      const arKey = keyOverride || activeKeyNow();
       if (arKey) {
         sentKey = arKey;
+        triedKeys.add(arKey);
         headers.authorization = `Bearer ${arKey}`;
         headers['x-api-key'] = arKey;
       }
@@ -2941,6 +3047,15 @@ const server = http.createServer((req, res) => {
     // перегрузки (см. isFastFail5xx). Момент старта — здесь, а не в колбэке ответа:
     // в цену попытки входит и установка соединения.
     const attemptT0 = Date.now();
+    // Простой больше порога - край уже закрыл keep-alive соединение. Гасим свободные
+    // сокеты ДО запроса, иначе он возьмёт мёртвый из пула и провисит до таймаута.
+    if (IDLE_FLUSH_MS > 0 && lastUpAt) {
+      const idleMs = Date.now() - lastUpAt;
+      if (idleMs > IDLE_FLUSH_MS) {
+        const flushed = flushFreeSockets(t.requester);
+        if (flushed) log(`${req.method} ${reqPath} простой ${Math.round(idleMs / 1000)}с — сброшено свободных сокетов: ${flushed} (attempt ${attempt})`);
+      }
+    }
     const upReq = t.requester({
       hostname: t.hostname,
       port: t.port,
@@ -2997,6 +3112,23 @@ const server = http.createServer((req, res) => {
           // живые деньги. Просим дашборд подменить активный ключ и повторяем ТОТ ЖЕ
           // запрос — Claude Code видит только успешный ответ.
           const reason = ROTATE_ON ? rotateReason(status, buf) : null;
+          // Субагентский запрос на 429: свободный ключ пула только для ЭТОГО запроса.
+          // Активный файл не меняем - основной ключ владельца остаётся выбранным.
+          if (status === 429 && ROTATE_ON && isTierModelName(clientModel) && keyFallbacks < MAX_KEY_FALLBACKS) {
+            const alt = spareKeyFor(sentKey, triedKeys);
+            if (alt) {
+              keyFallbacks += 1;
+              bonusAttempts += 1;
+              keyOverride = alt;
+              triedKeys.add(alt);
+              stats.keyFallbacks += 1;
+              activeSet.delete(upReq);
+              log(`${req.method} ${reqPath} 429 у субагента - беру свободный ключ пула #${keyFallbacks} и повторяю (активный не меняю)`);
+              setTimeout(() => { if (!finished && !aborted) makeUpstream('ключ пула'); }, RETRY_DELAY_MS);
+              return;
+            }
+            log(`${req.method} ${reqPath} 429 у субагента, но свободных ключей пула нет - обычные повторы`);
+          }
           if (reason) {
             // Ротация уже идёт (её начал параллельный мульти-дубль) — эта попытка
             // просто уходит: запрос доведёт та, что стартует после подмены.
@@ -3216,6 +3348,9 @@ const server = http.createServer((req, res) => {
       // именно он и есть симптом «после простоя не раздупляет».
       log(`${req.method} ${reqPath} upstream timeout ${cfg.upstreamTimeoutMs}ms (attempt ${attempt})`
         + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
+      // Таймаут на сокете из пула - тот же отмерший keep-alive; повтор должен идти
+      // новым соединением, а не следующим мёртвым.
+      if (ctrace && ctrace.reused) flushFreeSockets(t.requester);
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
@@ -3224,6 +3359,12 @@ const server = http.createServer((req, res) => {
       // его молча, пока мы простаивали, и узнали мы об этом только записью в трубу.
       log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`
         + (CONN_TRACE && ctrace ? ` · conn: ${fmtConn(ctrace)}` : ''));
+      // Сокет из пула + обрыв = отмершее keep-alive. Гасим остальные свободные,
+      // иначе повтор возьмёт такой же мёртвый и сгорит ещё раз.
+      if (ctrace && ctrace.reused) {
+        const flushed = flushFreeSockets(t.requester);
+        if (flushed) log(`${req.method} ${reqPath} ошибка на сокете из пула — сброшено свободных: ${flushed}`);
+      }
       attemptDone(upReq, err.message, 0);
     });
     upReq.end(body);
@@ -3292,6 +3433,18 @@ const server = http.createServer((req, res) => {
           reqBody = th.body;
           stats.remaps += 1;
         }
+      }
+    }
+    // Premier: хвост истории обязан быть пользовательским текстом, иначе 400
+    // «requires previous reasoning_content» на каждом агентском ходу. Замер и разбор - у
+    // ensureTrailingUserText. Гейт по хосту: у соседних шлюзов тот же хвост проходит, и
+    // дописывать им текст клиента нельзя.
+    if (PREMIER_TAIL && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+      const tail = ensureTrailingUserText(reqBody);
+      if (tail) {
+        log(`${req.method} ${reqPath} премьер: хвост без пользовательского текста — дописал «${PREMIER_TAIL_TEXT}»`);
+        reqBody = tail.body;
+        stats.remaps += 1;
       }
     }
     // Vision-мост: картинки → AgentRouter (deepseek) → текст. Только если включён тумблером
@@ -4302,6 +4455,7 @@ if (process.argv[2] === 'selftest') {
 }
 
 loadConfig();
+if (clampSingleKey()) saveConfig();
 // Гвоздь после чтения конфига: даже если в json лежит maxHedges от прошлых
 // экспериментов (или его вписали руками), на плоскотарифном шлюзе дубли не поедут.
 if (clampPaidHedge('старт')) saveConfig();

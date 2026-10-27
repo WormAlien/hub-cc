@@ -17,9 +17,9 @@ const HTML = path.join(__dirname, '..', 'routing', 'proxy-dashboard.html');
 const src = fs.readFileSync(DASH, 'utf8');
 const html = fs.readFileSync(HTML, 'utf8');
 const { classifyArQuotaProbe, AR_QUOTA_BODY, AR_SCHEDULE_DEFAULT,
-        AR_QUOTA_POOLS, arQuotaPoolForModel, arQuotaBodyFor, arQuotaReadPools,
+        AR_POOL_SCHEDULE_DEFAULT, AR_QUOTA_POOLS, arQuotaPoolForModel, arQuotaBodyFor, arQuotaReadPools,
         arQuotaDropAt, arQuotaKeyTail, buildArQuotaCache, isArQuotaCacheFresh,
-        pickFresherArQuota, arQuotaSchedule, arQuotaScheduleSave, arScheduleParseTimes,
+        pickFresherArQuota, arQuotaSchedule, arQuotaPoolSchedule, arQuotaScheduleSave, arScheduleParseTimes,
         arScheduleTzOk, arQuotaBatches } = require('../routing/lib/ar-quota-probe');
 
 const fails = [];
@@ -41,37 +41,37 @@ check(classifyArQuotaProbe(402, '{"error":{"message":"402 Budget pool quota has 
 check(classifyArQuotaProbe(402, '{"error":"account disabled"}').state === 'error', 'unrelated 402 stays an error');
 check(classifyArQuotaProbe(500, 'oops').state === 'error', 'other failures stay errors');
 check(src.includes('AR_ACTIVE_KEY_FILE'), 'probe reads active key server-side');
-const uiHandler = html.slice(html.indexOf('window.arqCheckQuota'), html.indexOf('\nfunction init()', html.indexOf('window.arqCheckQuota')));
+const uiStart = html.indexOf('window.arqCheckQuota');
+const uiHandler = html.slice(uiStart, html.indexOf('\n};', uiStart) + 3);
+check(/^window\.arqCheckQuota/.test(uiHandler) && uiHandler.length > 500, 'обработчик кнопки вырезан целиком');
 check(!/ar-active-key|api_key|x-api-key/i.test(uiHandler), 'browser handler never reads or sends the key');
 
-check(html.includes('id="arq-check"'), 'manual check button is under quota clock');
-check(html.includes('id="arq-check-result"'), 'inline result exists');
+check(html.includes('id="arq-pool-state"'), 'одна строка состояния под часами');
+check(/function stChipsPaint\(\)/.test(html), 'строку состояния рисует одна функция');
+check(/data-pool="\$\{p\}"[\s\S]{0,300}?onclick="arqCheckQuota\('\$\{p\}'\)"/.test(html),
+  'каждый чип - кнопка проверки СВОЕЙ полосы');
+check(!html.includes('id="arq-lanes"'), 'трёх переключателей полос нет');
+check(!html.includes('id="arq-check-result"'), 'отдельных строк результата нет');
 check(html.includes('async function arqCheckQuota('), 'manual click handler exists');
+check(/无可用渠道[\s\S]{0,1400}?канал ещё не открыт/.test(html),
+  '503 «нет канала» объясняется как «партия ещё не налита», а не красная ошибка');
+check(/нет доступа: 5-5 только для svip\/test/.test(html),
+  '503 по чужой группе объясняется как «нет доступа», а не «жди партию»');
+check(/const PROBE_MSG = \{\}/.test(html) && /probeMsgGet\(p\)/.test(html),
+  'последний ответ проверки переживает тик stSync, а не гаснет в прочерк через 30 с');
 check(html.includes("fetch('/__switch/api/ar/quota-check'"), 'UI calls server route');
-// Циферблат теперь красит ОБЩИЙ маляр полосы, а не обработчик кнопки: состояние
-// приходит и от пробы, и от фолбэка, и второе кнопку не нажимает.
-check(/arqState\(fresh \? \(e\.state === 'available' \? 'fresh' : 'burned'\)/.test(html),
-  'exhausted result marks clocks burned');
-check(/arqState\(fresh \? \(e\.state === 'available' \? 'fresh' : 'burned'\)/.test(html),
-  'available result marks clocks fresh');
-check(/if \(pool === VIEW\) \{[^}]*arqState\(/.test(html),
-  'красится только показываемая полоса: две полосы в один цвет не свести');
-
-// ── Явная строка «что отвечает и когда кончилась квота» ─────────────────────
-// Владелец 16.09 не понял этого по мелкой подписи в карточке конфига: панель маппинга
-// показывала claude-opus-5, а строка про фолбэк - deepseek, и обе были правы про РАЗНЫЕ
-// пути. Теперь состояние считает ОДНА функция по двум источникам сразу: квота (файл
-// состояния) + то, что реально отвечает (карта активного пути из `gatewayTiers`).
-check(html.includes('id="arq-pool-state"'), 'в карточке часов есть явная строка состояния');
-check(/function stPoolLine\(pool\)/.test(html), 'строку рисует одна функция, а не два места');
-check(/AR_MAP = \(p && p\.gatewayTiers\)/.test(html),
-  '«что отвечает» берётся из карты активного пути, а не из памяти о дропе');
-check(/квота кончилась \$\{at\} \(\$\{why\}\) · отвечает/.test(html),
-  'пул пуст и трафик ушёл: сказано, когда кончилась и куда ушёл');
-check(/а карта стоит на \$\{arpool\}/.test(html),
-  'пул пуст, но карта возвращена: сказано, что каждый запрос сначала упрётся в 402');
-check(/⚠️ пул пуст по \$\{dead\}[\s\S]{0,120}но карта уже на \$\{serving\}/.test(html),
-  'строка в карточке конфига сверяется с картой, а не повторяет память о дропе');
+// Циферблат один и общий: красится по полосе БЛИЖАЙШЕЙ партии, а не по выбранной
+// в переключателе (переключателя больше нет).
+check(/const n = nextLane\(now\)[\s\S]{0,260}?arqState\(/.test(html),
+  'общий циферблат красится состоянием полосы ближайшей партии');
+check(/function nextLane\(t\)/.test(html) && /for \(const p of POOL_KEYS\)/.test(html),
+  'ближайшая партия ищется по всем трём полосам');
+check(/квота есть|квота кончилась/.test(html) && /при фолбэке/.test(html),
+  'подсказка чипа говорит состояние и ОТКУДА оно: проба или фолбэк');
+check(/function batchesOfDayAll\(ts\)/.test(html),
+  'метки «Суток» собираются со всех полос, а не с одной');
+check(/LANE_ICON\[p\]/.test(html) && /LANE_LOGO\[p\]/.test(html),
+  'логотипы полос стоят и на циферблате, и в строке состояния');
 
 // ── Баннер «Маршрутов» обязан ВЫЗЫВАТЬСЯ, а не просто существовать ───────────
 // 🪤 Живой баг 16.09: `routesDropAt` звал `pad`, который объявлен внутри IIFE часов и
@@ -117,21 +117,12 @@ check(/pooldropFill\(pfx, data\.cfg\.poolFallbackModel \|\| ''\);\s*\n\s*KEEPALI
   'селектор обновляется на каждом тике статов, а не только при полной загрузке');
 check(/if \(!force && sel\.dataset\.filled === want\) return;/.test(html),
   'повторная отрисовка того же значения не пересобирает разметку каждый тик');
-// Часы значение ЧИТАЮТ (чтобы назвать адрес в строке), но не пишут.
-check(/async function arqFbSync/.test(html) && /await arqFbSync\(\)/.test(html),
-  'карточка часов читает фолбэк для строки состояния');
-check(/отвечает \$\{serving\}|поедет на \$\{FB/.test(html),
-  'строка состояния называет адрес: «пул пуст» без адреса бесполезно');
 
-// ── Две полосы в интерфейсе ─────────────────────────────────────────────────
-check(html.includes('id="arq-check-gpt"'), 'вторая кнопка - проверка полосы GPT');
-check(html.includes('id="arq-check-result-gpt"'), 'у второй полосы своя строка результата');
-check(html.includes("arqCheckQuota('gpt')") && html.includes("arqCheckQuota('opus')"),
-  'кнопки зовут проверку со СВОЕЙ полосой');
+// ── Полосы в интерфейсе ─────────────────────────────────────────────────────
 check(/setInterval\(stSync, 30000\)/.test(html),
   'состояние опрашивается по таймеру: фолбэк случается посреди дня, часы обязаны покраснеть сами');
-check(html.includes('const KEY_POOL') && html.includes("localStorage.setItem(KEY_POOL"),
-  'выбранная полоса помнится между перезагрузками');
+check(!html.includes('const KEY_POOL') && !html.includes('arqView('),
+  'выбранной полосы и переключателя нет: циферблат общий');
 check(/pooldrop/.test(html), 'вкладка «Маршруты» знает про пул-дроп');
 check(html.includes('возврат из бэкапа не перетрёт'), 'вкладка предупреждает про возврат карты');
 
@@ -164,11 +155,12 @@ check(/\['', \.\.\.cat, want\]/.test(html),
         const ticked = new Set();
         let markerExists = true;
         const autoTick = new Function('AR_QUOTA_AUTOTICK', 'arQuotaTicked', 'AR_QUOTA_POOLS',
-            'AR_QUOTA_WINDOWS_MS', 'arQuotaDropAt', 'poolDropLib', 'tierMapFile', 'fs', `
+            'AR_QUOTA_WINDOWS_MS', 'arQuotaDropAt', 'arQuotaPoolSchedule', 'poolDropLib', 'tierMapFile', 'fs', `
             ${body}
             return arQuotaAutoTickNow;`)(
             true, ticked, probeLib2.AR_QUOTA_POOLS, [2 * 60000, 20 * 60000],
-            probeLib2.arQuotaDropAt, ql, () => '/x/ar-modelmap.json',
+            probeLib2.arQuotaDropAt, probeLib2.arQuotaPoolSchedule,
+            ql, () => '/x/ar-modelmap.json',
             { existsSync: () => markerExists },
         );
         const BATCH = Date.UTC(2026, 8, 16, 11, 0, 0);     // 14:00 МСК, вторая партия суток
@@ -191,6 +183,15 @@ check(/\['', \.\.\.cat, want\]/.test(html),
         check(autoTick(BATCH + 2 * 60_000).length === 2,
             'проверяем в каждую партию независимо от маркера: иначе состояние неизвестно, пока не кликнешь');
         markerExists = true;
+        // 21.10: у claude-opus-5-5 своя партия в 09:00 Пекина = 04:00 МСК = 01:00 UTC.
+        // Общий график в эту минуту молчит, поэтому проверяется РОВНО одна полоса.
+        ticked.clear();
+        const BATCH55 = Date.UTC(2026, 8, 16, 1, 0, 0);
+        const due55 = autoTick(BATCH55 + 2 * 60_000);
+        check(due55.length === 1 && due55[0] === 'opus55',
+            'в партию Opus 5.5 проверяется только его полоса, а не весь общий график');
+        check(autoTick(Date.UTC(2026, 8, 16, 2, 0, 0) + 2 * 60_000).sort().join(',') === 'gpt,opus',
+            'в общую партию 05:00 МСК проверяются opus и gpt, а opus55 к ней не относится');
     }
     // Замер на старте дашборда: после рестарта состояние известно сразу, а не с партии.
     check(/setTimeout\(\(\) => \{[\s\S]{0,220}?arQuotaProbeAsync\(pool\)[\s\S]{0,80}?\}, 10_000\)/.test(src),
@@ -213,7 +214,7 @@ check(html.includes("tz: 'Asia/Shanghai', times: ['10:00', '19:00']"),
   'встроенный дефолт часов совпадает с поставкой сервера — иначе F5 до рестарта врёт');
 check(!html.includes("[3,'03']") && !html.includes("[11,'11']") && !html.includes("[19,'19']"),
   'метки 03/11/19 ушли из разметки');
-check(html.includes('batchesOfDay(Date.now())'), 'метки «Суток» считаются из расписания');
+check(!html.includes('batchesOfDay(Date.now(), VIEW)'), 'метки «Суток» больше не привязаны к выбранной полосе');
 check(!html.includes('(toA - 120 + 360) % 360'), 'жёсткий сектор 120° ушёл');
 check(html.includes('span > 180 ? 1 : 0'),
   'флаг большой дуги считается: на 15-часовом промежутке (225°) ноль выворачивает сектор');
@@ -339,20 +340,30 @@ check(html.includes("fetch('/__switch/api/ar/quota-state')"), 'browser reads the
 check(html.includes('stExpire(c.t)'), 'dial tick expires the cache when a batch lands');
 check(html.includes('по проверке') && html.includes('при фолбэке'),
   'restored result says WHERE the state came from: probe or fallback');
-const stHandler = html.slice(html.indexOf('function stPaint'), html.indexOf('window.arqCheckQuota'));
-check(stHandler.length > 200, 'stPaint extracted (иначе проверка ниже зелена по пустой строке)');
+const stHandler = html.slice(html.indexOf('function stChipsPaint'), html.indexOf('window.arqCheckQuota'));
+check(stHandler.length > 200, 'stChipsPaint extracted (иначе проверка ниже зелена по пустой строке)');
 check(!/api_key|x-api-key|sk-/i.test(stHandler), 'browser cache never touches keys');
 
 // ── Две полосы: Claude и GPT кончаются порознь ───────────────────────────────
-check(AR_QUOTA_POOLS.opus === 'claude-opus-5' && AR_QUOTA_POOLS.gpt === 'gpt-6-astra',
-  'обе полосы названы своими моделями');
-check(arQuotaPoolForModel('claude-opus-5') === 'opus', 'claude-* идёт в полосу opus');
+check(AR_QUOTA_POOLS.opus === 'claude-opus-5' && AR_QUOTA_POOLS.opus55 === 'claude-opus-5-5'
+  && AR_QUOTA_POOLS.gpt === 'gpt-6-astra', 'все три полосы названы своими моделями');
+check(arQuotaPoolForModel('claude-opus-5') === 'opus', 'claude-opus-5 идёт в полосу opus');
+check(arQuotaPoolForModel('claude-opus-5-5') === 'opus55', 'claude-opus-5-5 идёт в свою полосу');
+check(arQuotaPoolForModel('claude-opus-5-5[1m]') === 'opus55', 'суффикс окна не сбивает полосу 5.5');
+check(arQuotaPoolForModel('claude-sonnet-5') === 'opus', 'остальные claude остаются в общей полосе');
 check(arQuotaPoolForModel('gpt-6-astra') === 'gpt', 'gpt-* идёт в полосу gpt');
 check(arQuotaPoolForModel('deepseek-v4-flash') === null, 'беспуловая модель не имеет полосы');
 check(arQuotaBodyFor('gpt').model === 'gpt-6-astra',
   'проба GPT бьёт моделью GPT - иначе она проверяет Opus и врёт');
 check(arQuotaBodyFor('opus').model === 'claude-opus-5', 'проба opus осталась прежней');
+check(arQuotaBodyFor('opus55').model === 'claude-opus-5-5', 'проба 5.5 бьёт именно 5.5');
 check(arQuotaBodyFor('нет-такой').model === AR_QUOTA_BODY.model, 'неизвестная полоса не роняет пробу');
+check(AR_POOL_SCHEDULE_DEFAULT.opus55.times.join(',') === '09:00',
+  'поставка 5.5 = одна партия, Пекин 09:00');
+check(arQuotaPoolSchedule('opus55').times.join(',') === '09:00',
+  '5.5 не наследует общий график 10:00/19:00');
+check(arQuotaPoolSchedule('opus').times.join(',') === '10:00,19:00',
+  'общая полоса остаётся на 10:00/19:00');
 
 // 🪤 Файл v1 лежит на диске у всех, кто обновляется: после апдейта «квота пропала»
 // выглядело бы поломкой. Читается он как запись opus.
@@ -392,7 +403,14 @@ check(/неизвестная полоса квоты/.test(src), 'неизве�
         check(arQuotaScheduleSave({ tz: 'Марс/Олимп', times: '10:00, 19:00' }).ok === false,
             'невалидная зона не попадает на диск');
         check(arQuotaScheduleSave({ tz: 'UTC', times: '10:00' }).ok === false,
-            'одна партия не попадает на диск');
+            'одна партия не попадает на диск в общий график');
+        check(arQuotaScheduleSave({ pool: 'opus55', tz: 'Asia/Shanghai', times: '09:00' }).ok === true,
+            'отдельной полосе одна партия разрешена и пишется');
+        check(arQuotaPoolSchedule('opus55').times.join(',') === '09:00'
+            && arQuotaSchedule().times.join(',') === '05:00,14:00',
+            'переопределение полосы не переписало общий график');
+        check(arQuotaScheduleSave({ pool: 'opus55', tz: 'Марс/Олимп', times: '09:00' }).ok === false,
+            'невалидная зона полосы не попадает на диск');
         check(JSON.parse(fs.readFileSync(TMP, 'utf8')).tz === 'Europe/Moscow',
             'отказ валидатора не переписал живой файл');
     } finally {

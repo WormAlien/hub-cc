@@ -74,7 +74,11 @@ function subst(text, gw) {
         .replace(/%FOLDER%/g, gw.FOLDER || gw.full)
         .replace(/%ICON%/g, gw.ICON || '')
         .replace(/%COLOR%/g, gw.COLOR || '')
-        .replace(/%REF%/g, gw.REF || '');
+        .replace(/%REF%/g, gw.REF || '')
+        // Пути статуслайна: большинство шлюзов держит пул и активный ключ по полному
+        // имени. Исключения (например premier в .secrets) задают их в конфиге.
+        .replace(/%SESSIONSFILE%/g, gw.SESSIONSFILE || `$ROUTING/${gw.full}-sessions.json`)
+        .replace(/%KEYFILE%/g, gw.KEYFILE || `$PROF/.claude/${gw.full}-active-key.txt`);
 }
 
 // ── трансформация кода эталона в код цели ────────────────────────────────────
@@ -122,6 +126,11 @@ function tokenPairs(src, dst) {
         [src.ICON, dst.ICON],
         [src.COLOR, dst.COLOR],
         [src.REF, dst.REF],
+        // Статуслайн копии держат пути пула и активного ключа, а у части шлюзов они
+        // лежат не в `.claude`/`routing` (Premier — в `.secrets`). Без этой пары `apply`
+        // вставил бы путь эталона при верных `check`/`plan`.
+        [`$PROF/.claude/${src.full}-active-key.txt`, dst.KEYFILE || `$PROF/.claude/${dst.full}-active-key.txt`],
+        [`$ROUTING/${src.full}-sessions.json`, dst.SESSIONSFILE || `$ROUTING/${dst.full}-sessions.json`],
     ];
     return raw
         .filter(([from, to]) => from && to && from !== to)

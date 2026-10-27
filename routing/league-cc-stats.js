@@ -329,6 +329,13 @@ function snapshotFrom(agg, meta) {
     // машине - сутки дали 0,105 млрд входа+выхода и 3,479 млрд чтения кеша), поэтому день
     // считается той же gross-величиной, что и день из кеша. Иначе график ломался бы ступенькой
     // на границе watermark, а total недосчитывал кеш сегодняшнего дня против `/stats`.
+    //
+    // 🔴 Пройденные дни НЕ прибавляются к `modelUsage` (замер 26.10, владелец: «за всё время
+    // одно, а показывает другое»). `modelUsage` - общий счётчик [CC], и дни после watermark в
+    // нём уже есть: подневное совпадает с транскриптами до третьего знака. Сложение давало
+    // 76,74 + 15,85 = 92,59 млрд, плюс давало двойной счёт «всё время» против подневного ряда
+    // (83,05). Правило Лиги - сложение по харнессам: `[CC]` один раз, остальные сверху. Пройденный
+    // хвост нужен только как запасной итог, когда кеша нет вовсе (см. `lifetimeLowerBound`).
     const tailInOut = {};
     for (const dk of Object.keys(agg.daily.cc)) {
         const ms = dayStart(dk);
@@ -369,6 +376,10 @@ function snapshotFrom(agg, meta) {
     const sumOver = fromMs => Object.keys(known)
         .filter(dk => dayStart(dk) >= fromMs)
         .reduce((s, dk) => s + known[dk], 0);
+    // Сумма дней ложится рядом с `lifetimeCC` только по сбору общей оценки: в сам подневный ряд
+    // влиты и прочие харнессы из журнала, и без вычитания они попали бы в сумму дважды.
+    const knownDaysSum = Object.keys(known).reduce((s2, dk) => s2 + known[dk], 0);
+    const cacheDaysSum = knownDaysSum - otherTokens;
     const lifetimeCache = Object.keys(inSum).reduce(
         (s, m) => s + inSum[m] + outSum[m] + crSum[m] + cwSum[m], 0);
 
@@ -376,7 +387,7 @@ function snapshotFrom(agg, meta) {
     // транскрипты), а у журнальных харнессов - только то, что уцелело в журнале.
     const sources = [{
         h: 'claude-code',
-        tokens: doc ? lifetimeCache + tailGross : null,
+        tokens: doc ? cacheDaysSum : null,
         lowerBound: doc ? null : tailGross,
         coverage: doc ? 'full' : 'lower-bound',
     }];
@@ -394,9 +405,16 @@ function snapshotFrom(agg, meta) {
         available: true,
         // Причина остаётся и при живых данных: она объясняет, почему total неизвестен.
         reason: doc ? null : (cacheExists ? reason : 'no-cache'),
-        lifetimeCC: doc ? lifetimeCache + tailGross : null,
+
+        // 🔴 Итог - СУММА ПОДНЕВНОГО РЯДА, а не общий счётчик `modelUsage` (решение владельца
+        // 26.10: «83,09 - дни кеша»). Тогда цифра на карточке равна сумме своей же кривой и
+        // тултипу; общий счётчик к тому времени обгонял дни на 9,2 млрд (92,32 против 83,08),
+        // хотя 16.09 оба сходились с `/stats`, - то есть доверия к нему меньше. Хвост
+        // транскриптов входит в дни сам (см. `tailGross`) и второй раз не прибавляется.
+        // Сам `modelUsage` остаётся в `lifetimeBreakdown.cache` для сверки с `/stats`.
+        lifetimeCC: doc ? cacheDaysSum : null,
         // Итог для человека: Claude Code плюс всё, что видел журнал по прочим харнессам.
-        lifetime: doc ? lifetimeCache + tailGross + otherTokens : null,
+        lifetime: doc ? knownDaysSum : null,
         // Без кеша общий итог неизвестен, а сумма по сохранившимся транскриптам плюс журнал -
         // нижняя граница: истории старше первой уцелевшей сессии в ней нет по построению.
         lifetimeLowerBound: doc ? null : tailGross + otherTokens,
@@ -415,7 +433,7 @@ function snapshotFrom(agg, meta) {
             input: Object.keys(inSum).reduce((s, m) => s + inSum[m], 0) || null,
             cacheRead: Object.keys(crSum).reduce((s, m) => s + crSum[m], 0) || null,
             cacheWrite: Object.keys(cwSum).reduce((s, m) => s + cwSum[m], 0) || null,
-            knownDaysSum: Object.keys(known).reduce((s, dk) => s + known[dk], 0),
+            knownDaysSum,
         },
         totals: { d7: sumOver(dayStart(today) - 6 * DAY_MS), d30: sumOver(dayStart(today) - 29 * DAY_MS) },
         daily: {

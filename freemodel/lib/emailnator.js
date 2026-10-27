@@ -51,11 +51,26 @@ const ADDRESS_SEL = '.mf-address-row .mf-mono, .mf-panel-address, .mf-mono';
 const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function dismissCookie(page) {
-  for (const label of ['Got it', 'Consent', 'Accept']) {
+  // 🪤 Google Funding Choices (fc-dialog) рисуется НЕ сразу: через 3-4 секунды после
+  // загрузки, поверх чипов. Его оверлей перехватывает клики, и clickChip молча падал
+  // по таймауту — снаружи это выглядело как «тумблеры не переключаются» (замер 23.10:
+  // все четыре остались ВКЛ, адрес пришёл @psnator.com, не gmail).
+  for (let i = 0; i < 3; i++) {
     try {
-      const b = page.locator('button', { hasText: label }).first();
-      if (await b.count()) { await b.click({ timeout: 2500 }); await page.waitForTimeout(600); return; }
-    } catch { /* баннера может не быть */ }
+      const fc = page.locator('button.fc-cta-consent, button.fc-button-label, button.fc-cta-do-not-consent').first();
+      if (await fc.count()) {
+        await fc.click({ timeout: 2500 }).catch(() => {});
+        await page.waitForTimeout(600);
+      }
+    } catch { /* оверлея может не быть */ }
+    for (const label of ['Got it', 'Consent', 'Accept']) {
+      try {
+        const b = page.locator('button', { hasText: label }).first();
+        if (await b.count()) { await b.click({ timeout: 2500 }); await page.waitForTimeout(600); return; }
+      } catch { /* баннера может не быть */ }
+    }
+    if (!(await page.locator('.fc-dialog-container').count().catch(() => 0))) return;
+    await page.waitForTimeout(1200);
   }
 }
 
@@ -109,21 +124,28 @@ async function chipState(page, label) {
 async function clickChip(page, label) {
   const b = page.locator('button.mf-chip').filter({ hasText: new RegExp('^' + escRe(label) + '$') }).first();
   if (!(await b.count())) return false;
-  await b.click({ timeout: 4000 }).catch(() => {});
+  let ok = await b.click({ timeout: 4000 }).then(() => true).catch(() => false);
+  if (!ok) {
+    // Оверлей согласия мог всплыть уже после первого dismissCookie — снимаем и пробуем ещё раз.
+    await dismissCookie(page);
+    ok = await b.click({ timeout: 4000 }).then(() => true).catch(() => false);
+  }
   await page.waitForTimeout(700);
-  return true;
+  return ok;
 }
 
-// Оставляем включённым ТОЛЬКО `.Gmail`. Мало нажать на него: чипы независимы, и на свежей
-// загрузке включены все четыре — тогда адрес придёт с плюс-алиасом.
-async function selectDotGmail(page) {
+// Оставляем включённым ТОЛЬКО один чип. Мало нажать на него: чипы независимы, и на
+// свежей загрузке включены все четыре — тогда адрес придёт с плюс-алиасом.
+// `wantChip` по умолчанию `.Gmail`; `GoogleMail` даёт второй, менее выжженный домен
+// (@googlemail.com тоже в вайтлисте ThreeRouter).
+async function selectOnlyChip(page, wantChip = WANT_CHIP) {
   const state = {};
   for (const c of CHIPS) state[c] = await chipState(page, c);
   console.log('[emailnator] тумблеры на входе:', CHIPS.map(c => `${c}:${state[c] ? 'ВКЛ' : 'выкл'}`).join('  '));
 
   for (const c of CHIPS) {
     if (state[c] === null) continue;                 // чипа нет — не наша забота
-    const shouldBeOn = (c === WANT_CHIP);
+    const shouldBeOn = (c === wantChip);
     if (state[c] !== shouldBeOn) {
       await clickChip(page, c);
       console.log(`[emailnator] ${shouldBeOn ? 'включаю' : 'гашу'} ${c}`);
@@ -132,13 +154,19 @@ async function selectDotGmail(page) {
   const after = {};
   for (const c of CHIPS) after[c] = await chipState(page, c);
   console.log('[emailnator] тумблеры после:', CHIPS.map(c => `${c}:${after[c] ? 'ВКЛ' : 'выкл'}`).join('  '));
-  return after[WANT_CHIP] === true;
+  return after[wantChip] === true;
 }
+
+// Совместимость: старые вызовы ждут именно `.Gmail`.
+function selectDotGmail(page) { return selectOnlyChip(page, WANT_CHIP); }
 
 // Один вызов = один рабочий Gmail. Настраиваем тумблеры под канон, генерируем и
 // ПРОВЕРЯЕМ результат по адресу: тумблеры могут перерисоваться, а адрес не соврёт.
-async function createEmail(page) {
-  console.log('[emailnator] открываю сайт…');
+async function createEmail(page, opts = {}) {
+  const wantChip = CHIPS.includes(opts.chip) ? opts.chip : WANT_CHIP;
+  const domain = wantChip === 'GoogleMail' ? 'googlemail.com' : 'gmail.com';
+  const addrRe = wantChip === 'GoogleMail' ? /@googlemail\.com$/i : /@gmail\.com$/i;
+  console.log(`[emailnator] открываю сайт… (домен ${domain})`);
   await page.goto(SITE, { timeout: 45000, waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
   await dismissCookie(page);
@@ -147,13 +175,13 @@ async function createEmail(page) {
   const gen = page.locator('button', { hasText: /Generate New/i }).first();
 
   for (let attempt = 1; attempt <= 3; attempt++) {
-    await selectDotGmail(page);
+    await selectOnlyChip(page, wantChip);
     if (await gen.count()) await gen.click({ timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(4000);
 
     const addr = await readAddress(page);
     console.log(`[emailnator] попытка ${attempt} → ${addr || '(пусто)'}`);
-    if (addr && /@gmail\.com$/i.test(addr) && !addr.includes('+')) {
+    if (addr && addrRe.test(addr) && !addr.includes('+')) {
       // 🎯 ПОРЯДОК ВЛАДЕЛЬЦА, и он же рабочий: галочки → Generate New → **GO**.
       //
       // 🔴 Раньше GO стоял отдельно, уже на шаге кода (в openInbox), и адрес уходил
@@ -174,12 +202,12 @@ async function createEmail(page) {
       console.log(`[emailnator] ✅ Gmail: ${addr}`);
       return addr;
     }
-    if (addr && /@gmail\.com$/i.test(addr)) {
+    if (addr && addrRe.test(addr)) {
       // Плюс-алиас: тумблеры не встали как надо с первого раза — повторяем настройку
       console.log('[emailnator] адрес с плюс-алиасом — перенастраиваю тумблеры и пробую снова');
     }
   }
-  throw new Error('emailnator не выдал точечный адрес @gmail.com за 3 попытки');
+  throw new Error(`emailnator не выдал точечный адрес @${domain} за 3 попытки`);
 }
 
 // Клик по кнопке с точным ВИДИМЫМ текстом.
@@ -277,6 +305,12 @@ const inMessage = (url) => /\/inbox\/[^/]+\//.test(url);
 async function pollInbox(page, email, opts = {}) {
   const timeoutMin = opts.timeout || MAX_WAIT_MIN;
   const fromHint = (opts.fromHint || '').toLowerCase();
+  // Письма, лежавшие в ящике ДО начала операции. Адреса emailnator переиспользуются,
+  // поэтому «подходящее по отправителю» письмо может быть чужим и старым. Список href
+  // снимает вызывающий скрипт до отправки кода (см. threerouter/auto-add.js).
+  const excludeHrefs = new Set(opts.excludeHrefs || []);
+  // Свой извлекатель кода: у части панелей OTP не из шести цифр (ThreeRouter - 6 букв/цифр).
+  const extract = typeof opts.extract === 'function' ? opts.extract : extractCode;
   const maxAttempts = Math.max(1, Math.floor((timeoutMin * 60 * 1000) / POLL_INTERVAL_MS));
 
   console.log(`[emailnator] слежу за ${email} (${timeoutMin} мин макс)…`);
@@ -293,7 +327,7 @@ async function pollInbox(page, email, opts = {}) {
     // 🪤 Reload отсюда выбрасывает обратно в список — на этом и был бесконечный цикл.
     if (inMessage(url)) {
       const body = await readAllText(page);
-      const code = extractCode(body);
+      const code = extract(body);
       if (code) { console.log(`[emailnator] 🎉 код: ${code}`); return code; }
       console.log(`[emailnator] в письме кода нет (${body.replace(/\s+/g, ' ').length} симв.) — смотрю следующее`);
       await openInbox(page, email);         // вернуться в список — через вход, не Reload
@@ -345,6 +379,11 @@ async function pollInbox(page, email, opts = {}) {
       // Живой случай 13.09: взяли код 835302 из письма VerseIn трёхчасовой давности и
       // отправили его в rumeng → `invalid or expired verification code`. Берём только
       // свежие: «Just now» / «N mins ago». Часы и дни — чужое.
+      // Письма, снятые в baseline до операции, - чужие для нас, даже если отправитель совпал.
+      const href = await links.nth(j).getAttribute('href').catch(() => null);
+      if (href && excludeHrefs.has(href)) continue;
+      // Пустые/заглушки не открываем; свежесть проверяем по возрасту письма.
+      // 🪤 Здесь стоял литеральный BACKSPACE (U+0008) вместо ``, и фильтр не работал вовсе.
       if (/\d+\s*(hrs?|hours?|days?|d)\s*ago/i.test(t)) continue;
       if (opened.has(t)) continue;
       opened.add(t);

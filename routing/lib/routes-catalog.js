@@ -93,7 +93,7 @@ function readSnapshot(cacheFile) {
 }
 
 // Снимок по хосту шлюза. Совпадение — сам хост или поддомен в любую сторону
-// (`aipm9527.online` против `aipm9527.xyz` не совпадёт, и это правильно: это разные шлюзы).
+// (`aipm9527.site` против `aipm9527.xyz` не совпадёт, и это правильно: это разные шлюзы).
 function snapshotFor(host, opts) {
     if (!host) return null;
     const byHost = readSnapshot(opts && opts.cacheFile);

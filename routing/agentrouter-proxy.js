@@ -449,7 +449,8 @@ function convertClaudeToOpenAI(claudeReq) {
     }
 
     const openaiReq = {
-        model: claudeReq.model,
+        // Суффикс окна — клиентская метка CC, шлюзу он не нужен (см. разбор в Responses-конвертере).
+        model: stripWindow(claudeReq.model),
         messages,
         // 🪤 Astra не переживает крошечный max_tokens: на `max_tokens: 1` шлюз отвечает
         // 400 «Could not finish the message because max_tokens or model output limit was
@@ -713,8 +714,21 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
 // Порядок включения — в [[AgentRouter]] § «gpt-6-astra: Responses вместо chat».
 const ASTRA_RESPONSES_ENABLED = true;
 const ASTRA_RE = /astra/i;
-function isAstraModel(m) { return ASTRA_RE.test(String(m || '')); }
-function useResponsesPath(model) { return ASTRA_RESPONSES_ENABLED && isAstraModel(model); }
+// Sol-линейка шлюза ходит ТОЛЬКО в `/v1/responses`, как и astra. Вендор отвечает
+// прямым 400 на chat-путь: «Model gpt-6.1-sol does not support /v1/chat/completions,
+// please use /v1/responses instead» (живой `/model` 23.10). Сначала матчили ровно
+// `gpt-6.1-sol`, и `gpt-5.6-sol` через минуту упал тем же 400 — значит правило общее
+// для линейки, а не для одной модели.
+// 🪤 Матч по слову `sol`, а не по подстроке: `console`/`solid` в именах моделей не
+// встречаются, но подстрочный матч всё равно отправлял бы на Responses чужие имена.
+const SOL_RE = /(^|[-_.\/])sol([-_.\/]|$)/i;
+// Суффикс окна (`gpt-6.1-sol[1m]`) срезаем: Claude Code шлёт его и в пробе `/model`,
+// и в обычных запросах, а `sol[` иначе не матчится и запрос уезжает не туда.
+function stripWindow(m) { return String(m || '').replace(/\s*\[[^\]]*\]\s*$/, ''); }
+function isAstraModel(m) { return ASTRA_RE.test(stripWindow(m)); }
+function isSolModel(m) { return SOL_RE.test(stripWindow(m)); }
+function isResponsesModel(m) { return isAstraModel(m) || isSolModel(m); }
+function useResponsesPath(model) { return ASTRA_RESPONSES_ENABLED && isResponsesModel(model); }
 
 // Tools у Responses плоские: не {type:'function', function:{...}}, а {type:'function', name, parameters}.
 // strict не ставим (СС-схемы не всегда его переживают), но additionalProperties:false нужен,
@@ -777,12 +791,19 @@ function convertClaudeToResponses(claudeReq) {
     }
 
     const req = {
-        model: claudeReq.model,
+        // 🪤 Суффикс окна наверх НЕ уходит. Директная проба 23.10: `gpt-6.1-sol[1m]` и
+        // `gpt-6-astra[1m]` получают от шлюза `503 无可用渠道`, голые имена тех же
+        // моделей — 200. Keepalive суффикс и так срезает, но в :20132 ходят и напрямую
+        // (пробы, инструменты), и там имя уезжало бы как есть.
+        model: stripWindow(claudeReq.model),
         input,
         // 🪤 Пол по max_output_tokens — та же причина, что и в chat-конвертере: проба
         // валидации модели у CC шлёт `max_tokens: 1`, и Astra на крошечном потолке
         // отвечает 400 «Could not finish the message…». Здесь поле зовётся иначе.
-        max_output_tokens: Math.max(isAstraModel(claudeReq.model) ? 16 : 1,
+        // Пол — всем Responses-моделям: Sol проверен живой пробой, но тот же
+        // малый потолок на новой модели даёт тот же класс 400, а 16 токенов никому
+        // не мешают.
+        max_output_tokens: Math.max(isResponsesModel(claudeReq.model) ? 16 : 1,
             Math.min(claudeReq.max_tokens || 4096, MAX_TOKENS_LIMIT)),
         stream: !!claudeReq.stream,
         store: false,
@@ -882,9 +903,16 @@ const RESPONSES_ATTEMPTS = 3;   // 1 попытка + 2 повтора на тр
 
 // Текст отказа из события `response.failed`/`error`. Формы различаются: у `error` полезное
 // лежит в `.error`, у `response.failed` — в `.response.error`. Читаем обе, не угадывая.
+// 🪤 Третья форма, найденная живьём 23.10 на `gpt-6.1-sol`: у события `error`
+// `code` и `message` лежат В КОРНЕ данных, без вложенного `.error`
+// (`{"code":"rate_limit_exceeded","message":"…exceeded token rate limit."}`).
+// Без этой ветки отказ не распознавался вовсе: транзиентный 429 уезжал в
+// `finish()` и превращался в 502 «upstream вернул поток без содержимого» — то есть
+// в отказ ДРУГОГО вида, не ретраящийся у клиента.
 function responsesErrorInfo(ev) {
     const e = (ev && ev.type === 'response.failed' && ev.response && ev.response.error)
         || (ev && ev.error)
+        || (ev && ev.type === 'error' && (ev.code || ev.message) ? ev : null)
         || null;
     if (!e) return null;
     return {
@@ -1697,12 +1725,25 @@ if (process.argv[2] === 'selftest') {
     // к моменту включения. Ошибка в форме запроса не проявится локально, поэтому
     // форму проверяем явно и по шагам.
 
-    // Роутинг: на Responses уходит ТОЛЬКО astra, и только при включённом флаге.
-    assert.strictEqual(useResponsesPath('gpt-5.6-sol'), false, 'не-astra остаётся на chat');
+    // Роутинг: на Responses уходят astra и вся sol-линейка, и только при включённом флаге.
     assert.strictEqual(useResponsesPath('deepseek-v4-flash'), false, 'deepseek — не Responses');
     assert.strictEqual(isAstraModel('gpt-6-astra'), true, 'astra распознаётся');
     assert.strictEqual(useResponsesPath('gpt-6-astra'), ASTRA_RESPONSES_ENABLED,
         'astra идёт на Responses ровно тогда, когда флаг включён');
+
+    // gpt-6.1-sol: шлюз отвечает прямым 400 на chat-путь («Model gpt-6.1-sol does not
+    // support /v1/chat/completions»), живой `/model gpt-6.1-sol[1m]` 23.10. Суффикс
+    // окна обязан срезаться: именно на нём первый заход и промахнулся.
+    assert.strictEqual(useResponsesPath('gpt-6.1-sol[1m]'), ASTRA_RESPONSES_ENABLED,
+        'sol с суффиксом [1m] идёт на Responses');
+    assert.strictEqual(useResponsesPath('gpt-6.1-sol'), ASTRA_RESPONSES_ENABLED, 'sol без суффикса — тоже');
+    assert.strictEqual(useResponsesPath('GPT-6.1-SOL'), ASTRA_RESPONSES_ENABLED, 'регистр не важен');
+    // 🪤 `gpt-5.6-sol` сначала оставили на chat — и он упал тем же 400 («Model
+    // gpt-5.6-sol does not support /v1/chat/completions», живой пробой 23.10).
+    // Правило общее для линейки, поэтому проверка тут, а не отдельным списком моделей.
+    assert.strictEqual(useResponsesPath('gpt-5.6-sol'), ASTRA_RESPONSES_ENABLED,
+        'sol-линейка целиком идёт на Responses, а не только 6.1');
+    assert.strictEqual(useResponsesPath('gpt-5.6-sol[1m]'), ASTRA_RESPONSES_ENABLED, 'и с суффиксом окна');
 
     // Форма запроса: тулы ПЛОСКИЕ (name рядом с type), а не вложены в function.
     const rq = convertClaudeToResponses({
@@ -1751,8 +1792,10 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual(rq.reasoning_effort, undefined, 'на Responses reasoning_effort не ставится');
     const chatAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
     assert.strictEqual(chatAstra.reasoning_effort, undefined, 'костыль удалён: chat-путь тоже НЕ ставит reasoning_effort');
-    const chatSol = convertClaudeToOpenAI({ model: 'gpt-5.6-sol', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
-    assert.strictEqual(chatSol.reasoning_effort, undefined, 'и другим GPT-моделям поле не подставляется');
+    // Chat-путь проверяем на модели, которая на нём и осталась: sol-линейка с 23.10
+    // целиком ушла на Responses, и проверять костыль на ней стало бессмысленно.
+    const chatOther = convertClaudeToOpenAI({ model: 'gpt-5.6-luna', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
+    assert.strictEqual(chatOther.reasoning_effort, undefined, 'и другим GPT-моделям поле не подставляется');
 
     // Пол по max_output_tokens — та же грабля с пробой валидации CC (`max_tokens: 1`),
     // но поле в Responses зовётся иначе.
@@ -1800,6 +1843,11 @@ if (process.argv[2] === 'selftest') {
     const ehard = responsesErrorInfo({ type: 'error', error: { code: 'invalid_prompt', message: 'bad' } });
     assert.strictEqual(ehard.transient, false, 'незнакомый код не считаем транзиентным — не жжём повторы');
     assert.strictEqual(responsesErrorInfo({ type: 'response.created' }), null, 'не-ошибочное событие разбора не даёт');
+    // Третья форма (живой Sol, 23.10): code/message в КОРНЕ события `error`. Пропусти её
+    // разбор — и транзиентный отказ станет 502 «пустой поток», который клиент не ретраит.
+    const eroot = responsesErrorInfo({ type: 'error', code: 'rate_limit_exceeded', message: 'exceeded token rate limit', sequence_number: 1 });
+    assert.strictEqual(eroot && eroot.code, 'rate_limit_exceeded', 'код читается из корня события error');
+    assert.strictEqual(eroot && eroot.transient, true, 'и он транзиентен — уходит в 429, а не в 502');
 
     // Эмиттер: проверяем три исхода на поддельном clientRes.
     function fakeRes() {

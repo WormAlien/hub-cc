@@ -26,6 +26,8 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    { id: 'tr', file: 'threerouter-sessions.json', name: 'ThreeRouter' },
+    { id: 'pm', file: 'premier-sessions.json', name: 'Premier', noMoney: true },
     { id: 'vn', file: 'vani-sessions.json', name: 'Vani' },
     { id: 'dc', file: 'dacall-sessions.json', name: 'dacall.AI' },
     { id: 'cp', file: 'cleanapis-sessions.json', name: 'Clean APIs' },
@@ -56,6 +58,7 @@ const POOLS = [
 ];
 
 function readPool(p) {
+    if (p.noMoney) return { ...p, keys: 0, live: 0, available: 0, checkedAt: 0 };
     let rows = [];
     try {
         const doc = JSON.parse(fs.readFileSync(path.join(ROUTING, p.file), 'utf8'));

@@ -437,6 +437,15 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/threerouter-sessions.json
+# ThreeRouter: профили и снимки браузера (куки, localStorage, тысячи файлов кеша).
+threerouter/profiles/
+threerouter/sessions/
+threerouter/recordings/
+routing/premier-sessions.json
+premier/profiles/
+premier/sessions/
+premier/gh-sessions/
 routing/vani-sessions.json
 routing/dacall-sessions.json
 routing/cleanapis-sessions.json
@@ -710,3 +719,22 @@ gemini/server.pid
 # Держим файл вне репо, как `config.js` и `notion/config.js`; локальная копия на месте -
 # движок работает. Нужен на чистом клоне - взять значения из апстрима.
 gemini/src/constants.js
+
+# Local one-off diagnostics and release-preparation notes, not shipped.
+/_probe-anon-settings.js
+/_probe-cookies.js
+/_probe-seed-clean.js
+/_probe-source-profile.js
+/_research/ar-gh-autologin-probe.js
+/_research/ar-gh-login-step-dump.js
+/_research/ar-logout-menu-dump.js
+/_research/ar-gh-login-probe-*.log
+/_research/.probe/
+/_sandbox/a6api-drafts/tg.txt
+/_sandbox/a6api-public-contract.json
+/_sandbox/worklog-a6api-api.md
+/_sandbox/worklog-a6api-ui.md
+/tools/ar-model-probe.js
+/tools/ar-switch-opus55.js
+/vani/_probe_mail.py
+routing/threerouter-proxy-ledger.json

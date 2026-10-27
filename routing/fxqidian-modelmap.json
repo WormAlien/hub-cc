@@ -1,5 +1,5 @@
 {
-  "opus": "deepseek-v4-pro",
+  "opus": "deepseek-v4.1-flash",
   "sonnet": "deepseek-v4-flash",
   "haiku": "deepseek-v4-flash"
 }

@@ -18,6 +18,12 @@ $node = 'C:\Program Files\nodejs\node.exe'
 if (-not (Test-Path $node)) { $node = (Get-Command node -ErrorAction SilentlyContinue).Source }
 if (-not $node) { Write-Error 'node.exe not found'; exit 1 }
 $script = Join-Path $dir 'keepalive-proxy.js'
+# a6api owns a converter and a keepalive. Use its shared launcher, not a bare keepalive.
+if ($Port -eq 20191) {
+  $gateway = Join-Path $dir 'lib\a6api-gateway.js'
+  & $node $gateway restart
+  exit $LASTEXITCODE
+}
 $profileDir = $env:USERPROFILE
 
 # Same env transparent-proxy.js passes when it spawns these instances.
@@ -57,6 +63,12 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20181 = @{ UPSTREAM = 'https://api.threerouter.com'; KEY_FILE = "$profileDir\.claude\threerouter-active-key.txt";
+             SESSIONS_FILE = (Join-Path $dir 'threerouter-sessions.json');
+             MODELMAP_FILE = (Join-Path $dir 'threerouter-modelmap.json') }
+  20189 = @{ UPSTREAM = 'https://ide.kgpix.bond'; KEY_FILE = "$profileDir\.secrets\premier-active-key.txt";
+             SESSIONS_FILE = "$profileDir\.secrets\premier-sessions.json";
+             MODELMAP_FILE = (Join-Path $dir 'premier-modelmap.json') }
   20180 = @{ UPSTREAM = 'https://api.vani.ai'; KEY_FILE = "$profileDir\.claude\vani-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'vani-modelmap.json') }
   20177 = @{ UPSTREAM = 'https://api-ru.dacall.ai'; KEY_FILE = "$profileDir\.claude\dacall-active-key.txt";

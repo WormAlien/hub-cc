@@ -23,7 +23,7 @@
 
   "aipm": {
     "p": "ap", "P": "AP", "full": "aipm", "NAME": "AIPM",
-    "HOST": "emtf.aipm9527.online", "PORT": 20163, "FOLDER": "aipm",
+    "HOST": "emtf.aipm9527.site", "PORT": 20163, "FOLDER": "aipm",
     "ICON": "🔷", "COLOR": "indigo", "REF": "NS3L",
     "github": true, "ref": true, "flatRate": true, "anthropic": false, "pool": true, "shareScript": true, "autoreg": false, "customPanel": false
   },
@@ -110,10 +110,25 @@
     "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": true, "autoreg": true, "customPanel": true
   },
 
+  "premier": {
+    "p": "pm", "P": "PM", "full": "premier", "NAME": "Premier",
+    "HOST": "ide.kgpix.bond", "PORT": 20189, "FOLDER": "premier", "KEY_RE": "/^prm_[A-Za-z0-9_-]{40,}$/",
+    "ICON": "🅿️", "COLOR": "amber", "REF": "",
+    "SESSIONSFILE": "$PROF/.secrets/premier-sessions.json", "KEYFILE": "$PROF/.secrets/premier-active-key.txt",
+    "github": true, "ref": false, "flatRate": true, "anthropic": false, "pool": true, "shareScript": false, "autoreg": false, "customPanel": true
+  },
+
   "vani": {
     "p": "vn", "P": "VN", "full": "vani", "NAME": "Vani",
     "HOST": "api.vani.ai", "PORT": 20180, "FOLDER": "vani", "KEY_RE": "/^vani_[A-Za-z0-9]{40,}$/",
     "ICON": "🧿", "COLOR": "indigo", "REF": "",
     "github": false, "ref": false, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": true
+  },
+
+  "threerouter": {
+    "p": "tr", "P": "TR", "full": "threerouter", "NAME": "ThreeRouter",
+    "HOST": "api.threerouter.com", "PORT": 20181, "FOLDER": "threerouter",
+    "ICON": "🧭", "COLOR": "sky", "REF": "DADYQH35FHUJ",
+    "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": true
   }
 }

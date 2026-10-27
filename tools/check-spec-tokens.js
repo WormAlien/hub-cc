@@ -29,7 +29,7 @@ const SPEC_FILE = path.join(__dirname, 'gateways.spec.json');
 
 /** Токены, которые понимает subst() в add-gateway.js. Список обязан совпадать. */
 const TOKENS = ['%p%', '%x%', '%P%', '%full%', '%NAME%', '%HOST%', '%PORT%',
-    '%FOLDER%', '%ICON%', '%COLOR%', '%REF%'];
+    '%FOLDER%', '%ICON%', '%COLOR%', '%REF%', '%KEYFILE%', '%SESSIONSFILE%'];
 
 /** Поля точки, куда подставляются токены. */
 const FIELDS = ['expect', 'within', 'file'];

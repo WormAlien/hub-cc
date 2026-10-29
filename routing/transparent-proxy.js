@@ -17392,6 +17392,10 @@ async function trKeepaliveSpawn() {
                 KEY_FILE: TR_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: TR_SESSIONS_FILE,
                 MODELMAP_FILE: TR_MODELMAP_FILE,
+                // 🔀 Лимит конкурентности апстрима действует НА АККАУНТ: весь трафик через
+                // один активный ключ упирался в 429 Concurrency limit (утро 29.10), соседние
+                // ключи пула молчали. Раскидываем основные запросы по живым ключам пула.
+                KEY_SPREAD: '1',
                 ...(process.env.TR_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TR_PRE_COMMIT_MS } : {}),
             },
         });

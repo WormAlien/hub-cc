@@ -47,7 +47,9 @@ GATEWAY = "https://api.threerouter.com"
 REF = "VWCYM3TATVDX"
 REGISTER_URL = f"{ORIGIN}/register?aff={REF}"
 POOL_FILE = ROOT / "routing" / "threerouter-sessions.json"
-SESS_DIR = Path(__file__).resolve().parent / "sessions"
+# Снимок сессии должен лежать там, где его ищет кнопка 🌐 дашборда: open-session.js
+# читает threerouter/sessions/acct_<id>.json. smailpro/sessions - мёртвый путь (29.10).
+SESS_DIR = Path(__file__).resolve().parent.parent / "threerouter" / "sessions"
 # PID-файл: кнопка «Стоп» на вкладке tr читает ИМЕННО этот путь
 # (`TR_AUTOREG_PID` в routing/transparent-proxy.js). Без него прогон, запущенный
 # из терминала, кнопкой не остановить - и наоборот.

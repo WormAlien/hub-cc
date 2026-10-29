@@ -132,6 +132,38 @@ function spareKeyFor(current, tried) {
     return keys.sort((a, b) => bal(b) - bal(a))[0];
 }
 
+// 🔀 Раскидка основных запросов по живым ключам пула (KEY_SPREAD=1, включается env'ом
+// только для ThreeRouter). Лимит конкурентности у апстрима ДЕЙСТВУЕТ НА АККАУНТ, поэтому
+// весь трафик через один активный ключ упирался в 429 Concurrency limit, а соседние
+// ключи пула молчали (утро 29.10: медиана первого байта 31с против 2-3с прямым запросом,
+// 16x 429 за час; свежерегнутые ключи выжигались ротацией за десятки минут). Круговой
+// обход по живым ключам, упорядоченным по остатку (жирный идёт первым); ретраи с
+// keyOverride не трогаем - там ключ уже выбран, а spareKeyFor обходит triedKeys сам.
+const KEY_SPREAD = process.env.KEY_SPREAD === '1';
+let spreadIdx = 0;
+let spreadLogged = '';
+function spreadKey(tried) {
+    if (!KEY_SPREAD || !SESSIONS_FILE) return '';
+    const rows = activeKeyLib.poolAccounts(SESSIONS_FILE)
+        .filter(x => x && x.api_key && String(x.api_key).trim() && x.status !== 'dead');
+    const keys = [...new Set(rows.map(x => String(x.api_key).trim()))]
+        .filter(k => !(tried && tried.has(k)));
+    if (keys.length <= 1) return '';
+    const bal = k => {
+        const row = rows.find(x => String(x.api_key).trim() === k);
+        const n = Number(row && row.balance);
+        return Number.isFinite(n) ? n : 0;
+    };
+    keys.sort((a, b) => bal(b) - bal(a));
+    const k = keys[spreadIdx % keys.length];
+    spreadIdx += 1;
+    if (spreadLogged !== k) {
+        spreadLogged = k;
+        log(`KEY_SPREAD: запрос уходит на ключ пула ***${k.slice(-6)} (живых в пуле ${keys.length})`);
+    }
+    return k;
+}
+
 function activeKeyNow() {
     const r = activeKeyLib.resolveKey({ keyFile: AR_ACTIVE_KEY_FILE, sessionsFile: SESSIONS_FILE });
     if (r.source === 'pool' && poolKeyLogged !== r.key) {
@@ -3013,7 +3045,7 @@ const server = http.createServer((req, res) => {
     // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
     {
-      const arKey = keyOverride || activeKeyNow();
+      const arKey = keyOverride || spreadKey(triedKeys) || activeKeyNow();
       if (arKey) {
         sentKey = arKey;
         triedKeys.add(arKey);

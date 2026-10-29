@@ -860,7 +860,15 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
             log("tr", f"ключ {key_rec['key'][:6]}…{key_rec['key'][-4:]} (группа {grp['name']})")
 
             # ── 8. снимок сессии для кнопки 🌐 ──
+            #
+            # 🔴 Снимок ОБЯЗАН дойти до диска: кнопка 🌐 на вкладке ищет файл
+            # `threerouter/sessions/acct_<id>.json` (`handleTrSessionOpen` →
+            # `open-session.js`), и без него вход восстанавливается по пустому
+            # профилю - владелец видел форму входа при живом аккаунте.
+            # Имена ключей localStorage - как у SPA: `auth_token`, не `access_token`
+            # (замер 23.10 в open-session.js), снимок с `access_token` открывает форму.
             stage("snapshot")
+            rec_id = f"tr_sp_{int(time.time() * 1000)}_{n}"
             try:
                 SESS_DIR.mkdir(parents=True, exist_ok=True)
                 await tr.goto(ORIGIN + "/dashboard", wait_until="domcontentloaded")
@@ -882,10 +890,17 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 })
             except Exception as e:
                 log("tr", f"снимок localStorage: {str(e)[:80]}")
+            snap_file = SESS_DIR / f"acct_{rec_id}.json"
+            try:
+                state = await tr.context.storage_state()
+                snap_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+                log("tr", f"снимок сессии: {snap_file.name}")
+            except Exception as e:
+                log("tr", f"⚠️ снимок не записан: {str(e)[:90]} - вход будет по email+паролю")
 
             user = auth.get("user") or {}
             rec = {
-                "id": f"tr_sp_{int(time.time() * 1000)}_{n}",
+                "id": rec_id,   # тот же id, что в имени снимка: 🌐 ищет файл по нему
                 "email": addr,
                 "name": addr.split("@")[0],
                 "password": password,

@@ -20073,6 +20073,7 @@ function renderTr() {
       <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`trCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${s.password ? actBtn(`odCopyPass(${JSON.stringify(s.password)})`, 'Скопировать пароль. Вход в кабинет: этот email + пароль (кнопка 🌐)', '🔒', 'sky') : ''}
         ${actBtn(`trShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
         ${actBtn(`trSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
         ${actBtn(`trRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
@@ -20353,18 +20354,23 @@ async function trSetKey(id) {
 async function trRename(id) {
   const cur = state.threerouter.find(x => x.id === id);
   if (!cur) return toast('аккаунт не найден', 'error');
-  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  const emailVal = prompt('Редактировать аккаунт 1/3.\n\nemail (показывается в таблице):', cur.email || '');
   if (emailVal === null) return;
   const email = emailVal.trim();
   if (!email) return toast('email не может быть пустым', 'warn');
-  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  const nameVal = prompt('Редактировать аккаунт 2/3.\n\nname (подпись):', cur.name || '');
   if (nameVal === null) return;
   const name = nameVal.trim();
   if (!name) return toast('name не может быть пустым', 'warn');
+  // Пароль от кабинета: есть - можно скопировать кнопкой 🔒 и войти по 🌐.
+  // Пустая строка удаляет пароль из записи.
+  const passVal = prompt('Редактировать аккаунт 3/3.\n\nпароль кабинета (вход email + пароль по кнопке 🌐).\nПусто - удалить пароль из записи:', cur.password || '');
+  if (passVal === null) return;
+  const password = passVal.trim();
   try {
     const res = await fetch('/__switch/api/tr/rename', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, email, name }),
+      body: JSON.stringify({ id, email, name, password }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');

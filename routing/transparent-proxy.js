@@ -22579,9 +22579,16 @@ async function handleTrRename(req, res) {
             if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
             target.email = e;
         }
+        // Пароль задним числом: у аккаунтов до smailpro-скрипта его в записи нет,
+        // а войти в кабинет руками нечем (владелец 29.10: «логинится не могу потом
+        // в аккаунт по кнопке 🌐»). Пустая строка = удалить пароль.
+        if (body.password !== undefined) {
+            const p = String(body.password || '').trim();
+            if (p) target.password = p; else delete target.password;
+        }
         trSave(sessions);
         logLine(`threerouter rename: ${target.email} (${target.name})`);
-        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name, hasPassword: !!target.password });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 async function handlePmRename(req, res) {

@@ -2891,9 +2891,19 @@ const server = http.createServer((req, res) => {
       if (aborted || res.writableEnded) return;
       stopTimer();
       ev.note('stall');
-      log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — рву, иначе вызывающий ждёт вечно`);
+      log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — отдаю in-band overloaded_error вместо голого обрыва`);
+      // 🎯 Голый обрыв подвешивал субагента навсегда: CC, уже получивший часть
+      // содержимого, не ретраит ход по молчанию, агент стоит на 0 tok (29.10, три
+      // flex-агента). `overloaded_error` — каноничный повторяемый класс: клиент
+      // узнаёт об отказе сразу и переигрывает ход сам.
+      const obj = { type: 'error', error: { type: 'overloaded_error', message: `upstream stream stalled ${Math.round(cfg.stallMs / 1000)}s mid-response` } };
+      try {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(`event: error\ndata: ${JSON.stringify(obj)}\n\n`);
+          res.end();
+        }
+      } catch (e) { /* сокет уже мёртв */ }
       try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
-      if (!res.writableEnded && !res.destroyed) res.destroy();
     }, cfg.stallMs);
   };
   const armEmptyGuard = (stream) => {

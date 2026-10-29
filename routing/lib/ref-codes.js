@@ -113,6 +113,12 @@ const SHAPES = {
     // — но в списки UI он попадать НЕ должен: настраивать рефку мёртвого шлюза
     // бессмысленно, а строка в настройках выглядит как живой шлюз. Отсюда `legacy`.
     xpeach:      { host: 'xpeach.codes',      path: '/sign-up?aff=',  label: 'XPeach', legacy: true },
+    // SmailPro (2026-10-28) — не имеет формы регистрации с реф-кодом, работает через
+    // Sonjj API (https://sonjj.com/docs/?brand=smailpro.com): POST /temporary-email
+    // создаёт ящик, затем ThreeRouter регистрация через браузер с обычным реф-кодом.
+    // 💡 Ключевая особенность: выдаёт реальные Gmail/Outlook, которые ПРОХОДЯТ whitelist
+    // панелей (в отличие от emailnator, где адреса иногда в чёрных списках).
+    smailpro:    { host: 'smailpro.com',      path: '/',         label: 'SmailPro' },
 };
 // Полный набор — для резолва (его просят и легаси-скрипты).
 const PROVIDERS = Object.keys(SHAPES);

@@ -128,7 +128,7 @@
   "threerouter": {
     "p": "tr", "P": "TR", "full": "threerouter", "NAME": "ThreeRouter",
     "HOST": "api.threerouter.com", "PORT": 20181, "FOLDER": "threerouter",
-    "ICON": "🧭", "COLOR": "sky", "REF": "DADYQH35FHUJ",
+    "ICON": "🧭", "COLOR": "sky", "REF": "VWCYM3TATVDX",
     "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": true
   }
 }

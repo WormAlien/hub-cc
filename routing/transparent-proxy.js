@@ -21797,12 +21797,15 @@ async function handlePmRef(req, res) {
         if (body.set !== undefined && String(body.set).trim() && !set) {
             return jsonRes(res, 400, { error: 'не код и не ссылка ide.kgpix.bond/r/<код>' });
         }
-        // Сохранение — только по явному set. Пустая строка снимает свою ссылку:
-        // аккаунт вернётся к общему коду из ref-codes.js.
+        // Сохранение — только по явному set. Пустая строка снимает вписанный код:
+        // аккаунт вернётся к своему коду из кэша окна или к общему из ref-codes.js.
+        // 🪤 Пишем в `refCode`, а НЕ в `ref`: `ref` на записи пула — код, под которым
+        // регистрируется САМ этот аккаунт (его читает `open-session.js`). Положить туда
+        // его же опубликованный код значит отправить аккаунт на самоприглашение.
         if (set !== null || String(body.set || '').trim() === '') {
-            if (set) row.ref = set; else delete row.ref;
+            if (set) row.refCode = set; else delete row.refCode;
             pmSave(sessions);
-            logLine(`premier ref: ${row.email || row.name || id} → ${set ? set : 'общий код рефки'}`);
+            logLine(`premier ref: ${row.email || row.name || id} → ${set ? set : 'код аккаунта/общий'}`);
         }
         // id аккаунта на Premier и есть реф-код: он уже есть в кэше входа, а в
         // `/api/dev/state` его нет. Пока окно не открывали — код неизвестен, не угадываем.
@@ -21810,18 +21813,30 @@ async function handlePmRef(req, res) {
         try {
             const st = JSON.parse(fs.readFileSync(path.join(PM_SESSIONS_DIR, 'acct_' + id + '.json'), 'utf8'));
             referral = st.premierReferral || null;
+            // 🪤 Код берём из `premierReferral.code`, а не из `premierUserId`: тот стал
+            // `email:…`, когда `/api/dev/state` перестал отдавать `user.id`, и числовая
+            // ветка перестала срабатывать — живой аккаунт выглядел как «код неизвестен».
+            // `premierUserId` остаётся запасным: у старых снимков там ещё голое число.
+            const fromRef = String((referral && referral.code) || '');
             const raw = String(st.premierUserId || '');
-            if (/^\d{6,}$/.test(raw)) code = raw; else if (/^id:(\d{6,})$/.test(raw)) code = raw.slice(3);
+            if (/^[A-Za-z0-9_-]{2,32}$/.test(fromRef)) code = fromRef;
+            else if (/^\d{6,}$/.test(raw)) code = raw;
+            else if (/^id:(\d{6,})$/.test(raw)) code = raw.slice(3);
         } catch {}
-        const own = row.ref || null;
-        const effective = own || (() => { try { return require('./lib/ref-codes.js').code('premier'); } catch { return null; } })();
+        const own = row.refCode || null;
+        const shared = (() => { try { return require('./lib/ref-codes.js').code('premier'); } catch { return null; } })();
+        // Порядок важен: вписанный руками код → собственный код аккаунта → общий код репозитория.
+        // Собственный код аккаунта и есть та ссылка, что зачтёт приглашённых ЕМУ; общий код
+        // зачитывает чужому рефереру, поэтому он последний, а не первый.
+        const effective = own || code || shared;
+        const source = own ? 'own' : (code ? 'account' : (shared ? 'shared' : 'none'));
         return jsonRes(res, 200, {
             ok: true,
             id,
             ref: own,
             code: code || own,
             link: effective ? `${PM_REF_DEFAULT_HOST}/r/${encodeURIComponent(effective)}` : null,
-            source: own ? 'own' : (effective ? 'shared' : 'none'),
+            source,
             referral,
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -23130,12 +23145,18 @@ async function handleTrAutoregStart(req, res) {
         if (trAutoreg.running && trAutoreg.proc) {
             return jsonRes(res, 409, { error: 'авторега ThreeRouter уже идёт', ...trAutoregPublic() });
         }
-        const script = path.join(__dirname, '..', 'threerouter', 'auto-add.js');
-        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'threerouter/auto-add.js не найден' });
+        // 🔴 Почта - smailpro через Camoufox, поэтому скрипт на PYTHON, а не на Node.
+        // Причина в вике «Одноразовые почты» § SmailPro: emailnator исчерпал свободные
+        // адреса, а smailpro закрыт Turnstile - обычный Chromium его не проходит.
+        // 🪤 PYTHON берём из окружения с фолбэком: тем же именем уже пользуется
+        // поиск прокси, и второй источник имени разошёлся бы с первым.
+        const script = path.join(__dirname, '..', 'smailpro', 'auto-add.py');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'smailpro/auto-add.py не найден' });
         const useProxy = body.useProxy !== false;
-        const args = [script, String(count)];
+        const py = process.env.PYTHON || 'python';
+        const args = ['-u', script, String(count)];
         if (!useProxy) args.push('--no-proxy');
-        const proc = spawn(process.execPath, args, {
+        const proc = spawn(py, args, {
             cwd: path.join(__dirname, '..'),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -23147,15 +23168,19 @@ async function handleTrAutoregStart(req, res) {
         });
         const pushLines = (which, chunk) => {
             for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
-                if (line.startsWith('TR_STAGE ')) {
+                // Маркеры читаем ОБА: `TR_` остался у старого node-скрипта, `SP_` печатает
+                // smailpro/auto-add.py. Префиксы одной длины, поэтому срез общий.
+                const stageLine = line.startsWith('TR_STAGE ') || line.startsWith('SP_STAGE ')
+                    ? line.slice('SP_STAGE '.length) : null;
+                if (stageLine !== null) {
                     try {
-                        const s = JSON.parse(line.slice('TR_STAGE '.length));
+                        const s = JSON.parse(stageLine);
                         if (s && typeof s.stage === 'string') trAutoreg.stage = { ...s, at: new Date().toISOString() };
                     } catch { /* битый маркер не ломает лог */ }
                     continue;
                 }
-                if (line.startsWith('TR_AUTOADD_RESULT ')) {
-                    try { trAutoreg.result = JSON.parse(line.slice('TR_AUTOADD_RESULT '.length)); } catch {}
+                if (line.startsWith('TR_AUTOADD_RESULT ') || line.startsWith('SP_AUTOADD_RESULT ')) {
+                    try { trAutoreg.result = JSON.parse(line.slice('SP_AUTOADD_RESULT '.length)); } catch {}
                     continue;
                 }
                 trAutoreg[which].push(line);

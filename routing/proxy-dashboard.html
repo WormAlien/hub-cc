@@ -7420,7 +7420,7 @@ window.finNavCount = async () => {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-sky">🧭</span> <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">ThreeRouter</a>
+              <span class="text-sky">🧭</span> <a href="https://www.threerouter.com/register?aff=VWCYM3TATVDX" data-ref-link="threerouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">ThreeRouter</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">api.threerouter.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20181</code>) · вход <b>email+пароль</b>, клик-капча руками · каталог ключа: <code class="font-mono text-xs">deepseek-v4-pro</code>, glm-5.3, kimi-k3, minimax-m3, qwen3.8-max · новому аккаунту <b>$10</b></p>
           </div>
@@ -7508,7 +7508,7 @@ window.finNavCount = async () => {
           <button onclick="trCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
           <button onclick="trMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
           <button onclick="trShowAdd()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">➕ Добавить</button>
-          <button onclick="trAutoregToggle()" title="Запустить threerouter/auto-add.js: капчу решаешь руками в открывшемся окне" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🤖 Авторега</button>
+          <button onclick="trAutoregToggle()" title="Запустить smailpro/auto-add.py: почта на smailpro через Camoufox, панель - через прокси-пул (скрапер). Капчу решаешь руками в открывшемся окне" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🤖 Авторега</button>
           <button onclick="trShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
                здесь нет: колонка чек-ина есть только у AgentRouter. -->
@@ -7596,7 +7596,7 @@ window.finNavCount = async () => {
           <span class="mx-2 opacity-40">·</span>
           <span>🪤 нативный <code class="text-ink">/v1/messages</code>; суффикс <code class="text-ink">[1m]</code> срезает keepalive, сырой API его отвергает</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
+          <a href="https://www.threerouter.com/register?aff=VWCYM3TATVDX" data-ref-link="threerouter" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -7615,11 +7615,13 @@ window.finNavCount = async () => {
 
         <div id="pm-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
-        <!-- Реф-ссылка аккаунта. Код = user.id на Premier; новый аккаунт, заведённый
-             с этой ссылкой, зачтётся приглашённым. Счётчик обновляется открытием окна. -->
+        <!-- Реф-код, под которым регистрировать новорегов. Код аккаунта = его user.id на
+             Premier и приезжает сам вместе с окном входа; но его можно вписать руками —
+             у аккаунта, чьё окно ещё не открывали, кода иначе не узнать. Счётчик
+             приглашённых обновляется только открытием окна (`/api/billing` под cookie). -->
         <div id="pm-ref" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-2">
-            <h2 class="text-sm font-semibold tracking-tight">🤝 Реф-ссылка новорегов</h2>
+            <h2 class="text-sm font-semibold tracking-tight">🤝 Реф-код для новорегов</h2>
             <span id="pm-ref-stats" class="text-[11px] font-mono text-faint">—</span>
           </div>
           <div class="flex gap-2 items-end flex-wrap">
@@ -7627,12 +7629,21 @@ window.finNavCount = async () => {
               <span class="text-[10px] text-faint">под каким аккаунтом зачитывать приглашённых</span>
               <select id="pm-ref-owner" onchange="pmRefLoad()" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60"></select>
             </label>
-            <div class="flex-1 min-w-[260px] flex flex-col gap-1">
-              <span class="text-[10px] text-faint">ссылка (копируется в форму «Добавить»)</span>
+            <label class="flex flex-col gap-1 flex-1 min-w-[260px]">
+              <span class="text-[10px] text-faint">свой код · пусто = код аккаунта</span>
               <div class="flex gap-2">
-                <input id="pm-ref-link" readonly placeholder="— открой окно аккаунта (🌐), чтобы узнать код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none">
+                <input id="pm-ref-code" placeholder="569d56342c5e или https://ide.kgpix.bond/r/…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none focus:border-amber/60">
+                <button onclick="pmRefSave()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить код</button>
+              </div>
+            </label>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap mt-2">
+            <div class="flex-1 min-w-[260px] flex flex-col gap-1">
+              <span class="text-[10px] text-faint">ссылка · кнопка кладёт её в форму «Добавить»</span>
+              <div class="flex gap-2">
+                <input id="pm-ref-link" readonly placeholder="— кода ещё нет: впиши выше или открой окно аккаунта (🌐)" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none">
                 <button onclick="pmRefCopy()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Копировать</button>
-                <button onclick="pmRefToAdd()" title="Подставить эту ссылку в форму «Добавить»" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">В добавить</button>
+                <button onclick="pmRefToAdd()" title="Подставить эту ссылку в поле «реф» формы «Добавить»" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">→ в «Добавить»</button>
               </div>
             </div>
           </div>
@@ -16168,7 +16179,7 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     // Повторная отрисовка того же значения не страшна — pooldropFill сравнивает и выходит.
     pooldropFill(pfx, data.cfg.poolFallbackModel || '');
     KEEPALIVE_STATE[pfx] = data;
-    // Ручка дублей на плоскотарифном шлюзе не крутится: прокси всё равно зажмёт её в 0,
+    // Ручки дублей на плоскотарифном шлюзе не крутятся: прокси всё равно зажмёт их в 0,
     // и молча вернувшийся ноль выглядел бы как поломка панели. Лучше сразу видно почему.
     const mh = $(pfx + '-keepalive-maxhedges');
     if (mh) {
@@ -16177,6 +16188,17 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
         ? 'У этого шлюза плоский тариф: убитый дубль списывается как полный ответ. Мульти-запрос заблокирован, включить можно только запуском прокси с ALLOW_PAID_HEDGE=1'
         : 'Сколько параллельных копий запроса максимум. 0 = мульти-запрос выкл';
       mh.classList.toggle('opacity-40', !!data.paidHedgeLocked);
+    }
+    // 🪤 Интервал мульти-запроса гасим вместе с дублями. При `maxHedges: 0` он не значит
+    // ничего, но живое поле «мульти-запрос через 20 с» читается как «дубли включены, вот
+    // через сколько» — владелец 28.10 так и прочитал, хотя прокси дублей не шлёт вовсе.
+    const hedgeIn = $(pfx + '-keepalive-hedge');
+    if (hedgeIn) {
+      hedgeIn.disabled = !!data.paidHedgeLocked;
+      hedgeIn.title = data.paidHedgeLocked
+        ? 'Мульти-запрос выключен: тариф плоский, каждая копия запроса списывает ещё одно сообщение'
+        : 'Через сколько секунд слать параллельную копию запроса. Работает только при дублях > 0';
+      hedgeIn.classList.toggle('opacity-40', !!data.paidHedgeLocked);
     }
     if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data);
     const s = data.stats || {};
@@ -20087,6 +20109,8 @@ const TR_STAGE_RU = {
     'captcha-manual': 'ЖДЁМ КАПЧУ', 'email-verify': 'код из письма',
     'verify-code': 'подтверждение', key: 'ключ', 'probe-key': 'проверка ключа',
     snapshot: 'снимок сессии', save: 'запись в пул',
+    // Этапы smailpro/auto-add.py (SP_STAGE)
+    'send-code': 'отправка кода', 'wait-mail': 'ждём письмо', register: 'регистрация',
 };
 function trAutoregToggle(show) {
     const p = $('tr-autoreg-panel');
@@ -20749,7 +20773,7 @@ function pmRefFillOwners() {
   if (!sel) return;
   const prev = sel.value || localStorage.getItem('pm:ref-owner') || '';
   const list = (state.premier || []).filter(s => s.id);
-  sel.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.email || s.name || s.id)}${s.ref ? ' · своя ссылка' : ''}</option>`).join('')
+  sel.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.email || s.name || s.id)}${s.refCode ? ' · свой код' : ''}</option>`).join('')
     || '<option value="">нет аккаунтов</option>';
   if (prev && list.some(s => s.id === prev)) sel.value = prev;
   else if ((state.premier || []).find(s => s.active)) sel.value = state.premier.find(s => s.active).id;
@@ -20758,8 +20782,8 @@ function pmRefFillOwners() {
 async function pmRefLoad(id) {
   const sel = $('pm-ref-owner');
   const acct = id || (sel && sel.value);
-  const link = $('pm-ref-link'), stats = $('pm-ref-stats'), note = $('pm-ref-note');
-  if (!acct) { if (link) { link.value = ''; } if (stats) stats.textContent = '—'; return; }
+  const link = $('pm-ref-link'), stats = $('pm-ref-stats'), note = $('pm-ref-note'), codeIn = $('pm-ref-code');
+  if (!acct) { if (link) link.value = ''; if (stats) stats.textContent = '—'; return; }
   if (sel && sel.value !== acct) sel.value = acct;
   localStorage.setItem('pm:ref-owner', acct);
   try {
@@ -20774,29 +20798,63 @@ async function pmRefLoad(id) {
     if (!res.ok || d.error) throw new Error(d.error || 'http ' + res.status);
     PM_REF = d;
     if (link) link.value = d.link || '';
+    // Поле «свой код» — ровно то, что вписано руками (`ref`), а не вычисленная ссылка:
+    // иначе после сохранения там оказался бы код аккаунта, и «пусто = код аккаунта»
+    // стало бы неправдой. Пока в поле печатают, не перебиваем.
+    if (codeIn && document.activeElement !== codeIn) codeIn.value = d.ref || '';
     const rf = d.referral;
     if (stats) {
       stats.textContent = rf ? `активных ${rf.active} · ждут 3-го сообщения ${rf.pending}` : 'счётчик неизвестен';
       stats.title = rf && rf.next ? `до тира ${rf.next.n}: ещё ${rf.next.need}` : '';
     }
-    if (note) note.textContent = d.link
-      ? (d.source === 'own' ? 'своя ссылка аккаунта' : 'код по умолчанию из «Настроек» (💩) или ref-codes.default.json')
-        + (rf ? '' : ' · счётчик появится после открытия окна аккаунта (🌐)')
-      : 'код ещё неизвестен — открой окно аккаунта через 🌐, войдя в него, он станет известен';
+    if (note) {
+      // Источники кода, в порядке приоритета бэкенда: вписанный руками → код аккаунта
+      // (из кэша окна входа) → общий код из «Настроек». Нужен именно тот, кто получает
+      // награду: приглашённый под общим кодом идёт чужому рефереру.
+      const why = d.source === 'own' ? 'код вписан руками'
+        : d.source === 'account' ? 'код этого аккаунта'
+          : d.source === 'shared' ? 'общий код репозитория, не код этого аккаунта'
+            : '';
+      note.textContent = d.link
+        ? why + (rf ? '' : ' · счётчик появится после открытия окна аккаунта (🌐)')
+        : 'кода ещё нет — впиши его в поле выше или открой окно аккаунта (🌐), войдя в него';
+    }
   } catch (e) {
     if (link) link.value = '';
     if (stats) stats.textContent = '—';
-    if (note) note.textContent = 'реф-ссылка: ' + e.message + ' (после правки нужен рестарт :8200)';
+    if (note) note.textContent = 'реф-код: ' + e.message + ' (после правки нужен рестарт :8200)';
+  }
+}
+// Сохранение вписанного кода на запись пула: им open-session.js поведёт новорега на
+// `/r/<код>`. Пустое поле снимает свой код — аккаунт вернётся к коду из кэша окна.
+async function pmRefSave() {
+  const sel = $('pm-ref-owner'), codeIn = $('pm-ref-code'), note = $('pm-ref-note');
+  const acct = sel && sel.value;
+  if (!acct) return toast('нет аккаунта', 'warn');
+  const raw = codeIn ? codeIn.value.trim() : '';
+  try {
+    const sep = acct.indexOf(':');
+    const body = { [sep > 0 ? acct.slice(0, sep) : 'id']: sep > 0 ? acct.slice(sep + 1) : acct, set: raw };
+    const res = await fetch('/__switch/api/pm/ref', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'http ' + res.status);
+    toast(raw ? '✓ реф-код сохранён' : '✓ свой код снят', 'success', 2500);
+    await loadPmSessions(false);
+  } catch (e) {
+    if (note) note.textContent = 'реф-код: ' + e.message;
+    toast('реф-код: ' + e.message, 'error');
   }
 }
 function pmRefCopy() {
   const v = $('pm-ref-link') && $('pm-ref-link').value;
-  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  if (!v) return toast('ссылки ещё нет — впиши код выше', 'warn');
   copyToClipboard(v, 'реф-ссылка скопирована');
 }
 function pmRefToAdd() {
   const v = $('pm-ref-link') && $('pm-ref-link').value;
-  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  if (!v) return toast('ссылки ещё нет — впиши код выше', 'warn');
   pmShowAdd(true);
   if ($('pm-add-ref')) $('pm-add-ref').value = v;
   toast('реф-ссылка подставлена в «Добавить»', 'info', 2500);

@@ -156,6 +156,11 @@ function children() {
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
         { port: 20182, name: 'KVOTUM keepalive', respawn: false },
+        // Конвертер KVOTUM (Anthropic → OpenAI): площадка НЕ принимает /v1/messages
+        // ни для одной модели (осознанный 400, замер 30.10), а CC говорит только
+        // Anthropic-формат. Живёт как у Odyssey: поднимает активация, `respawn: false`,
+        // порт резервируется этой же строкой через lib/custom-ports.js.
+        { port: 20183, name: 'KVOTUM конвертер', respawn: false },
         { port: 20181, name: 'ThreeRouter keepalive', respawn: false },
         { port: 20189, name: 'Premier keepalive', respawn: false },
         { port: 20191, name: 'a6api keepalive', respawn: false },

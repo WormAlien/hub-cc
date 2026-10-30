@@ -68,6 +68,51 @@ const ghCapture = require('../routing/lib/gh-live-capture.js').makeCapture({
 });
 
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000; // 10 минут на ручной GitHub-логин
+const HUB = 'http://localhost:8200';
+
+// Авто-запись готового ключа новичка в пул дашборда (два вызова, оба молчат при
+// ошибке - вкладка скажет, чего не хватает, но браузер не роняем):
+//   /kv/add   - аккаунта ещё нет в пуле: создаём запись по email из панели;
+//   /kv/key   - запись есть (владелец добавил руками): вписываем ключ в неё.
+// Автоматизирует «создание и сохранение API» (владелец 30.10): после GitHub-входа
+// площадка сама отдаёт ключ (sessionStorage first_key), скрипт кладёт его в пул -
+// кнопка 🔑 руками остаётся для чужих ключей. Страницу передаёт вызывающий (main).
+async function autoSaveKey(page, firstKey) {
+  try {
+    // Панель знает настоящий email аккаунта: /api/me с JWT из localStorage.
+    const token = await page.evaluate(() => {
+      try { return localStorage.getItem('token') || ''; } catch { return ''; }
+    });
+    let email = '';
+    if (token) {
+      const me = await fetch('https://myapi.buzz/api/me', { headers: { Authorization: 'Bearer ' + token } })
+        .then(r => (r.ok ? r.json() : null)).catch(() => null);
+      email = me && me.email ? me.email : '';
+    }
+    const list = await fetch(`${HUB}/__switch/api/kv/sessions`).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    const rows = (list && list.sessions) || [];
+    const byKey = rows.find(s => s.api_key === firstKey);
+    if (byKey) return `ключ уже в пуле (${byKey.id}) - ничего не делаю`;
+    const byEmail = email && rows.find(s => s.email === email);
+    if (byEmail && !/^sk-/.test(String(byEmail.api_key || ''))) {
+      const r = await fetch(`${HUB}/__switch/api/kv/key`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: byEmail.id, api_key: firstKey }),
+      }).then(r => r.json()).catch(() => null);
+      return r && r.ok ? `ключ вписан в запись ${byEmail.id} (${email})` : 'не вписал: дашборд отказал (/kv/key)';
+    }
+    if (email) {
+      const r = await fetch(`${HUB}/__switch/api/kv/add`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, api_key: firstKey }),
+      }).then(r => r.json()).catch(() => null);
+      return r && r.ok ? `аккаунт ${email} добавлен в пул с ключом (${r.id})` : 'не добавил: дашборд отказал (/kv/add)';
+    }
+    return 'не добавил: панель не назвала email (сессия без JWT)';
+  } catch (e) {
+    return 'не добавил: ' + e.message;
+  }
+}
 
 // Если рядом лежит <label>.json - применяем как storageState: cookies + localStorage.
 // Два источника, различать обязательно:
@@ -236,7 +281,7 @@ async function main() {
       }
       if (res.firstKey) {
         console.log(`🔑 Готовый ключ новичка (из sessionStorage first_key): ${res.firstKey}`);
-        console.log('   Вставь его кнопкой 🔑 в дашборде.');
+        console.log('🤖 ' + await autoSaveKey(page, res.firstKey));
       } else {
         console.log('⚠️  Готового ключа в sessionStorage нет - возьми ключ на #/keys вручную.');
       }
@@ -265,7 +310,7 @@ async function main() {
       }
       if (res.firstKey) {
         console.log(`🔑 Готовый ключ новичка (из sessionStorage first_key): ${res.firstKey}`);
-        console.log('   Вставь его кнопкой 🔑 в дашборде.');
+        console.log('🤖 ' + await autoSaveKey(page, res.firstKey));
       }
     }
     if (!/github\.com/i.test(page.url())) {

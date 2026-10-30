@@ -63,7 +63,10 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
-  20182 = @{ UPSTREAM = 'https://myapi.buzz'; KEY_FILE = "$profileDir\.claude\kvotum-active-key.txt";
+  # KVOTUM: keepalive goes through the Anthropic-to-OpenAI converter on :20183
+  # (the platform rejects /v1/messages for EVERY model, measured 2026-10-30).
+  # The converter is spawned below if :20183 is not listening yet.
+  20182 = @{ UPSTREAM = 'http://127.0.0.1:20183'; KEY_FILE = "$profileDir\.claude\kvotum-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kvotum-modelmap.json') }
   20181 = @{ UPSTREAM = 'https://api.threerouter.com'; KEY_FILE = "$profileDir\.claude\threerouter-active-key.txt";
              SESSIONS_FILE = (Join-Path $dir 'threerouter-sessions.json');
@@ -121,6 +124,19 @@ foreach ($kv in $common.GetEnumerator())         { Set-Item "env:$($kv.Key)" $kv
 foreach ($kv in $perPort[$Port].GetEnumerator()) { Set-Item "env:$($kv.Key)" $kv.Value }
 $env:PORT = "$Port"
 $env:LOG_FILE = Join-Path $dir "keepalive-$Port.log"
+
+# KVOTUM (:20182): make sure the Anthropic-to-OpenAI converter on :20183 is up before
+# starting the keepalive. Same job kvConverterSpawn does from the dashboard path.
+if ($Port -eq 20182 -and -not (Get-NetTCPConnection -LocalPort 20183 -State Listen -ErrorAction SilentlyContinue)) {
+  $kvCfg = Join-Path $profileDir '.claude\kvotum-openai-proxy.json'
+  @{ port = 20183; upstream = 'https://myapi.buzz/v1'; keyFile = "$profileDir\.claude\kvotum-active-key.txt"; modelMap = @{}; providerName = 'KVOTUM' } |
+    ConvertTo-Json | Set-Content -Path $kvCfg -Encoding UTF8
+  Start-Process -FilePath $node -ArgumentList "`"$(Join-Path $dir 'custom-openai-proxy.js')`"", "`"$kvCfg`"" -WorkingDirectory $dir -WindowStyle Hidden
+  for ($i = 0; $i -lt 40; $i++) {
+    Start-Sleep -Milliseconds 250
+    if (Get-NetTCPConnection -LocalPort 20183 -State Listen -ErrorAction SilentlyContinue) { break }
+  }
+}
 
 Start-Process -FilePath $node -ArgumentList "`"$script`"" -WorkingDirectory $dir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dir "keepalive-$Port.out.log") -RedirectStandardError (Join-Path $dir "keepalive-$Port.err.log")
 

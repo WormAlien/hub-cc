@@ -5183,6 +5183,7 @@ async function handleHealth(res) {
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KVOTUM',  port: Number(process.env.KV_KEEPALIVE_PORT || 20182), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'KVOTUM конвертер',  port: KV_CONVERTER_PORT, path: '/health' },
         { name: 'Keepalive ThreeRouter',  port: Number(process.env.TR_KEEPALIVE_PORT || 20181), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Premier',  port: Number(process.env.PM_KEEPALIVE_PORT || 20189), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Vani',  port: Number(process.env.VN_KEEPALIVE_PORT || 20180), path: '/__keepalive/api/status', keepalive: true },
@@ -16433,6 +16434,15 @@ const KV_UPSTREAM = 'https://myapi.buzz';
 const KV_KEEPALIVE_PORT = 20182;
 const KV_KEEPALIVE_URL = `http://localhost:${KV_KEEPALIVE_PORT}`;
 const KV_MODELMAP_FILE = path.join(__dirname, 'kvotum-modelmap.json');
+// Конвертер Anthropic→OpenAI (прецедент odyssey :20171 / a6api :20192): площадка
+// НЕ принимает /v1/messages ни для одной модели - даже для Claude (замер 30.10,
+// осознанный 400 «Используйте /v1/chat/completions»), а CC говорит только
+// Anthropic-формат. Значит ВЕСЬ CC-трафик идёт keepalive → конвертер → myapi.buzz.
+// Порт 20183 - соседний с keepalive, в диапазоне кастомов 20150-20299 резерв
+// проверяет lifecycle (порт в children()).
+const KV_CONVERTER_PORT = 20183;
+const KV_CONVERTER_URL = `http://127.0.0.1:${KV_CONVERTER_PORT}`;
+const KV_CONVERTER_CONFIG = path.join(os.homedir(), '.claude', 'kvotum-openai-proxy.json');
 // Грант-резерва у kvotum НЕТ: панель платная, бонуса при регистрации не заявлено,
 // а баланс ключом не читается вовсе (см. kvBalance) - он РУЧНОЙ (✏️ set-balance).
 // Знаменатель $5 для ручных цифр живёт на фронте (kvPoolStats → balanceDenom).
@@ -17464,8 +17474,46 @@ async function kkKeepaliveSpawn() {
         return { ok: false, error: e.message };
     }
 }
+async function kvConverterSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(KV_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        // Конфиг тот же, что у конвертеров Custom-провайдеров: `upstream` с `/v1`
+        // (конвертер сам добавляет `/chat/completions`), ключ из active-key, тир-карта
+        // та же, что у keepalive. STRICT_TOOLS_VISION не включаем: у него двойная цена -
+        // ошибки апстрима отдавались бы строкой «upstream HTTP 402» вместо честного
+        // «недостаточно средств…», а на этом тексте стоит авторотация пула.
+        fs.writeFileSync(KV_CONVERTER_CONFIG, JSON.stringify({
+            port: KV_CONVERTER_PORT,
+            upstream: KV_BASE_URL,
+            keyFile: KV_ACTIVE_KEY_FILE,
+            modelMap: {},
+            providerName: 'KVOTUM',
+        }, null, 2), 'utf8');
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), KV_CONVERTER_CONFIG], {
+            detached: true, stdio: 'ignore', env: { ...process.env },
+        });
+        watchChildExit(child, 'конвертер KVOTUM', KV_CONVERTER_PORT);
+        child.unref();
+        logLine(`kvotum конвертер spawn: :${KV_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`kvotum конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
 async function kvKeepaliveSpawn() {
     try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive (прецедент odyssey): без него CC-форма
+        // /v1/messages уехала бы апстриму нативным путём, а площадка отвечает на неё
+        // осознанным 400 для ВСЕХ моделей - Claude Code остался бы без бэкенда.
+        await kvConverterSpawn();
         const net = require('net');
         const free = await new Promise(resolve => {
             const sock = net.createServer();
@@ -17478,7 +17526,7 @@ async function kvKeepaliveSpawn() {
             detached: true, stdio: 'ignore', env: {
                 ...process.env,
                 PORT: String(KV_KEEPALIVE_PORT),
-                UPSTREAM: KV_UPSTREAM,
+                UPSTREAM: KV_CONVERTER_URL,   // keepalive → конвертер :20183 → myapi.buzz
                 KEY_FILE: KV_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: KV_SESSIONS_FILE,
                 MODELMAP_FILE: KV_MODELMAP_FILE,
@@ -17487,7 +17535,7 @@ async function kvKeepaliveSpawn() {
         });
         watchChildExit(child, 'keepalive KVOTUM', KV_KEEPALIVE_PORT);
         child.unref();
-        logLine(`kvotum keepalive proxy spawn: :${KV_KEEPALIVE_PORT} (pid ${child.pid})`);
+        logLine(`kvotum keepalive proxy spawn: :${KV_KEEPALIVE_PORT} (pid ${child.pid}) → конвертер :${KV_CONVERTER_PORT}`);
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kvotum keepalive proxy spawn FAILED: ${e.message}`);
@@ -18101,19 +18149,89 @@ async function kkBalance(target, opts = {}) {
     });
 }
 async function kvBalance(target, opts = {}) {
-    // 🔴 Панельных ручек у площадки НЕТ - это замер, а не догадка (30.10):
-    //   GET /v1/dashboard/billing/usage, /subscription → 404 {"detail":"Not Found"}
-    //   GET /api/me, /api/me/keys, /api/me/usage (ключом) → 401 «Сессия истекла»
-    // Панель - СВОЯ (FastAPI + SPA): сессия живёт JWT в localStorage браузера, и API-ключ
-    // панелью не признаётся вовсе. Ровно класс odyssey: путь New API тут не мог работать
-    // НИКОГДА. Точного остатка ключом не достать; 402-отказ инференса печатает его в тексте
-    // («на балансе -7,33 ₽»), но платить запросом ради цифры нельзя. Честный ответ - как у
-    // Odyssey без снимка: статус unknown и подсказка, а не «ошибка чека».
+    // Панельных New-API ручек у площадки НЕТ (замер 30.10: /v1/dashboard/billing/* → 404,
+    // API-ключ панелью не признаётся - 401 «Сессия истекла»). Панель - своя (FastAPI + SPA),
+    // её сессия - JWT в localStorage ПРОФИЛЯ браузера. Замер 30.10: JWT живёт в
+    // Default/Local Storage/leveldb открытым текстом (leveldb-лог), едится regex'ом
+    // `eyJ…` и принимается панелью (`GET /api/me` с Bearer JWT → 200 с `balance`).
+    // Поэтому читаем кабинетом по прецеденту odyssey (read-account.py) - только здесь
+    // без запуска браузера: прямо из leveldb-лога профиля.
     void opts;
+    const profile = kvProfileFor(target || {});
+    if (!profile) return { status: 'unknown', error: 'нет профиля: открой аккаунт кнопкой 🌐' };
+    const me = await kvPanelSelf(profile, target);
+    if (!me.ok) return { status: 'unknown', error: me.error, ...(me.stale ? { stale: true } : {}) };
+    // Расход по МАТЧЕМУСЬ ключу: панель отдаёт masked display (`sk-gw-zOi…NdB0`);
+    // наш api_key лежит в записи, маска собирается из него же - совпадение надёжное.
+    const mask = kvKeyMask(target.api_key);
+    const keyRow = (me.keys || []).find(k => k.display === mask) || null;
+    const granted = Number(me.user.balance) + Number(me.user.spent != null ? me.user.spent : 0);
     return {
-        status: 'unknown',
-        error: 'баланс myapi.buzz ключом не читается (панель своя, сессия в браузере) - впиши руками ✏️; 402-отказ инференса печатает точный остаток',
+        status: 'live',
+        balance: Number(me.user.balance),
+        spent: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
+        granted,
+        balanceSource: 'self',
+        self: {
+            balance: Number(me.user.balance),
+            granted,
+            selfCheckedAt: new Date().toISOString(),
+            newApiUsername: me.user.name,
+        },
+        // Расход конкретного ключа и число ключей аккаунта - для «Здоровья» и авторотации.
+        keySpent: keyRow ? Number(keyRow.spent) : null,
+        keysCount: (me.keys || []).length,
     };
+}
+// Маска ключа в стиле панели: `sk-gw-zOi…NdB0` (9 первых, 4 последних).
+// Замер /api/me/keys 30.10: панель даёт 'sk-gw-zOi…NdB0', то есть 9 символов до
+// многоточия - сверка строкой надёжна только при той же длине (при 7 совпадений нет).
+function kvKeyMask(key) {
+    const s = String(key || '');
+    if (s.length < 14) return s;
+    return s.slice(0, 9) + '…' + s.slice(-4);
+}
+// Каталог профиля записи: метка `acct_<id>` (см. handleKvSessionOpen), live-каталог
+// профиль создаёт при первом открытии браузера.
+function kvProfileFor(target) {
+    if (!target || !target.id) return null;
+    const label = 'acct_' + target.id;
+    const dir = path.join(__dirname, '..', 'kvotum', 'profiles', label);
+    return fs.existsSync(dir) ? { label, dir } : null;
+}
+// Чтение кабинета из leveldb-профиля: JWT (localStorage `token`) + `/api/me`,
+// `/api/me/keys`, `/api/me/usage`. Никакого браузера: leveldb-лог пишет localStorage
+// открытым текстом, JWT короткий (замер: 139 символов, exp +7 дней).
+function kvPanelSelf(profile, target) {
+    const lsDir = path.join(profile.dir, 'Default', 'Local Storage', 'leveldb');
+    let raw = null;
+    try {
+        // leveldb пишет и в .log, и в .ldb; свежие записи почти всегда в .log.
+        // Читаем оба и берём ПОСЛЕДНЕЕ вхождение JWT - протухший старый не выиграет.
+        for (const f of fs.readdirSync(lsDir)) {
+            if (!/\.log$|\.ldb$/.test(f)) continue;
+            const buf = fs.readFileSync(path.join(lsDir, f));
+            const m = [...buf.toString('latin1').matchAll(/eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g)].pop();
+            if (m) raw = m[0];
+        }
+    } catch { /* нет папки - ниже честная ошибка */ }
+    if (!raw) return { ok: false, error: 'в профиле нет JWT панели - открой аккаунт кнопкой 🌐 и войди' };
+    // exp из payload: протухший JWT панель отвергнет 401, но дешевле проверить дома.
+    try {
+        const payload = JSON.parse(Buffer.from(raw.split('.')[1], 'base64url').toString('utf8'));
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+            return { ok: false, error: 'JWT профиля протух - открой аккаунт кнопкой 🌐 и войди заново', stale: true };
+        }
+    } catch { /* форма не JWT - отдаём как есть, панель скажет 401 */ }
+    const headers = { Authorization: 'Bearer ' + raw };
+    const get = (p) => fetch(`https://myapi.buzz${p}`, { headers, signal: AbortSignal.timeout(15000) })
+        .then(r => r.status === 200 ? r.json() : null).catch(() => null);
+    return (async () => {
+        const user = await get('/api/me');
+        if (!user || user.balance == null) return { ok: false, error: 'JWT панель не приняла (401) - открой аккаунт кнопкой 🌐 и войди заново', stale: true };
+        const [keys, usage] = await Promise.all([get('/api/me/keys'), get('/api/me/usage?days=1')]);
+        return { ok: true, user, keys: Array.isArray(keys) ? keys : [], usage: usage || {} };
+    })();
 }
 // ThreeRouter - свой движок (sub2api), New-API ручек баланса нет: /v1/dashboard/billing/*
 // и /api/user/self отвечают 404. Ключом читается GET /v1/usage: {balance, remaining,

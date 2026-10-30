@@ -155,6 +155,7 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20182, name: 'KVOTUM keepalive', respawn: false },
         { port: 20181, name: 'ThreeRouter keepalive', respawn: false },
         { port: 20189, name: 'Premier keepalive', respawn: false },
         { port: 20191, name: 'a6api keepalive', respawn: false },

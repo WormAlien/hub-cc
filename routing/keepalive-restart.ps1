@@ -63,6 +63,8 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20182 = @{ UPSTREAM = 'https://myapi.buzz'; KEY_FILE = "$profileDir\.claude\kvotum-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'kvotum-modelmap.json') }
   20181 = @{ UPSTREAM = 'https://api.threerouter.com'; KEY_FILE = "$profileDir\.claude\threerouter-active-key.txt";
              SESSIONS_FILE = (Join-Path $dir 'threerouter-sessions.json');
              MODELMAP_FILE = (Join-Path $dir 'threerouter-modelmap.json') }

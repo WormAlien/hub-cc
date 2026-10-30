@@ -950,7 +950,7 @@ t('вкладки не зовут функций, которых нет: све�
     // `switchTab` зовёт такую функцию первой — открытие вкладки падает ReferenceError и
     // не доходит до конца, то есть пустая вкладка вместо содержимого.
     const src = read('routing/proxy-dashboard.html');
-    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|tr|pm|vn|dc|cp|ab|fx|ls|od|uk|bai|nv|bd|hn|ol)';
+    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|kv|tr|pm|vn|dc|cp|ab|fx|ls|od|uk|bai|nv|bd|hn|ol)';
     const called = new Set([...src.matchAll(new RegExp('\\b(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*\\(', 'g'))].map(m => m[1]));
     const defined = new Set();
     for (const re of [
@@ -1004,7 +1004,7 @@ t('дефолтный набор вкладок дашборда — как на
     // добавленные 23.10: 'seekai' (шлюз SeekAi) и 'a6api' (пульт Claude Code поверх
     // маркетплейса a6api, сразу за 'custom'). Обе настроены и живым рестартом принимались
     // отдельно - расхождение было в тесте, а не в наборе.
-    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });

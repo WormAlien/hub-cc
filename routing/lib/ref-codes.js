@@ -32,6 +32,11 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // KVOTUM (2026-10-30) — форма СВОЯ: рефка ловится на КОРНЕ `/?ref=`, а не на
+    // странице регистрации. Сам бандл витрины строит ссылку как
+    // `${location.origin}/?ref=${code}` и матчами `[?&]ref=([0-9a-z]{7,16})` по
+    // location.search+hash кладёт код в localStorage `ref` + cookie на 30 дней.
+    kvotum:      { host: 'myapi.buzz',        path: '/?ref=',         label: 'KVOTUM' },
     // ThreeRouter (2026-10-23) — форма СВОЯ: `/register?aff=`, как у AgentRouter, а не
     // `/sign-up?aff=` эталона. Проверено живой ссылкой владельца (страница регистрации
     // открывается, реф-код в форме). Хост — `www.`, API-хост `api.threerouter.com` регистрацию не отдаёт.

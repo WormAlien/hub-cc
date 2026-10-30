@@ -1800,7 +1800,7 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
 // была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
 // обычный «too many requests» по-прежнему аккаунт не меняет.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -1857,6 +1857,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'myapi.buzz': 'kv',
   'api.threerouter.com': 'tr',
   'ide.kgpix.bond': 'pm',
   'api.vani.ai': 'vn',

@@ -130,5 +130,12 @@
     "HOST": "api.threerouter.com", "PORT": 20181, "FOLDER": "threerouter",
     "ICON": "🧭", "COLOR": "sky", "REF": "VWCYM3TATVDX",
     "github": false, "ref": true, "flatRate": false, "anthropic": true, "pool": true, "shareScript": false, "autoreg": true, "customPanel": true
+  },
+
+  "kvotum": {
+    "p": "kv", "P": "KV", "full": "kvotum", "NAME": "KVOTUM",
+    "HOST": "myapi.buzz", "PORT": 20182, "FOLDER": "kvotum",
+    "ICON": "💎", "COLOR": "violet", "REF": "1yf3e8e3",
+    "github": true, "ref": true, "flatRate": false, "anthropic": false, "pool": true, "shareScript": false, "autoreg": false, "customPanel": true
   }
 }

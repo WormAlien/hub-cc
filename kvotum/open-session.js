@@ -26,8 +26,9 @@
 //   2. Открывается Chromium с профилем kvotum/profiles/<label>/ (на аккаунт).
 //   3. Ключа у аккаунта ещё нет → открывается реф-ссылка и кнопка GitHub.
 //      Ключ уже вписан → сразу страница ключей.
-//   4. У свежего аккаунта скрипт печатает готовый ключ из sessionStorage
-//      (`first_key`) - вставь его кнопкой 🔑 в дашборде.
+//   4. Ключ скрипт берёт сам: у новичка площадка отдаёт его в URL возврата
+//      (`first_key`); не достался - создаётся через панельный API (JWT) и всё
+//      равно пишется в пул дашборда без рук.
 //   5. Профиль сохраняется автоматически - при следующих открытиях GitHub и
 //      KVOTUM уже залогинены.
 //
@@ -205,7 +206,7 @@ async function openRegisterViaRef(page) {
 }
 
 // Ждём сессию панели: вернулись с GitHub на myapi.buzz И в localStorage
-// появился JWT. Попутно снимаем first_key - готовый ключ новичка.
+// появился JWT. Попутно снимаем first_key - готовый ключ новичка (см. ниже).
 async function waitForPanelLogin(page) {
   const deadline = Date.now() + LOGIN_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -219,6 +220,40 @@ async function waitForPanelLogin(page) {
     await page.waitForTimeout(1500);
   }
   return { ok: false };
+}
+
+// 🪤 first_key живёт РОВНО ОДИН раз: площадка создаёт ключ сама при ПЕРВОМ входе
+// нового аккаунта и отдаёт его в URL возврата OAuth (`#/oauth?token=…&key=…`),
+// SPA кладёт в sessionStorage и показывает на дашборде один раз. У существующего
+// аккаунта first_key не бывает вовсе - раньше ключ пришлось бы создавать руками
+// в панели («Новый API-ключ», показывается один раз).
+//
+// Замер 30.10: JWT сессии принимает и СОЗДАНИЕ ключа - POST /api/me/keys с телом
+// формы панели ({name, spend_limit, clear_limit, limit_period, allowed_models,
+// expires_on, rpm_limit}) отвечает 200 и отдаёт ПОЛНЫЙ ключ в поле `key`
+// (подтверждено живой пробой: ключ создан и удалён тем же JWT). Поэтому когда
+// first_key не достался - ключ создаём сами, руками в панель ходить не нужно.
+async function createPanelKey(token, name = 'hub') {
+  const r = await fetch('https://myapi.buzz/api/me/keys', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name, spend_limit: null, clear_limit: true, limit_period: 'total',
+      allowed_models: [], expires_on: null, rpm_limit: null,
+    }),
+  }).catch(() => null);
+  if (!r || !r.ok) return '';
+  const k = await r.json().catch(() => null);
+  return (k && k.key) ? k.key : '';
+}
+
+// Готовый ключ: first_key (бесплатный подарок новичку) или свежесозданный панелью.
+async function ensurePanelKey(res) {
+  if (res.firstKey) return res.firstKey;
+  console.log('ℹ️  first_key не достался (аккаунт не новый либо окно закрыли до возврата) - создаю ключ через панельный API…');
+  const made = await createPanelKey(res.token);
+  if (made) console.log(`🔑 ключ создан панелью автоматически: ${made}`);
+  return made;
 }
 
 async function main() {
@@ -279,11 +314,11 @@ async function main() {
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
         process.exit(2);
       }
-      if (res.firstKey) {
-        console.log(`🔑 Готовый ключ новичка (из sessionStorage first_key): ${res.firstKey}`);
-        console.log('🤖 ' + await autoSaveKey(page, res.firstKey));
+      const key = await ensurePanelKey(res);
+      if (key) {
+        console.log('🤖 ' + await autoSaveKey(page, key));
       } else {
-        console.log('⚠️  Готового ключа в sessionStorage нет - возьми ключ на #/keys вручную.');
+        console.log('⚠️  Ключа нет (ни first_key, ни созданного) - возьми ключ на #/keys вручную.');
       }
       await page.goto(KEYS_URL, { waitUntil: 'domcontentloaded' }).catch(() => {});
       console.log('✅ Вход выполнен, профиль сохранён на диск.');
@@ -308,10 +343,8 @@ async function main() {
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
         process.exit(2);
       }
-      if (res.firstKey) {
-        console.log(`🔑 Готовый ключ новичка (из sessionStorage first_key): ${res.firstKey}`);
-        console.log('🤖 ' + await autoSaveKey(page, res.firstKey));
-      }
+      const key = await ensurePanelKey(res);
+      if (key) console.log('🤖 ' + await autoSaveKey(page, key));
     }
     if (!/github\.com/i.test(page.url())) {
       await page.goto(KEYS_URL, { waitUntil: 'domcontentloaded' });

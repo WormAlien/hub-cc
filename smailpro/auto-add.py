@@ -103,24 +103,31 @@ MAILBOX_JS = """() => {
 
 # Забирает {address,timestamp,key} из IndexedDB и обменивает на payload.
 # Всё - в одной evaluate: запросы уходят с origin smailpro.com и его куками.
-GET_PAYLOAD_JS = """async (addr) => {
-  const readEmails = async () => {
-    const db = await new Promise((res, rej) => {
-      const r = indexedDB.open('EmailDatabase');
-      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-    });
-    const rows = await new Promise((res, rej) => {
-      const tx = db.transaction('emails', 'readonly');
-      const q = tx.objectStore('emails').getAll();
-      q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
-    });
-    db.close();
-    return rows || [];
-  };
-  let rows = [];
-  try { rows = await readEmails(); } catch (e) { return { error: 'idb: ' + e }; }
-  const mine = rows.find(r => r.address === addr) || rows[0];
-  if (!mine) return { error: 'в IndexedDB нет ящиков', rows: rows.length };
+GET_PAYLOAD_JS = """async (arg) => {
+  let mine = null;
+  if (arg && typeof arg === 'object') {
+    // Тройка {address,timestamp,key}, спасённая в Python: /app/inbox принимает её
+    // напрямую, IndexedDB не нужен - работает даже после перезапуска браузера.
+    mine = arg;
+  } else {
+    const readEmails = async () => {
+      const db = await new Promise((res, rej) => {
+        const r = indexedDB.open('EmailDatabase');
+        r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+      });
+      const rows = await new Promise((res, rej) => {
+        const tx = db.transaction('emails', 'readonly');
+        const q = tx.objectStore('emails').getAll();
+        q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+      });
+      db.close();
+      return rows || [];
+    };
+    let rows = [];
+    try { rows = await readEmails(); } catch (e) { return { error: 'idb: ' + e }; }
+    mine = rows.find(r => r.address === arg) || rows[0];
+    if (!mine) return { error: 'в IndexedDB нет ящиков', rows: rows.length };
+  }
 
   const r = await fetch('/app/inbox', {
     method: 'POST',
@@ -133,7 +140,7 @@ GET_PAYLOAD_JS = """async (addr) => {
   const f = (Array.isArray(arr) ? arr.find(x => x && x.address === mine.address) : null)
          || (Array.isArray(arr) ? arr[0] : null);
   if (!f || !f.payload) return { error: 'нет payload', status: r.status, body: txt.slice(0, 200) };
-  return { address: mine.address, payload: f.payload, key: mine.key };
+  return { address: mine.address, timestamp: mine.timestamp, payload: f.payload, key: mine.key };
 }"""
 
 # Список писем: api.sonjj.com, без captcha.
@@ -678,6 +685,11 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
         if not got or got.get("error"):
             raise RuntimeError(f"payload не получен: {(got or {}).get('error')} {(got or {}).get('body', '')}")
         payload = got["payload"]
+        # Тройку СПАСАЕМ в Python: она сама достаточна для /app/inbox (запросу нужен
+        # только {address,timestamp,key}, страница не нужна). Если окно Camoufox
+        # закрыли посреди прогона (владелец 30.10 02:57), mail_page() поднимет новое
+        # и опрос почты продолжится по спасённой тройке - ящик пересоздавать не надо.
+        saved_triple = {"address": got["address"], "timestamp": got["timestamp"], "key": got["key"]}
         kind = mail_kind(addr)
         log("mail", f"payload получен, тип ящика {kind}")
 
@@ -801,12 +813,26 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 # 08:28:34 - три опроса подряд упали так). /app/inbox выдаёт новый
                 # payload по тому же {address,timestamp,key} - берём его каждый раз.
                 try:
-                    fresh = await mail.evaluate(GET_PAYLOAD_JS, addr)
+                    fresh = await mail.evaluate(GET_PAYLOAD_JS, saved_triple)
                     if fresh and not fresh.get("error") and fresh.get("payload"):
                         payload = fresh["payload"]
                     box = await mail.evaluate(FETCH_INBOX_JS, {"payload": payload, "kind": kind})
                 except Exception as e:
-                    log("mail", f"опрос: {str(e)[:70]}")
+                    err = str(e)
+                    log("mail", f"опрос: {err[:70]}")
+                    # 🪤 Страница почты умерла НАВСЕГДА (владелец закрыл окно Camoufox
+                    # посреди прогона 30.10: «Target page, context or browser has been
+                    # closed») - sleep+continue здесь просто выжгут таймаут. Поднимаем
+                    # новую страницу и продолжаем опрос по спасённой тройке: ящику
+                    # перерождение не нужно, тройка уже у нас.
+                    if re.search(r"closed|destroyed|Target page|Target closed", err, re.I):
+                        try:
+                            mail = await mail_ctx.new_page()
+                            await mail.goto("https://smailpro.com/temporary-email",
+                                            wait_until="domcontentloaded", timeout=60000)
+                            log("mail", "страница почты пересоздана - продолжаю опрос")
+                        except Exception as e2:
+                            log("mail", f"пересоздание не удалось: {str(e2)[:70]}")
                     await asyncio.sleep(5)
                     continue
                 for m in (box.get("msgs") or []):

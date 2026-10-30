@@ -73,39 +73,50 @@ const HUB = 'http://localhost:8200';
 
 // Авто-запись готового ключа новичка в пул дашборда (два вызова, оба молчат при
 // ошибке - вкладка скажет, чего не хватает, но браузер не роняем):
-//   /kv/add   - аккаунта ещё нет в пуле: создаём запись по email из панели;
-//   /kv/key   - запись есть (владелец добавил руками): вписываем ключ в неё.
+//   /kv/key   - запись есть (владелец добавил руками или заселение GitHub): вписываем ключ;
+//   /kv/add   - аккаунта нет в пуле: создаём запись.
 // Автоматизирует «создание и сохранение API» (владелец 30.10): после GitHub-входа
 // площадка сама отдаёт ключ (sessionStorage first_key), скрипт кладёт его в пул -
 // кнопка 🔑 руками остаётся для чужих ключей. Страницу передаёт вызывающий (main).
+//
+// 🪤 Дедуп - по ТРЁМ полям, не по одному (дубль 31.10): запись, созданная заселением
+// GitHub, хранит в email НИК (`bewitchedpr` - так пишет newapiAddGithub), а панель
+// отдаёт АДРЕС (`vanessahecker_21@outlook.com`) - матч по точному email промахнулся,
+// и /kv/add создал вторую запись на тот же аккаунт. Панель знает и email, и name -
+// матчим: email панели ↔ email записи, name панели ↔ email записи (ник), name панели
+// ↔ name записи. Ключ уже в чьей-то записи → ничего не делаем.
 async function autoSaveKey(page, firstKey) {
   try {
     // Панель знает настоящий email аккаунта: /api/me с JWT из localStorage.
     const token = await page.evaluate(() => {
       try { return localStorage.getItem('token') || ''; } catch { return ''; }
     });
-    let email = '';
+    let email = '', name = '';
     if (token) {
       const me = await fetch('https://myapi.buzz/api/me', { headers: { Authorization: 'Bearer ' + token } })
         .then(r => (r.ok ? r.json() : null)).catch(() => null);
       email = me && me.email ? me.email : '';
+      name = me && me.name ? me.name : '';
     }
     const list = await fetch(`${HUB}/__switch/api/kv/sessions`).then(r => (r.ok ? r.json() : null)).catch(() => null);
     const rows = (list && list.sessions) || [];
+    const norm = (v) => String(v || '').trim().toLowerCase();
     const byKey = rows.find(s => s.api_key === firstKey);
     if (byKey) return `ключ уже в пуле (${byKey.id}) - ничего не делаю`;
-    const byEmail = email && rows.find(s => s.email === email);
-    if (byEmail && !/^sk-/.test(String(byEmail.api_key || ''))) {
+    const match = email && rows.find(s =>
+      [s.email, s.name].some(f => norm(f) === norm(email) || (name && norm(f) === norm(name))));
+    if (match && !/^sk-/.test(String(match.api_key || ''))) {
       const r = await fetch(`${HUB}/__switch/api/kv/key`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: byEmail.id, api_key: firstKey }),
+        body: JSON.stringify({ id: match.id, api_key: firstKey }),
       }).then(r => r.json()).catch(() => null);
-      return r && r.ok ? `ключ вписан в запись ${byEmail.id} (${email})` : 'не вписал: дашборд отказал (/kv/key)';
+      return r && r.ok ? `ключ вписан в запись ${match.id} (${match.email})` : 'не вписал: дашборд отказал (/kv/key)';
     }
+    if (match) return `запись ${match.id} уже с ключом - второй не вписываю`;
     if (email) {
       const r = await fetch(`${HUB}/__switch/api/kv/add`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, api_key: firstKey }),
+        body: JSON.stringify({ email, api_key: firstKey, name: name || undefined }),
       }).then(r => r.json()).catch(() => null);
       return r && r.ok ? `аккаунт ${email} добавлен в пул с ключом (${r.id})` : 'не добавил: дашборд отказал (/kv/add)';
     }
@@ -175,6 +186,17 @@ async function panelToken(page) {
   return page.evaluate(() => {
     try { return localStorage.getItem('token') || ''; } catch { return ''; }
   }).catch(() => '');
+}
+
+// Имя аккаунта панели (поле `name`, у GitHub-входов это ник: backmountai,
+// bewitchedpr) - им называем создаваемый ключ вместо безликого `hub`
+// (владелец 31.10: «надо нажимать создать новый ключ и писать своё название»).
+async function panelName(page) {
+  const token = await panelToken(page);
+  if (!token) return '';
+  const me = await fetch('https://myapi.buzz/api/me', { headers: { Authorization: 'Bearer ' + token } })
+    .then(r => (r.ok ? r.json() : null)).catch(() => null);
+  return (me && me.name) ? String(me.name) : '';
 }
 
 // Chromium кеширует и 404-ответы: осевший 404 на бандле SPA ломает витрину
@@ -248,11 +270,16 @@ async function createPanelKey(token, name = 'hub') {
 }
 
 // Готовый ключ: first_key (бесплатный подарок новичку) или свежесозданный панелью.
-async function ensurePanelKey(res) {
+// 🪤 first_key приходит под именем `default` (замер 31.10), а дефолтный ключ сайт
+// показать не умеет - поле скрыто, копировать нечего (владелец 31.10: «надо нажимать
+// создать новый ключ и писать своё название»). Поэтому first_key снимаем ИЗ ОКНА
+// (там он полный в sessionStorage), а если он упущен - СОЗДАЁМ ключ с именем
+// аккаунта: его панель отдаёт полным прямо в ответе, копировать из сайта не надо.
+async function ensurePanelKey(res, name) {
   if (res.firstKey) return res.firstKey;
   console.log('ℹ️  first_key не достался (аккаунт не новый либо окно закрыли до возврата) - создаю ключ через панельный API…');
-  const made = await createPanelKey(res.token);
-  if (made) console.log(`🔑 ключ создан панелью автоматически: ${made}`);
+  const made = await createPanelKey(res.token, name || 'hub');
+  if (made) console.log(`🔑 ключ создан панелью автоматически (имя ${name || 'hub'}): ${made}`);
   return made;
 }
 
@@ -314,7 +341,8 @@ async function main() {
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
         process.exit(2);
       }
-      const key = await ensurePanelKey(res);
+      const acctName = await panelName(page);
+      const key = await ensurePanelKey(res, acctName);
       if (key) {
         console.log('🤖 ' + await autoSaveKey(page, key));
       } else {
@@ -343,7 +371,7 @@ async function main() {
         console.error('❌ Таймаут ожидания GitHub-логина (10 мин). Закрываю.');
         process.exit(2);
       }
-      const key = await ensurePanelKey(res);
+      const key = await ensurePanelKey(res, await panelName(page));
       if (key) console.log('🤖 ' + await autoSaveKey(page, key));
     }
     if (!/github\.com/i.test(page.url())) {

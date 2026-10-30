@@ -18166,12 +18166,27 @@ async function kvBalance(target, opts = {}) {
     const mask = kvKeyMask(target.api_key);
     const keyRow = (me.keys || []).find(k => k.display === mask) || null;
     const granted = Number(me.user.balance) + Number(me.user.spent != null ? me.user.spent : 0);
+    // Панель хранит USD и ПОКАЗЫВАЕТ ₽: `rub(u.balance) = usd × RATE()`, RATE берётся
+    // из /api/public/config (`usd_rub_rate: 95`; замер 31.10, комментарий в бандле
+    // «balances are kept in USD and shown at the top»). Владелец 31.10: «баланс не
+    // в рублях» - цифра была настоящая, а подпись долларовая. Отдаём пару полей
+    // валюты по прецеденту hcnsec (юани): локальная цифра = панельная, доллары мелким.
+    const rate = Number(me.config && me.config.usd_rub_rate) || 0;
+    const cur = rate > 1 ? {
+        currency: 'RUB',
+        currencySymbol: '₽',
+        currencyRate: rate,
+        balanceLocal: Number(me.user.balance),
+        spentLocal: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
+        grantedLocal: granted,
+    } : {};
     return {
         status: 'live',
         balance: Number(me.user.balance),
         spent: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
         granted,
         balanceSource: 'self',
+        ...cur,
         self: {
             balance: Number(me.user.balance),
             granted,
@@ -18229,8 +18244,10 @@ function kvPanelSelf(profile, target) {
     return (async () => {
         const user = await get('/api/me');
         if (!user || user.balance == null) return { ok: false, error: 'JWT панель не приняла (401) - открой аккаунт кнопкой 🌐 и войди заново', stale: true };
-        const [keys, usage] = await Promise.all([get('/api/me/keys'), get('/api/me/usage?days=1')]);
-        return { ok: true, user, keys: Array.isArray(keys) ? keys : [], usage: usage || {} };
+        const [keys, usage, config] = await Promise.all([
+            get('/api/me/keys'), get('/api/me/usage?days=1'), get('/api/public/config'),
+        ]);
+        return { ok: true, user, keys: Array.isArray(keys) ? keys : [], usage: usage || {}, config: config || {} };
     })();
 }
 // ThreeRouter - свой движок (sub2api), New-API ручек баланса нет: /v1/dashboard/billing/*

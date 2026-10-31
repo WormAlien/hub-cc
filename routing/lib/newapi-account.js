@@ -243,6 +243,16 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'api.apinex.bond': 'jwt',
+    // myapi.buzz (KVOTUM, 2026-10-30) — НЕ New API вовсе: свой движок (FastAPI + SPA).
+    // Инструмент вписал `jwt` копией от kktoken - для несуществующей панели. Панель
+    // живёт JWT в localStorage (`localStorage.setItem('token', r.token)` бандла),
+    // НЕ в куках, а `GET /api/me` с Bearer-токеном сессии отвечает 401 «Сессия
+    // истекла» (замер: ключ API панелью не признаётся вообще). Новые API-ручки:
+    // /api/me/keys (ключи+лимиты), /api/me/usage (расход), /api/public/config.
+    // cookie-ветки тут не нужно: баланс вкладки пока РУЧНОЙ (✏️ set-balance),
+    // 402-отказ инферсенса печатает точный остаток («на балансе -7,33 ₽»).
+    'myapi.buzz': 'classic',
     'api.threerouter.com': 'jwt',
     'ide.kgpix.bond': 'classic', // Custom site cookie; quota lives in premier-api, not New API billing.
     'api.vani.ai': 'jwt',

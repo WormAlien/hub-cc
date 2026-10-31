@@ -774,6 +774,16 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="apinex" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
+        <span class="w-5 text-center text-[14px]">🆓</span>
+        <span class="flex-1">APINEX</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-apinex">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="kvotum" title="KVOTUM: своя панель (не New API), оплата в рублях СБП/карта/крипта. Обе Claude живы: opus-5-5 и sonnet-5-5 на 1M, usage настоящий (claude-поля + кеш). /v1/messages у opus-5-5 отказ формата, у sonnet-5-5 не проверен (стена баланса). Баланс ключом не читается, 402 печатает остаток">
+        <span class="w-5 text-center text-[14px]">💎</span>
+        <span class="flex-1">KVOTUM</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-kvotum">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="threerouter" title="sub2api: панель /api/v1, шлюз /v1. Вход email+пароль, клик-капча. Каталог ключа: deepseek-v4-pro, glm-5.3, kimi-k3, minimax-m3, qwen3.8-max; Claude группой сейчас не обслуживается">
         <span class="w-5 text-center text-[14px]">🧭</span>
         <span class="flex-1">ThreeRouter</span>
@@ -4887,6 +4897,11 @@ window.finNavCount = async () => {
       #leagueTab .lggw.off{color:var(--lg-faint);background:transparent;
         border-color:var(--lg-line-soft)}
       #leagueTab .lggw.off i{background:color-mix(in oklab,var(--lg-ink) 32%,var(--lg-surface))}
+      /* Скорость токенов - та же медиана, что в KPI вкладки «Модели», но посчитанная
+         по парам одного шлюза. Кегль меньше подписи: цифра уточняет чип, а не спорит
+         с именем шлюза. tabular-nums - чтобы значки не дёргались при обновлении. */
+      #leagueTab .lggwspd{font:500 10.5px/1 var(--lg-mono);color:var(--lg-faint);
+        padding-left:2px;font-variant-numeric:tabular-nums;letter-spacing:.01em}
       #leagueTab .lggwdown summary{cursor:pointer;color:var(--lg-faint);
         font:600 10.5px/1 var(--lg-mono);letter-spacing:.13em;text-transform:uppercase}
       #leagueTab .lggwdown[open] summary{margin-bottom:8px}
@@ -7415,12 +7430,311 @@ window.finNavCount = async () => {
       </div>
     </div>
 
+    <div data-tab-content="apinex">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-orange">🆓</span> <span class="text-ink">APINEX</span>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи вручную из личного кабинета (вход через Google) · клик по ключу = активный (через keepalive <code class="font-mono text-orange text-xs">:20190</code>) · <b>берём только бесплатные модели</b> с префиксом <code class="font-mono text-xs">free/</code>; платные помечены <b>PAID</b> и не выбираются, чтобы не списать баланс · free-план: $<b>0.1</b>, rpm 15</p>
+            <p class="text-[11px] text-amber mt-1">⚠ Бесплатные модели требуют <b>ежедневного check-in</b>: без него ответ 400 <code class="font-mono">billing_error</code> «Daily check-in required». Отметка: <a href="https://apinex.bond/airdrop?tab=quests" target="_blank" rel="noopener" class="underline hover:text-ink">apinex.bond/airdrop → quests</a> (вход через Google, руками).</p>
+          </div>
+        </header>
+
+        <div id="ax-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). В списке только бесплатные модели
+             (`free/...`): платные показаны заблокированными, чтобы случайно не выбрать
+             модель, которая списывает баланс. -->
+        <div id="ax-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — только 🆓 бесплатные модели · сохранить = применится при следующей активации</h2>
+            <button onclick="loadAxModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="ax-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20190).
+             403-факт эталона у apinex не замерен: пробы 31.10 - чистые 200 на chat,
+             stream, tools и /v1/messages. Ретраи оставлены страховкой. -->
+        <div id="ax-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20190 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="axLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="ax-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="ax-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="ax-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="ax-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="ax-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="axApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="axResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="ax-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="ax-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="ax-lat-chart" class="w-full"></div>
+              <div id="ax-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="ax-lat-windows"></div>
+          </div>
+          <div id="ax-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="ax-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="ax-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="ax-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="ax-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="ax-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="ax-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="ax-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="ax-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — <span class="text-emerald">FREE</span> = бесплатно, клик = применить · <span class="text-amber">PAID</span> = списывает баланс, не выбирается · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="ax-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model apinex[1m]</code><button onclick='copyToClipboard("/model apinex[1m]", "команда /model apinex[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadAxModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="ax-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadAxSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadAxSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="axCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="axShowAdd()" class="text-xs px-3 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">➕ Добавить</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="ax-filter" oninput="newapiFilterChange('ax')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-orange/60">
+          <select id="ax-sort" onchange="newapiSortChange('ax')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-orange/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="ax-add-form" class="hidden rounded-xl bg-surface border border-orange/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email / метка</span>
+              <input id="ax-add-email" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-orange/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — вручную из ЛК</span>
+              <input id="ax-add-key" placeholder="sk-apx…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-orange/60">
+            </label>
+            <button onclick="axAdd()" class="text-xs px-4 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">Сохранить</button>
+            <button onclick="axShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div class="text-[11px] text-dim mt-2 min-h-[16px]">Ключ не подхватывается из браузера: у площадки вход через Google-аккаунт, поэтому ключ вставляется вручную (ЛК → API Keys → copy).</div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="ax-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20190</code> keepalive → <code class="text-ink">api.apinex.bond</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-apx…</code> — вручную из ЛК (вход через Google)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>баланс: <code class="text-ink">GET /v1/balance</code> ключом · замер 31.10: free-модели отвечают с <code class="text-ink">cost_tokens: 0</code></span>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="kvotum">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-violet">💎</span> <a href="https://myapi.buzz/?ref=1yf3e8e3" data-ref-link="kvotum" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-violet">KVOTUM</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-violet text-xs">sk-gw-…</code> · клик по ключу = активный (через keepalive <code class="font-mono text-violet text-xs">:20182</code>) · вход GitHub/Google/Telegram - аккаунт создаётся при первом входе · 13 моделей, живы opus-5-5 и sonnet-5-5 (1M) · баланс только руками ✏️ - 402-отказ печатает точный остаток</p>
+          </div>
+        </header>
+
+        <div id="kv-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Model map (настраиваемый, как в Custom). Все три тира → claude-sonnet-5-5:
+             opus-5-5 площадка отказывает в формате Anthropic (замер 30.10), а sonnet-5-5
+             на /v1/messages не проверен (стена баланса раньше) - только у него есть шанс
+             пройти без конвертера. После пополнения проверить /v1/messages ПЕРВЫМ: если
+             отказ и тут - нужен конвертер Anthropic→OpenAI (как у a6api :20192). -->
+        <div id="kv-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг claude-тиров — сохранить = применится при следующей активации · каталог 13 моделей</h2>
+            <button onclick="loadKvModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="kv-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20182).
+             «Каждый четвёртый 403» - факт ЭТАЛОНА, у kvotum НЕ замерен (проб мало,
+             30.10). Дефолтные ретраи до первого боя не трогать; пересмотреть по
+             живым отказам. -->
+        <div id="kv-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20182 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
+            <button onclick="kvLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="kv-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="kv-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="kv-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="kv-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="kv-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="kvApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="kvResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="kv-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="kv-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="kv-lat-chart" class="w-full"></div>
+              <div id="kv-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="kv-lat-windows"></div>
+          </div>
+          <div id="kv-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="kv-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="kv-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="kv-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="kv-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="kv-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="kv-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="kv-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="kv-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="kv-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model kvotum[1m]</code><button onclick='copyToClipboard("/model kvotum[1m]", "команда /model kvotum[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadKvModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="kv-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadKvSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadKvSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="kvCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="kvMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="kvShowAdd()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">➕ Добавить</button>
+          <button onclick="kvShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="kv-filter" oninput="newapiFilterChange('kv')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-violet/60">
+          <select id="kv-sort" onchange="newapiSortChange('kv')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-violet/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="kv-add-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="kv-add-email" oninput="newapiAddGhHint('kv')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-violet/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="kv-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60">
+            </label>
+            <button onclick="kvAdd()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('kv')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">🐙 из менеджера</button>
+            <button onclick="kvShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="kv-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="kv-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="kvShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/kvotum уже залогинены).</p>
+          <textarea id="kv-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="kv-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="kvImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="kvShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="kv-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>base → <code class="text-ink">http://localhost:20182</code> keepalive → <code class="text-ink">myapi.buzz</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://myapi.buzz/?ref=1yf3e8e3" data-ref-link="kvotum" target="_blank" class="text-violet hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
     <div data-tab-content="threerouter">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-sky">🧭</span> <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">ThreeRouter</a>
+              <span class="text-sky">🧭</span> <a href="https://www.threerouter.com/register?aff=VWCYM3TATVDX" data-ref-link="threerouter" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">ThreeRouter</a>
             </h1>
             <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">api.threerouter.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20181</code>) · вход <b>email+пароль</b>, клик-капча руками · каталог ключа: <code class="font-mono text-xs">deepseek-v4-pro</code>, glm-5.3, kimi-k3, minimax-m3, qwen3.8-max · новому аккаунту <b>$10</b></p>
           </div>
@@ -7508,7 +7822,7 @@ window.finNavCount = async () => {
           <button onclick="trCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
           <button onclick="trMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
           <button onclick="trShowAdd()" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">➕ Добавить</button>
-          <button onclick="trAutoregToggle()" title="Запустить threerouter/auto-add.js: капчу решаешь руками в открывшемся окне" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🤖 Авторега</button>
+          <button onclick="trAutoregToggle()" title="Запустить smailpro/auto-add.py: почта на smailpro через Camoufox, панель - через прокси-пул (скрапер). Капчу решаешь руками в открывшемся окне" class="text-xs px-3 py-2 bg-emerald/10 border border-emerald/50 text-emerald rounded-lg hover:bg-emerald/20 font-medium">🤖 Авторега</button>
           <button onclick="trShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
           <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
                здесь нет: колонка чек-ина есть только у AgentRouter. -->
@@ -7596,7 +7910,7 @@ window.finNavCount = async () => {
           <span class="mx-2 opacity-40">·</span>
           <span>🪤 нативный <code class="text-ink">/v1/messages</code>; суффикс <code class="text-ink">[1m]</code> срезает keepalive, сырой API его отвергает</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://www.threerouter.com/register?aff=DADYQH35FHUJ" data-ref-link="threerouter" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
+          <a href="https://www.threerouter.com/register?aff=VWCYM3TATVDX" data-ref-link="threerouter" target="_blank" class="text-sky hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -7615,11 +7929,13 @@ window.finNavCount = async () => {
 
         <div id="pm-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
-        <!-- Реф-ссылка аккаунта. Код = user.id на Premier; новый аккаунт, заведённый
-             с этой ссылкой, зачтётся приглашённым. Счётчик обновляется открытием окна. -->
+        <!-- Реф-код, под которым регистрировать новорегов. Код аккаунта = его user.id на
+             Premier и приезжает сам вместе с окном входа; но его можно вписать руками —
+             у аккаунта, чьё окно ещё не открывали, кода иначе не узнать. Счётчик
+             приглашённых обновляется только открытием окна (`/api/billing` под cookie). -->
         <div id="pm-ref" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-2">
-            <h2 class="text-sm font-semibold tracking-tight">🤝 Реф-ссылка новорегов</h2>
+            <h2 class="text-sm font-semibold tracking-tight">🤝 Реф-код для новорегов</h2>
             <span id="pm-ref-stats" class="text-[11px] font-mono text-faint">—</span>
           </div>
           <div class="flex gap-2 items-end flex-wrap">
@@ -7627,12 +7943,21 @@ window.finNavCount = async () => {
               <span class="text-[10px] text-faint">под каким аккаунтом зачитывать приглашённых</span>
               <select id="pm-ref-owner" onchange="pmRefLoad()" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60"></select>
             </label>
-            <div class="flex-1 min-w-[260px] flex flex-col gap-1">
-              <span class="text-[10px] text-faint">ссылка (копируется в форму «Добавить»)</span>
+            <label class="flex flex-col gap-1 flex-1 min-w-[260px]">
+              <span class="text-[10px] text-faint">свой код · пусто = код аккаунта</span>
               <div class="flex gap-2">
-                <input id="pm-ref-link" readonly placeholder="— открой окно аккаунта (🌐), чтобы узнать код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none">
+                <input id="pm-ref-code" placeholder="569d56342c5e или https://ide.kgpix.bond/r/…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none focus:border-amber/60">
+                <button onclick="pmRefSave()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить код</button>
+              </div>
+            </label>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap mt-2">
+            <div class="flex-1 min-w-[260px] flex flex-col gap-1">
+              <span class="text-[10px] text-faint">ссылка · кнопка кладёт её в форму «Добавить»</span>
+              <div class="flex gap-2">
+                <input id="pm-ref-link" readonly placeholder="— кода ещё нет: впиши выше или открой окно аккаунта (🌐)" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none">
                 <button onclick="pmRefCopy()" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Копировать</button>
-                <button onclick="pmRefToAdd()" title="Подставить эту ссылку в форму «Добавить»" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">В добавить</button>
+                <button onclick="pmRefToAdd()" title="Подставить эту ссылку в поле «реф» формы «Добавить»" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">→ в «Добавить»</button>
               </div>
             </div>
           </div>
@@ -7773,7 +8098,7 @@ window.finNavCount = async () => {
         <div class="text-xs text-faint">
           <span>base → <code class="text-ink">http://localhost:20189</code> keepalive → <code class="text-ink">ide.kgpix.bond</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
           <span class="mx-2 opacity-40">·</span>
-          <span>ключи <code class="text-ink">prm_…</code> - бери в кабинете разработчика после GitHub-входа</span>
+          <span>ключи <code class="text-ink">prm_… / sk-premier-…</code> - бери в кабинете разработчика после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <span>Квота читается с сервера, а не считается по локальным запросам.</span>
           <span class="mx-2 opacity-40">·</span>
@@ -11413,7 +11738,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, threerouter: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, apinex: false, kvotum: false, threerouter: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -11446,7 +11771,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], threerouter: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], apinex: [], kvotum: [], threerouter: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -11661,6 +11986,8 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'apinex') { if (!state.loaded.apinex) { state.loaded.apinex = true; loadAxSessions(false); } axLoadKeepalive(); }
+  if (name === 'kvotum') { if (!state.loaded.kvotum) { state.loaded.kvotum = true; loadKvSessions(false); } kvLoadKeepalive(); }
   if (name === 'threerouter') { if (!state.loaded.threerouter) { state.loaded.threerouter = true; loadTrSessions(false); } trLoadKeepalive(); }
   if (name === 'premier') { if (!state.loaded.premier) { state.loaded.premier = true; loadPmSessions(false); } pmLoadKeepalive(); }
   if (name === 'vani') { if (!state.loaded.vani) { state.loaded.vani = true; loadVnSessions(false); } vnLoadKeepalive(); vnVisionLoad(); }
@@ -11754,9 +12081,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { a6api: 'a6api', apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', threerouter: 'ThreeRouter', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { a6api: 'a6api', apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', apinex: 'APINEX', kvotum: 'KVOTUM', threerouter: 'ThreeRouter', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { a6api: 'text-azure bg-azure', apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', threerouter: 'text-sky bg-sky', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { a6api: 'text-azure bg-azure', apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', apinex: 'text-orange bg-orange', kvotum: 'text-violet bg-violet', threerouter: 'text-sky bg-sky', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -16168,7 +16495,7 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
     // Повторная отрисовка того же значения не страшна — pooldropFill сравнивает и выходит.
     pooldropFill(pfx, data.cfg.poolFallbackModel || '');
     KEEPALIVE_STATE[pfx] = data;
-    // Ручка дублей на плоскотарифном шлюзе не крутится: прокси всё равно зажмёт её в 0,
+    // Ручки дублей на плоскотарифном шлюзе не крутятся: прокси всё равно зажмёт их в 0,
     // и молча вернувшийся ноль выглядел бы как поломка панели. Лучше сразу видно почему.
     const mh = $(pfx + '-keepalive-maxhedges');
     if (mh) {
@@ -16177,6 +16504,17 @@ async function loadKeepaliveCard(pfx, api, statsOnly) {
         ? 'У этого шлюза плоский тариф: убитый дубль списывается как полный ответ. Мульти-запрос заблокирован, включить можно только запуском прокси с ALLOW_PAID_HEDGE=1'
         : 'Сколько параллельных копий запроса максимум. 0 = мульти-запрос выкл';
       mh.classList.toggle('opacity-40', !!data.paidHedgeLocked);
+    }
+    // 🪤 Интервал мульти-запроса гасим вместе с дублями. При `maxHedges: 0` он не значит
+    // ничего, но живое поле «мульти-запрос через 20 с» читается как «дубли включены, вот
+    // через сколько» — владелец 28.10 так и прочитал, хотя прокси дублей не шлёт вовсе.
+    const hedgeIn = $(pfx + '-keepalive-hedge');
+    if (hedgeIn) {
+      hedgeIn.disabled = !!data.paidHedgeLocked;
+      hedgeIn.title = data.paidHedgeLocked
+        ? 'Мульти-запрос выключен: тариф плоский, каждая копия запроса списывает ещё одно сообщение'
+        : 'Через сколько секунд слать параллельную копию запроса. Работает только при дублях > 0';
+      hedgeIn.classList.toggle('opacity-40', !!data.paidHedgeLocked);
     }
     if (st) st.textContent = keepaliveSummary(data.cfg, KEEPALIVE_DEFAULTS[pfx], data);
     const s = data.stats || {};
@@ -16329,6 +16667,8 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  ax: '/__switch/api/ax/keepalive',
+  kv: '/__switch/api/kv/keepalive',
   tr: '/__switch/api/tr/keepalive',
   pm: '/__switch/api/pm/keepalive',
   vn: '/__switch/api/vn/keepalive',
@@ -16708,6 +17048,8 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const axLoadKeepalive   = () => loadKeepaliveCard('ax', KEEPALIVE_API.ax);
+const kvLoadKeepalive   = () => loadKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trLoadKeepalive   = () => loadKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmLoadKeepalive   = () => loadKeepaliveCard('pm', KEEPALIVE_API.pm);
 // Vision-мост (self-applying, как pooldropFill): тумблер и поле модели шлют патч сразу,
@@ -16772,6 +17114,8 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const axApplyKeepalive  = () => applyKeepaliveCard('ax', KEEPALIVE_API.ax);
+const kvApplyKeepalive  = () => applyKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trApplyKeepalive  = () => applyKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmApplyKeepalive  = () => applyKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnApplyKeepalive  = () => applyKeepaliveCard('vn', KEEPALIVE_API.vn);
@@ -16803,6 +17147,8 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const axResetKeepalive  = () => resetKeepaliveCard('ax', KEEPALIVE_API.ax);
+const kvResetKeepalive  = () => resetKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trResetKeepalive  = () => resetKeepaliveCard('tr', KEEPALIVE_API.tr);
 const pmResetKeepalive  = () => resetKeepaliveCard('pm', KEEPALIVE_API.pm);
 const vnResetKeepalive  = () => resetKeepaliveCard('vn', KEEPALIVE_API.vn);
@@ -16843,6 +17189,8 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  apinex: ['ax', '/__switch/api/ax/keepalive'],
+  kvotum: ['kv', '/__switch/api/kv/keepalive'],
   threerouter: ['tr', '/__switch/api/tr/keepalive'],
   premier: ['pm', '/__switch/api/pm/keepalive'],
   vani: ['vn', '/__switch/api/vn/keepalive'],
@@ -16989,7 +17337,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), tr: () => renderTr(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), ax: () => renderAx(), kv: () => renderKv(), tr: () => renderTr(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -17088,7 +17436,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'tr', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'ax', 'kv', 'tr', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -18007,7 +18355,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, pm: null, cp: null, ab: null, fx: null, bd: null, nv: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, kv: null, pm: null, cp: null, ab: null, fx: null, bd: null, nv: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -18318,6 +18666,7 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
+  kv: { label: 'KVOTUM',     host: 'myapi.buzz',        color: 'violet', reload: () => loadKvSessions(), list: () => state.kvotum,  render: () => renderKv(), setKey: id => kvSetKey(id), open: id => kvOpenLk(id) },
   pm: { label: 'Premier',     host: 'ide.kgpix.bond',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
   cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
   ab: { label: 'Artbloom',     host: 'api.artbloom.tech',        color: 'pink', reload: () => loadAbSessions(), list: () => state.artbloom,  render: () => renderAb(), setKey: id => abSetKey(id), open: id => abOpenLk(id) },
@@ -19876,6 +20225,1066 @@ async function kkSaveModelMap() {
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
 }
+function axPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (AX_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderAxGauge() {
+  moneyAutoFetch('apinex').then(() => moneyRotateToHistory('apinex')).catch(() => {});
+  const st = axPoolStats(state.apinex);
+  renderEnergyGauge($('ax-energy'), {
+    title: 'APINEX · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-orange">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-orange">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20190 → api.apinex.bond (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+  });
+}
+
+async function loadAxSessions(probe) {
+  if (probe) $('ax-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ax/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.apinex = data.sessions || [];
+    if ($('nav-count-apinex')) $('nav-count-apinex').textContent = state.apinex.length;
+    await newapiEnsureGhNames(state.apinex);
+    renderAx();
+    renderAxGauge();
+    loadAxModels();
+    loadAxModelMap();
+    if (probe) toast('✓ APINEX: статусы обновлены', 'success');
+  } catch (e) {
+    $('ax-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadAxSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/ax/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.apinex = data.sessions || [];
+    if ($('nav-count-apinex')) $('nav-count-apinex').textContent = state.apinex.length;
+    renderAx();
+    renderAxGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadAxModels(force) {
+  const keys = state.apinex
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('ax-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('ax-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/ax/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderAxModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('ax-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderAxModels(models) {
+  if (models) state.axModels = models;
+  const list = state.axModels || [];
+  let active = state.axActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/ax/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.axActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('ax-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // Бесплатные модели площадка отдаёт с префиксом `free/` — это и есть признак.
+    // Всё остальное (claude-*, gpt-*, gemini-* без префикса) списывает баланс, поэтому
+    // платную модель НЕЛЬЗЯ выбрать кликом: иначе один неверный клик молча жжёт деньги.
+    const isFree = id.startsWith('free/');
+    const badge = isFree
+      ? '<span class="text-[9px] font-semibold px-1 rounded bg-emerald/15 border border-emerald/40 text-emerald">FREE</span>'
+      : '<span class="text-[9px] font-semibold px-1 rounded bg-amber/10 border border-amber/40 text-amber" title="платная — списывает баланс">PAID</span>';
+    if (!isFree) {
+      return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono bg-elevated/50 border border-line-soft text-faint opacity-70 cursor-not-allowed"
+        title="платная модель — не выбираем, чтобы не списать баланс">
+        ${esc(id)}${badge}
+      </span>`;
+    }
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-orange/15 border border-orange/50 text-orange' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='axSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + apinex-active-model.txt) · 📋 = копия">
+      ${esc(id)}${badge}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "apinex")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderAxModelMap();
+}
+async function axSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/ax/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.axModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.axActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderAxModels(state.axModels);
+  } catch (e) { toast('axSelectModel: ' + e.message, 'error'); }
+}
+
+function renderAx() {
+  const { list: all, total, q } = newapiRows(state.apinex, 'ax');
+  if (!all.length) {
+    $('ax-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить и вставь ключ sk-apx… из ЛК (вход через Google)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-orange text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-orange/5' : '';
+    const activeTag = active ? '<span class="text-orange mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = axBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderAxModels.
+    const keyCell = noKey ? noKeyCell(`axSetKey(${idJ})`) : `<button onclick='axActivate(${kJ})' title="Сделать активным (keepalive :20190 → api.apinex.bond)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-orange/10 border-orange/50 text-orange' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`axCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`axSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`axRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`axActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`axPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${actBtn(`axDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('ax-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'ax', q),
+    { sortProv: 'ax', accent: 'orange' }
+  );
+}
+
+function axBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'ax'); }
+
+function axShowAdd(show = true) {
+  $('ax-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('ax');
+  if (show) { $('ax-add-email').value = ''; $('ax-add-key').value = ''; $('ax-add-email').focus(); }
+}
+async function axAdd() {
+  const email = $('ax-add-email').value.trim();
+  const api_key = $('ax-add-key').value.trim();
+  if (!email) return toast('email / метка обязательны', 'warn');
+  if (!api_key) return toast('ключ sk-apx… обязателен — бери его в ЛК после входа через Google', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ax/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast('✓ ключ добавлен', 'success');
+      axShowAdd(false);
+      loadAxSessions(false);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function axDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/ax/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadAxSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function axShare(id) {
+  const cur = state.apinex.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/ax/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'APINEX',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function axShowImport(show = true) {
+  $('ax-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('ax-import-text').value = '';
+    $('ax-import-preview').innerHTML = '';
+    $('ax-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function axImport() {
+  const share = $('ax-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('ax-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/ax/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('ax-import-preview').innerHTML = '';
+    axShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadAxSessions(false);
+  } catch (e) {
+    $('ax-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли apinex).
+async function axSetKey(id) {
+  const cur = state.apinex.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли apinex после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/ax/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadAxSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (axSetKey).
+async function axRename(id) {
+  const cur = state.apinex.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/ax/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadAxSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function axActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/ax/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'apinex';
+      state.urls.apinex = 'http://localhost:20190';
+      paintStatus();
+      loadAxSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function axPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/ax/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.apinex.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.apinex[idx].status = data.status;
+    renderAx();
+    renderAxGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function axCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/ax/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.apinex.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderAx();
+    renderAxGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function axCheckAllBalances() {
+  $('ax-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/ax/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.apinex = data.sessions || [];
+    renderAx();
+    renderAxGauge();
+    balanceBatchToast(state.apinex);
+  } catch (e) {
+    $('ax-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function axSetBalance(api_key) {
+  return newapiSetBalanceUI('ax', api_key, () => state.apinex, () => { renderAx(); renderAxGauge(); });
+}
+
+function axMapProfiles() {
+  return newapiMapProfilesUI('ax', () => loadAxSessions(false));
+}
+
+async function axOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/ax/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function axCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → apinex-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadAxModelMap() {
+  try {
+    const res = await fetch('/__switch/api/ax/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.axModelMap = data.modelMap || {};
+    renderAxModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderAxModelMap() {
+  const mm = state.axModelMap || {};
+  const models = (state.axModels || []).map(m => m.id);
+  // Только бесплатные модели доступны для выбора: у площадки они помечены префиксом
+  // `free/`, остальные списывают баланс. Платные показываем в списке ЗАБЛОКИРОВАННЫМИ,
+  // чтобы было видно, что они есть и что мы их сознательно не берём.
+  const free = [...new Set(models.filter(id => id.startsWith('free/')))];
+  const paid = [...new Set(models.filter(id => !id.startsWith('free/')))];
+  // Сохранённые цели держим в опциях ВСЕГДА: /ax/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя apinex-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const saved = ['opus', 'sonnet', 'haiku'].map(n => mm[n]).filter(v => typeof v === 'string' && v);
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const parts = [`<option value=""${val ? '' : ' selected'}>— как есть —</option>`];
+    for (const id of free) parts.push(`<option value="${esc(id)}"${id === val ? ' selected' : ''}>🆓 ${esc(id)}</option>`);
+    // Цель вне free/ (могла остаться от прежней настройки) показываем выбранной, но
+    // с пометкой: молча подменять её на «как есть» нельзя — человек должен видеть, что стоит.
+    for (const id of [...new Set(saved)].filter(id => !id.startsWith('free/'))) {
+      parts.push(`<option value="${esc(id)}"${id === val ? ' selected' : ''}>⚠ ${esc(id)} — платная</option>`);
+    }
+    for (const id of paid) {
+      if (saved.includes(id)) continue;
+      parts.push(`<option value="${esc(id)}" disabled>🔒 ${esc(id)} — платная</option>`);
+    }
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="ax-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${parts.join('')}</select></label>`;
+  };
+  $('ax-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='axSaveModelMap()' class="text-xs px-3 py-2 bg-orange/10 border border-orange/50 text-orange rounded-lg hover:bg-orange/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function axSaveModelMap() {
+  const mm = {
+    opus: $('ax-mm-opus')?.value || '',
+    sonnet: $('ax-mm-sonnet')?.value || '',
+    haiku: $('ax-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/ax/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.axModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function kvPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 - у kvotum баланса-гранта нет вовсе: цифры
+      // РУЧНЫЕ (✏️ set-balance, 402-отказ инференса печатает точный остаток).
+      // Подставлять сюда $70, как у шлюзов с грантом, нельзя: авторотация приняла
+      // бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderKvGauge() {
+  moneyAutoFetch('kvotum').then(() => moneyRotateToHistory('kvotum')).catch(() => {});
+  const st = kvPoolStats(state.kvotum);
+  renderEnergyGauge($('kv-energy'), {
+    title: 'KVOTUM · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-violet">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-violet">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive http://localhost:20182 → myapi.buzz (напрямую). 403-факт эталона у kvotum не замерен; ретраи дефолтные, пересмотреть по первому бою.',
+  });
+}
+
+async function loadKvSessions(probe) {
+  if (probe) $('kv-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/kv/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.kvotum = data.sessions || [];
+    if ($('nav-count-kvotum')) $('nav-count-kvotum').textContent = state.kvotum.length;
+    await newapiEnsureGhNames(state.kvotum);
+    renderKv();
+    renderKvGauge();
+    loadKvModels();
+    loadKvModelMap();
+    if (probe) toast('✓ KVOTUM: статусы обновлены', 'success');
+  } catch (e) {
+    $('kv-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadKvSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/kv/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.kvotum = data.sessions || [];
+    if ($('nav-count-kvotum')) $('nav-count-kvotum').textContent = state.kvotum.length;
+    renderKv();
+    renderKvGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadKvModels(force) {
+  const keys = state.kvotum
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('kv-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('kv-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/kv/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderKvModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('kv-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderKvModels(models) {
+  if (models) state.kvModels = models;
+  const list = state.kvModels || [];
+  let active = state.kvActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/kv/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.kvActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('kv-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — violet, а violet же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-violet/15 border border-violet/50 text-violet' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='kvSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + kvotum-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "kvotum")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderKvModelMap();
+}
+async function kvSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/kv/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.kvModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.kvActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderKvModels(state.kvModels);
+  } catch (e) { toast('kvSelectModel: ' + e.message, 'error'); }
+}
+
+function renderKv() {
+  const { list: all, total, q } = newapiRows(state.kvotum, 'kv');
+  if (!all.length) {
+    $('kv-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-violet text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-violet/5' : '';
+    const activeTag = active ? '<span class="text-violet mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = kvBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderKvModels.
+    const keyCell = noKey ? noKeyCell(`kvSetKey(${idJ})`) : `<button onclick='kvActivate(${kJ})' title="Сделать активным (keepalive :20182 → myapi.buzz)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-violet/10 border-violet/50 text-violet' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'kv')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`kvCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`kvShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`kvSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`kvRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`kvActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`kvPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'kv', idJ)}
+        ${actBtn(`kvOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс kvotum)', '🌐', 'violet')}
+        ${actBtn(`kvDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('kv-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'kv', q),
+    { sortProv: 'kv', accent: 'violet' }
+  );
+}
+
+function kvBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'kv'); }
+
+function kvShowAdd(show = true) {
+  $('kv-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('kv');
+  if (show) { $('kv-add-email').value = ''; $('kv-add-key').value = ''; $('kv-add-email').focus(); }
+}
+async function kvAdd() {
+  const email = $('kv-add-email').value.trim();
+  const api_key = $('kv-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/kv/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.kv }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      kvShowAdd(false);
+      loadKvSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) kvOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function kvDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/kv/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadKvSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function kvShare(id) {
+  const cur = state.kvotum.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/kv/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'KVOTUM',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function kvShowImport(show = true) {
+  $('kv-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('kv-import-text').value = '';
+    $('kv-import-preview').innerHTML = '';
+    $('kv-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function kvImport() {
+  const share = $('kv-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('kv-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/kv/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('kv-import-preview').innerHTML = '';
+    kvShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadKvSessions(false);
+  } catch (e) {
+    $('kv-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли kvotum).
+async function kvSetKey(id) {
+  const cur = state.kvotum.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли kvotum после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/kv/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadKvSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (kvSetKey).
+async function kvRename(id) {
+  const cur = state.kvotum.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/kv/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadKvSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function kvActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/kv/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'kvotum';
+      state.urls.kvotum = 'http://localhost:20182';
+      paintStatus();
+      loadKvSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function kvPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/kv/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.kvotum.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.kvotum[idx].status = data.status;
+    renderKv();
+    renderKvGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function kvCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/kv/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.kvotum.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderKv();
+    renderKvGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function kvCheckAllBalances() {
+  $('kv-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/kv/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.kvotum = data.sessions || [];
+    renderKv();
+    renderKvGauge();
+    balanceBatchToast(state.kvotum);
+  } catch (e) {
+    $('kv-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function kvSetBalance(api_key) {
+  return newapiSetBalanceUI('kv', api_key, () => state.kvotum, () => { renderKv(); renderKvGauge(); });
+}
+
+function kvMapProfiles() {
+  return newapiMapProfilesUI('kv', () => loadKvSessions(false));
+}
+
+async function kvOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/kv/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function kvCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → kvotum-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadKvModelMap() {
+  try {
+    const res = await fetch('/__switch/api/kv/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.kvModelMap = data.modelMap || {};
+    renderKvModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderKvModelMap() {
+  const mm = state.kvModelMap || {};
+  const models = (state.kvModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /kv/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя kvotum-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="kv-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('kv-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='kvSaveModelMap()' class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function kvSaveModelMap() {
+  const mm = {
+    opus: $('kv-mm-opus')?.value || '',
+    sonnet: $('kv-mm-sonnet')?.value || '',
+    haiku: $('kv-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/kv/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.kvModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
 function trPoolStats(sessions) {
   let live = 0, dead = 0, total = 0;
   let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
@@ -20051,6 +21460,7 @@ function renderTr() {
       <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
       <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
         ${noKey ? '' : actBtn(`trCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${s.password ? actBtn(`odCopyPass(${JSON.stringify(s.password)})`, 'Скопировать пароль. Вход в кабинет: этот email + пароль (кнопка 🌐)', '🔒', 'sky') : ''}
         ${actBtn(`trShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
         ${actBtn(`trSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
         ${actBtn(`trRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
@@ -20087,6 +21497,8 @@ const TR_STAGE_RU = {
     'captcha-manual': 'ЖДЁМ КАПЧУ', 'email-verify': 'код из письма',
     'verify-code': 'подтверждение', key: 'ключ', 'probe-key': 'проверка ключа',
     snapshot: 'снимок сессии', save: 'запись в пул',
+    // Этапы smailpro/auto-add.py (SP_STAGE)
+    'send-code': 'отправка кода', 'wait-mail': 'ждём письмо', register: 'регистрация',
 };
 function trAutoregToggle(show) {
     const p = $('tr-autoreg-panel');
@@ -20329,18 +21741,23 @@ async function trSetKey(id) {
 async function trRename(id) {
   const cur = state.threerouter.find(x => x.id === id);
   if (!cur) return toast('аккаунт не найден', 'error');
-  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  const emailVal = prompt('Редактировать аккаунт 1/3.\n\nemail (показывается в таблице):', cur.email || '');
   if (emailVal === null) return;
   const email = emailVal.trim();
   if (!email) return toast('email не может быть пустым', 'warn');
-  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  const nameVal = prompt('Редактировать аккаунт 2/3.\n\nname (подпись):', cur.name || '');
   if (nameVal === null) return;
   const name = nameVal.trim();
   if (!name) return toast('name не может быть пустым', 'warn');
+  // Пароль от кабинета: есть - можно скопировать кнопкой 🔒 и войти по 🌐.
+  // Пустая строка удаляет пароль из записи.
+  const passVal = prompt('Редактировать аккаунт 3/3.\n\nпароль кабинета (вход email + пароль по кнопке 🌐).\nПусто - удалить пароль из записи:', cur.password || '');
+  if (passVal === null) return;
+  const password = passVal.trim();
   try {
     const res = await fetch('/__switch/api/tr/rename', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, email, name }),
+      body: JSON.stringify({ id, email, name, password }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
@@ -20749,7 +22166,7 @@ function pmRefFillOwners() {
   if (!sel) return;
   const prev = sel.value || localStorage.getItem('pm:ref-owner') || '';
   const list = (state.premier || []).filter(s => s.id);
-  sel.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.email || s.name || s.id)}${s.ref ? ' · своя ссылка' : ''}</option>`).join('')
+  sel.innerHTML = list.map(s => `<option value="${esc(s.id)}">${esc(s.email || s.name || s.id)}${s.refCode ? ' · свой код' : ''}</option>`).join('')
     || '<option value="">нет аккаунтов</option>';
   if (prev && list.some(s => s.id === prev)) sel.value = prev;
   else if ((state.premier || []).find(s => s.active)) sel.value = state.premier.find(s => s.active).id;
@@ -20758,8 +22175,8 @@ function pmRefFillOwners() {
 async function pmRefLoad(id) {
   const sel = $('pm-ref-owner');
   const acct = id || (sel && sel.value);
-  const link = $('pm-ref-link'), stats = $('pm-ref-stats'), note = $('pm-ref-note');
-  if (!acct) { if (link) { link.value = ''; } if (stats) stats.textContent = '—'; return; }
+  const link = $('pm-ref-link'), stats = $('pm-ref-stats'), note = $('pm-ref-note'), codeIn = $('pm-ref-code');
+  if (!acct) { if (link) link.value = ''; if (stats) stats.textContent = '—'; return; }
   if (sel && sel.value !== acct) sel.value = acct;
   localStorage.setItem('pm:ref-owner', acct);
   try {
@@ -20774,29 +22191,63 @@ async function pmRefLoad(id) {
     if (!res.ok || d.error) throw new Error(d.error || 'http ' + res.status);
     PM_REF = d;
     if (link) link.value = d.link || '';
+    // Поле «свой код» — ровно то, что вписано руками (`ref`), а не вычисленная ссылка:
+    // иначе после сохранения там оказался бы код аккаунта, и «пусто = код аккаунта»
+    // стало бы неправдой. Пока в поле печатают, не перебиваем.
+    if (codeIn && document.activeElement !== codeIn) codeIn.value = d.ref || '';
     const rf = d.referral;
     if (stats) {
       stats.textContent = rf ? `активных ${rf.active} · ждут 3-го сообщения ${rf.pending}` : 'счётчик неизвестен';
       stats.title = rf && rf.next ? `до тира ${rf.next.n}: ещё ${rf.next.need}` : '';
     }
-    if (note) note.textContent = d.link
-      ? (d.source === 'own' ? 'своя ссылка аккаунта' : 'код по умолчанию из «Настроек» (💩) или ref-codes.default.json')
-        + (rf ? '' : ' · счётчик появится после открытия окна аккаунта (🌐)')
-      : 'код ещё неизвестен — открой окно аккаунта через 🌐, войдя в него, он станет известен';
+    if (note) {
+      // Источники кода, в порядке приоритета бэкенда: вписанный руками → код аккаунта
+      // (из кэша окна входа) → общий код из «Настроек». Нужен именно тот, кто получает
+      // награду: приглашённый под общим кодом идёт чужому рефереру.
+      const why = d.source === 'own' ? 'код вписан руками'
+        : d.source === 'account' ? 'код этого аккаунта'
+          : d.source === 'shared' ? 'общий код репозитория, не код этого аккаунта'
+            : '';
+      note.textContent = d.link
+        ? why + (rf ? '' : ' · счётчик появится после открытия окна аккаунта (🌐)')
+        : 'кода ещё нет — впиши его в поле выше или открой окно аккаунта (🌐), войдя в него';
+    }
   } catch (e) {
     if (link) link.value = '';
     if (stats) stats.textContent = '—';
-    if (note) note.textContent = 'реф-ссылка: ' + e.message + ' (после правки нужен рестарт :8200)';
+    if (note) note.textContent = 'реф-код: ' + e.message + ' (после правки нужен рестарт :8200)';
+  }
+}
+// Сохранение вписанного кода на запись пула: им open-session.js поведёт новорега на
+// `/r/<код>`. Пустое поле снимает свой код — аккаунт вернётся к коду из кэша окна.
+async function pmRefSave() {
+  const sel = $('pm-ref-owner'), codeIn = $('pm-ref-code'), note = $('pm-ref-note');
+  const acct = sel && sel.value;
+  if (!acct) return toast('нет аккаунта', 'warn');
+  const raw = codeIn ? codeIn.value.trim() : '';
+  try {
+    const sep = acct.indexOf(':');
+    const body = { [sep > 0 ? acct.slice(0, sep) : 'id']: sep > 0 ? acct.slice(sep + 1) : acct, set: raw };
+    const res = await fetch('/__switch/api/pm/ref', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const d = await res.json();
+    if (!res.ok || d.error) throw new Error(d.error || 'http ' + res.status);
+    toast(raw ? '✓ реф-код сохранён' : '✓ свой код снят', 'success', 2500);
+    await loadPmSessions(false);
+  } catch (e) {
+    if (note) note.textContent = 'реф-код: ' + e.message;
+    toast('реф-код: ' + e.message, 'error');
   }
 }
 function pmRefCopy() {
   const v = $('pm-ref-link') && $('pm-ref-link').value;
-  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  if (!v) return toast('ссылки ещё нет — впиши код выше', 'warn');
   copyToClipboard(v, 'реф-ссылка скопирована');
 }
 function pmRefToAdd() {
   const v = $('pm-ref-link') && $('pm-ref-link').value;
-  if (!v) return toast('ссылки ещё нет — открой окно аккаунта', 'warn');
+  if (!v) return toast('ссылки ещё нет — впиши код выше', 'warn');
   pmShowAdd(true);
   if ($('pm-add-ref')) $('pm-add-ref').value = v;
   toast('реф-ссылка подставлена в «Добавить»', 'info', 2500);
@@ -20925,7 +22376,9 @@ async function pmSetKey(id) {
   const val = prompt(msg, 'prm_');
   if (val === null || val.trim() === '') return;
   const newKey = val.trim();
-  if (!/^prm_[A-Za-z0-9_-]{40,}$/.test(newKey)) return toast('Ожидается ключ Premier prm_…', 'warn');
+  // Два живых формата (31.10): prm_… у аккаунтов пула, sk-premier-… у старых кабинетов
+  // (у владельца в списке только sk-premier-…; замер: /v1/models его и отвечает 200).
+  if (!/^(?:prm_|sk-premier-)[A-Za-z0-9_-]{20,}$/.test(newKey)) return toast('Ожидается ключ Premier prm_… или sk-premier-…', 'warn');
   try {
     const res = await fetch('/__switch/api/pm/key', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -33782,6 +35235,7 @@ const GH_USE_META = {
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
   jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },
+  kv: { icon: '💎', short: 'KV', label: 'KVOTUM',     badge: 'bg-violet/15 text-violet border-violet/40' },
   pm: { icon: '🅿️', short: 'PM', label: 'Premier',     badge: 'bg-amber/15 text-amber border-amber/40' },
   cp: { icon: '🧼', short: 'CP', label: 'Clean APIs',     badge: 'bg-blue/15 text-blue border-blue/40' },
   ab: { icon: '🌸', short: 'AB', label: 'Artbloom',     badge: 'bg-pink/15 text-pink border-pink/40' },
@@ -33839,7 +35293,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', pm: 'premier', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', kv: 'kvotum', pm: 'premier', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -36244,6 +37698,8 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  apinex:     { id: 'apinex',     p: 'ax', stateKey: 'apinex',     base: 5,   sym: '$',  label: 'APINEX',     icon: '🆓', color: 'orange', reload: () => loadAxSessionsLight() },
+  kvotum:     { id: 'kvotum',     p: 'kv', stateKey: 'kvotum',     base: 5,   sym: '$',  label: 'KVOTUM',     icon: '💎', color: 'violet', reload: () => loadKvSessionsLight() },
   threerouter:     { id: 'threerouter',     p: 'tr', stateKey: 'threerouter',     base: 5,   sym: '$',  label: 'ThreeRouter',     icon: '🧭', color: 'sky', reload: () => loadTrSessionsLight() },
   // 🎯 noAuto снят 25.10: у Premier авторотация есть, только единица другая - дневные
   // сообщения вместо долларов (бэкенд: `quotaMode`). `noMoney` остаётся: квота сообщений
@@ -39809,7 +41265,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -40130,6 +41586,8 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'apinex':       loadAxSessionsLight(); break;
+      case 'kvotum':       loadKvSessionsLight(); break;
       case 'threerouter':       loadTrSessionsLight(); break;
       case 'premier':       loadPmSessionsLight(); break;
       case 'vani':       loadVnSessionsLight(); break;
@@ -40224,6 +41682,8 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'apinex',     fn: () => loadAxSessionsLight() },
+  { tab: 'kvotum',     fn: () => loadKvSessionsLight() },
   { tab: 'threerouter',     fn: () => loadTrSessionsLight() },
   { tab: 'premier',     fn: () => loadPmSessionsLight() },
   { tab: 'vani',     fn: () => loadVnSessionsLight() },
@@ -40389,7 +41849,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
@@ -45597,7 +47057,47 @@ async function lgGatewaysLoad() {
     const j = await r.json().catch(() => null);
     LG.gw = (r.ok && j && j.ok === true) ? j : null;
   } catch (e) { LG.gw = null; }
+  // Отметки рисуем сразу: агрегат скорости читает журнал за две недели и может
+  // считаться секунды, а панель по замыслу не ждёт срез. Цифры въезжают поверх
+  // готовых чипов, когда приедут.
   lgGatewaysPaint();
+  lgGwSpeedLoad().then(() => lgGatewaysPaint());
+}
+// Медиана скорости по парам шлюза - ТОТ ЖЕ расчёт, что в KPI вкладки «Модели»
+// (`median(rows.map(r => r.pair.tokps_median))`), только сгруппированный по `bk`.
+// Ничего не усредняем повторно и не складываем окна: у каждой цифры своё окно журнала,
+// и оно подписано в тултипе чипа.
+let LG_GW_SPEED = null;
+const LG_GW_SPEED_TTL = 300000;   // 5 минут: агрегат читает журнал за две недели
+function lgGwSpeedOf(id) {
+  const m = LG_GW_SPEED && LG_GW_SPEED.map[String(id || '').trim().toLowerCase()];
+  return m && Number.isFinite(m.tps) ? m : null;
+}
+async function lgGwSpeedLoad(force = false) {
+  const now = Date.now();
+  if (!force && LG_GW_SPEED && now - LG_GW_SPEED.at < LG_GW_SPEED_TTL) return LG_GW_SPEED;
+  const out = { at: now, map: {}, days: null };
+  try {
+    const r = await fetch('/__switch/api/models/health');
+    const j = await r.json().catch(() => null);
+    if (r.ok && j && j.ok === true) {
+      const byBk = new Map();
+      for (const p of Array.isArray(j.pairs) ? j.pairs : []) {
+        const bk = String(p.bk || '').trim().toLowerCase();
+        if (!bk || p.tokps_median == null || !Number.isFinite(Number(p.tokps_median))) continue;
+        if (!byBk.has(bk)) byBk.set(bk, []);
+        byBk.get(bk).push(Number(p.tokps_median));
+      }
+      for (const [bk, arr] of byBk) {
+        arr.sort((a, b) => a - b);
+        const h = arr.length >> 1;
+        out.map[bk] = { tps: arr.length % 2 ? arr[h] : (arr[h - 1] + arr[h]) / 2, n: arr.length };
+      }
+      out.days = j.window && Number(j.window.days) ? Number(j.window.days) : null;
+    }
+  } catch (e) { /* нет скорости - чип без цифры, панель не страдает */ }
+  LG_GW_SPEED = out;
+  return out;
 }
 function lgGatewaysPaint() {
   const box = document.getElementById('lg-gws');
@@ -45608,8 +47108,17 @@ function lgGatewaysPaint() {
   // правилом, и один атрибут `hidden` его не перебивает.
   box.hidden = !items.length; box.style.display = items.length ? '' : 'none';
   if (!items.length) return;
-  const chip = x => `<span class="lggw${x.up ? '' : ' off'}"`
-    + ` title="${lgEsc(x.note || '')}"><i></i>${lgEsc(x.label || x.id)}</span>`;
+  // Скорость ищется по id шлюза (`bk` в журнале моделей). Не совпало - чип без цифры:
+  // выдумывать 0 вместо «нет данных» здесь нельзя, ноль читался бы как «стоит».
+  const chip = x => {
+    const s = lgGwSpeedOf(x.id);
+    const tps = s ? `${s.tps.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ток/с` : '';
+    const tip = [x.note || '',
+      s ? `медиана ${tps} по ${s.n} моделям` + (LG_GW_SPEED.days ? ` · журнал ${LG_GW_SPEED.days} дн` : '') : ''
+    ].filter(Boolean).join(' · ');
+    return `<span class="lggw${x.up ? '' : ' off'}" title="${lgEsc(tip)}"><i></i>`
+      + `${lgEsc(x.label || x.id)}${tps ? `<b class="lggwspd">${lgEsc(tps)}</b>` : ''}</span>`;
+  };
   const up = items.filter(x => x.up), down = items.filter(x => !x.up);
   const upHost = document.getElementById('lg-gw-up');
   if (upHost) upHost.innerHTML = up.length ? up.map(chip).join('')
@@ -46978,7 +48487,7 @@ else init();
      вторым источником правды — разъедется в тот день, когда права поменяются. -->
 <script>
 const LAD = { rows: [], admins: 0, err: '', loading: false, me: null,
-  gw: null, gwDirty: false };
+  gw: null, gwDirty: false, gwGen: 0, gwSaving: false };
 
 function ladEsc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g,
@@ -47072,6 +48581,24 @@ function ladGwTabs() {
   }
   return out;
 }
+// Свободный ввод: id должен пройти проверку приёмника (буквы, цифры, точка, дефис,
+// подчёркивание, до 32 символов). Чистим здесь же, чтобы админ увидел причину сразу,
+// а не получил 200 с молча выброшенной записью.
+function ladGwId(raw) {
+  const s = String(raw || '').trim().replace(/\s+/g, '-').replace(/[^\p{L}\p{N}._-]/gu, '');
+  return s.replace(/^[^\p{L}\p{N}]+/u, '').slice(0, 32);
+}
+// Правка сохраняется сама: без этого выбор жил в памяти вкладки, а «Лига» показывала
+// пусто - ровно та жалоба, с которой начали. Пауза 900 мс склеивает щелчки тумблеров в
+// один PUT; кнопка «сохранить» осталась для ручного повтора.
+let LAD_GW_TIMER = null;
+function ladGwTouch() {
+  LAD.gwDirty = true;
+  LAD.gwGen += 1;
+  ladGwRender();
+  clearTimeout(LAD_GW_TIMER);
+  LAD_GW_TIMER = setTimeout(() => ladGwSave(true), 900);
+}
 async function ladGwLoad() {
   try {
     const r = await fetch('/__switch/api/league/gateways');
@@ -47085,6 +48612,13 @@ async function ladGwLoad() {
     LAD.gwDirty = false;
   } catch (e) { LAD.gw = null; }
   ladGwRender();
+  // Скорость догоняет списком: журнал моделей читается дольше отметок, а строки
+  // должны появиться сразу. Фокус в поле заметки не отбираем - если админ печатает,
+  // цифры доедут к следующей отрисовке.
+  lgGwSpeedLoad().then(() => {
+    const host = document.getElementById('lad-gw-list');
+    if (host && !host.contains(document.activeElement)) ladGwRender();
+  });
 }
 function ladGwRender() {
   const host = document.getElementById('lad-gw-list');
@@ -47093,9 +48627,16 @@ function ladGwRender() {
   const items = gw ? gw.items : [];
   host.innerHTML = items.length ? items.map(x => {
     const id = ladEsc(x.id);
+    const s = lgGwSpeedOf(x.id);
     return `<div class="rounded-lg border border-line-soft bg-surface px-3 py-2 flex items-center gap-3">
       <span class="text-sm text-ink flex-1 truncate">${ladEsc(x.label || x.id)}</span>
       <code class="font-mono text-[10px] text-faint">${id}</code>
+      <span class="font-mono text-[10px] text-faint w-[86px] text-right"
+        title="${s ? `медиана ${s.tps} ток/с по ${s.n} моделям` : 'скорости в журнале моделей нет'}">${s
+        ? s.tps.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' ток/с' : '—'}</span>
+      <input type="text" data-gw-note="${id}" value="${ladEsc(x.note || '')}" maxlength="120"
+        placeholder="заметка"
+        class="text-xs px-2 py-1 rounded border border-line-soft bg-surface text-ink w-44">
       <button type="button" data-gw-toggle="${id}" data-on="${x.up ? '1' : '0'}"
         class="text-xs px-2 py-1 rounded border transition ${x.up
           ? 'border-emerald/40 text-emerald hover:bg-emerald/10'
@@ -47105,24 +48646,29 @@ function ladGwRender() {
     </div>`;
   }).join('') : '<div class="text-xs text-faint px-1">ни одного шлюза не отмечено — добавь из списка ниже</div>';
   const note = document.getElementById('lad-gw-note');
-  if (note) note.textContent = LAD.gwDirty ? 'есть несохранённые изменения'
+  if (note) note.textContent = LAD.gwSaving ? 'сохраняю…'
+    : LAD.gwDirty ? 'есть несохранённые изменения'
     : (gw && gw.updated ? 'обновлено ' + new Date(gw.updated).toLocaleString('ru-RU',
         { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
         + (gw.updatedBy ? ' · ' + gw.updatedBy : '') : '');
-  const sel = document.getElementById('lad-gw-add');
-  if (sel) {
-    const have = new Set(items.map(x => x.id));
-    const tabs = ladGwTabs().filter(t => !have.has(t.id));
-    sel.innerHTML = tabs.length
-      ? tabs.map(t => `<option value="${ladEsc(t.id)}">${ladEsc(t.label)}</option>`).join('')
-      : '<option value="">все вкладки уже в списке</option>';
+  // Кандидаты - в datalist: нативный поиск по вводу вместо прокрутки селекта на сорок
+  // вкладок. Уже добавленные не прячем: иначе повторное добавление молча ничего не
+  // делает, и непонятно, почему. Отсекает дубли обработчик «добавить».
+  const dl = document.getElementById('lad-gw-opts');
+  if (dl) {
+    // Сверху - шлюзы, по которым в журнале моделей есть трафик: именно их админ и
+    // отмечает. Остальные вкладки остаются ниже, чтобы нельзя было потерять новый
+    // шлюз, которого в журнале ещё нет.
+    const seenBk = new Set(LG_GW_SPEED ? Object.keys(LG_GW_SPEED.map) : []);
+    const tabs = ladGwTabs().sort((a, b) => (seenBk.has(b.id) ? 1 : 0) - (seenBk.has(a.id) ? 1 : 0));
+    dl.innerHTML = tabs.map(t => `<option value="${ladEsc(t.id)}">${ladEsc(t.label)}</option>`).join('');
   }
   for (const b of host.querySelectorAll('[data-gw-toggle]')) {
     b.addEventListener('click', () => {
       const id = b.getAttribute('data-gw-toggle');
       const it = LAD.gw && LAD.gw.items.find(x => x.id === id);
       if (!it) return;
-      it.up = !it.up; LAD.gwDirty = true; ladGwRender();
+      it.up = !it.up; ladGwTouch();
     });
   }
   for (const b of host.querySelectorAll('[data-gw-del]')) {
@@ -47130,32 +48676,60 @@ function ladGwRender() {
       const id = b.getAttribute('data-gw-del');
       if (!LAD.gw) return;
       LAD.gw.items = LAD.gw.items.filter(x => x.id !== id);
-      LAD.gwDirty = true; ladGwRender();
+      ladGwTouch();
+    });
+  }
+  // Заметка сохраняется на «change» (Enter или уход из поля), а не на каждый символ:
+  // иначе перерисовка списка выдёргивала бы курсор из-под рук.
+  for (const inp of host.querySelectorAll('[data-gw-note]')) {
+    inp.addEventListener('change', () => {
+      const it = LAD.gw && LAD.gw.items.find(x => x.id === inp.getAttribute('data-gw-note'));
+      if (!it) return;
+      it.note = inp.value.trim().slice(0, 120);
+      ladGwTouch();
     });
   }
   const add = document.getElementById('lad-gw-addbtn');
   if (add) add.onclick = () => {
     const s = document.getElementById('lad-gw-add');
-    const id = s && s.value;
-    if (!id || !LAD.gw) return;
-    const t = ladGwTabs().find(x => x.id === id);
-    LAD.gw.items.push({ id, label: t ? t.label : id, up: false, note: '' });
-    LAD.gwDirty = true; ladGwRender();
+    const raw = ((s && s.value) || '').trim();
+    if (!raw || !LAD.gw) return;
+    // Сначала ищем вкладку по id или подписи, и только потом считаем ввод именем
+    // нового шлюза: у вкладки подпись человеческая («GoRouter»), а id технический.
+    const low = raw.toLowerCase();
+    const t = ladGwTabs().find(x => x.id.toLowerCase() === low || x.label.toLowerCase() === low);
+    const id = t ? t.id : ladGwId(raw);
+    if (!id) { toast('имя шлюза: буквы, цифры, точка, дефис, подчёркивание', 'error', 6000); return; }
+    if (LAD.gw.items.some(x => x.id === id)) { toast('«' + id + '» уже в списке', 'error'); return; }
+    LAD.gw.items.push({ id, label: t ? t.label : raw, up: false, note: '' });
+    if (s) s.value = '';
+    ladGwTouch();
   };
   const all = document.getElementById('lad-gw-all');
   if (all) all.onclick = () => {
     if (!LAD.gw) return;
     const have = new Set(LAD.gw.items.map(x => x.id));
+    let n = 0;
     for (const t of ladGwTabs()) if (!have.has(t.id)) {
-      LAD.gw.items.push({ id: t.id, label: t.label, up: false, note: '' });
+      LAD.gw.items.push({ id: t.id, label: t.label, up: false, note: '' }); n++;
     }
-    LAD.gwDirty = true; ladGwRender();
+    if (!n) { toast('все вкладки уже в списке', 'error'); return; }
+    ladGwTouch();
   };
   const save = document.getElementById('lad-gw-save');
-  if (save) save.onclick = ladGwSave;
+  if (save) save.onclick = () => ladGwSave(false);
 }
-async function ladGwSave() {
+async function ladGwSave(auto = false) {
   if (!LAD.gw) return;
+  // Параллельные PUT не плодим: второй ушёл бы со списком, снятым до первого ответа,
+  // и затёр бы более свежую правку.
+  if (LAD.gwSaving) {
+    if (!auto) toast('сохранение уже идёт', 'info');
+    return;
+  }
+  clearTimeout(LAD_GW_TIMER);
+  const gen = LAD.gwGen;
+  LAD.gwSaving = true;
   try {
     const r = await fetch('/__switch/api/league/gateways', { method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -47163,12 +48737,29 @@ async function ladGwSave() {
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || j.ok !== true) {
       toast(ladWhy(r.status, j, 'сохранить шлюзы'), 'error', 6000);
+      LAD.gwDirty = true; ladGwRender();
       return;
     }
-    toast('✓ отметки шлюзов сохранены', 'success');
-    await ladGwLoad();
+    // Пока запрос летел, админ мог щёлкнуть ещё раз: тогда локальный список новее
+    // ответа, и перечитывать его нельзя - правка пропадёт. Сохраняем ещё раз.
+    if (gen === LAD.gwGen) {
+      LAD.gwDirty = false;
+      await ladGwLoad();
+      if (!auto) toast('✓ отметки шлюзов сохранены', 'success');
+    } else {
+      LAD.gwDirty = true; ladGwRender();
+      setTimeout(() => ladGwSave(true), 300);
+    }
     if (typeof lgGatewaysLoad === 'function') lgGatewaysLoad();
-  } catch (e) { toast('не отправлено: ' + (e.message || 'запрос не ушёл'), 'error'); }
+  } catch (e) {
+    toast('не отправлено: ' + (e.message || 'запрос не ушёл'), 'error');
+    LAD.gwDirty = true; ladGwRender();
+  } finally {
+    LAD.gwSaving = false;
+    // Без этой перерисовки строка «сохраняю…» оставалась бы на экране до следующего
+    // действия: `ladGwLoad` рисует ещё внутри сохранения, когда флаг ещё поднят.
+    if (document.getElementById('lad-gw-list')) ladGwRender();
+  }
 }
 const LAD_SHELL = `
   <div class="flex items-center gap-2 mb-4">
@@ -47188,11 +48779,14 @@ const LAD_SHELL = `
   <section>
     <h2 class="text-sm font-semibold tracking-tight mb-2">Шлюзы</h2>
     <p class="text-[11px] text-faint mb-2">Отметки «работает / лежит» видят все участники
-      на вкладке «Лига». Список живёт на приёмнике, правит его только админ.</p>
+      на вкладке «Лига». Список живёт на приёмнике, правит его только админ. Скорость -
+      медиана токенов в секунду по журналу вкладки «Модели», к отметке отношения не имеет.</p>
     <div id="lad-gw-list" class="space-y-1.5"></div>
     <div class="flex items-center gap-2 mt-3 flex-wrap">
-      <select id="lad-gw-add"
-        class="text-xs px-2 py-1 rounded border border-line-soft bg-surface text-ink"></select>
+      <input id="lad-gw-add" list="lad-gw-opts" type="text" autocomplete="off"
+        placeholder="найти шлюз или вписать имя"
+        class="text-xs px-2 py-1 rounded border border-line-soft bg-surface text-ink w-64">
+      <datalist id="lad-gw-opts"></datalist>
       <button id="lad-gw-addbtn" type="button"
         class="text-xs px-2 py-1 rounded border border-line-soft text-muted hover:text-ink hover:border-line transition">добавить</button>
       <button id="lad-gw-all" type="button"

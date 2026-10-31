@@ -51,7 +51,7 @@
     const root = byId('a6api-root'); if (!root) return;
     root.innerHTML = `
       <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Claude Code на одном платном аккаунте</p></div>
-        <div class="a6-row"><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.com/console" target="_blank" rel="noopener">Кабинет</a></div></header>
+        <div class="a6-row"><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.vip/console" target="_blank" rel="noopener">Кабинет</a></div></header>
       <div id="a6-error" class="a6-notice a6-error" role="alert" hidden></div>
       <div id="a6-local" class="a6-notice" hidden>Только просмотр. Чтобы изменить настройки, откройте дашборд через localhost на основной машине.</div>
       <section class="a6-account" aria-label="Аккаунт a6api"><div><span class="a6-muted">Общий баланс</span><strong id="a6-balance" class="a6-balance a6-mono">нет данных</strong></div>

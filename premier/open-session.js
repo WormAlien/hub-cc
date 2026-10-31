@@ -48,7 +48,9 @@ async function openRegisterViaRef(page, label) {
 
 function permittedHost(host, githubOnly) {
     const h = String(host || '').replace(/^\./, '').toLowerCase();
-    return h === 'github.com' || h.endsWith('.github.com') || (!githubOnly && h === api.HOST);
+    // Premier lives on two domains (29.10.2026): old cabinet and eide.pro where new
+    // sign-ins land. Both carry the session cookie, so accept either.
+    return h === 'github.com' || h.endsWith('.github.com') || (!githubOnly && api.HOSTS.includes(h));
 }
 async function applyImportedSession(context, session) {
     if (!session) return false;
@@ -68,10 +70,21 @@ async function applyImportedSession(context, session) {
     }, origins);
     return cookies.length > 0;
 }
+// Which Premier domain is the browser actually signed in to? The session cookie is
+// domain-scoped, so probing /api/auth/me on each origin is the only honest answer.
+async function activeOrigin(context) {
+    for (const origin of api.ORIGINS.slice().reverse()) {
+        try {
+            const me = await context.request.get(origin + '/api/auth/me', { timeout: 12000, maxRedirects: 0 });
+            if (me.ok() && api.isAuthenticated(await me.json())) return origin;
+        } catch {}
+    }
+    return null;
+}
 async function authenticatedState(context) {
-    const me = await context.request.get(api.ORIGIN + '/api/auth/me', { timeout: 12000, maxRedirects: 0 });
-    if (!me.ok() || !api.isAuthenticated(await me.json())) return null;
-    const response = await context.request.get(api.ORIGIN + '/api/dev/state', { timeout: 12000, maxRedirects: 0 });
+    const origin = await activeOrigin(context);
+    if (!origin) return null;
+    const response = await context.request.get(origin + '/api/dev/state', { timeout: 12000, maxRedirects: 0 });
     if (!response.ok()) return null;
     const state = await response.json();
     return api.isAuthenticated(state) ? state : null;
@@ -81,7 +94,9 @@ async function authenticatedState(context) {
 // окна: тир набирается днями, а не секундами. Ошибка не влияет на вход.
 async function referralState(context) {
     try {
-        const r = await context.request.get(api.ORIGIN + '/api/billing', { timeout: 12000, maxRedirects: 0 });
+        const origin = await activeOrigin(context);
+        if (!origin) return null;
+        const r = await context.request.get(origin + '/api/billing', { timeout: 12000, maxRedirects: 0 });
         if (!r.ok()) return null;
         const ref = (await r.json() || {}).ref;
         return ref && ref.on ? ref : null;
@@ -106,8 +121,9 @@ async function main() {
     const done = new Promise(resolve => context.once('close', () => { closed = true; resolve(); }));
     const save = async () => {
         if (busy || closed || Date.now() - lastCheck < 4000) return;
-        // Do not navigate or call GitHub APIs during its OAuth flow.
-        if (!context.pages().some(p => p.url().startsWith(api.ORIGIN + '/'))) return;
+        // Do not navigate or call GitHub APIs during its OAuth flow. Either Premier
+        // domain counts: new sign-ins land on eide.pro, not only the old cabinet.
+        if (!api.ORIGINS.some(o => context.pages().some(p => p.url().startsWith(o + '/')))) return;
         busy = true; lastCheck = Date.now();
         try {
             const state = await authenticatedState(context);
@@ -128,7 +144,8 @@ async function main() {
             if (!loggedIn) {
                 loggedIn = true;
                 console.log('Premier login verified. Session saved; open Developers to copy the API key.');
-                await page.goto(api.ORIGIN + '/developers', { waitUntil: 'domcontentloaded' });
+                const origin = await activeOrigin(context) || api.ORIGIN;
+                await page.goto(origin + '/developers', { waitUntil: 'domcontentloaded' });
             }
         } catch (e) {
             if (!closed) console.error('Premier session check: ' + e.message);

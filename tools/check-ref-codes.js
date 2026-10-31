@@ -43,7 +43,10 @@ if (rc) {
     // не отличала «список разъехался» от «список вырос». Держим СПИСОК имён, а не счётчик:
     // добавление шлюза видно как «нет в списке у теста», а расхождение печатается по именам.
     const LIVE = ['agentrouter', 'gorouter', 'hcnsec', 'justwoker', 'kktoken', 'nova', 'bai',
-        'getunikey', 'aikeysapi', 'aipm', 'wisdomsatan', 'tabi', 'tuzi'];
+        'getunikey', 'aikeysapi', 'aipm', 'wisdomsatan', 'tabi', 'tuzi',
+        // добраны 31.10: шлюзы заведены раньше, а список не пополнялся, и проверка
+        // краснела на ровном месте - ровно тот дрейф, о котором предупреждает коммент выше.
+        'artbloom', 'budsin', 'fxqidian', 'kvotum', 'lsapi', 'premier', 'smailpro', 'threerouter'];
     const LEGACY = ['seekai', 'truesota', 'xpeach'];
     const diff = (got, want) => 'лишние: ' + got.filter((p) => !want.includes(p)).join(', ')
         + ' | пропали: ' + want.filter((p) => !got.includes(p)).join(', ');
@@ -140,6 +143,28 @@ console.log('\n── justwoker/auto-add.js ──');
     const s = R('justwoker/auto-add.js');
     chk(/require\(['"]\.\.\/routing\/lib\/ref-codes\.js['"]\)\.code\(['"]justwoker['"]\)/.test(s),
         'JW_AFF_CODE берётся из модуля');
+}
+
+// Автореги ThreeRouter (31.10). Раньше проверка смотрела только `justwoker/auto-add.js`,
+// а авторега-то как раз и осталась с литералами: `threerouter/auto-add.js` регистрировал
+// по коду DADYQH35FHUJ, забаненному 28.10, и `smailpro/auto-add.py` - по замороженному
+// VWCYM3TATVDX. Настройка рефки в «Настройках» до них не доезжала вовсе.
+console.log('\n── автореги ThreeRouter ──');
+{
+    const s = R('threerouter/auto-add.js');
+    chk(/require\(['"]\.\.\/routing\/lib\/ref-codes\.js['"]\)\.code\(['"]threerouter['"]\)/.test(s),
+        'threerouter/auto-add.js: REF из модуля');
+    chk(!/DADYQH35FHUJ/.test(s.replace(/^\s*\/\/.*$/gm, '')),
+        'threerouter/auto-add.js: забаненного кода DADYQH35FHUJ в живом коде нет');
+    const p = R('smailpro/auto-add.py');
+    chk(/REF = owner_ref\(["']threerouter["']\)/.test(p),
+        'smailpro/auto-add.py: REF через owner_ref()');
+    chk(p.includes('"routing" / "lib" / "ref-codes.js"'),
+        'smailpro/auto-add.py: порядок override > default спрашивает у ref-codes.js, а не копией');
+    chk(!/^REF = "VWCYM3TATVDX"/m.test(p),
+        'smailpro/auto-add.py: замороженного литерала REF нет');
+    const c = R('routing/lib/ref-codes.js');
+    chk(/require\.main === module/.test(c), 'ref-codes.js: CLI для не-Node клиентов объявлен');
 }
 
 console.log('\n── routing/proxy-dashboard.html ──');

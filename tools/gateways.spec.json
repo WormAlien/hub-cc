@@ -11,7 +11,7 @@
     "  must-not-count — счётчик: max (дубли, грабля 19) и expectMin (ровно одна такая строка)",
     "  file           — файл обязан существовать",
     "",
-    "when — условие применимости по флагам конфига шлюза (github / ref / flatRate / anthropic / pool / shareScript).",
+    "when — условие применимости по флагам конфига шлюза (github / ref / flatRate / anthropic / pool / shareScript / customPanel / paidHedge).",
     "Значение `!флаг` значит «этот флаг обязан быть ВЫКЛЮЧЕН». Так включается точка, которая",
     "ПОДМЕНЯЕТ собой другую при обратном флаге: у 1.18 (обработчик share) есть пара 1.18n для",
     "shareScript: false, и её регион клонируется из ДРУГОГО источника (`\"source\": \"lsapi\"`).",
@@ -25,7 +25,6 @@
     "",
     "Файлы, которых нет в files, проверяются относительно корня проекта."
   ],
-
   "files": {
     "backend": "routing/transparent-proxy.js",
     "frontend": "routing/proxy-dashboard.html",
@@ -40,144 +39,1013 @@
     "githubSession": "routing/lib/github-session.js",
     "statusline": "routing/statusline-autoreger.sh"
   },
-
   "points": [
-    { "id": "1.1",  "title": "Константы шлюза",            "file": "backend", "kind": "must", "expect": "const %P%_SESSIONS_FILE" },
-    { "id": "1.1b", "title": "Константы шлюза (порт)",      "file": "backend", "kind": "must-any",
-      "any": ["const %P%_KEEPALIVE_PORT = %PORT%;", "const %P%_KEEPALIVE_PORT = Number(process.env.%P%_KEEPALIVE_PORT || %PORT%)"],
-      "note": "ДВЕ формы: старая (KK/GO/JW/SK/TB/XP/AP) и новая с env-override (HN/AK/RM/TS). Инструкция знает только первую — грабля." },
-    { "id": "1.1c", "title": "Константы шлюза (листинг)",   "file": "backend", "kind": "must", "expect": "const %P%_BASE_URL = 'https://%HOST%/v1'" },
-    { "id": "1.2",  "title": "keepalive handler",           "file": "backend", "kind": "must", "expect": "const keepalive%x% = makeKeepaliveHandlers" },
-
-    { "id": "1.3",  "title": "Util: чтение пула",           "file": "backend", "kind": "must", "expect": "function %p%Load()" },
-    { "id": "1.4",  "title": "Util: запись пула",           "file": "backend", "kind": "must", "expect": "function %p%Save(" },
-    { "id": "1.5",  "title": "Util: активная модель",       "file": "backend", "kind": "must", "expect": "function %p%ReadActiveModel()" },
-    { "id": "1.6",  "title": "Util: активный ключ",         "file": "backend", "kind": "must", "expect": "function %p%ReadActiveKey()" },
-    { "id": "1.7",  "title": "Util: спавн keepalive",       "file": "backend", "kind": "must", "expect": "function %p%KeepaliveSpawn()" },
-    { "id": "1.8",  "title": "Util: пинг ключа",            "file": "backend", "kind": "must", "expect": "function %p%Probe(" },
-    { "id": "1.9",  "title": "Util: баланс",                "file": "backend", "kind": "must", "expect": "function %p%Balance(" },
-    { "id": "1.10", "title": "Util: применение баланса",    "file": "backend", "kind": "must", "expect": "function %p%ApplyBalance(" },
-    { "id": "1.11", "title": "Свой pid-пул",                "file": "backend", "kind": "must", "expect": "const %p%LkPids = new Map()" },
-    { "id": "1.12", "title": "Своя pidAlive (грабля #22)",  "file": "backend", "kind": "must", "expect": "function %p%PidAlive(pid)" },
-
-    { "id": "1.13", "title": "Handler: sessions",           "file": "backend", "kind": "must", "expect": "function handle%x%Sessions(req, res)" },
-    { "id": "1.14", "title": "Handler: ping",               "file": "backend", "kind": "must", "expect": "function handle%x%Ping(req, res)" },
-    { "id": "1.15", "title": "Handler: balance",            "file": "backend", "kind": "must", "expect": "function handle%x%Balance(req, res)" },
-    { "id": "1.16", "title": "Handler: set-balance",        "file": "backend", "kind": "must", "expect": "function handle%x%SetBalance(req, res)" },
-    { "id": "1.17", "title": "Handler: session/open",       "file": "backend", "kind": "must", "expect": "function handle%x%SessionOpen(" },
-    { "id": "1.18", "title": "Handler: share",              "file": "backend", "kind": "must", "expect": "function handle%x%Share(", "when": ["shareScript"] },
-    { "id": "1.18a", "title": "Опора share/import: B64-кодек",      "file": "backend", "kind": "must", "expect": "function %p%B64UrlEncode(" },
-    { "id": "1.18b", "title": "Опора share/import: папка снимков", "file": "backend", "kind": "must", "expect": "const %P%_SESSIONS_DIR" },
-    { "id": "1.18c", "title": "Опора share/import: скрипт снимка",  "file": "backend", "kind": "must", "expect": "const %P%_SHARE_SCRIPT", "guard": "%P%_SHARE_SCRIPT", "when": ["shareScript"] },
-    { "id": "1.18n", "title": "Handler: share без скрипта снимка (читает с диска)", "file": "backend", "kind": "must", "expect": "function handle%x%Share(", "when": ["!shareScript"], "source": "lsapi" },
-    { "id": "1.18n2", "title": "Скрипта снимка у такой вкладки нет", "file": "backend", "kind": "must-not-count", "expect": "%P%_SHARE_SCRIPT", "max": 0, "when": ["!shareScript"] },
-    { "id": "1.19", "title": "Handler: import",             "file": "backend", "kind": "must", "expect": "function handle%x%Import(" },
-    { "id": "1.20", "title": "Handler: add",                "file": "backend", "kind": "must", "expect": "function handle%x%Add(" },
-    { "id": "1.21", "title": "Handler: set-key",            "file": "backend", "kind": "must", "expect": "function handle%x%SetKey(" },
-    { "id": "1.22", "title": "Handler: rename",             "file": "backend", "kind": "must", "expect": "function handle%x%Rename(" },
-    { "id": "1.23", "title": "Handler: delete",             "file": "backend", "kind": "must", "expect": "function handle%x%Delete(" },
-    { "id": "1.24", "title": "Handler: activate",           "file": "backend", "kind": "must", "expect": "function handle%x%Activate(" },
-    { "id": "1.25", "title": "Handler: models",             "file": "backend", "kind": "must", "expect": "function handle%x%Models(" },
-    { "id": "1.26", "title": "Handler: set-model",          "file": "backend", "kind": "must", "expect": "function handle%x%SetModel(" },
-    { "id": "1.27", "title": "Handler: modelmap",           "file": "backend", "kind": "must", "expect": "function handle%x%ModelMap(" },
-    { "id": "1.28", "title": "Чтение тир-карты",            "file": "backend", "kind": "must", "expect": "function %p%ReadModelMap()" },
-
-    { "id": "1.29", "title": "Обёртка add-github",          "file": "backend", "kind": "must", "when": ["github"], "expect": "function handle%x%AddGithub(req, res)" },
-    { "id": "1.30", "title": "Обёртка map-profiles",        "file": "backend", "kind": "must", "when": ["github"], "expect": "function handle%x%MapProfiles(req, res)" },
-    { "id": "1.31", "title": "Обёртка set-github",          "file": "backend", "kind": "must", "when": ["github"], "expect": "function handle%x%SetGithub(req, res)" },
-    { "id": "1.32", "title": "Грабля #18: префикс аккаунта", "file": "backend", "kind": "must", "when": ["github"], "expect": "prefix: '%p%_'" },
-
-    { "id": "1.8a",  "title": "Реестр BACKENDS",            "file": "backend", "kind": "must", "expect": ["%full%: {", "label: '%NAME%',"] },
-    { "id": "1.8b",  "title": "Реестр CC_MODEL_PREFIX",     "file": "backend", "kind": "must", "expect": "%full%: '%full%'," },
-    { "id": "1.8c",  "title": "Реестр GH_POOL_LOADERS",     "file": "backend", "kind": "must", "when": ["github"], "expect": "%p%: () => %p%Load()" },
-    { "id": "1.8d",  "title": "Реестр GH_POOL_FILES",       "file": "backend", "kind": "must", "when": ["github"], "expect": "%p%: () => %P%_SESSIONS_FILE" },
-    { "id": "1.8e",  "title": "Реестр GH_POOL_SAVERS",      "file": "backend", "kind": "must", "when": ["github"], "expect": "%p%: arr => %p%Save(arr)" },
-    { "id": "1.8f",  "title": "Реестр GH_POOL_LABELS",      "file": "backend", "kind": "must", "when": ["github"], "expect": "%p%: '%NAME%'" },
-    { "id": "1.8g",  "title": "Реестр NEWAPI_PROFILE_DIRS", "file": "backend", "kind": "must", "expect": "'%HOST%':" },
-    { "id": "1.8h",  "title": "Реестр MONEY_GW",            "file": "backend", "kind": "must", "expect": ["%p%: { tag: '%full%',", "balanceFn: %p%Balance"] },
-    { "id": "1.8i",  "title": "Реестр keepaliveInstances",  "file": "backend", "kind": "must", "expect": "[%P%_KEEPALIVE_PORT]: { name: '%NAME%'" },
-
-    { "id": "1.8j",  "title": "Грабля #21: pid-пул в newapiLkBusy", "file": "backend", "kind": "must", "expect": "%p%LkPids", "within": "const pools = [" },
-    { "id": "1.9a",  "title": "Роут: sessions",             "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/sessions'" },
-    { "id": "1.9b",  "title": "Роут: ping",                 "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/ping'" },
-    { "id": "1.9c",  "title": "Роут: balance",              "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/balance'" },
-    { "id": "1.9d",  "title": "Роут: models",               "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/models'" },
-    { "id": "1.9e",  "title": "Роут: active-model",         "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/active-model'" },
-    { "id": "1.9f",  "title": "Роут: modelmap",             "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/modelmap'", "within": "modelMap: %p%ReadModelMap()" },
-    { "id": "1.9f2", "title": "Роут: modelmap POST",        "file": "backend", "kind": "must", "expect": "handle%x%ModelMap(req, res);" },
-    { "id": "1.9g",  "title": "Роут: add",                  "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/add'" },
-    { "id": "1.9h",  "title": "Роут: key",                  "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/key'" },
-    { "id": "1.9i",  "title": "Роут: rename",               "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/rename'" },
-    { "id": "1.9j",  "title": "Роут: delete",               "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/delete'" },
-    { "id": "1.9k",  "title": "Роут: activate",             "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/activate'" },
-    { "id": "1.9l",  "title": "Роут: set-model",            "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/set-model'" },
-    { "id": "1.9m",  "title": "Роут: set-balance",          "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/set-balance'" },
-    { "id": "1.9n",  "title": "Роут: map-profiles",         "file": "backend", "kind": "must", "when": ["github"], "expect": "'/__switch/api/%p%/map-profiles'" },
-    { "id": "1.9o",  "title": "Роут: session/open",         "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/session/open'" },
-    { "id": "1.9p",  "title": "Роут: share",                "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/share'" },
-    { "id": "1.9q",  "title": "Роут: import",               "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/import'" },
-    { "id": "1.9r",  "title": "Роут: keepalive/state",      "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/keepalive/state'" },
-    { "id": "1.9s",  "title": "Роут: keepalive/config",     "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/keepalive/config'" },
-    { "id": "1.9t",  "title": "Роут: keepalive/latency",    "file": "backend", "kind": "must", "expect": "'/__switch/api/%p%/keepalive/latency'" },
-    { "id": "1.9u",  "title": "Роут: add-github",           "file": "backend", "kind": "must", "when": ["github"], "expect": "'/__switch/api/%p%/add-github'" },
-    { "id": "1.9v",  "title": "Роут: set-github",           "file": "backend", "kind": "must", "when": ["github"], "expect": "'/__switch/api/%p%/set-github'" },
-
-    { "id": "1.33", "title": "Грабля #23: тег дедупа баланса", "file": "backend", "kind": "must", "expect": "nudgeBalanceOnce('%p%:'" },
-    { "id": "1.34", "title": "Грабля #25: тег бэкапа настроек", "file": "backend", "kind": "must", "expect": "'settings-%p%'" },
-    { "id": "1.35", "title": "Грабля #19: дубль pidAlive",      "file": "backend", "kind": "must-not-count", "expect": "function %p%PidAlive(pid)", "max": 1, "expectMin": 1 },
-
-    { "id": "2.1",  "title": "Фронт: кнопка сайдбара",      "file": "frontend", "kind": "must", "expect": "data-tab=\"%full%\"" },
-    { "id": "2.2",  "title": "Фронт: панель вкладки",       "file": "frontend", "kind": "must", "expect": "data-tab-content=\"%full%\"" },
-    { "id": "2.3",  "title": "Фронт: LABELS",               "file": "frontend", "kind": "must", "expect": "%full%: '%NAME%'," },
-    { "id": "2.4",  "title": "Фронт: MONEY_PROVIDERS",      "file": "frontend", "kind": "must", "expect": ["id: '%full%',", "stateKey: '%full%'", "icon: '%ICON%'"] },
-    { "id": "2.5",  "title": "Фронт: showTab()",            "file": "frontend", "kind": "must", "expect": "name === '%full%'" },
-    { "id": "2.6",  "title": "Фронт: KEEPALIVE_API",        "file": "frontend", "kind": "must", "expect": "%p%: '/__switch/api/%p%/keepalive'" },
-    { "id": "2.7",  "title": "Фронт: обёртки keepalive",    "file": "frontend", "kind": "must", "expect": "loadKeepaliveCard('%p%'" },
-    { "id": "2.7b",   "title": "Фронт: обёртка keepalive apply", "file": "frontend", "kind": "must", "expect": "applyKeepaliveCard('%p%'", "note": "Три обёртки одной вкладки, а не одна: кнопка «Применить» зовёт apply-версию, и без определения вкладка падает ReferenceError при клике. У nova на 21.09 нет ни apply, ни reset - найдено этой точкой." },
-    { "id": "2.7c",   "title": "Фронт: обёртка keepalive reset", "file": "frontend", "kind": "must", "expect": "resetKeepaliveCard('%p%'" },
-    { "id": "2.8",  "title": "Фронт: KEEPALIVE_POLL_TABS",  "file": "frontend", "kind": "must", "expect": "%full%: ['%p%', '/__switch/api/%p%/keepalive']" },
-    { "id": "2.9",  "title": "Фронт: GH_USE_META",          "file": "frontend", "kind": "must", "when": ["github"], "expect": "%p%: { icon: '%ICON%'" },
-    { "id": "2.10", "title": "Фронт: DEFAULT_TABS_VISIBLE", "file": "frontend", "kind": "must", "expect": "'%full%'", "within": "const DEFAULT_TABS_VISIBLE" },
-    { "id": "2.11", "title": "Фронт: NAV_COUNT_JOBS",       "file": "frontend", "kind": "must", "expect": "tab: '%full%'" },
-    { "id": "2.12", "title": "Фронт: state init (список)",  "file": "frontend", "kind": "must", "expect": "%full%: []" },
-    { "id": "2.13", "title": "Фронт: рендер вкладки",       "file": "frontend", "kind": "must", "expect": "function render%x%Gauge(" },
-
-    { "id": "3.1",  "title": "GW_BY_HOST",                  "file": "keepalive", "kind": "must", "expect": "'%HOST%': '%p%'" },
-    { "id": "3.2",  "title": "FLAT_RATE_HOSTS",             "file": "keepalive", "kind": "must", "when": ["flatRate"], "expect": "'%HOST%'", "within": "const FLAT_RATE_HOSTS" },
-    { "id": "3.3",  "title": "lifecycle: keepalive",        "file": "lifecycle", "kind": "must", "expect": "port: %PORT%, name: '%NAME% keepalive'" },
-    { "id": "3.4",  "title": "keepalive-restart.ps1",       "file": "restart", "kind": "must", "expect": "%PORT% = @{ UPSTREAM" },
-    { "id": "3.5",  "title": "Реф-код в SHAPES",            "file": "refcodes", "kind": "must", "when": ["ref"], "expect": "%full%:" },
-    { "id": "3.6",  "title": "Реф-код в дефолтах",          "file": "refcodesDefault", "kind": "must", "when": ["ref"], "expect": "\"%full%\":", "note": "ключ — ПОЛНОЕ имя шлюза, не короткий префикс" },
-    { "id": "3.7",  "title": "HOST_AUTH",                   "file": "newapiAccount", "kind": "must", "expect": "'%HOST%':" },
-    { "id": "3.8",  "title": "hub-balance POOLS",           "file": "hubBalance", "kind": "must", "expect": "id: '%p%'" },
-    { "id": "3.9",  "title": "Тир-карта (файл)",            "file": "routing/%full%-modelmap.json", "kind": "file", "expect": "" },
-    { "id": "3.10", "title": "Папка шлюза + open-session",  "file": "%FOLDER%/open-session.js", "kind": "file", "expect": "" },
-    { "id": "3.11", "title": ".gitignore: сессии",          "file": "gitignore", "kind": "must", "expect": "%full%-sessions.json" },
-    { "id": "3.12", "title": "Индекс профилей GitHub",      "file": "githubSession", "kind": "must", "when": ["github"], "expect": "host: '%HOST%'" },
-    { "id": "1.1e",   "title": "Константы: CC_HEADERS", "file": "backend", "kind": "must", "expect": "const %P%_CC_HEADERS = {" },
-    { "id": "2.14",   "title": "Фронт: блок функций вкладки", "file": "frontend", "kind": "must", "expect": "function %p%PoolStats(sessions)", "within": "function %p%PoolStats(sessions)" },
-    { "id": "4.1",    "title": "BACKEND_ALIASES (резолв /model)", "file": "backend", "kind": "must", "expect": "%p%: '%full%',", "within": "const BACKEND_ALIASES" },
-    { "id": "4.2",    "title": "ROUTE_EP (префикс эндпоинтов)", "file": "backend", "kind": "must", "expect": "%full%: '%p%',", "within": "const ROUTE_EP" },
-    { "id": "4.3",    "title": "Health: keepalive шлюза", "file": "backend", "kind": "must", "expect": "name: 'Keepalive %NAME%'" },
-    { "id": "4.4",    "title": "Тик автоперечитки вкладки", "file": "frontend", "kind": "must", "expect": "case '%full%':" },
-    { "id": "4.5",    "title": "COLORS вкладки", "file": "frontend", "kind": "must", "expect": "%full%: 'text-%COLOR% bg-%COLOR%',", "within": "const COLORS = {" },
-    { "id": "4.6",    "title": "NEWAPI_RERENDER вкладки", "file": "frontend", "kind": "must", "expect": "%p%: () => render%x%(),", "within": "const NEWAPI_RERENDER = {" },
-    { "id": "4.7",    "title": "check-hub: ожидаемый список вкладок", "file": "tools/check-hub.js", "kind": "must", "expect": "'%full%',", "within": "const want = [" },
-    { "id": "4.8",    "title": "check-hub: префиксы в сверке «зовут ↔ объявлено»", "file": "tools/check-hub.js", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "within": "const PREF = ", "note": "PREF в check-hub.js перечисляет префиксы литерально: вкладки вне списка не проверяются на «зовёт функцию, которой нет» - ровно так молча ломались ts, hn и ol." },
-
-    { "id": "1.8k",   "title": "Реестр ghLkPidsByTag (карты pid по тегу)", "file": "backend", "kind": "must", "expect": "%p%: %p%LkPids", "within": "function ghLkPidsByTag", "when": ["github"] },
-    { "id": "1.8m",   "title": "Список ручек ротации денежных шлюзов", "file": "backend", "kind": "must-any", "any": ["|%p%|", "|%p%)", "(%p%|"], "within": "rotate|auto", "when": ["pool"], "note": "ВТОРАЯ карта денежного шлюза: MONEY_GW знает шлюз, а эта регулярка - какие префиксы роутятся. Разъехались молча: 17.09 Odyssey, 21.09 budsin и nova - просьба о подмене уезжала в 404, снаружи «авторотация не сработала на пустом пуле»." },
-    { "id": "2.15",   "title": "Фронт: NEWAPI_SEED_PROV (модалка GitHub)", "file": "frontend", "kind": "must", "expect": "%p%: { label: '%NAME%',", "when": ["github"] },
-    { "id": "2.16",   "title": "Фронт: ghAddPick (выбор GitHub в форме)", "file": "frontend", "kind": "must", "expect": "%p%: null", "within": "const ghAddPick", "when": ["github"] },
-    { "id": "2.17",   "title": "Фронт: карта тег → полное имя (GitHub-usage)", "file": "frontend", "kind": "must", "expect": "%p%: '%full%'", "when": ["github"] },
-    { "id": "2.18",   "title": "Фронт: state.loaded (карта «вкладка загружена»)", "file": "frontend", "kind": "must", "expect": "%full%: false" },
-    { "id": "2.19",   "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)", "file": "frontend", "kind": "must", "expect": "%full%: '%p%',", "within": "const CATALOG_EP" },
-    { "id": "2.20",   "title": "Фронт: возврат сохранённого порядка сортировки", "file": "frontend", "kind": "must", "expect": "'%p%',", "within": "// Выбранный порядок переживает F5", "note": "Цикл возврата сортировки перечисляет префиксы литерально: вкладка вне списка после F5 молча сбрасывает выбранный порядок." },
-    { "id": "5.1",    "title": "Статуслайн: шкала баланса", "file": "statusline", "kind": "must",
+    {
+      "id": "1.1",
+      "title": "Константы шлюза",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %P%_SESSIONS_FILE"
+    },
+    {
+      "id": "1.1b",
+      "title": "Константы шлюза (порт)",
+      "file": "backend",
+      "kind": "must-any",
+      "any": [
+        "const %P%_KEEPALIVE_PORT = %PORT%;",
+        "const %P%_KEEPALIVE_PORT = Number(process.env.%P%_KEEPALIVE_PORT || %PORT%)"
+      ],
+      "note": "ДВЕ формы: старая (KK/GO/JW/SK/TB/XP/AP) и новая с env-override (HN/AK/RM/TS). Инструкция знает только первую — грабля."
+    },
+    {
+      "id": "1.1c",
+      "title": "Константы шлюза (листинг)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %P%_BASE_URL = 'https://%HOST%/v1'"
+    },
+    {
+      "id": "1.2",
+      "title": "keepalive handler",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const keepalive%x% = makeKeepaliveHandlers"
+    },
+    {
+      "id": "1.3",
+      "title": "Util: чтение пула",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%Load()"
+    },
+    {
+      "id": "1.4",
+      "title": "Util: запись пула",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%Save("
+    },
+    {
+      "id": "1.5",
+      "title": "Util: активная модель",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%ReadActiveModel()"
+    },
+    {
+      "id": "1.6",
+      "title": "Util: активный ключ",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%ReadActiveKey()"
+    },
+    {
+      "id": "1.7",
+      "title": "Util: спавн keepalive",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%KeepaliveSpawn()"
+    },
+    {
+      "id": "1.8",
+      "title": "Util: пинг ключа",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%Probe("
+    },
+    {
+      "id": "1.9",
+      "title": "Util: баланс",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%Balance("
+    },
+    {
+      "id": "1.10",
+      "title": "Util: применение баланса",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%ApplyBalance("
+    },
+    {
+      "id": "1.11",
+      "title": "Свой pid-пул",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %p%LkPids = new Map()"
+    },
+    {
+      "id": "1.12",
+      "title": "Своя pidAlive (грабля #22)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%PidAlive(pid)"
+    },
+    {
+      "id": "1.13",
+      "title": "Handler: sessions",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Sessions(req, res)"
+    },
+    {
+      "id": "1.14",
+      "title": "Handler: ping",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Ping(req, res)"
+    },
+    {
+      "id": "1.15",
+      "title": "Handler: balance",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Balance(req, res)"
+    },
+    {
+      "id": "1.16",
+      "title": "Handler: set-balance",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%SetBalance(req, res)"
+    },
+    {
+      "id": "1.17",
+      "title": "Handler: session/open",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%SessionOpen("
+    },
+    {
+      "id": "1.18",
+      "title": "Handler: share",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Share(",
+      "when": [
+        "shareScript"
+      ]
+    },
+    {
+      "id": "1.18a",
+      "title": "Опора share/import: B64-кодек",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%B64UrlEncode("
+    },
+    {
+      "id": "1.18b",
+      "title": "Опора share/import: папка снимков",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %P%_SESSIONS_DIR"
+    },
+    {
+      "id": "1.18c",
+      "title": "Опора share/import: скрипт снимка",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %P%_SHARE_SCRIPT",
+      "guard": "%P%_SHARE_SCRIPT",
+      "when": [
+        "shareScript"
+      ]
+    },
+    {
+      "id": "1.18n",
+      "title": "Handler: share без скрипта снимка (читает с диска)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Share(",
+      "when": [
+        "!shareScript"
+      ],
+      "source": "lsapi"
+    },
+    {
+      "id": "1.18n2",
+      "title": "Скрипта снимка у такой вкладки нет",
+      "file": "backend",
+      "kind": "must-not-count",
+      "expect": "%P%_SHARE_SCRIPT",
+      "max": 0,
+      "when": [
+        "!shareScript"
+      ]
+    },
+    {
+      "id": "1.19",
+      "title": "Handler: import",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Import("
+    },
+    {
+      "id": "1.20",
+      "title": "Handler: add",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Add("
+    },
+    {
+      "id": "1.21",
+      "title": "Handler: set-key",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%SetKey("
+    },
+    {
+      "id": "1.22",
+      "title": "Handler: rename",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Rename("
+    },
+    {
+      "id": "1.23",
+      "title": "Handler: delete",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Delete("
+    },
+    {
+      "id": "1.24",
+      "title": "Handler: activate",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Activate("
+    },
+    {
+      "id": "1.25",
+      "title": "Handler: models",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%Models("
+    },
+    {
+      "id": "1.26",
+      "title": "Handler: set-model",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%SetModel("
+    },
+    {
+      "id": "1.27",
+      "title": "Handler: modelmap",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function handle%x%ModelMap("
+    },
+    {
+      "id": "1.28",
+      "title": "Чтение тир-карты",
+      "file": "backend",
+      "kind": "must",
+      "expect": "function %p%ReadModelMap()"
+    },
+    {
+      "id": "1.29",
+      "title": "Обёртка add-github",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "function handle%x%AddGithub(req, res)"
+    },
+    {
+      "id": "1.30",
+      "title": "Обёртка map-profiles",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "function handle%x%MapProfiles(req, res)"
+    },
+    {
+      "id": "1.31",
+      "title": "Обёртка set-github",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "function handle%x%SetGithub(req, res)"
+    },
+    {
+      "id": "1.32",
+      "title": "Грабля #18: префикс аккаунта",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "prefix: '%p%_'"
+    },
+    {
+      "id": "1.8a",
+      "title": "Реестр BACKENDS",
+      "file": "backend",
+      "kind": "must",
+      "expect": [
+        "%full%: {",
+        "label: '%NAME%',"
+      ]
+    },
+    {
+      "id": "1.8b",
+      "title": "Реестр CC_MODEL_PREFIX",
+      "file": "backend",
+      "kind": "must",
+      "expect": "%full%: '%full%',"
+    },
+    {
+      "id": "1.8c",
+      "title": "Реестр GH_POOL_LOADERS",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "%p%: () => %p%Load()"
+    },
+    {
+      "id": "1.8d",
+      "title": "Реестр GH_POOL_FILES",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "%p%: () => %P%_SESSIONS_FILE"
+    },
+    {
+      "id": "1.8e",
+      "title": "Реестр GH_POOL_SAVERS",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "%p%: arr => %p%Save(arr)"
+    },
+    {
+      "id": "1.8f",
+      "title": "Реестр GH_POOL_LABELS",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "%p%: '%NAME%'"
+    },
+    {
+      "id": "1.8g",
+      "title": "Реестр NEWAPI_PROFILE_DIRS",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'%HOST%':"
+    },
+    {
+      "id": "1.8h",
+      "title": "Реестр MONEY_GW",
+      "file": "backend",
+      "kind": "must",
+      "expect": [
+        "%p%: { tag: '%full%',",
+        "balanceFn: %p%Balance"
+      ]
+    },
+    {
+      "id": "1.8i",
+      "title": "Реестр keepaliveInstances",
+      "file": "backend",
+      "kind": "must",
+      "expect": "[%P%_KEEPALIVE_PORT]: { name: '%NAME%'"
+    },
+    {
+      "id": "1.8j",
+      "title": "Грабля #21: pid-пул в newapiLkBusy",
+      "file": "backend",
+      "kind": "must",
+      "expect": "%p%LkPids",
+      "within": "const pools = ["
+    },
+    {
+      "id": "1.9a",
+      "title": "Роут: sessions",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/sessions'"
+    },
+    {
+      "id": "1.9b",
+      "title": "Роут: ping",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/ping'"
+    },
+    {
+      "id": "1.9c",
+      "title": "Роут: balance",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/balance'"
+    },
+    {
+      "id": "1.9d",
+      "title": "Роут: models",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/models'"
+    },
+    {
+      "id": "1.9e",
+      "title": "Роут: active-model",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/active-model'"
+    },
+    {
+      "id": "1.9f",
+      "title": "Роут: modelmap",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/modelmap'",
+      "within": "modelMap: %p%ReadModelMap()"
+    },
+    {
+      "id": "1.9f2",
+      "title": "Роут: modelmap POST",
+      "file": "backend",
+      "kind": "must",
+      "expect": "handle%x%ModelMap(req, res);"
+    },
+    {
+      "id": "1.9g",
+      "title": "Роут: add",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/add'"
+    },
+    {
+      "id": "1.9h",
+      "title": "Роут: key",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/key'"
+    },
+    {
+      "id": "1.9i",
+      "title": "Роут: rename",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/rename'"
+    },
+    {
+      "id": "1.9j",
+      "title": "Роут: delete",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/delete'"
+    },
+    {
+      "id": "1.9k",
+      "title": "Роут: activate",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/activate'"
+    },
+    {
+      "id": "1.9l",
+      "title": "Роут: set-model",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/set-model'"
+    },
+    {
+      "id": "1.9m",
+      "title": "Роут: set-balance",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/set-balance'"
+    },
+    {
+      "id": "1.9n",
+      "title": "Роут: map-profiles",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "'/__switch/api/%p%/map-profiles'"
+    },
+    {
+      "id": "1.9o",
+      "title": "Роут: session/open",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/session/open'"
+    },
+    {
+      "id": "1.9p",
+      "title": "Роут: share",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/share'"
+    },
+    {
+      "id": "1.9q",
+      "title": "Роут: import",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/import'"
+    },
+    {
+      "id": "1.9r",
+      "title": "Роут: keepalive/state",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/keepalive/state'"
+    },
+    {
+      "id": "1.9s",
+      "title": "Роут: keepalive/config",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/keepalive/config'"
+    },
+    {
+      "id": "1.9t",
+      "title": "Роут: keepalive/latency",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'/__switch/api/%p%/keepalive/latency'"
+    },
+    {
+      "id": "1.9u",
+      "title": "Роут: add-github",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "'/__switch/api/%p%/add-github'"
+    },
+    {
+      "id": "1.9v",
+      "title": "Роут: set-github",
+      "file": "backend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "'/__switch/api/%p%/set-github'"
+    },
+    {
+      "id": "1.33",
+      "title": "Грабля #23: тег дедупа баланса",
+      "file": "backend",
+      "kind": "must",
+      "expect": "nudgeBalanceOnce('%p%:'"
+    },
+    {
+      "id": "1.34",
+      "title": "Грабля #25: тег бэкапа настроек",
+      "file": "backend",
+      "kind": "must",
+      "expect": "'settings-%p%'"
+    },
+    {
+      "id": "1.35",
+      "title": "Грабля #19: дубль pidAlive",
+      "file": "backend",
+      "kind": "must-not-count",
+      "expect": "function %p%PidAlive(pid)",
+      "max": 1,
+      "expectMin": 1
+    },
+    {
+      "id": "2.1",
+      "title": "Фронт: кнопка сайдбара",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "data-tab=\"%full%\""
+    },
+    {
+      "id": "2.2",
+      "title": "Фронт: панель вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "data-tab-content=\"%full%\""
+    },
+    {
+      "id": "2.3",
+      "title": "Фронт: LABELS",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: '%NAME%',"
+    },
+    {
+      "id": "2.4",
+      "title": "Фронт: MONEY_PROVIDERS",
+      "file": "frontend",
+      "kind": "must",
+      "expect": [
+        "id: '%full%',",
+        "stateKey: '%full%'",
+        "icon: '%ICON%'"
+      ]
+    },
+    {
+      "id": "2.5",
+      "title": "Фронт: showTab()",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "name === '%full%'"
+    },
+    {
+      "id": "2.6",
+      "title": "Фронт: KEEPALIVE_API",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%p%: '/__switch/api/%p%/keepalive'"
+    },
+    {
+      "id": "2.7",
+      "title": "Фронт: обёртки keepalive",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "loadKeepaliveCard('%p%'"
+    },
+    {
+      "id": "2.7b",
+      "title": "Фронт: обёртка keepalive apply",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "applyKeepaliveCard('%p%'",
+      "note": "Три обёртки одной вкладки, а не одна: кнопка «Применить» зовёт apply-версию, и без определения вкладка падает ReferenceError при клике. У nova на 21.09 нет ни apply, ни reset - найдено этой точкой."
+    },
+    {
+      "id": "2.7c",
+      "title": "Фронт: обёртка keepalive reset",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "resetKeepaliveCard('%p%'"
+    },
+    {
+      "id": "2.8",
+      "title": "Фронт: KEEPALIVE_POLL_TABS",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: ['%p%', '/__switch/api/%p%/keepalive']"
+    },
+    {
+      "id": "2.9",
+      "title": "Фронт: GH_USE_META",
+      "file": "frontend",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "%p%: { icon: '%ICON%'"
+    },
+    {
+      "id": "2.10",
+      "title": "Фронт: DEFAULT_TABS_VISIBLE",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "'%full%'",
+      "within": "const DEFAULT_TABS_VISIBLE"
+    },
+    {
+      "id": "2.11",
+      "title": "Фронт: NAV_COUNT_JOBS",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "tab: '%full%'"
+    },
+    {
+      "id": "2.12",
+      "title": "Фронт: state init (список)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: []"
+    },
+    {
+      "id": "2.13",
+      "title": "Фронт: рендер вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "function render%x%Gauge("
+    },
+    {
+      "id": "3.1",
+      "title": "GW_BY_HOST",
+      "file": "keepalive",
+      "kind": "must",
+      "expect": "'%HOST%': '%p%'"
+    },
+    {
+      "id": "3.2",
+      "title": "FLAT_RATE_HOSTS",
+      "file": "keepalive",
+      "kind": "must",
+      "when": [
+        "flatRate"
+      ],
+      "expect": "'%HOST%'",
+      "within": "const FLAT_RATE_HOSTS"
+    },
+    {
+      "id": "3.3",
+      "title": "lifecycle: keepalive",
+      "file": "lifecycle",
+      "kind": "must",
+      "expect": "port: %PORT%, name: '%NAME% keepalive'"
+    },
+    {
+      "id": "3.4",
+      "title": "keepalive-restart.ps1",
+      "file": "restart",
+      "kind": "must",
+      "expect": "%PORT% = @{ UPSTREAM"
+    },
+    {
+      "id": "3.5",
+      "title": "Реф-код в SHAPES",
+      "file": "refcodes",
+      "kind": "must",
+      "when": [
+        "ref"
+      ],
+      "expect": "%full%:"
+    },
+    {
+      "id": "3.6",
+      "title": "Реф-код в дефолтах",
+      "file": "refcodesDefault",
+      "kind": "must",
+      "when": [
+        "ref"
+      ],
+      "expect": "\"%full%\":",
+      "note": "ключ — ПОЛНОЕ имя шлюза, не короткий префикс"
+    },
+    {
+      "id": "3.7",
+      "title": "HOST_AUTH",
+      "file": "newapiAccount",
+      "kind": "must",
+      "expect": "'%HOST%':"
+    },
+    {
+      "id": "3.8",
+      "title": "hub-balance POOLS",
+      "file": "hubBalance",
+      "kind": "must",
+      "expect": "id: '%p%'"
+    },
+    {
+      "id": "3.9",
+      "title": "Тир-карта (файл)",
+      "file": "routing/%full%-modelmap.json",
+      "kind": "file",
+      "expect": ""
+    },
+    {
+      "id": "3.10",
+      "title": "Папка шлюза + open-session",
+      "file": "%FOLDER%/open-session.js",
+      "kind": "file",
+      "expect": ""
+    },
+    {
+      "id": "3.13",
+      "title": "Keepalive-конфиг: дубли выключены",
+      "file": "routing/keepalive-config-%PORT%.json",
+      "kind": "file",
+      "expect": "",
+      "when": [
+        "!hedgesTuned"
+      ],
+      "note": "Новая вкладка обязана стартовать без параллельных дублей: файл конфига с maxHedges 0 читается процессом на старте и переживает рестарт. Дубли включаются осознанно на вкладке (POST /__config), когда замер показал, что площадка их терпит и они не стоят денег."
+    },
+    {
+      "id": "3.13b",
+      "title": "Keepalive-конфиг: maxHedges 0",
+      "file": "routing/keepalive-config-%PORT%.json",
+      "kind": "must",
+      "expect": "\"maxHedges\": 0",
+      "when": [
+        "!hedgesTuned"
+      ],
+      "note": "Файл есть, но дубли включены - значит кто-то нажал «Применить» с maxHedges > 0. Для нового шлюза это осознанное решение, и оно должно быть видно в check, а не тонуть в истории кнопок."
+    },
+    {
+      "id": "3.11",
+      "title": ".gitignore: сессии",
+      "file": "gitignore",
+      "kind": "must",
+      "expect": "%full%-sessions.json"
+    },
+    {
+      "id": "3.12",
+      "title": "Индекс профилей GitHub",
+      "file": "githubSession",
+      "kind": "must",
+      "when": [
+        "github"
+      ],
+      "expect": "host: '%HOST%'"
+    },
+    {
+      "id": "1.1e",
+      "title": "Константы: CC_HEADERS",
+      "file": "backend",
+      "kind": "must",
+      "expect": "const %P%_CC_HEADERS = {"
+    },
+    {
+      "id": "2.14",
+      "title": "Фронт: блок функций вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "function %p%PoolStats(sessions)",
+      "within": "function %p%PoolStats(sessions)"
+    },
+    {
+      "id": "4.1",
+      "title": "BACKEND_ALIASES (резолв /model)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "%p%: '%full%',",
+      "within": "const BACKEND_ALIASES"
+    },
+    {
+      "id": "4.2",
+      "title": "ROUTE_EP (префикс эндпоинтов)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "%full%: '%p%',",
+      "within": "const ROUTE_EP"
+    },
+    {
+      "id": "4.3",
+      "title": "Health: keepalive шлюза",
+      "file": "backend",
+      "kind": "must",
+      "expect": "name: 'Keepalive %NAME%'"
+    },
+    {
+      "id": "4.4",
+      "title": "Тик автоперечитки вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "case '%full%':"
+    },
+    {
+      "id": "4.5",
+      "title": "COLORS вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: 'text-%COLOR% bg-%COLOR%',",
+      "within": "const COLORS = {"
+    },
+    {
+      "id": "4.6",
+      "title": "NEWAPI_RERENDER вкладки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%p%: () => render%x%(),",
+      "within": "const NEWAPI_RERENDER = {"
+    },
+    {
+      "id": "4.7",
+      "title": "check-hub: ожидаемый список вкладок",
+      "file": "tools/check-hub.js",
+      "kind": "must",
+      "expect": "'%full%',",
+      "within": "const want = ["
+    },
+    {
+      "id": "4.8",
+      "title": "check-hub: префиксы в сверке «зовут ↔ объявлено»",
+      "file": "tools/check-hub.js",
+      "kind": "must-any",
+      "any": [
+        "|%p%|",
+        "|%p%)",
+        "(%p%|"
+      ],
+      "within": "const PREF = ",
+      "note": "PREF в check-hub.js перечисляет префиксы литерально: вкладки вне списка не проверяются на «зовёт функцию, которой нет» - ровно так молча ломались ts, hn и ol."
+    },
+    {
+      "id": "1.8k",
+      "title": "Реестр ghLkPidsByTag (карты pid по тегу)",
+      "file": "backend",
+      "kind": "must",
+      "expect": "%p%: %p%LkPids",
+      "within": "function ghLkPidsByTag",
+      "when": [
+        "github"
+      ]
+    },
+    {
+      "id": "1.8m",
+      "title": "Список ручек ротации денежных шлюзов",
+      "file": "backend",
+      "kind": "must-any",
+      "any": [
+        "|%p%|",
+        "|%p%)",
+        "(%p%|"
+      ],
+      "within": "rotate|auto",
+      "when": [
+        "pool"
+      ],
+      "note": "ВТОРАЯ карта денежного шлюза: MONEY_GW знает шлюз, а эта регулярка - какие префиксы роутятся. Разъехались молча: 17.09 Odyssey, 21.09 budsin и nova - просьба о подмене уезжала в 404, снаружи «авторотация не сработала на пустом пуле»."
+    },
+    {
+      "id": "2.15",
+      "title": "Фронт: NEWAPI_SEED_PROV (модалка GitHub)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%p%: { label: '%NAME%',",
+      "when": [
+        "github"
+      ]
+    },
+    {
+      "id": "2.16",
+      "title": "Фронт: ghAddPick (выбор GitHub в форме)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%p%: null",
+      "within": "const ghAddPick",
+      "when": [
+        "github"
+      ]
+    },
+    {
+      "id": "2.17",
+      "title": "Фронт: карта тег → полное имя (GitHub-usage)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%p%: '%full%'",
+      "when": [
+        "github"
+      ]
+    },
+    {
+      "id": "2.18",
+      "title": "Фронт: state.loaded (карта «вкладка загружена»)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: false"
+    },
+    {
+      "id": "2.19",
+      "title": "Фронт: CATALOG_EP (метка «каталог не отдаётся»)",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "%full%: '%p%',",
+      "within": "const CATALOG_EP"
+    },
+    {
+      "id": "2.20",
+      "title": "Фронт: возврат сохранённого порядка сортировки",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "'%p%',",
+      "within": "// Выбранный порядок переживает F5",
+      "note": "Цикл возврата сортировки перечисляет префиксы литерально: вкладка вне списка после F5 молча сбрасывает выбранный порядок."
+    },
+    {
+      "id": "5.1",
+      "title": "Статуслайн: шкала баланса",
+      "file": "statusline",
+      "kind": "must",
       "expect": "elif [ \"$provider\" = \"%full%\" ] && [ -f \"%SESSIONSFILE%\" ]; then\n    gauge_from_balance_cache \"%SESSIONSFILE%\" \"%KEYFILE%\" \"%p%/balance\" 90",
-      "note": "Без этой точки вкладка живёт без баланса в статуслайне: модель и контекст есть, шкала пустая. Кеш пишет дашборд в <шлюз>-sessions.json." }
+      "note": "Без этой точки вкладка живёт без баланса в статуслайне: модель и контекст есть, шкала пустая. Кеш пишет дашборд в <шлюз>-sessions.json."
+    },
+    {
+      "id": "3.2b",
+      "title": "FLAT_RATE_HOSTS для платного дубля (paidHedge)",
+      "file": "keepalive",
+      "kind": "must",
+      "when": [
+        "paidHedge"
+      ],
+      "expect": "'%HOST%'",
+      "within": "const FLAT_RATE_HOSTS",
+      "note": "Хост площадки, у которой параллельный дубль запроса стоит денег (квота/плоский тариф/счёт по завершению). В списке запрет дублей сам: maxHedges 0 на старте."
+    }
   ],
-
   "_source": "kktoken",
   "_inserts_readme": [
     "Правила вставки для `apply`. Ключ — id точки, значение — как склонировать её из эталона.",
@@ -202,105 +1070,295 @@
     "Шаблоны здесь НЕ хранятся: шаблон — живой код эталона. Отдельная копия разошлась бы",
     "с оригиналом на первой же правке, а check проверяет присутствие, а не совпадение."
   ],
-
   "inserts": {
-    "1.8a":  { "span": "braces" },
-    "1.8b":  {},
-    "1.8c":  { "mode": "inline", "find": "%p%: () => %p%Load()",         "add": ", %p%: () => %p%Load()" },
-    "1.8d":  { "mode": "inline", "find": "%p%: () => %P%_SESSIONS_FILE", "add": ", %p%: () => %P%_SESSIONS_FILE" },
-    "1.8e":  { "mode": "inline", "find": "%p%: arr => %p%Save(arr)",     "add": ", %p%: arr => %p%Save(arr)" },
-    "1.8f":  { "mode": "inline", "find": "%p%: '%NAME%'",                "add": ", %p%: '%NAME%'" },
-    "1.8g":  {},
-    "1.8h":  {},
-    "1.8i":  {},
-    "1.8j":  { "mode": "inline", "find": "%p%LkPids,",                   "add": " %p%LkPids," },
-
-    "1.9a":  {}, "1.9b":  {}, "1.9c":  {}, "1.9d":  {}, "1.9e":  {}, "1.9f":  {}, "1.9f2": {},
-    "1.9g":  {}, "1.9h":  {}, "1.9i":  {}, "1.9j":  {}, "1.9k":  {}, "1.9l":  {},
-    "1.9m":  {}, "1.9n":  {}, "1.9o":  {}, "1.9p":  {}, "1.9q":  {}, "1.9r":  {},
-    "1.9s":  {}, "1.9t":  {}, "1.9u":  {}, "1.9v":  {},
-
-    "1.12":  { "span": "braces" },
-
-    "2.1":   { "span": "lines:5" },
-    "2.3":   { "mode": "inline", "find": "%full%: '%NAME%',", "add": " %full%: '%NAME%'," },
-    "2.4":   {},
-    "2.5":   {},
-    "2.6":   {},
-    "2.7":   {},
-    "2.7b":  {},
-    "2.7c":  {},
-    "2.8":   {},
-    "2.9":   {},
-    "2.10":  { "mode": "inline", "find": "'%full%',",                    "add": " '%full%'," },
-    "2.11":  {},
-
-    "3.1":   {},
-    "3.2":   { "mode": "inline", "find": "'%HOST%'", "add": ", '%HOST%'" },
-    "3.3":   {},
-    "3.4":   { "span": "braces" },
-    "3.7":   {},
-    "3.8":   {},
-    "3.9":   { "create": "fromSource" },
-    "3.11":  {},
-    "3.12":  {},
-    "1.1":   { "span": "until-blank" },
-    "1.1e":  { "span": "braces" },
-    "1.2":   {},
-    "1.11":  {},
-    "1.3":   { "span": "braces" },
-    "1.4":   { "span": "braces" },
-    "1.5":   { "span": "braces" },
-    "1.6":   { "span": "braces" },
-    "1.7":   { "span": "braces" },
-    "1.8":   { "span": "braces" },
-    "1.9":   { "span": "braces" },
-    "1.10":  {},
-    "1.13":  { "span": "braces" },
-    "1.14":  { "span": "braces" },
-    "1.15":  { "span": "braces" },
-    "1.16":  { "span": "braces" },
-    "1.17":  { "span": "braces" },
-    "1.18":  { "span": "braces" },
-    "1.18a": { "span": "lines:7" },
+    "1.8a": {
+      "span": "braces"
+    },
+    "1.8b": {},
+    "1.8c": {
+      "mode": "inline",
+      "find": "%p%: () => %p%Load()",
+      "add": ", %p%: () => %p%Load()"
+    },
+    "1.8d": {
+      "mode": "inline",
+      "find": "%p%: () => %P%_SESSIONS_FILE",
+      "add": ", %p%: () => %P%_SESSIONS_FILE"
+    },
+    "1.8e": {
+      "mode": "inline",
+      "find": "%p%: arr => %p%Save(arr)",
+      "add": ", %p%: arr => %p%Save(arr)"
+    },
+    "1.8f": {
+      "mode": "inline",
+      "find": "%p%: '%NAME%'",
+      "add": ", %p%: '%NAME%'"
+    },
+    "1.8g": {},
+    "1.8h": {},
+    "1.8i": {},
+    "1.8j": {
+      "mode": "inline",
+      "find": "%p%LkPids,",
+      "add": " %p%LkPids,"
+    },
+    "1.9a": {},
+    "1.9b": {},
+    "1.9c": {},
+    "1.9d": {},
+    "1.9e": {},
+    "1.9f": {},
+    "1.9f2": {},
+    "1.9g": {},
+    "1.9h": {},
+    "1.9i": {},
+    "1.9j": {},
+    "1.9k": {},
+    "1.9l": {},
+    "1.9m": {},
+    "1.9n": {},
+    "1.9o": {},
+    "1.9p": {},
+    "1.9q": {},
+    "1.9r": {},
+    "1.9s": {},
+    "1.9t": {},
+    "1.9u": {},
+    "1.9v": {},
+    "1.12": {
+      "span": "braces"
+    },
+    "2.1": {
+      "span": "lines:5"
+    },
+    "2.3": {
+      "mode": "inline",
+      "find": "%full%: '%NAME%',",
+      "add": " %full%: '%NAME%',"
+    },
+    "2.4": {},
+    "2.5": {},
+    "2.6": {},
+    "2.7": {},
+    "2.7b": {},
+    "2.7c": {},
+    "2.8": {},
+    "2.9": {},
+    "2.10": {
+      "mode": "inline",
+      "find": "'%full%',",
+      "add": " '%full%',"
+    },
+    "2.11": {},
+    "3.1": {},
+    "3.2": {
+      "mode": "inline",
+      "find": "'%HOST%'",
+      "add": ", '%HOST%'"
+    },
+    "3.3": {},
+    "3.4": {
+      "span": "braces"
+    },
+    "3.7": {},
+    "3.8": {},
+    "3.9": {
+      "create": "fromSource"
+    },
+    "3.11": {},
+    "3.12": {},
+    "1.1": {
+      "span": "until-blank"
+    },
+    "1.1e": {
+      "span": "braces"
+    },
+    "1.2": {},
+    "1.11": {},
+    "1.3": {
+      "span": "braces"
+    },
+    "1.4": {
+      "span": "braces"
+    },
+    "1.5": {
+      "span": "braces"
+    },
+    "1.6": {
+      "span": "braces"
+    },
+    "1.7": {
+      "span": "braces"
+    },
+    "1.8": {
+      "span": "braces"
+    },
+    "1.9": {
+      "span": "braces"
+    },
+    "1.10": {},
+    "1.13": {
+      "span": "braces"
+    },
+    "1.14": {
+      "span": "braces"
+    },
+    "1.15": {
+      "span": "braces"
+    },
+    "1.16": {
+      "span": "braces"
+    },
+    "1.17": {
+      "span": "braces"
+    },
+    "1.18": {
+      "span": "braces"
+    },
+    "1.18a": {
+      "span": "lines:7"
+    },
     "1.18b": {},
     "1.18c": {},
-    "1.18n": { "span": "braces" },
-    "1.19":  { "span": "braces" },
-    "1.20":  { "span": "braces" },
-    "1.21":  { "span": "braces" },
-    "1.22":  { "span": "braces" },
-    "1.23":  { "span": "braces" },
-    "1.24":  { "span": "braces" },
-    "1.25":  { "span": "braces" },
-    "1.26":  { "span": "braces" },
-    "1.27":  { "span": "braces" },
-    "1.28":  { "span": "braces" },
-    "1.29":  { "span": "braces" },
-    "1.30":  { "span": "braces" },
-    "1.31":  { "span": "braces" },
-    "2.2":   { "span": "lines:158" },
-    "2.14":  { "span": "lines:520" },
-    "2.12":  { "mode": "inline", "find": "%full%: [],", "add": " %full%: []," },
-    "3.5":   {},
-    "3.6":   {},
-    "4.1":   { "mode": "inline", "find": "%p%: '%full%',", "add": " %p%: '%full%'," },
-    "4.2":   { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," },
-    "4.3":   {},
-    "4.4":   {},
-    "4.5":   { "mode": "inline", "find": "%full%: 'text-%COLOR% bg-%COLOR%',", "add": " %full%: 'text-%COLOR% bg-%COLOR%'," },
-    "4.6":   { "mode": "inline", "find": "%p%: () => render%x%(),", "add": " %p%: () => render%x%()," },
-    "4.7":   { "mode": "inline", "find": "'%full%',", "add": " '%full%'," },
-    "4.8":   { "mode": "inline", "ref": "|%p%|", "find": "|%p%|", "add": "%p%|" },
-
-    "1.8k":  { "mode": "inline", "find": "%p%: %p%LkPids", "add": ", %p%: %p%LkPids" },
-    "1.8m":  { "mode": "inline", "ref": "|%p%|", "find": "|%p%", "add": "|%p%" },
-    "2.15":  {},
-    "2.16":  { "mode": "inline", "find": "%p%: null", "add": ", %p%: null" },
-    "2.17":  { "mode": "inline", "find": "%p%: '%full%'", "add": ", %p%: '%full%'" },
-    "2.18":  { "mode": "inline", "find": "%full%: false", "add": ", %full%: false" },
-    "2.19":  { "mode": "inline", "find": "%full%: '%p%',", "add": " %full%: '%p%'," },
-    "2.20":  { "mode": "inline", "ref": "'%p%',", "find": "'%p%',", "add": " '%p%'," },
-    "5.1":   { "ref": "elif [ \"$provider\" = \"%full%\" ] && [ -f \"$ROUTING/%full%-sessions.json\" ]; then", "span": "lines:2" }
+    "1.18n": {
+      "span": "braces"
+    },
+    "1.19": {
+      "span": "braces"
+    },
+    "1.20": {
+      "span": "braces"
+    },
+    "1.21": {
+      "span": "braces"
+    },
+    "1.22": {
+      "span": "braces"
+    },
+    "1.23": {
+      "span": "braces"
+    },
+    "1.24": {
+      "span": "braces"
+    },
+    "1.25": {
+      "span": "braces"
+    },
+    "1.26": {
+      "span": "braces"
+    },
+    "1.27": {
+      "span": "braces"
+    },
+    "1.28": {
+      "span": "braces"
+    },
+    "1.29": {
+      "span": "braces"
+    },
+    "1.30": {
+      "span": "braces"
+    },
+    "1.31": {
+      "span": "braces"
+    },
+    "2.2": {
+      "span": "lines:158"
+    },
+    "2.14": {
+      "span": "lines:520"
+    },
+    "2.12": {
+      "mode": "inline",
+      "find": "%full%: [],",
+      "add": " %full%: [],"
+    },
+    "3.5": {},
+    "3.6": {},
+    "4.1": {
+      "mode": "inline",
+      "find": "%p%: '%full%',",
+      "add": " %p%: '%full%',"
+    },
+    "4.2": {
+      "mode": "inline",
+      "find": "%full%: '%p%',",
+      "add": " %full%: '%p%',"
+    },
+    "4.3": {},
+    "4.4": {},
+    "4.5": {
+      "mode": "inline",
+      "find": "%full%: 'text-%COLOR% bg-%COLOR%',",
+      "add": " %full%: 'text-%COLOR% bg-%COLOR%',"
+    },
+    "4.6": {
+      "mode": "inline",
+      "find": "%p%: () => render%x%(),",
+      "add": " %p%: () => render%x%(),"
+    },
+    "4.7": {
+      "mode": "inline",
+      "find": "'%full%',",
+      "add": " '%full%',"
+    },
+    "4.8": {
+      "mode": "inline",
+      "ref": "|%p%|",
+      "find": "|%p%|",
+      "add": "%p%|"
+    },
+    "1.8k": {
+      "mode": "inline",
+      "find": "%p%: %p%LkPids",
+      "add": ", %p%: %p%LkPids"
+    },
+    "1.8m": {
+      "mode": "inline",
+      "ref": "|%p%|",
+      "find": "|%p%",
+      "add": "|%p%"
+    },
+    "2.15": {},
+    "2.16": {
+      "mode": "inline",
+      "find": "%p%: null",
+      "add": ", %p%: null"
+    },
+    "2.17": {
+      "mode": "inline",
+      "find": "%p%: '%full%'",
+      "add": ", %p%: '%full%'"
+    },
+    "2.18": {
+      "mode": "inline",
+      "find": "%full%: false",
+      "add": ", %full%: false"
+    },
+    "2.19": {
+      "mode": "inline",
+      "find": "%full%: '%p%',",
+      "add": " %full%: '%p%',"
+    },
+    "2.20": {
+      "mode": "inline",
+      "ref": "'%p%',",
+      "find": "'%p%',",
+      "add": " '%p%',"
+    },
+    "5.1": {
+      "ref": "elif [ \"$provider\" = \"%full%\" ] && [ -f \"$ROUTING/%full%-sessions.json\" ]; then",
+      "span": "lines:2"
+    },
+    "3.2b": {
+      "mode": "inline",
+      "find": "'%HOST%'",
+      "add": ", '%HOST%'"
+    },
+    "3.13": {
+      "create": "default",
+      "text": "{\n  \"v\": 8,\n  \"maxHedges\": 0\n}\n"
+    }
   }
-}
+}

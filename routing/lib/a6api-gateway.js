@@ -20,7 +20,7 @@ const problem = (code, message, status = 409) => { throw new ApiError(code, mess
 function buildRuntimeConfig({ secretDir = SECRET_DIR, routingDir = ROUTING, port = PORT, converterPort = CONVERTER_PORT } = {}) {
     const keyFile = path.join(secretDir, 'a6api-active-key.txt');
     return {
-        converter: { port: converterPort, upstream: 'https://api.a6api.com/v1', keyFile, modelMap: {}, providerName: 'a6api', strictToolsVision: true },
+        converter: { port: converterPort, upstream: 'https://api.a6api.vip/v1', keyFile, modelMap: {}, providerName: 'a6api', strictToolsVision: true },
         keepaliveEnv: {
             PORT: String(port), UPSTREAM: `http://127.0.0.1:${converterPort}`, KEY_FILE: keyFile,
             SESSIONS_FILE: '', MODELMAP_FILE: path.join(routingDir, 'a6api-modelmap.json'),

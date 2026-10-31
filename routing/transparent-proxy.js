@@ -253,6 +253,31 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    apinex: {
+        label: 'APINEX',
+        base_url: 'http://localhost:20190',
+        api_key: 'dummy',           // real key keepalive reads from apinex-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20190) → api.apinex.bond (БЕЗ /v1).
+        // Активация через handleAxActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в apinex-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у apinex каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    kvotum: {
+        label: 'KVOTUM',
+        base_url: 'http://localhost:20182',
+        api_key: 'dummy',           // real key keepalive reads from kvotum-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20182) → myapi.buzz (БЕЗ /v1).
+        // Активация через handleKvActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в kvotum-active-key.txt и инжектится прокси на каждый запрос.
+        // 403-факт эталона не подтверждён у kvotum: единственный замер 30.10 -
+        // отказов не видел, но проб мало; keepalive в любом случае полезен
+        // (настоящий claude-usage и паузы SSE). Держать и пересмотреть при первом бое.
+    },
     threerouter: {
         label: 'ThreeRouter',
         base_url: 'http://localhost:20181',
@@ -629,6 +654,8 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    apinex: 'apinex',
+    kvotum: 'kvotum',
     threerouter: 'threerouter',
     premier: 'premier',
     vani: 'vani',
@@ -920,7 +947,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 const BACKEND_ALIASES = {
     a6: 'a6api',
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     gm: 'gemini',
     rm: 'rumeng',
@@ -1099,7 +1126,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
     a6api: 'a6api',
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -2181,6 +2208,8 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveAx = makeKeepaliveHandlers(Number(process.env.AX_KEEPALIVE_PORT || 20190));
+const keepaliveKv = makeKeepaliveHandlers(Number(process.env.KV_KEEPALIVE_PORT || 20182));
 const keepaliveTr = makeKeepaliveHandlers(Number(process.env.TR_KEEPALIVE_PORT || 20181));
 const keepalivePm = makeKeepaliveHandlers(Number(process.env.PM_KEEPALIVE_PORT || 20189));
 const keepaliveVn = makeKeepaliveHandlers(Number(process.env.VN_KEEPALIVE_PORT || 20180));
@@ -5167,6 +5196,9 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive APINEX',  port: Number(process.env.AX_KEEPALIVE_PORT || 20190), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive KVOTUM',  port: Number(process.env.KV_KEEPALIVE_PORT || 20182), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'KVOTUM конвертер',  port: KV_CONVERTER_PORT, path: '/health' },
         { name: 'Keepalive ThreeRouter',  port: Number(process.env.TR_KEEPALIVE_PORT || 20181), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Premier',  port: Number(process.env.PM_KEEPALIVE_PORT || 20189), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Vani',  port: Number(process.env.VN_KEEPALIVE_PORT || 20180), path: '/__keepalive/api/status', keepalive: true },
@@ -7187,7 +7219,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, pm: pmLkPids, cp: cpLkPids, ab: abLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, kv: kvLkPids, pm: pmLkPids, cp: cpLkPids, ab: abLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -7299,12 +7331,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), pm: () => pmLoad(), cp: () => cpLoad(), ab: () => abLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), kv: () => kvLoad(), pm: () => pmLoad(), cp: () => cpLoad(), ab: () => abLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, pm: () => PM_SESSIONS_FILE, cp: () => CP_SESSIONS_FILE, ab: () => AB_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), pm: arr => pmSave(arr), cp: arr => cpSave(arr), ab: arr => abSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', pm: 'Premier', cp: 'Clean APIs', ab: 'Artbloom', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, kv: () => KV_SESSIONS_FILE, pm: () => PM_SESSIONS_FILE, cp: () => CP_SESSIONS_FILE, ab: () => AB_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), kv: arr => kvSave(arr), pm: arr => pmSave(arr), cp: arr => cpSave(arr), ab: arr => abSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', kv: 'KVOTUM', pm: 'Premier', cp: 'Clean APIs', ab: 'Artbloom', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -7767,6 +7799,9 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleKvAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'kvotum', host: 'myapi.buzz', prefix: 'kv_', load: kvLoad, save: kvSave, sessionsDir: KV_SESSIONS_DIR });
 }
 function handlePmAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'premier', host: 'ide.kgpix.bond', prefix: 'pm_', load: pmLoad, save: pmSave, sessionsDir: PM_SESSIONS_DIR });
@@ -9043,6 +9078,8 @@ async function handleConduitSetModel(req, res) {
 // не выдаёт ни один другой шлюз, поэтому общий код соседей не задет.
 function isRealKey(k) {
     const s = String(k || '').trim();
+    // sk- покрывает и новый формат Premier sk-premier-… (31.10): у владельца в кабинете
+    // только такие; prm_ - формат аккаунтов, регистрируемых после 22.10.
     return /^sk-/.test(s) || /^vani_[A-Za-z0-9]{40,}$/.test(s) || /^prm_[A-Za-z0-9_-]{40,}$/.test(s);
 }
 function makeNoKeyStub() {
@@ -9350,6 +9387,8 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
+    'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),
     'api.threerouter.com':      path.join(__dirname, '..', 'threerouter', 'profiles'),
     'ide.kgpix.bond':      path.join(__dirname, '..', 'premier', 'profiles'),
     'api.vani.ai':      path.join(__dirname, '..', 'vani', 'profiles'),
@@ -9509,7 +9548,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -13424,6 +13463,9 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleKvMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'kvotum', host: 'myapi.buzz', load: kvLoad, save: kvSave });
+}
 function handlePmMapProfiles(req, res) {
     const sessions = pmLoad(), mapped = [], unmatched = [];
     for (const s of sessions) {
@@ -13524,6 +13566,9 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleKvSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'kvotum', load: kvLoad, save: kvSave });
 }
 function handlePmSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'premier', load: pmLoad, save: pmSave });
@@ -16392,6 +16437,56 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const AX_SESSIONS_FILE = path.join(__dirname, 'apinex-sessions.json');
+const AX_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'apinex-active-key.txt');
+const AX_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'apinex-active-model.txt');
+const AX_BASE_URL = 'https://api.apinex.bond/v1';
+// SSE keepalive proxy для apinex: форвардит напрямую в api.apinex.bond, режет
+// [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 403-факт эталона («каждый четвёртый POST — пустой 403») у apinex НЕ замерен:
+// пробы 31.10 (chat, stream, tools, /v1/messages) — чистые 200. Ретрай 403 в
+// keepalive-proxy.js оставлен страховкой, а не потому, что отказы видели.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const AX_UPSTREAM = 'https://api.apinex.bond';
+const AX_KEEPALIVE_PORT = 20190;
+const AX_KEEPALIVE_URL = `http://localhost:${AX_KEEPALIVE_PORT}`;
+const AX_MODELMAP_FILE = path.join(__dirname, 'apinex-modelmap.json');
+// Гранта у apinex нет, но и прикидка не нужна: ключом читается GET /v1/balance
+// (см. axBalance) и отдаёт balance_usd напрямую. Константы оставлены только как
+// знаменатель шкалы пула на фронте (у free-плана это $0.1, у платного — сколько внесено).
+const AX_GRANT_STEP = 5;
+const AX_DEFAULT_GRANT = 5;
+const AX_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
+const KV_SESSIONS_FILE = path.join(__dirname, 'kvotum-sessions.json');
+const KV_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'kvotum-active-key.txt');
+const KV_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'kvotum-active-model.txt');
+const KV_BASE_URL = 'https://myapi.buzz/v1';
+// SSE keepalive proxy для kvotum (как у tabi :20155): форвардит напрямую в
+// myapi.buzz, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 403-факт эталона («каждый четвёртый POST - пустой 403 от кромки CF») у kvotum
+// НЕ замерен - не переносить без пробы. Keepalive в любом случае полезен:
+// /v1/messages у площадки принципиально нет, всё идёт OpenAI-путём через
+// конвертер, а настоящий claude-usage приезжает из ответов апстрима.
+// UPSTREAM БЕЗ /v1 - keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const KV_UPSTREAM = 'https://myapi.buzz';
+const KV_KEEPALIVE_PORT = 20182;
+const KV_KEEPALIVE_URL = `http://localhost:${KV_KEEPALIVE_PORT}`;
+const KV_MODELMAP_FILE = path.join(__dirname, 'kvotum-modelmap.json');
+// Конвертер Anthropic→OpenAI (прецедент odyssey :20171 / a6api :20192): площадка
+// НЕ принимает /v1/messages ни для одной модели - даже для Claude (замер 30.10,
+// осознанный 400 «Используйте /v1/chat/completions»), а CC говорит только
+// Anthropic-формат. Значит ВЕСЬ CC-трафик идёт keepalive → конвертер → myapi.buzz.
+// Порт 20183 - соседний с keepalive, в диапазоне кастомов 20150-20299 резерв
+// проверяет lifecycle (порт в children()).
+const KV_CONVERTER_PORT = 20183;
+const KV_CONVERTER_URL = `http://127.0.0.1:${KV_CONVERTER_PORT}`;
+const KV_CONVERTER_CONFIG = path.join(os.homedir(), '.claude', 'kvotum-openai-proxy.json');
+// Грант-резерва у kvotum НЕТ: панель платная, бонуса при регистрации не заявлено,
+// а баланс ключом не читается вовсе (см. kvBalance) - он РУЧНОЙ (✏️ set-balance).
+// Знаменатель $5 для ручных цифр живёт на фронте (kvPoolStats → balanceDenom).
+const KV_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const TR_SESSIONS_FILE = path.join(__dirname, 'threerouter-sessions.json');
 const TR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'threerouter-active-key.txt');
 const TR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'threerouter-active-model.txt');
@@ -16718,6 +16813,20 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const AX_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
+const KV_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const TR_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -16894,6 +17003,58 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function axLoad() {
+    try {
+        const raw = fs.readFileSync(AX_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'APINEX');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'ax_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { axSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function kvLoad() {
+    try {
+        const raw = fs.readFileSync(KV_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'KVOTUM');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'kv_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { kvSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -17200,6 +17361,12 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function axSave(arr) {
+    durableWriteJson(AX_SESSIONS_FILE, arr);
+}
+function kvSave(arr) {
+    durableWriteJson(KV_SESSIONS_FILE, arr);
+}
 function trSave(arr) {
     durableWriteJson(TR_SESSIONS_FILE, arr);
 }
@@ -17238,6 +17405,14 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function axReadActiveModel() {
+    try { return fs.readFileSync(AX_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function kvReadActiveModel() {
+    try { return fs.readFileSync(KV_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function trReadActiveModel() {
@@ -17290,6 +17465,14 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function axReadActiveKey() {
+    try { return fs.readFileSync(AX_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function kvReadActiveKey() {
+    try { return fs.readFileSync(KV_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function trReadActiveKey() {
@@ -17374,6 +17557,104 @@ async function kkKeepaliveSpawn() {
         return { ok: false, error: e.message };
     }
 }
+async function axKeepaliveSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(AX_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(AX_KEEPALIVE_PORT),
+                UPSTREAM: AX_UPSTREAM,
+                KEY_FILE: AX_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: AX_SESSIONS_FILE,
+                MODELMAP_FILE: AX_MODELMAP_FILE,
+                ...(process.env.AX_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.AX_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive APINEX', AX_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`apinex keepalive proxy spawn: :${AX_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`apinex keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function kvConverterSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(KV_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        // Конфиг тот же, что у конвертеров Custom-провайдеров: `upstream` с `/v1`
+        // (конвертер сам добавляет `/chat/completions`), ключ из active-key, тир-карта
+        // та же, что у keepalive. STRICT_TOOLS_VISION не включаем: у него двойная цена -
+        // ошибки апстрима отдавались бы строкой «upstream HTTP 402» вместо честного
+        // «недостаточно средств…», а на этом тексте стоит авторотация пула.
+        fs.writeFileSync(KV_CONVERTER_CONFIG, JSON.stringify({
+            port: KV_CONVERTER_PORT,
+            upstream: KV_BASE_URL,
+            keyFile: KV_ACTIVE_KEY_FILE,
+            modelMap: {},
+            providerName: 'KVOTUM',
+        }, null, 2), 'utf8');
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), KV_CONVERTER_CONFIG], {
+            detached: true, stdio: 'ignore', env: { ...process.env },
+        });
+        watchChildExit(child, 'конвертер KVOTUM', KV_CONVERTER_PORT);
+        child.unref();
+        logLine(`kvotum конвертер spawn: :${KV_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`kvotum конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function kvKeepaliveSpawn() {
+    try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive (прецедент odyssey): без него CC-форма
+        // /v1/messages уехала бы апстриму нативным путём, а площадка отвечает на неё
+        // осознанным 400 для ВСЕХ моделей - Claude Code остался бы без бэкенда.
+        await kvConverterSpawn();
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(KV_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(KV_KEEPALIVE_PORT),
+                UPSTREAM: KV_CONVERTER_URL,   // keepalive → конвертер :20183 → myapi.buzz
+                KEY_FILE: KV_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: KV_SESSIONS_FILE,
+                MODELMAP_FILE: KV_MODELMAP_FILE,
+                ...(process.env.KV_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KV_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive KVOTUM', KV_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`kvotum keepalive proxy spawn: :${KV_KEEPALIVE_PORT} (pid ${child.pid}) → конвертер :${KV_CONVERTER_PORT}`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`kvotum keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
 async function trKeepaliveSpawn() {
     try {
         const net = require('net');
@@ -17392,6 +17673,10 @@ async function trKeepaliveSpawn() {
                 KEY_FILE: TR_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: TR_SESSIONS_FILE,
                 MODELMAP_FILE: TR_MODELMAP_FILE,
+                // 🔀 Лимит конкурентности апстрима действует НА АККАУНТ: весь трафик через
+                // один активный ключ упирался в 429 Concurrency limit (утро 29.10), соседние
+                // ключи пула молчали. Раскидываем основные запросы по живым ключам пула.
+                KEY_SPREAD: '1',
                 ...(process.env.TR_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.TR_PRE_COMMIT_MS } : {}),
             },
         });
@@ -17790,6 +18075,32 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function axProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${AX_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...AX_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
+async function kvProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${KV_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...KV_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function trProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -17963,6 +18274,143 @@ async function kkBalance(target, opts = {}) {
         force: !!opts.force,
     });
 }
+// APINEX — своя витрина, New-API ручек баланса нет (/v1/dashboard/billing/* → 404).
+// Ключом читается GET /v1/balance: {object:"balance", balance_usd, reserved_usd, rpm,
+// rpm_plan, api_key:{spent_usd, reserved_usd}}. Замер 31.10 на free-ключе:
+// balance_usd 0.1, spent_usd 0, rpm 15, rpm_plan "free". Потраченное берём из
+// api_key.spent_usd; `granted` не считаем — гранта у площадки нет.
+async function axBalance(target, opts = {}) {
+    const t = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = t.api_key;
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    const lib = newapiLib();
+    const gated = fn => (lib && lib.hostGate) ? lib.hostGate('api.apinex.bond', fn) : fn();
+    let res;
+    try {
+        res = await gated(() => fetch('https://api.apinex.bond/v1/balance', {
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(15000),
+        }));
+    } catch (e) { return { status: 'unknown', error: e.message }; }
+    if (res.status === 401 || res.status === 403) return { status: 'dead', error: `HTTP ${res.status}` };
+    if (res.status !== 200) return { status: 'unknown', error: `HTTP ${res.status}` };
+    let d = {};
+    try { d = await res.json(); } catch (e) { return { status: 'unknown', error: 'ответ не JSON' }; }
+    const bal = (typeof d.balance_usd === 'number') ? d.balance_usd : null;
+    if (bal == null) return { status: 'unknown', error: 'в ответе нет balance_usd' };
+    const spent = Number(d.api_key && d.api_key.spent_usd) || 0;
+    return {
+        status: 'live',
+        balanceSource: 'key',
+        balance: bal,
+        spent,
+        planName: d.rpm_plan || null,
+        rpm: d.rpm || null,
+        force: !!opts.force,
+    };
+}
+async function kvBalance(target, opts = {}) {
+    // Панельных New-API ручек у площадки НЕТ (замер 30.10: /v1/dashboard/billing/* → 404,
+    // API-ключ панелью не признаётся - 401 «Сессия истекла»). Панель - своя (FastAPI + SPA),
+    // её сессия - JWT в localStorage ПРОФИЛЯ браузера. Замер 30.10: JWT живёт в
+    // Default/Local Storage/leveldb открытым текстом (leveldb-лог), едится regex'ом
+    // `eyJ…` и принимается панелью (`GET /api/me` с Bearer JWT → 200 с `balance`).
+    // Поэтому читаем кабинетом по прецеденту odyssey (read-account.py) - только здесь
+    // без запуска браузера: прямо из leveldb-лога профиля.
+    void opts;
+    const profile = kvProfileFor(target || {});
+    if (!profile) return { status: 'unknown', error: 'нет профиля: открой аккаунт кнопкой 🌐' };
+    const me = await kvPanelSelf(profile, target);
+    if (!me.ok) return { status: 'unknown', error: me.error, ...(me.stale ? { stale: true } : {}) };
+    // Расход по МАТЧЕМУСЬ ключу: панель отдаёт masked display (`sk-gw-zOi…NdB0`);
+    // наш api_key лежит в записи, маска собирается из него же - совпадение надёжное.
+    const mask = kvKeyMask(target.api_key);
+    const keyRow = (me.keys || []).find(k => k.display === mask) || null;
+    const granted = Number(me.user.balance) + Number(me.user.spent != null ? me.user.spent : 0);
+    // Панель хранит USD и ПОКАЗЫВАЕТ ₽: `rub(u.balance) = usd × RATE()`, RATE берётся
+    // из /api/public/config (`usd_rub_rate: 95`; замер 31.10, комментарий в бандле
+    // «balances are kept in USD and shown at the top»). Владелец 31.10: «баланс не
+    // в рублях» - цифра была настоящая, а подпись долларовая. Отдаём пару полей
+    // валюты по прецеденту hcnsec (юани): локальная цифра = панельная, доллары мелким.
+    const rate = Number(me.config && me.config.usd_rub_rate) || 0;
+    const cur = rate > 1 ? {
+        currency: 'RUB',
+        currencySymbol: '₽',
+        currencyRate: rate,
+        balanceLocal: Number(me.user.balance),
+        spentLocal: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
+        grantedLocal: granted,
+    } : {};
+    return {
+        status: 'live',
+        balance: Number(me.user.balance),
+        spent: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
+        granted,
+        balanceSource: 'self',
+        ...cur,
+        self: {
+            balance: Number(me.user.balance),
+            granted,
+            selfCheckedAt: new Date().toISOString(),
+            newApiUsername: me.user.name,
+        },
+        // Расход конкретного ключа и число ключей аккаунта - для «Здоровья» и авторотации.
+        keySpent: keyRow ? Number(keyRow.spent) : null,
+        keysCount: (me.keys || []).length,
+    };
+}
+// Маска ключа в стиле панели: `sk-gw-zOi…NdB0` (9 первых, 4 последних).
+// Замер /api/me/keys 30.10: панель даёт 'sk-gw-zOi…NdB0', то есть 9 символов до
+// многоточия - сверка строкой надёжна только при той же длине (при 7 совпадений нет).
+function kvKeyMask(key) {
+    const s = String(key || '');
+    if (s.length < 14) return s;
+    return s.slice(0, 9) + '…' + s.slice(-4);
+}
+// Каталог профиля записи: метка `acct_<id>` (см. handleKvSessionOpen), live-каталог
+// профиль создаёт при первом открытии браузера.
+function kvProfileFor(target) {
+    if (!target || !target.id) return null;
+    const label = 'acct_' + target.id;
+    const dir = path.join(__dirname, '..', 'kvotum', 'profiles', label);
+    return fs.existsSync(dir) ? { label, dir } : null;
+}
+// Чтение кабинета из leveldb-профиля: JWT (localStorage `token`) + `/api/me`,
+// `/api/me/keys`, `/api/me/usage`. Никакого браузера: leveldb-лог пишет localStorage
+// открытым текстом, JWT короткий (замер: 139 символов, exp +7 дней).
+function kvPanelSelf(profile, target) {
+    const lsDir = path.join(profile.dir, 'Default', 'Local Storage', 'leveldb');
+    let raw = null;
+    try {
+        // leveldb пишет и в .log, и в .ldb; свежие записи почти всегда в .log.
+        // Читаем оба и берём ПОСЛЕДНЕЕ вхождение JWT - протухший старый не выиграет.
+        for (const f of fs.readdirSync(lsDir)) {
+            if (!/\.log$|\.ldb$/.test(f)) continue;
+            const buf = fs.readFileSync(path.join(lsDir, f));
+            const m = [...buf.toString('latin1').matchAll(/eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/g)].pop();
+            if (m) raw = m[0];
+        }
+    } catch { /* нет папки - ниже честная ошибка */ }
+    if (!raw) return { ok: false, error: 'в профиле нет JWT панели - открой аккаунт кнопкой 🌐 и войди' };
+    // exp из payload: протухший JWT панель отвергнет 401, но дешевле проверить дома.
+    try {
+        const payload = JSON.parse(Buffer.from(raw.split('.')[1], 'base64url').toString('utf8'));
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+            return { ok: false, error: 'JWT профиля протух - открой аккаунт кнопкой 🌐 и войди заново', stale: true };
+        }
+    } catch { /* форма не JWT - отдаём как есть, панель скажет 401 */ }
+    const headers = { Authorization: 'Bearer ' + raw };
+    const get = (p) => fetch(`https://myapi.buzz${p}`, { headers, signal: AbortSignal.timeout(15000) })
+        .then(r => r.status === 200 ? r.json() : null).catch(() => null);
+    return (async () => {
+        const user = await get('/api/me');
+        if (!user || user.balance == null) return { ok: false, error: 'JWT панель не приняла (401) - открой аккаунт кнопкой 🌐 и войди заново', stale: true };
+        const [keys, usage, config] = await Promise.all([
+            get('/api/me/keys'), get('/api/me/usage?days=1'), get('/api/public/config'),
+        ]);
+        return { ok: true, user, keys: Array.isArray(keys) ? keys : [], usage: usage || {}, config: config || {} };
+    })();
+}
 // ThreeRouter - свой движок (sub2api), New-API ручек баланса нет: /v1/dashboard/billing/*
 // и /api/user/self отвечают 404. Ключом читается GET /v1/usage: {balance, remaining,
 // unit:"USD", planName, daily_usage, model_stats, isValid, mode}. Остаток - remaining ?? balance.
@@ -18019,50 +18467,73 @@ const PM_QUOTA_TICK_MS = Number(process.env.PM_QUOTA_TICK_MS || 2 * 60_000);
 // «устарело» успевала мигнуть. 2 + 2 = 4 мин даёт запас.
 const PM_QUOTA_STALE_MS = Number(process.env.PM_QUOTA_STALE_MS || 2 * 60_000);
 const PM_QUOTA_MIN_GAP_MS = Number(process.env.PM_QUOTA_MIN_GAP_MS || 60_000);
+// Флор потолка за тик. Пулу крупнее 16 потолок дорастает до половины (см. pmQuotaDue):
+// цикл обязан укладываться в два тика, иначе хвост снова мигнёт «устарело».
 const PM_QUOTA_MAX_PER_TICK = Number(process.env.PM_QUOTA_MAX_PER_TICK || 8);
-const pmQuotaRefresh = { timer: null, last: new Map(), runs: 0 };
+const pmQuotaRefresh = { timer: null, last: new Map(), runs: 0, busy: false };
 // Кого обновлять в этом тике. Отдельной функцией, а не телом таймера, чтобы регресс
 // проверял отбор без сети и без живого пула.
 function pmQuotaDue(sessions, now = Date.now(), lastTry = pmQuotaRefresh.last) {
-    const out = [];
+    // Сначала считаем, кого ВООБЩЕ можно трогать: потолок считается от этого числа,
+    // а не от очереди кандидатов - иначе при малой очереди потолок схлопывается и
+    // полный цикл перестаёт укладываться в два тика.
+    const eligible = [];
     for (const s of sessions || []) {
         if (!s || !isRealKey(s.api_key)) continue;
         if (s.status === 'dead' || s.authRequired) continue;
+        eligible.push(s);
+    }
+    const out = [];
+    for (const s of eligible) {
         const checked = Date.parse((s.quota && s.quota.checkedAt) || s.quotaCheckedAt || '');
         if (now - ((lastTry && lastTry.get(s.api_key)) || 0) < PM_QUOTA_MIN_GAP_MS) continue;
         if (Number.isFinite(checked) && now - checked < PM_QUOTA_STALE_MS) continue;
-        out.push(s);
-        if (out.length >= PM_QUOTA_MAX_PER_TICK) break;
+        out.push({ s, checked: Number.isFinite(checked) ? checked : -Infinity });
     }
-    return out;
+    // 🔴 Голодание хвоста (живой дефект 31.10): отбор шёл по порядку пула с потолком 8.
+    // Порог протухания равен тику, поэтому 16 головных успевали протухнуть заново к
+    // каждому тику и занимали все слоты; хвост (18-22) не перечитывался сутки и вечно
+    // рисовал «данные устарели» (скрин владельца). Сортируем по старшинству метки:
+    // старые и никогда не читавшиеся - первыми.
+    out.sort((x, y) => x.checked - y.checked);
+    const cap = Math.max(PM_QUOTA_MAX_PER_TICK, Math.ceil(eligible.length / 2));
+    return out.slice(0, cap).map(x => x.s);
 }
 async function pmQuotaTick() {
-    let sessions;
-    try { sessions = pmLoad(); } catch (e) { logLine(`premier quota: пул не прочитан (${e.message})`); return 0; }
-    const due = pmQuotaDue(sessions);
-    if (!due.length) return 0;
-    pmQuotaRefresh.runs += 1;
-    const updates = [];
-    for (const s of due) {
-        // Метим попытку ДО запроса: упавший чек иначе повторялся бы каждые две минуты.
-        pmQuotaRefresh.last.set(s.api_key, Date.now());
-        try { updates.push({ id: s.id, key: s.api_key, result: await pmBalance(s, { force: true }) }); }
-        catch (e) { logLine(`premier quota: ${s.email || s.name} - ${e.message}`); }
+    // Потолок дорос до половины пула, тик может тянуться дольше интервала. Наслоение
+    // тиков дало бы двойные пробы и гонку записи - повторный вызов просто пропускаем.
+    if (pmQuotaRefresh.busy) return 0;
+    pmQuotaRefresh.busy = true;
+    try {
+        let sessions;
+        try { sessions = pmLoad(); } catch (e) { logLine(`premier quota: пул не прочитан (${e.message})`); return 0; }
+        const due = pmQuotaDue(sessions);
+        if (!due.length) return 0;
+        pmQuotaRefresh.runs += 1;
+        const updates = [];
+        for (const s of due) {
+            // Метим попытку ДО запроса: упавший чек иначе повторялся бы каждые две минуты.
+            pmQuotaRefresh.last.set(s.api_key, Date.now());
+            try { updates.push({ id: s.id, key: s.api_key, result: await pmBalance(s, { force: true }) }); }
+            catch (e) { logLine(`premier quota: ${s.email || s.name} - ${e.message}`); }
+        }
+        if (!updates.length) return 0;
+        // Перечитываем пул перед записью: за время чеков человек мог сменить ключ или добавить
+        // аккаунт, и сохранение старого снимка вернуло бы удалённое.
+        const latest = pmLoad();
+        let written = 0;
+        for (const u of updates) {
+            const cur = latest.find(x => x.id === u.id && x.api_key === u.key);
+            if (!cur) continue;
+            pmApplyBalance(cur, u.result);
+            written += 1;
+        }
+        if (written) pmSave(latest);
+        logLine(`premier quota: фоном обновлено ${written} из ${due.length} (всего в пуле ${latest.length})`);
+        return written;
+    } finally {
+        pmQuotaRefresh.busy = false;
     }
-    if (!updates.length) return 0;
-    // Перечитываем пул перед записью: за время чеков человек мог сменить ключ или добавить
-    // аккаунт, и сохранение старого снимка вернуло бы удалённое.
-    const latest = pmLoad();
-    let written = 0;
-    for (const u of updates) {
-        const cur = latest.find(x => x.id === u.id && x.api_key === u.key);
-        if (!cur) continue;
-        pmApplyBalance(cur, u.result);
-        written += 1;
-    }
-    if (written) pmSave(latest);
-    logLine(`premier quota: фоном обновлено ${written} из ${due.length} (всего в пуле ${latest.length})`);
-    return written;
 }
 function pmQuotaStart() {
     if (pmQuotaRefresh.timer) return;
@@ -18350,6 +18821,8 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function axApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'apinex' }); }
+function kvApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kvotum' }); }
 function trApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'threerouter' }); }
 function pmApplyBalance(target, bal) { return premierApi.applyResult(target, bal); }
 // vani - не New API: у неё ПРОЦЕНТЫ квоты, а не доллары, поэтому свой apply (не
@@ -18682,6 +19155,52 @@ async function handleKkSessions(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
+async function handleAxSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = axLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await axProbe(s.api_key); }));
+            }
+            axSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => axApplyBalance(s, await axBalance(s))));
+            }
+            axSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: axReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleKvSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = kvLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await kvProbe(s.api_key); }));
+            }
+            kvSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => kvApplyBalance(s, await kvBalance(s))));
+            }
+            kvSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: kvReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
 async function handleTrSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
     try {
@@ -18989,6 +19508,30 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await axProbe(api_key);
+        const sessions = axLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; axSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await kvProbe(api_key);
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; kvSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -19150,6 +19693,50 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAxBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = axLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await axBalance(target || { api_key }, { force });
+            if (target) { axApplyBalance(target, bal); axSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('ax:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = kvLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await kvBalance(target || { api_key }, { force });
+            if (target) { kvApplyBalance(target, bal); kvSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('kv:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -19425,6 +20012,12 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleAxSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'apinex', load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance });
+}
+function handleKvSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'kvotum', load: kvLoad, save: kvSave, balanceFn: kvBalance, applyFn: kvApplyBalance });
+}
 function handleTrSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'threerouter', load: trLoad, save: trSave, balanceFn: trBalance, applyFn: trApplyBalance });
 }
@@ -19463,6 +20056,8 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const axLkPids = new Map();
+const kvLkPids = new Map();
 const trLkPids = new Map();
 const pmLkPids = new Map();
 const vnLkPids = new Map();
@@ -19476,6 +20071,14 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function axPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function kvPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -19578,6 +20181,112 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAxSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = axLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = axLkPids.get(label);
+        if (axPidAlive(prevPid)) {
+            logLine(`apinex session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'apinex', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.apinex.bond', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`apinex session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`apinex session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`apinex session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            axLkPids.delete(label);
+            logLine(`apinex session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('ax', id);
+        });
+        proc.unref();
+        axLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            axLkPids.delete(label);
+            logLine(`apinex session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`apinex session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kvLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = kvLkPids.get(label);
+        if (kvPidAlive(prevPid)) {
+            logLine(`kvotum session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'kvotum', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('myapi.buzz', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`kvotum session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`kvotum session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`kvotum session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            kvLkPids.delete(label);
+            logLine(`kvotum session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('kv', id);
+        });
+        proc.unref();
+        kvLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            kvLkPids.delete(label);
+            logLine(`kvotum session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`kvotum session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -20238,6 +20947,8 @@ const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js')
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const AX_SESSIONS_DIR = path.join(__dirname, '..', 'apinex', 'sessions');
+const KV_SESSIONS_DIR = path.join(__dirname, '..', 'kvotum', 'sessions');
 const TR_SESSIONS_DIR = path.join(__dirname, '..', 'threerouter', 'sessions');
 const PM_SESSIONS_DIR = path.join(__dirname, '..', 'premier', 'sessions');
 const VN_SESSIONS_DIR = path.join(__dirname, '..', 'vani', 'sessions');
@@ -20255,6 +20966,20 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function axB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function axB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function kvB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function kvB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -20591,6 +21316,88 @@ async function handleLsShare(req, res) {
         };
         const share = lsB64UrlEncode(JSON.stringify(payload));
         logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAxShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = axLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = axLkPids.get(label);
+        if (axPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `apinex/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у ax нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(AX_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'apinex',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = axB64UrlEncode(JSON.stringify(payload));
+        logLine(`apinex share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = kvLkPids.get(label);
+        if (kvPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `kvotum/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у kv нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(KV_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'kvotum',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = kvB64UrlEncode(JSON.stringify(payload));
+        logLine(`kvotum share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -21007,6 +21814,124 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleAxImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(axB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'apinex' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не apinex-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = axLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'ax_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        axSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(AX_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(AX_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`apinex import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`apinex import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(kvB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'kvotum' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не kvotum-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = kvLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'kv_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        kvSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(KV_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(KV_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`kvotum import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`kvotum import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -21752,6 +22677,64 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // У apinex вход в кабинет через Google, ключ берётся в ЛК вручную - регистрации
+        // из дашборда нет. Поэтому запись без ключа бессмысленна и отвергается.
+        const key = String(api_key || '').trim();
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'api_key обязателен: вход через Google, ключ вставляется вручную из ЛК' });
+        const sessions = axLoad();
+        if (sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'ax_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+        });
+        axSave(sessions);
+        logLine(`apinex add: ${mail} (***${key.slice(-6)})`);
+        jsonRes(res, 200, { ok: true, id, noKey: false });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = kvLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'kv_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        kvSave(sessions);
+        logLine(`kvotum add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -21797,12 +22780,15 @@ async function handlePmRef(req, res) {
         if (body.set !== undefined && String(body.set).trim() && !set) {
             return jsonRes(res, 400, { error: 'не код и не ссылка ide.kgpix.bond/r/<код>' });
         }
-        // Сохранение — только по явному set. Пустая строка снимает свою ссылку:
-        // аккаунт вернётся к общему коду из ref-codes.js.
+        // Сохранение — только по явному set. Пустая строка снимает вписанный код:
+        // аккаунт вернётся к своему коду из кэша окна или к общему из ref-codes.js.
+        // 🪤 Пишем в `refCode`, а НЕ в `ref`: `ref` на записи пула — код, под которым
+        // регистрируется САМ этот аккаунт (его читает `open-session.js`). Положить туда
+        // его же опубликованный код значит отправить аккаунт на самоприглашение.
         if (set !== null || String(body.set || '').trim() === '') {
-            if (set) row.ref = set; else delete row.ref;
+            if (set) row.refCode = set; else delete row.refCode;
             pmSave(sessions);
-            logLine(`premier ref: ${row.email || row.name || id} → ${set ? set : 'общий код рефки'}`);
+            logLine(`premier ref: ${row.email || row.name || id} → ${set ? set : 'код аккаунта/общий'}`);
         }
         // id аккаунта на Premier и есть реф-код: он уже есть в кэше входа, а в
         // `/api/dev/state` его нет. Пока окно не открывали — код неизвестен, не угадываем.
@@ -21810,18 +22796,30 @@ async function handlePmRef(req, res) {
         try {
             const st = JSON.parse(fs.readFileSync(path.join(PM_SESSIONS_DIR, 'acct_' + id + '.json'), 'utf8'));
             referral = st.premierReferral || null;
+            // 🪤 Код берём из `premierReferral.code`, а не из `premierUserId`: тот стал
+            // `email:…`, когда `/api/dev/state` перестал отдавать `user.id`, и числовая
+            // ветка перестала срабатывать — живой аккаунт выглядел как «код неизвестен».
+            // `premierUserId` остаётся запасным: у старых снимков там ещё голое число.
+            const fromRef = String((referral && referral.code) || '');
             const raw = String(st.premierUserId || '');
-            if (/^\d{6,}$/.test(raw)) code = raw; else if (/^id:(\d{6,})$/.test(raw)) code = raw.slice(3);
+            if (/^[A-Za-z0-9_-]{2,32}$/.test(fromRef)) code = fromRef;
+            else if (/^\d{6,}$/.test(raw)) code = raw;
+            else if (/^id:(\d{6,})$/.test(raw)) code = raw.slice(3);
         } catch {}
-        const own = row.ref || null;
-        const effective = own || (() => { try { return require('./lib/ref-codes.js').code('premier'); } catch { return null; } })();
+        const own = row.refCode || null;
+        const shared = (() => { try { return require('./lib/ref-codes.js').code('premier'); } catch { return null; } })();
+        // Порядок важен: вписанный руками код → собственный код аккаунта → общий код репозитория.
+        // Собственный код аккаунта и есть та ссылка, что зачтёт приглашённых ЕМУ; общий код
+        // зачитывает чужому рефереру, поэтому он последний, а не первый.
+        const effective = own || code || shared;
+        const source = own ? 'own' : (code ? 'account' : (shared ? 'shared' : 'none'));
         return jsonRes(res, 200, {
             ok: true,
             id,
             ref: own,
             code: code || own,
             link: effective ? `${PM_REF_DEFAULT_HOST}/r/${encodeURIComponent(effective)}` : null,
-            source: own ? 'own' : (effective ? 'shared' : 'none'),
+            source,
             referral,
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
@@ -22226,6 +23224,54 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = axLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(AX_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        axSave(sessions);
+        logLine(`apinex set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(KV_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        kvSave(sessions);
+        logLine(`kvotum set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -22546,6 +23592,52 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = axLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        axSave(sessions);
+        logLine(`apinex rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        kvSave(sessions);
+        logLine(`kvotum rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -22564,9 +23656,16 @@ async function handleTrRename(req, res) {
             if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
             target.email = e;
         }
+        // Пароль задним числом: у аккаунтов до smailpro-скрипта его в записи нет,
+        // а войти в кабинет руками нечем (владелец 29.10: «логинится не могу потом
+        // в аккаунт по кнопке 🌐»). Пустая строка = удалить пароль.
+        if (body.password !== undefined) {
+            const p = String(body.password || '').trim();
+            if (p) target.password = p; else delete target.password;
+        }
         trSave(sessions);
         logLine(`threerouter rename: ${target.email} (${target.name})`);
-        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name, hasPassword: !!target.password });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 async function handlePmRename(req, res) {
@@ -22839,6 +23938,38 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = axLoad();
+        const target = sessions.find(s => s.id === idKey);
+        axSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === axReadActiveKey()) {
+            try { fs.rmSync(AX_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(AX_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`apinex delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.id === idKey);
+        kvSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === kvReadActiveKey()) {
+            try { fs.rmSync(KV_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(KV_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`kvotum delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -23088,6 +24219,112 @@ async function handleKkActivate(req, res) {
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в apinex-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = axLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(AX_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        axSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ax');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AX_KEEPALIVE_URL;   // keepalive :20190 → api.apinex.bond напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — apinex-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const axCurModel = axReadActiveModel() || '';
+            if (axCurModel) settings.model = axCurModel;
+            else { delete settings.model; logLine('apinex activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из apinex-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`apinex activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20190, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const axKa = await keepaliveBring(AX_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!axKa.ok) logLine(`apinex activate: keepalive :${AX_KEEPALIVE_PORT} НЕ поднялся — ${axKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`apinex activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${AX_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: axKa.ok, port: AX_KEEPALIVE_PORT, error: axKa.ok ? null : (axKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в kvotum-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = kvLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(KV_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        kvSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kv');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = KV_KEEPALIVE_URL;   // keepalive :20182 → myapi.buzz напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — kvotum-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const kvCurModel = kvReadActiveModel() || '';
+            if (kvCurModel) settings.model = kvCurModel;
+            else { delete settings.model; logLine('kvotum activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из kvotum-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`kvotum activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20182, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const kvKa = await keepaliveBring(KV_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kvKa.ok) logLine(`kvotum activate: keepalive :${KV_KEEPALIVE_PORT} НЕ поднялся — ${kvKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`kvotum activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${KV_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: kvKa.ok, port: KV_KEEPALIVE_PORT, error: kvKa.ok ? null : (kvKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 // ── ThreeRouter: авторега с ручной капчей + поиск прокси ─────────────────────
 //
 // Капча решается владельцем в видимом окне, поэтому прогон нельзя запускать синхронным
@@ -23130,12 +24367,18 @@ async function handleTrAutoregStart(req, res) {
         if (trAutoreg.running && trAutoreg.proc) {
             return jsonRes(res, 409, { error: 'авторега ThreeRouter уже идёт', ...trAutoregPublic() });
         }
-        const script = path.join(__dirname, '..', 'threerouter', 'auto-add.js');
-        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'threerouter/auto-add.js не найден' });
+        // 🔴 Почта - smailpro через Camoufox, поэтому скрипт на PYTHON, а не на Node.
+        // Причина в вике «Одноразовые почты» § SmailPro: emailnator исчерпал свободные
+        // адреса, а smailpro закрыт Turnstile - обычный Chromium его не проходит.
+        // 🪤 PYTHON берём из окружения с фолбэком: тем же именем уже пользуется
+        // поиск прокси, и второй источник имени разошёлся бы с первым.
+        const script = path.join(__dirname, '..', 'smailpro', 'auto-add.py');
+        if (!fs.existsSync(script)) return jsonRes(res, 404, { error: 'smailpro/auto-add.py не найден' });
         const useProxy = body.useProxy !== false;
-        const args = [script, String(count)];
+        const py = process.env.PYTHON || 'python';
+        const args = ['-u', script, String(count)];
         if (!useProxy) args.push('--no-proxy');
-        const proc = spawn(process.execPath, args, {
+        const proc = spawn(py, args, {
             cwd: path.join(__dirname, '..'),
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
@@ -23147,15 +24390,19 @@ async function handleTrAutoregStart(req, res) {
         });
         const pushLines = (which, chunk) => {
             for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
-                if (line.startsWith('TR_STAGE ')) {
+                // Маркеры читаем ОБА: `TR_` остался у старого node-скрипта, `SP_` печатает
+                // smailpro/auto-add.py. Префиксы одной длины, поэтому срез общий.
+                const stageLine = line.startsWith('TR_STAGE ') || line.startsWith('SP_STAGE ')
+                    ? line.slice('SP_STAGE '.length) : null;
+                if (stageLine !== null) {
                     try {
-                        const s = JSON.parse(line.slice('TR_STAGE '.length));
+                        const s = JSON.parse(stageLine);
                         if (s && typeof s.stage === 'string') trAutoreg.stage = { ...s, at: new Date().toISOString() };
                     } catch { /* битый маркер не ломает лог */ }
                     continue;
                 }
-                if (line.startsWith('TR_AUTOADD_RESULT ')) {
-                    try { trAutoreg.result = JSON.parse(line.slice('TR_AUTOADD_RESULT '.length)); } catch {}
+                if (line.startsWith('TR_AUTOADD_RESULT ') || line.startsWith('SP_AUTOADD_RESULT ')) {
+                    try { trAutoreg.result = JSON.parse(line.slice('SP_AUTOADD_RESULT '.length)); } catch {}
                     continue;
                 }
                 trAutoreg[which].push(line);
@@ -23999,6 +25246,74 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleAxModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (AX_MODELS_CACHE.data && Date.now() - AX_MODELS_CACHE.ts < AX_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: AX_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${AX_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...AX_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        AX_MODELS_CACHE.data = models;
+        AX_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (AX_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: AX_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+async function handleKvModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (KV_MODELS_CACHE.data && Date.now() - KV_MODELS_CACHE.ts < KV_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: KV_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${KV_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...KV_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        KV_MODELS_CACHE.data = models;
+        KV_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (KV_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: KV_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleTrModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -24441,6 +25756,70 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(AX_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-ax-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = AX_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`apinex set-model: settings.json FAILED: ${e.message}`);
+        }
+        const axKaM = await keepaliveBring(AX_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!axKaM.ok) logLine(`apinex set-model: keepalive :${AX_KEEPALIVE_PORT} НЕ поднялся — ${axKaM.error || '?'}`);
+        logLine(`apinex set-model: ${m} (base ${AX_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: AX_ACTIVE_MODEL_FILE, base: AX_KEEPALIVE_URL, needRestart: true, keepalive: { up: axKaM.ok, port: AX_KEEPALIVE_PORT, error: axKaM.ok ? null : (axKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(KV_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-kv-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = KV_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`kvotum set-model: settings.json FAILED: ${e.message}`);
+        }
+        const kvKaM = await keepaliveBring(KV_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!kvKaM.ok) logLine(`kvotum set-model: keepalive :${KV_KEEPALIVE_PORT} НЕ поднялся — ${kvKaM.error || '?'}`);
+        logLine(`kvotum set-model: ${m} (base ${KV_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KV_ACTIVE_MODEL_FILE, base: KV_KEEPALIVE_URL, needRestart: true, keepalive: { up: kvKaM.ok, port: KV_KEEPALIVE_PORT, error: kvKaM.ok ? null : (kvKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24840,6 +26219,30 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleAxModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(AX_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`apinex modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleKvModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(KV_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`kvotum modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleTrModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24988,6 +26391,18 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function axReadModelMap() {
+    try {
+        const raw = fs.readFileSync(AX_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function kvReadModelMap() {
+    try {
+        const raw = fs.readFileSync(KV_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -32894,6 +34309,8 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [AX_KEEPALIVE_PORT]: { name: 'APINEX', spawn: axKeepaliveSpawn },
+        [KV_KEEPALIVE_PORT]: { name: 'KVOTUM', spawn: kvKeepaliveSpawn },
         [TR_KEEPALIVE_PORT]: { name: 'ThreeRouter', spawn: trKeepaliveSpawn },
         [PM_KEEPALIVE_PORT]: { name: 'Premier', spawn: pmKeepaliveSpawn },
         [VN_KEEPALIVE_PORT]: { name: 'Vani', spawn: vnKeepaliveSpawn },
@@ -34331,6 +35748,8 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    ax: { tag: 'apinex',     label: 'APINEX',     host: 'api.apinex.bond',     keyFile: AX_ACTIVE_KEY_FILE, load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance },
+    kv: { tag: 'kvotum',     label: 'KVOTUM',     host: 'myapi.buzz',     keyFile: KV_ACTIVE_KEY_FILE, load: kvLoad, save: kvSave, balanceFn: kvBalance, applyFn: kvApplyBalance },
     tr: { tag: 'threerouter',     label: 'ThreeRouter',     host: 'api.threerouter.com',     keyFile: TR_ACTIVE_KEY_FILE, load: trLoad, save: trSave, balanceFn: trBalance, applyFn: trApplyBalance },
     // 🎯 Premier: `quotaMode` вместо прежнего `noAuto` (25.10). Денег у площадки нет вовсе -
     // Free-план тарифицируется дневной квотой сообщений, - и пока стоял `noAuto`, ротация не
@@ -36069,6 +37488,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/set-github') return handleKvSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/set-github') return handlePmSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/set-github') return handleCpSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/set-github') return handleAbSetGithub(req, res);
@@ -36132,6 +37552,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/ax/keepalive/state')  return keepaliveAx.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/kv/keepalive/state')  return keepaliveKv.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/keepalive/state')  return keepaliveTr.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/pm/keepalive/state')  return keepalivePm.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/vn/keepalive/state')  return keepaliveVn.state(req, res);
@@ -36147,6 +37569,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/keepalive/config') return keepaliveAx.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/keepalive/config') return keepaliveKv.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/keepalive/config') return keepaliveTr.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/keepalive/config') return keepalivePm.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/keepalive/config') return keepaliveVn.config(req, res);
@@ -36180,6 +37604,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/keepalive/latency')) return keepaliveAx.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/keepalive/latency')) return keepaliveKv.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/keepalive/latency')) return keepaliveTr.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/pm/keepalive/latency')) return keepalivePm.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/keepalive/latency')) return keepaliveVn.latency(req, res);
@@ -36239,6 +37665,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/sessions')) return handleAxSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/sessions')) return handleKvSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/sessions')) return handleTrSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/pm/sessions')) return handlePmSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/sessions')) return handleVnSessions(req, res);
@@ -36253,6 +37681,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/ping'))     return handleAxPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/ping'))     return handleKvPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/ping'))     return handleTrPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/pm/ping'))     return handlePmPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/ping'))     return handleVnPing(req, res);
@@ -36267,6 +37697,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/balance'))  return handleAxBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/balance'))  return handleKvBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/balance'))  return handleTrBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/pm/balance'))  return handlePmBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/balance'))  return handleVnBalance(req, res);
@@ -36281,6 +37713,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/models'))   return handleAxModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/models'))   return handleKvModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/models'))   return handleTrModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/pm/models'))   return handlePmModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/vn/models'))   return handleVnModels(req, res);
@@ -36295,6 +37729,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ax/active-model') return jsonRes(res, 200, { model: axReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/kv/active-model') return jsonRes(res, 200, { model: kvReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/active-model') return jsonRes(res, 200, { model: trReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/pm/active-model') return jsonRes(res, 200, { model: pmReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/vn/active-model') return jsonRes(res, 200, { model: vnReadActiveModel() || null });
@@ -36309,6 +37745,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/ax/modelmap') return jsonRes(res, 200, { ok: true, modelMap: axReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/kv/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kvReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/modelmap') return jsonRes(res, 200, { ok: true, modelMap: trReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/pm/modelmap') return jsonRes(res, 200, { ok: true, modelMap: pmReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/vn/modelmap') return jsonRes(res, 200, { ok: true, modelMap: vnReadModelMap() });
@@ -36324,6 +37762,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/add')       return handleAxAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/add')       return handleKvAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/add')       return handleTrAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/add')       return handlePmAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/add')       return handleVnAdd(req, res);
@@ -36338,6 +37778,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/key')       return handleAxSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/key')       return handleKvSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/key')       return handleTrSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/key')       return handlePmSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/key')       return handleVnSetKey(req, res);
@@ -36353,6 +37795,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/rename')    return handleAxRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/rename')    return handleKvRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/rename')    return handleTrRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/rename')    return handlePmRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/rename')    return handleVnRename(req, res);
@@ -36367,6 +37811,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/delete')    return handleAxDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/delete')    return handleKvDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/delete')    return handleTrDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/delete')    return handlePmDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/delete')    return handleVnDelete(req, res);
@@ -36381,6 +37827,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/activate')  return handleAxActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/activate')  return handleKvActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/activate')  return handleTrActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/activate')  return handlePmActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/activate')  return handleVnActivate(req, res);
@@ -36395,6 +37843,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/set-model') return handleAxSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/set-model') return handleKvSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/set-model') return handleTrSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/set-model') return handlePmSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/set-model') return handleVnSetModel(req, res);
@@ -36409,6 +37859,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/set-balance') return handleAxSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/set-balance') return handleKvSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/set-balance') return handleTrSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/set-balance') return handlePmSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/set-balance') return handleVnSetBalance(req, res);
@@ -36423,6 +37875,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/map-profiles') return handleKvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/map-profiles') return handlePmMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/map-profiles') return handleCpMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/map-profiles') return handleAbMapProfiles(req, res);
@@ -36430,12 +37883,16 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/modelmap')  return handleAxModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/modelmap')  return handleKvModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/modelmap')  return handleTrModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/modelmap')  return handlePmModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/modelmap')  return handleVnModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/session/open') return handleAxSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/session/open') return handleKvSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/session/open') return handleTrSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/session/open') return handlePmSessionOpen(req, res);
     // Поле реф-ссылки на вкладке: ссылка на аккаунт + последний известный счётчик.
@@ -36454,6 +37911,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/share')    return handleAxShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/share')    return handleKvShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/share')    return handleTrShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/share')    return handlePmShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/vn/share')    return handleVnShare(req, res);
@@ -36468,6 +37927,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/ax/import')   return handleAxImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/import')   return handleKvImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/import')   return handleTrImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/autoreg/start')   return handleTrAutoregStart(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/autoreg/status')  return handleTrAutoregStatus(req, res);
@@ -36768,6 +38229,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/kv/add-github')       return handleKvAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/add-github')       return handlePmAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/add-github')       return handleCpAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ab/add-github')       return handleAbAddGithub(req, res);
@@ -36879,7 +38341,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

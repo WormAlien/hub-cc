@@ -32,6 +32,11 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // KVOTUM (2026-10-30) — форма СВОЯ: рефка ловится на КОРНЕ `/?ref=`, а не на
+    // странице регистрации. Сам бандл витрины строит ссылку как
+    // `${location.origin}/?ref=${code}` и матчами `[?&]ref=([0-9a-z]{7,16})` по
+    // location.search+hash кладёт код в localStorage `ref` + cookie на 30 дней.
+    kvotum:      { host: 'myapi.buzz',        path: '/?ref=',         label: 'KVOTUM' },
     // ThreeRouter (2026-10-23) — форма СВОЯ: `/register?aff=`, как у AgentRouter, а не
     // `/sign-up?aff=` эталона. Проверено живой ссылкой владельца (страница регистрации
     // открывается, реф-код в форме). Хост — `www.`, API-хост `api.threerouter.com` регистрацию не отдаёт.
@@ -113,6 +118,12 @@ const SHAPES = {
     // — но в списки UI он попадать НЕ должен: настраивать рефку мёртвого шлюза
     // бессмысленно, а строка в настройках выглядит как живой шлюз. Отсюда `legacy`.
     xpeach:      { host: 'xpeach.codes',      path: '/sign-up?aff=',  label: 'XPeach', legacy: true },
+    // SmailPro (2026-10-28) — не имеет формы регистрации с реф-кодом, работает через
+    // Sonjj API (https://sonjj.com/docs/?brand=smailpro.com): POST /temporary-email
+    // создаёт ящик, затем ThreeRouter регистрация через браузер с обычным реф-кодом.
+    // 💡 Ключевая особенность: выдаёт реальные Gmail/Outlook, которые ПРОХОДЯТ whitelist
+    // панелей (в отличие от emailnator, где адреса иногда в чёрных списках).
+    smailpro:    { host: 'smailpro.com',      path: '/',         label: 'SmailPro' },
 };
 // Полный набор — для резолва (его просят и легаси-скрипты).
 const PROVIDERS = Object.keys(SHAPES);
@@ -185,3 +196,12 @@ function save(patch) {
 }
 
 module.exports = { PROVIDERS, ACTIVE_PROVIDERS, SHAPES, defaults, user, effective, code, url, save, USER_FILE, DEFAULTS_FILE };
+
+// CLI для тех, кто не на Node: `node routing/lib/ref-codes.js threerouter` печатает
+// действующий код (переопределение пользователя > дефолт) и выходит 0; кода нет - 2.
+// Так smailpro/auto-add.py не держит ВТОРУЮ копию порядка «override > default».
+if (require.main === module) {
+    const c = code(process.argv[2]);
+    if (!c) process.exit(2);
+    process.stdout.write(c + '\n');
+}

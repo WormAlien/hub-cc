@@ -437,6 +437,8 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/apinex-sessions.json
+routing/kvotum-sessions.json
 routing/threerouter-sessions.json
 # ThreeRouter: профили и снимки браузера (куки, localStorage, тысячи файлов кеша).
 threerouter/profiles/
@@ -738,3 +740,12 @@ gemini/src/constants.js
 /tools/ar-switch-opus55.js
 /vani/_probe_mail.py
 routing/threerouter-proxy-ledger.json
+
+# ── KVOTUM (myapi.buzz): приватные данные ─────────────────────────────────────
+# Папки закрываем ДО первого прогона сессии: там профили браузера и живые куки
+# GitHub (kvotum/gh-sessions/acct_*.json). Репозиторий публичный. Тот же класс,
+# что у budsin/fxqidian/lsapi выше. kvotum-modelmap.json - безопасный конфиг
+# маппинга, его коммитим.
+kvotum/profiles/
+kvotum/sessions/
+kvotum/gh-sessions/

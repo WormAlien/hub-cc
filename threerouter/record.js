@@ -78,9 +78,18 @@ function installWatcher() {
     }, 400);
 }
 
+// Реф-ссылку берём из ref-codes.js - один источник с дашбордом и авторегой.
+function refUrl() {
+    try { return require('../routing/lib/ref-codes.js').url('threerouter'); }
+    catch { return 'https://www.threerouter.com/register?aff=VWCYM3TATVDX'; }
+}
+
+// 🔴 Почта: smailpro грузится ГОЛОЙ страницей (Camoufox), emailnator больше не
+// используется - на нём кончились свободные адреса. Запись открывает панель
+// и smailpro, чтобы снять маршрут «ящик -> регистрация -> код».
 const WINDOWS = [
-    { name: 'email', url: 'https://www.emailnator.com/' },
-    { name: 'site', url: 'https://www.threerouter.com/register?aff=DADYQH35FHUJ' },
+    { name: 'email', url: 'https://smailpro.com/temporary-email' },
+    { name: 'site', url: refUrl() },
 ];
 
 async function openWindow(win) {

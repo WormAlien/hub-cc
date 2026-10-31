@@ -109,7 +109,7 @@ function createRunner({ fetchImpl = globalThis.fetch, secretDir = SECRET_DIR, ma
         const start = now(); const record = { at: new Date().toISOString(), tokenId, channelId, model: body.model, test, request: b.count, ok: false };
         let got = null;
         try {
-            const r = await fetchImpl('https://api.a6api.com/v1/chat/completions', { method: 'POST', redirect: 'error',
+            const r = await fetchImpl('https://api.a6api.vip/v1/chat/completions', { method: 'POST', redirect: 'error',
                 headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) });
             record.http = r.status; record.ttfbMs = now() - start;
             if (!r.ok) { record.reason = 'http_' + r.status; await r.body?.cancel(); return { record, got }; }

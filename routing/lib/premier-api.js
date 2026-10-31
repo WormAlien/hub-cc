@@ -7,6 +7,11 @@ const os = require('os');
 const crypto = require('crypto');
 const HOST = 'ide.kgpix.bond';
 const ORIGIN = 'https://' + HOST;
+// Two domains serve the same Premier (live 29.10.2026): the old cabinet and eide.pro,
+// where new sign-ins land. Site cookies are domain-scoped, so the quota reader has to
+// pick the domain the session actually lives on instead of assuming the old one.
+const HOSTS = ['ide.kgpix.bond', 'eide.pro'];
+const ORIGINS = HOSTS.map(h => 'https://' + h);
 const ROOT = path.join(__dirname, '..', '..', 'premier');
 const POOL_FILE = path.join(os.homedir(), '.secrets', 'premier-sessions.json');
 const CACHE_MS = 60_000;
@@ -30,10 +35,14 @@ function keyFingerprint(apiKey) {
     const k = String(apiKey || '');
     return k ? crypto.createHash('sha256').update(k).digest('hex').slice(0, 32) : null;
 }
-// The cabinet shows keys only as prm_XXX…XXXX; the same mask is what /api/dev/state returns.
+// The cabinet shows keys only masked; the same mask is what /api/dev/state returns.
+// Two live formats (31.10): prm_… shows 3 secret chars, the older sk-premier-… shows 7
+// (sk-premier-c6e3593…63e1 is the owner cabinet's only key, live 31.10).
 function maskKey(apiKey) {
     const k = String(apiKey || '');
-    return /^prm_[A-Za-z0-9_-]{20,}$/.test(k) ? k.slice(0, 7) + '\u2026' + k.slice(-4) : null;
+    if (/^prm_[A-Za-z0-9_-]{20,}$/.test(k)) return k.slice(0, 7) + '…' + k.slice(-4);
+    if (/^sk-premier-[A-Za-z0-9_-]{20,}$/.test(k)) return k.slice(0, 18) + '…' + k.slice(-4);
+    return null;
 }
 // A link is evidence only when the authenticated account lists exactly one key with this mask.
 function keyBindingFrom(identity, keys, apiKey, now = Date.now()) {
@@ -91,11 +100,29 @@ function applyResult(target, result, now = Date.now()) {
     target.authRequired = !!result.authRequired;
 }
 function siteCookieHeader(cookies, now = Date.now()) {
-    return (cookies || []).filter(c => {
-        const domain = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
-        return domain === HOST && c.name && c.value && !/[\r\n;]/.test(c.name + c.value)
+    // Premier lives on two domains (29.10.2026): old cabinet and eide.pro where new
+    // sign-ins land. A Cookie header is domain-scoped - never mix two domains into
+    // one header. The auth cookie is premier_session (checked live); prefer the
+    // domain that holds it, and among those the newer login domain (eide.pro, last
+    // in HOSTS) wins so a migrated account is not answered by its stale side.
+    const live = (cookies || []).filter(c => {
+        const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
+        return HOSTS.includes(d) && c.name && c.value && !/[\r\n;]/.test(c.name + c.value)
             && !(typeof c.expires === 'number' && c.expires > 0 && c.expires * 1000 <= now);
-    }).map(c => c.name + '=' + c.value).join('; ');
+    });
+    const header = domain => live
+        .filter(c => String(c.domain || c.host || '').replace(/^\./, '').toLowerCase() === domain)
+        .map(c => c.name + '=' + c.value).join('; ');
+    const withAuth = HOSTS.filter(h => live.some(c =>
+        String(c.domain || c.host || '').replace(/^\./, '').toLowerCase() === h && c.name === 'premier_session'));
+    if (withAuth.length) return header(withAuth[withAuth.length - 1]);
+    // No auth cookie on either domain: any Premier cookies still tell "the browser
+    // reached the site" (hasSite checks in open-session), keep that meaning.
+    for (const domain of HOSTS.slice().reverse()) {
+        const h = header(domain);
+        if (h) return h;
+    }
+    return '';
 }
 function labelFor(target) {
     const id = String(target && target.id || '');
@@ -107,27 +134,46 @@ function readSnapshot(target) {
     try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'sessions', label + '.json'), 'utf8')); }
     catch { return null; }
 }
+// A domain-scoped cookie header only authenticates on its own domain, so try each
+// Premier domain with the header that belongs to it. readQuota passes a plain string
+// here (tests mock it), so the try-each loop needs the paired origin - a single string
+// is probed against every origin and the 200 wins.
 async function fetchQuota(cookie, { fetchImpl = fetch, now = Date.now(), apiKey = '' } = {}) {
     if (!cookie) return { authRequired: true, error: 'Войди в Premier через браузер аккаунта' };
-    try {
-        const r = await fetchImpl(ORIGIN + '/api/dev/state', {
-            headers: { Accept: 'application/json', Cookie: cookie },
-            redirect: 'error', signal: AbortSignal.timeout(15000),
-        });
-        if (r.status === 401) return { authRequired: true, error: 'Сессия Premier истекла, войди заново' };
-        if (!r.ok) return { error: 'Квота недоступна: HTTP ' + r.status };
-        const data = await r.json();
-        const quota = normalizeState(data, now);
-        if (!quota) return { unverified: true, error: 'Сервер не вернул дневную квоту аккаунта' };
-        // A number without the key in this account's own list may belong to someone else.
-        const binding = keyBinding(data, apiKey, now);
-        if (!binding) {
-            return { unverified: true, error: apiKey
-                ? 'Ключ не найден в списке этого аккаунта: владелец квоты не подтверждён'
-                : 'В записи нет key: владелец квоты не подтверждён' };
-        }
-        return { quota, binding };
-    } catch (e) { return { error: 'Не удалось прочитать квоту Premier: ' + e.message }; }
+    const headers = Array.isArray(cookie)
+        ? cookie
+        : ORIGINS.map(origin => ({ origin, cookie }));
+    let lastError = null;
+    // A domain without a session cookie answers 401 and must not mask the real
+    // diagnosis from the domain we ARE logged in to (live 31.10: eide.pro said "key
+    // not in list" while the cookieless kgpix 401 overwrote it into "session expired").
+    let sessionedError = null;
+    for (const { origin, cookie: hdr } of headers) {
+        if (!hdr) continue;
+        const hasSession = /(?:^|[;\s])premier_session=/.test(hdr);
+        const remember = e => { lastError = e; if (hasSession && !sessionedError) sessionedError = e; };
+        try {
+            const r = await fetchImpl(origin + '/api/dev/state', {
+                headers: { Accept: 'application/json', Cookie: hdr },
+                redirect: 'error', signal: AbortSignal.timeout(15000),
+            });
+            if (r.status === 401) { remember({ authRequired: true, error: 'Сессия Premier истекла, войди заново' }); continue; }
+            if (!r.ok) { remember({ error: 'Квота недоступна: HTTP ' + r.status }); continue; }
+            const data = await r.json();
+            const quota = normalizeState(data, now);
+            if (!quota) { remember({ unverified: true, error: 'Сервер не вернул дневную квоту аккаунта' }); continue; }
+            // A number without the key in this account's own list may belong to someone else.
+            const binding = keyBinding(data, apiKey, now);
+            if (!binding) {
+                remember({ unverified: true, error: apiKey
+                    ? 'Ключ не найден в списке этого аккаунта: владелец квоты не подтверждён'
+                    : 'В записи нет key: владелец квоты не подтверждён' });
+                continue;
+            }
+            return { quota, binding };
+        } catch (e) { remember({ error: 'Не удалось прочитать квоту Premier: ' + e.message }); }
+    }
+    return sessionedError || lastError || { authRequired: true, error: 'Войди в Premier через браузер аккаунта' };
 }
 async function readQuota(target = {}, opts = {}) {
     const now = Date.now();
@@ -149,14 +195,31 @@ async function readQuota(target = {}, opts = {}) {
         && (!target.quota || Date.parse(snap.premierQuota.checkedAt) >= Date.parse(target.quota.checkedAt))) {
         return { quota: snap.premierQuota, binding: snapBinding };
     }
-    let cookie = siteCookieHeader(snap && snap.cookies);
+    const readCookieHeader = cookies => {
+        // Domain-scoped headers paired with their origin: a kgpix header is useless
+        // against eide.pro and vice versa, so never send a mixed jar to one host.
+        const pairs = [];
+        for (const domain of HOSTS.slice().reverse()) {
+            const hdr = (cookies || []).filter(c => {
+                const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
+                return d === domain && c.name && c.value && !/[\r\n;]/.test(c.name + c.value)
+                    && !(typeof c.expires === 'number' && c.expires > 0 && c.expires * 1000 <= now);
+            }).map(c => c.name + '=' + c.value).join('; ');
+            if (hdr) pairs.push({ origin: 'https://' + domain, cookie: hdr });
+        }
+        return pairs;
+    };
+    let cookie = readCookieHeader(snap && snap.cookies);
     const label = labelFor(target);
-    if (!cookie && label) {
+    if (!cookie.length && label) {
         const profile = path.join(ROOT, 'profiles', label);
         if (fs.existsSync(profile)) {
-            try { cookie = siteCookieHeader(require('./newapi-account').readProfileCookies(profile)); } catch {}
+            try { cookie = readCookieHeader(require('./newapi-account').readProfileCookies(profile)); } catch {}
         }
     }
+    // A single header string (snapshot files only ever had kgpix) still works: it is
+    // probed against every Premier domain and the 200 wins.
+    if (cookie.length === 1) cookie = cookie[0].cookie;
     const result = await fetchQuota(cookie, { ...opts, now, apiKey });
     if (result.quota && target.quota && target.quota.accountId !== result.quota.accountId) {
         return { unverified: true, error: 'В профиле другой аккаунт Premier: проверь привязку' };
@@ -165,7 +228,7 @@ async function readQuota(target = {}, opts = {}) {
 }
 
 module.exports = {
-    HOST, ORIGIN, ROOT, POOL_FILE, CACHE_MS, FRESH_MS,
+    HOST, ORIGIN, HOSTS, ORIGINS, ROOT, POOL_FILE, CACHE_MS, FRESH_MS,
     accountIdentity, isAuthenticated, keyFingerprint, maskKey, keyBindingFrom, keyBinding,
     bindingMatches, normalizeState, quotaFresh, applyResult, siteCookieHeader,
     labelFor, readSnapshot, fetchQuota, readQuota,

@@ -446,7 +446,7 @@ const C = process.stdout.isTTY
     ? { ok: '\x1b[32m', bad: '\x1b[31m', warn: '\x1b[33m', dim: '\x1b[2m', off: '\x1b[0m', b: '\x1b[1m' }
     : { ok: '', bad: '', warn: '', dim: '', off: '', b: '' };
 
-const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript', 'customPanel'];
+const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript', 'customPanel', 'paidHedge', 'hedgesTuned'];
 
 /**
  * Что инструмент НЕ может решить за чужую панель. Печатается, когда вкладка помечена `customPanel`.
@@ -979,6 +979,21 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
         return p;
     }
 
+    // ── создание файла по литералу из спеки ─────────────────────────────────
+    // `{"create": "default", "text": "…"}` — файл, у которого нет осмысленного
+    // источника-шлюза, но есть одна правильная форма. Первый такой — per-port конфиг
+    // keepalive: новая вкладка обязана стартовать БЕЗ параллельных дублей запроса
+    // (`maxHedges: 0`), иначе один неверный хедж на платной или квотируемой площадке
+    // молча списывает второй запрос. Дубли включаются осознанно на вкладке, когда
+    // замер покажет, что площадка их терпит и они бесплатны.
+    if (rule.create === 'default') {
+        if (fs.existsSync(abs)) { p.status = 'done'; p.note = 'уже на месте'; return p; }
+        p.status = 'insert';
+        p.create = { text: toTarget(String(rule.text || ''), pairs) };
+        p.note = 'создать по шаблону спеки';
+        return p;
+    }
+
     if (!fs.existsSync(abs)) { p.status = 'bad'; p.note = `нет файла ${p.rel}`; return p; }
 
     const hay = fs.readFileSync(abs, 'utf8');
@@ -1185,6 +1200,18 @@ function runApply(name, spec, config, write) {
     for (const it of items) tally[it.status] += 1;
 
     gwHead(dst);
+    // 🔴 Правило владельца 31.10: новая вкладка заводится БЕЗ параллельных дублей запроса,
+    // дубли включаются потом осознанно, когда замер покажет что площадка их терпит.
+    // Безопасный путь — по умолчанию: поле `hedgesTuned` ставится только старым вкладкам,
+    // у которых дубли уже настроены владельцем. У нового шлюза поля нет, точка 3.13
+    // активна, и apply создаёт keepalive-конфиг с maxHedges 0 — иначе код стартует с
+    // дефолтом `maxHedges: 1`, и каждый молчащий запрос шлётся вторым. На платной или
+    // квотируемой площадке это списание за ответ, который никто не увидел.
+    if (dst.hedgesTuned) {
+        console.log(`${C.dim}дубли: вкладка помечена hedgesTuned — tools/gateways.config.json её keepalive не трогает.${C.off}\n`);
+    } else if (!fs.existsSync(path.join(REPO, 'routing', `keepalive-config-${dst.PORT}.json`))) {
+        console.log(`${C.ok}дубли: новый шлюз — создаю routing/keepalive-config-${dst.PORT}.json с maxHedges 0 (без параллельных дублей).${C.off}\n`);
+    }
     const clash = portGuard(name, dst, config);
     const badKey = keyGuard(name, dst, config);
     console.log(`${C.dim}эталон: ${srcName} · режим: ${write ? `${C.bad}ЗАПИСЬ${C.off}` : `${C.ok}сухой прогон${C.off} — файлы не тронуты`}${C.off}\n`);

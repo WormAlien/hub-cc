@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const ORIGIN = 'https://api.a6api.com';
+const ORIGIN = 'https://api.a6api.vip';
 const MODEL = 'deepseek-v4.1-flash-1017';
 const PRICE_FIELDS = ['input_price_micros', 'output_price_micros', 'cache_read_price_micros', 'cache_write_price_micros', 'per_request_price_micros'];
 const STRATEGIES = ['price_asc', 'success_desc', 'latency_asc', 'user_priority_desc'];

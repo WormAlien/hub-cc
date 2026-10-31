@@ -7,6 +7,18 @@ const path = require('node:path');
 const os = require('node:os');
 const root = path.join(__dirname, '..');
 const file = path.join(root, 'routing/lib/a6api-gateway.js');
+const API_ORIGIN = 'https://api.a6api.vip';
+const WEB_ORIGIN = 'https://a6api.vip';
+const OLD_ORIGINS = /https:\/\/(?:api\.)?a6api\.com/;
+const A6_DOMAIN_FILES = [
+    'routing/lib/a6api-api.js',
+    'routing/lib/a6api-gateway.js',
+    'routing/lib/a6api-probe.js',
+    'routing/vendor/a6api-tab.js',
+    'tools/check-a6api-gateway.js',
+    'tools/probe-pro-full.js',
+    'tools/probe-pro-vision.js',
+];
 const MODEL = 'deepseek-v4.1-flash-1017';
 let passed = 0;
 async function test(name, fn) { try { await fn(); passed++; console.log('  ok ' + name); } catch (e) { console.error('  FAIL ' + name + ': ' + e.message); process.exitCode = 1; } }
@@ -141,10 +153,18 @@ function fixture(createGateway) {
         assert.match(source, /require\.main === module/); assert.match(source, /process\.argv\[2\]/);
         assert.match(source, /restart/);
     });
+    await test('all a6api links use the announced vip domains', () => {
+        const sources = Object.fromEntries(A6_DOMAIN_FILES.map(rel => [rel, fs.readFileSync(path.join(root, rel), 'utf8')]));
+        for (const [rel, source] of Object.entries(sources)) assert.doesNotMatch(source, OLD_ORIGINS, rel + ' still uses an old a6api domain');
+        assert.match(sources['routing/lib/a6api-api.js'], new RegExp(`const ORIGIN = '${API_ORIGIN.replaceAll('.', '\\.')}'`));
+        assert.match(sources['routing/lib/a6api-probe.js'], new RegExp(`${API_ORIGIN.replaceAll('.', '\\.')}\\/v1\\/chat\\/completions`));
+        assert.match(sources['routing/vendor/a6api-tab.js'], new RegExp(`${WEB_ORIGIN.replaceAll('.', '\\.')}\\/console`));
+        for (const rel of ['tools/probe-pro-full.js', 'tools/probe-pro-vision.js']) assert.match(sources[rel], /hostname: 'api\.a6api\.vip'/, rel + ' does not use the new API hostname');
+    });
     await test('new runtime is isolated, private, non-rotating and single-attempt', () => {
         const x = buildRuntimeConfig({ secretDir: '/private', routingDir: '/routing' });
         assert.equal(x.converter.strictToolsVision, true); assert.deepEqual(x.converter.modelMap, {});
-        assert.equal(x.converter.upstream, 'https://api.a6api.com/v1');
+        assert.equal(x.converter.upstream, API_ORIGIN + '/v1');
         assert.equal(x.keepaliveEnv.KEY_FILE, path.join('/private', 'a6api-active-key.txt'));
         assert.equal(x.keepaliveEnv.UPSTREAM, 'http://127.0.0.1:20192');
         assert.equal(x.keepaliveEnv.SESSIONS_FILE, ''); assert.equal(x.keepaliveEnv.PAID_SINGLE_KEY, '1');

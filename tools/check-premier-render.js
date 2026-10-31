@@ -44,6 +44,23 @@ let rows = [
             if (url.pathname === '/__switch/api/pm/modelmap') return send({ ok: true, modelMap });
             if (url.pathname === '/__switch/api/pm/active-model') return send({ ok: true, model: 'qwen3.8-max-0902' });
             if (url.pathname === '/__switch/api/pm/session/open') return send({ ok: true, mode: 'console' });
+            // Реф-блок: код известен только у демо-аккаунта 1, остальные — «впиши код».
+            if (url.pathname === '/__switch/api/pm/ref') {
+                // Фронт шлёт ключ по форме id аккаунта: `id_…` не бывает, реальные — `pm_…` / `ar_…`.
+                const body = JSON.parse(route.request().postData() || '{}');
+                const id = body.id || Object.values(body)[0] || '';
+                const set = typeof body.set === 'string' ? body.set.trim() : null;
+                const row = rows.find(r => r.id === id);
+                // Запись пула: вписанный руками код лежит в `refCode`, а `ref` — код, под
+                // которым регистрируется сам аккаунт. Держим оба поля, чтобы тест ловил
+                // подмену одного другим.
+                if (set !== null && row) { if (set) row.refCode = set; else delete row.refCode; }
+                const own = row && row.refCode ? row.refCode : null;
+                if (id === 'pm_demo1') return send({ ok: true, id, ref: own, code: '123260146087', link: 'https://ide.kgpix.bond/r/123260146087', source: own ? 'own' : 'account', referral: { on: true, active: 1, pending: 0, next: { n: 3, need: 2 } } });
+                // Демо-2: кода нет, пока его не впишут руками.
+                if (!own) return send({ ok: true, id, ref: null, code: null, link: null, source: 'none', referral: null });
+                return send({ ok: true, id, ref: own, code: own, link: 'https://ide.kgpix.bond/r/' + own, source: 'own', referral: null });
+            }
             if (url.pathname === '/__switch/api/status') return send({ current: 'agentrouter', backends: {}, oauth: { loggedIn: false } });
             if (url.pathname.endsWith('/accounts')) return send({ accounts: [] });
             if (url.pathname.endsWith('/sessions')) return send({ sessions: [] });
@@ -68,6 +85,39 @@ let rows = [
         assert.ok(calls.includes('POST /__switch/api/pm/session/open'));
         await page.locator('button[onclick="pmShowAdd()"]').click();
         assert.equal(await page.locator('#pm-add-form button[onclick="newapiAddPickGithub(\'pm\')"]').isVisible(), true);
+        await page.locator('button[onclick="pmShowAdd(false)"]').click();
+        // Реф-код: селект аккаунтов, ссылка для выбранного, ручной ввод кода и
+        // перенос ссылки в форму «Добавить».
+        await page.selectOption('#pm-ref-owner', 'pm_demo1');
+        await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('/r/'));
+        assert.match(await page.locator('#pm-ref-link').inputValue(), /^https:\/\/ide\.kgpix\.bond\/r\/[A-Za-z0-9_-]+$/);
+        assert.match(await page.locator('#pm-ref-stats').innerText(), /активных 1/);
+        assert.match(await page.locator('#pm-ref-note').innerText(), /код этого аккаунта/);
+        await page.selectOption('#pm-ref-owner', 'pm_demo2');
+        await page.waitForFunction(() => document.querySelector('#pm-ref-stats').innerText === 'счётчик неизвестен');
+        assert.equal(await page.locator('#pm-ref-link').inputValue(), '');
+        assert.equal(await page.locator('#pm-ref-code').inputValue(), '');
+        assert.match(await page.locator('#pm-ref-note').innerText(), /впиши его в поле выше|открой окно/);
+        // Ручной ввод: код без открытого окна аккаунта — главный сценарий.
+        await page.fill('#pm-ref-code', '569d56342c5e');
+        await page.locator('button[onclick="pmRefSave()"]').click();
+        await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('569d56342c5e'));
+        assert.equal(await page.locator('#pm-ref-link').inputValue(), 'https://ide.kgpix.bond/r/569d56342c5e');
+        assert.match(await page.locator('#pm-ref-note').innerText(), /код вписан руками/);
+        await page.locator('button[onclick="pmRefToAdd()"]').click();
+        assert.equal(await page.locator('#pm-add-form').isVisible(), true);
+        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://ide.kgpix.bond/r/569d56342c5e');
+        await page.locator('button[onclick="pmShowAdd(false)"]').click();
+        // Снятие своего кода: аккаунт возвращается к коду из кэша окна.
+        await page.fill('#pm-ref-code', '');
+        await page.locator('button[onclick="pmRefSave()"]').click();
+        await page.waitForFunction(() => !document.querySelector('#pm-ref-link').value.includes('569d56342c5e'));
+        assert.equal(await page.locator('#pm-ref-link').inputValue(), '');
+        await page.selectOption('#pm-ref-owner', 'pm_demo1');
+        await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('/r/'));
+        await page.locator('button[onclick="pmRefToAdd()"]').click();
+        assert.equal(await page.locator('#pm-add-form').isVisible(), true);
+        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://ide.kgpix.bond/r/123260146087');
         await page.locator('button[onclick="pmShowAdd(false)"]').click();
         for (const tab of ['kktoken', 'vani', 'premier']) {
             await page.evaluate(name => showTab(name), tab);

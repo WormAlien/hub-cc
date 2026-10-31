@@ -50,8 +50,8 @@ const parts = [
 ];
 
 // Пул в памяти; balanceFn отдаёт заданную цифру и умеет падать.
-function makeWorld({ pool, quota = {}, fail = [] }) {
-    const world = { pool, saves: 0, probes: [], logs: [] };
+function makeWorld({ pool, quota = {}, fail = [], hang = false }) {
+    const world = { pool, saves: 0, probes: [], logs: [], release: null };
     const deps = {
         isRealKey: k => /^prm_[A-Za-z0-9_-]{20,}$/.test(String(k || '')),
         pmLoad: () => world.pool,
@@ -67,6 +67,7 @@ function makeWorld({ pool, quota = {}, fail = [] }) {
             world.probes.push(s.email);
             if (fail.includes(s.email)) throw new Error('сеть');
             const used = quota[s.email];
+            if (hang) await new Promise(r => { world.release = r; });
             return { quota: { unit: 'messages', accountId: 'email:' + s.email, plan: 'Free',
                 used, limit: 50, remaining: 50 - used, resetAt: null, checkedAt: new Date().toISOString() } };
         },
@@ -126,11 +127,43 @@ step('дедуп попыток держит паузу', () => {
     assert.strictEqual(w.api.pmQuotaDue(w.pool, now + 3 * 60_000).length, 1, 'после паузы - снова в очереди');
 });
 
-// 5. Потолок за тик: полсотни аккаунтов не должны разом дёргать площадку.
-step('за тик не больше потолка', () => {
-    const pool = Array.from({ length: 30 }, (_, i) => acct('a' + i));
+// 5. Потолок за тик и самоподстройка: полсотни аккаунтов не должны разом дёргать
+//    площадку, но полный цикл обязан укладываться в два тика, иначе хвост голодает.
+step('потолок от размера пула: малый пул 8, большой - половина', () => {
+    const pool8 = Array.from({ length: 8 }, (_, i) => acct('a' + i));
+    const w8 = makeWorld({ pool: pool8 });
+    assert.strictEqual(w8.api.pmQuotaDue(pool8).length, 8);
+    const pool30 = Array.from({ length: 30 }, (_, i) => acct('b' + i));
+    const w30 = makeWorld({ pool: pool30 });
+    assert.strictEqual(w30.api.pmQuotaDue(pool30).length, 15, 'цикл обязан уложиться в два тика');
+});
+
+// 5b. Голодание хвоста (живой дефект 31.10): отбор шёл по порядку пула, и при потолке 8
+//     голова, успевшая протухнуть заново, занимала все слоты каждый тик; хвост не читался
+//     сутки. Отбор обязан идти по старшинству метки: старые - первыми.
+step('голодание: самые старые метки первыми', () => {
+    const now = Date.now();
+    const pool = [];
+    for (let i = 0; i < 16; i += 1) {
+        pool.push(acct('head' + i, { quota: { checkedAt: new Date(now - 3 * 60_000).toISOString() } }));
+    }
+    for (let i = 0; i < 6; i += 1) {
+        pool.push(acct('tail' + i, { quota: { checkedAt: new Date(now - 20 * 60 * 60_000).toISOString() } }));
+    }
     const w = makeWorld({ pool });
-    assert.strictEqual(w.api.pmQuotaDue(pool).length, 8);
+    const due = w.api.pmQuotaDue(pool, now);
+    assert.strictEqual(due.length, 11, 'потолок от 22 годных = половина');
+    assert.deepStrictEqual(due.slice(0, 6).map(s => s.name),
+        ['tail0', 'tail1', 'tail2', 'tail3', 'tail4', 'tail5'], 'сутки не читавшиеся - первыми');
+    assert.ok(due.slice(6).every(s => /^head/.test(s.name)), 'остальные слоты - голова');
+});
+
+// 5c. Никогда не читавшиеся (метки нет вовсе) старше любого протухшего.
+step('без метки - старше всех', () => {
+    const now = Date.now();
+    const old = new Date(now - 10 * 60_000).toISOString();
+    const w = makeWorld({ pool: [acct('stale', { quota: { checkedAt: old } }), acct('never')] });
+    assert.deepStrictEqual(w.api.pmQuotaDue(w.pool, now).map(s => s.name), ['never', 'stale']);
 });
 
 (async () => {
@@ -166,6 +199,19 @@ step('за тик не больше потолка', () => {
         assert.strictEqual(w.pool[1].quota.used, 5);
         assert.ok(!w.pool[0].quota, 'упавший аккаунт квоты не получил');
         results.push({ name: 'упавший чек не роняет тик', ok: true });
+    }
+
+    // 8b. Наслоение тиков: пока первый не дошёл до записи, второй пропускается - иначе
+    //     двойные пробы площадке и гонка записи в пул. Доросший до половины пула потолок
+    //     делает тик длиннее интервала, так что страж обязателен.
+    {
+        const w = makeWorld({ pool: [acct('slow')], quota: { slow: 1 }, hang: true });
+        const first = w.api.pmQuotaTick();
+        const second = await w.api.pmQuotaTick();
+        assert.strictEqual(second, 0, 'второй тик во время первого пропускается');
+        w.release();
+        assert.strictEqual(await first, 1, 'первый тик после снятия зависания пишет');
+        assert.strictEqual(w.saves, 1, 'запись одна');
     }
 
     // 9. Подключение к старту: таймер обязан запускаться из boot, а не только по кнопке.

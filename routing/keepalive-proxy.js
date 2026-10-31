@@ -132,6 +132,38 @@ function spareKeyFor(current, tried) {
     return keys.sort((a, b) => bal(b) - bal(a))[0];
 }
 
+// 🔀 Раскидка основных запросов по живым ключам пула (KEY_SPREAD=1, включается env'ом
+// только для ThreeRouter). Лимит конкурентности у апстрима ДЕЙСТВУЕТ НА АККАУНТ, поэтому
+// весь трафик через один активный ключ упирался в 429 Concurrency limit, а соседние
+// ключи пула молчали (утро 29.10: медиана первого байта 31с против 2-3с прямым запросом,
+// 16x 429 за час; свежерегнутые ключи выжигались ротацией за десятки минут). Круговой
+// обход по живым ключам, упорядоченным по остатку (жирный идёт первым); ретраи с
+// keyOverride не трогаем - там ключ уже выбран, а spareKeyFor обходит triedKeys сам.
+const KEY_SPREAD = process.env.KEY_SPREAD === '1';
+let spreadIdx = 0;
+let spreadLogged = '';
+function spreadKey(tried) {
+    if (!KEY_SPREAD || !SESSIONS_FILE) return '';
+    const rows = activeKeyLib.poolAccounts(SESSIONS_FILE)
+        .filter(x => x && x.api_key && String(x.api_key).trim() && x.status !== 'dead');
+    const keys = [...new Set(rows.map(x => String(x.api_key).trim()))]
+        .filter(k => !(tried && tried.has(k)));
+    if (keys.length <= 1) return '';
+    const bal = k => {
+        const row = rows.find(x => String(x.api_key).trim() === k);
+        const n = Number(row && row.balance);
+        return Number.isFinite(n) ? n : 0;
+    };
+    keys.sort((a, b) => bal(b) - bal(a));
+    const k = keys[spreadIdx % keys.length];
+    spreadIdx += 1;
+    if (spreadLogged !== k) {
+        spreadLogged = k;
+        log(`KEY_SPREAD: запрос уходит на ключ пула ***${k.slice(-6)} (живых в пуле ${keys.length})`);
+    }
+    return k;
+}
+
 function activeKeyNow() {
     const r = activeKeyLib.resolveKey({ keyFile: AR_ACTIVE_KEY_FILE, sessionsFile: SESSIONS_FILE });
     if (r.source === 'pool' && poolKeyLogged !== r.key) {
@@ -1079,7 +1111,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com', 'api.apinex.bond']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1768,7 +1800,7 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
 // была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
 // обычный «too many requests» по-прежнему аккаунт не меняет.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -1825,6 +1857,8 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'api.apinex.bond': 'ax',
+  'myapi.buzz': 'kv',
   'api.threerouter.com': 'tr',
   'ide.kgpix.bond': 'pm',
   'api.vani.ai': 'vn',
@@ -2859,9 +2893,19 @@ const server = http.createServer((req, res) => {
       if (aborted || res.writableEnded) return;
       stopTimer();
       ev.note('stall');
-      log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — рву, иначе вызывающий ждёт вечно`);
+      log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — отдаю in-band overloaded_error вместо голого обрыва`);
+      // 🎯 Голый обрыв подвешивал субагента навсегда: CC, уже получивший часть
+      // содержимого, не ретраит ход по молчанию, агент стоит на 0 tok (29.10, три
+      // flex-агента). `overloaded_error` — каноничный повторяемый класс: клиент
+      // узнаёт об отказе сразу и переигрывает ход сам.
+      const obj = { type: 'error', error: { type: 'overloaded_error', message: `upstream stream stalled ${Math.round(cfg.stallMs / 1000)}s mid-response` } };
+      try {
+        if (!res.writableEnded && !res.destroyed) {
+          res.write(`event: error\ndata: ${JSON.stringify(obj)}\n\n`);
+          res.end();
+        }
+      } catch (e) { /* сокет уже мёртв */ }
       try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
-      if (!res.writableEnded && !res.destroyed) res.destroy();
     }, cfg.stallMs);
   };
   const armEmptyGuard = (stream) => {
@@ -3013,7 +3057,7 @@ const server = http.createServer((req, res) => {
     // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
     {
-      const arKey = keyOverride || activeKeyNow();
+      const arKey = keyOverride || spreadKey(triedKeys) || activeKeyNow();
       if (arKey) {
         sentKey = arKey;
         triedKeys.add(arKey);

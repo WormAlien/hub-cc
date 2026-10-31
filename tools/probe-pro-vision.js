@@ -9,7 +9,7 @@ const key = fs.readFileSync(path.join(os.homedir(), '.secrets', 'a6api-active-ke
 const MODEL = 'deepseek-v4-pro', TOKEN = 145381;
 
 const call = body => new Promise(resolve => {
-    const req = require('node:https').request({ hostname: 'api.a6api.com', path: '/v1/chat/completions', method: 'POST',
+    const req = require('node:https').request({ hostname: 'api.a6api.vip', path: '/v1/chat/completions', method: 'POST',
         headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
         let raw = ''; res.on('data', c => { raw += c; });
         res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve({ raw: raw.slice(0, 150) }); } });

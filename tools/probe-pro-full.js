@@ -18,7 +18,7 @@ const TOKEN = 145381;
 
 const post = body => new Promise(resolve => {
     const req = require('node:https').request({
-        hostname: 'api.a6api.com', path: '/v1/chat/completions', method: 'POST',
+        hostname: 'api.a6api.vip', path: '/v1/chat/completions', method: 'POST',
         headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
     }, res => {
         let raw = '';

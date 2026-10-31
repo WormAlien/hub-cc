@@ -51,6 +51,7 @@ const PROFILE_ROOTS = [
     // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
     // GitHub-сессии отвечало бы «неизвестный хост».
     { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
+    { tag: 'kv', dir: path.join(ROOT, 'kvotum', 'profiles'), host: 'myapi.buzz' },
     { tag: 'pm', dir: path.join(ROOT, 'premier', 'profiles'), host: 'ide.kgpix.bond' },
     { tag: 'cp', dir: path.join(ROOT, 'cleanapis', 'profiles'), host: 'cleanapis.com' },
     // SeekAi, Fxqidian, BudsAI, Nova, AIPM - вкладки, у которых в дашборде есть свой 🐙

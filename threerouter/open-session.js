@@ -49,7 +49,17 @@ const HOST = 'www.threerouter.com';
 const ROOT_URL = `https://${HOST}/`;
 const ORIGIN = `https://${HOST}`;
 // Форма рефки своя: `/register?aff=`, не `/sign-up?aff=` эталона.
-const REGISTER_URL = `${ORIGIN}/register?aff=DADYQH35FHUJ`;
+// 🪤 Код НЕ дублировать здесь: он живёт в `routing/ref-codes.js` (дефолт владельца +
+// пользовательское переопределение через дашборд). Хардкод расходился с настройками
+// третий раз подряд, поэтому берём из одного места, а литерал оставляем фолбэком
+// на случай, если модуль недоступен.
+const REGISTER_URL = (() => {
+  try {
+    return require('../routing/lib/ref-codes.js').url('threerouter');
+  } catch {
+    return `${ORIGIN}/register?aff=VWCYM3TATVDX`;
+  }
+})();
 const LOGIN_URL = `${ORIGIN}/login`;
 // Личный кабинет — то, что владелец ждёт увидеть по кнопке 🌐. Ключи лежат на /keys,
 // но кнопка называется «открыть ЛК», а не «открыть ключи».

@@ -10,7 +10,7 @@ function test(name, fn) {
     try { fn(); console.log('OK ' + name); passed++; }
     catch (e) { console.error('FAIL ' + name + ': ' + e.message); failed++; }
 }
-function source(file) { return fs.readFileSync(path.join(ROOT, file), 'utf8'); }
+function source(file) { return fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n'); }
 function keyCheck(file) {
     const match = source(file).match(/function isRealKey\(k\)\s*\{[\s\S]*?;\s*\}/);
     assert.ok(match, 'isRealKey exists');

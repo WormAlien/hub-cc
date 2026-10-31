@@ -196,3 +196,12 @@ function save(patch) {
 }
 
 module.exports = { PROVIDERS, ACTIVE_PROVIDERS, SHAPES, defaults, user, effective, code, url, save, USER_FILE, DEFAULTS_FILE };
+
+// CLI для тех, кто не на Node: `node routing/lib/ref-codes.js threerouter` печатает
+// действующий код (переопределение пользователя > дефолт) и выходит 0; кода нет - 2.
+// Так smailpro/auto-add.py не держит ВТОРУЮ копию порядка «override > default».
+if (require.main === module) {
+    const c = code(process.argv[2]);
+    if (!c) process.exit(2);
+    process.stdout.write(c + '\n');
+}

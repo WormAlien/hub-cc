@@ -42,6 +42,8 @@ const MODEL_MAP = config.modelMap || {};
 const PROVIDER_NAME = config.providerName || 'Custom';
 // Opt in per instance. Existing Custom/Odyssey converters retain their legacy contract.
 const STRICT_TOOLS_VISION = config.strictToolsVision === true;
+const IS_A6API = STRICT_TOOLS_VISION && PROVIDER_NAME.toLowerCase() === 'a6api';
+const A6API_ERROR_BODY_MAX = 64 * 1024;
 
 const upstream = new URL(UPSTREAM_BASE);
 
@@ -586,6 +588,18 @@ function writeJSON(res, code, obj) {
     });
     res.end(JSON.stringify(obj));
 }
+function a6apiSellerError(raw, model) {
+    if (!IS_A6API || !raw || raw.length > A6API_ERROR_BODY_MAX) return null;
+    let doc;
+    try { doc = JSON.parse(raw.toString('utf8')); } catch { return null; }
+    const code = doc && (doc.code || doc.error && doc.error.code);
+    if (code !== 'smart_route_no_active_candidates') return null;
+    return {
+        code: 409,
+        type: 'invalid_request_error',
+        message: `a6api: у модели ${model} нет доступного продавца. Выбранный продавец недоступен или удалён. Выберите другого продавца в кабинете a6api или смените модель.`,
+    };
+}
 function claudeError(res, code, message, errType) {
     if (STRICT_TOOLS_VISION) {
         if (res.writableEnded || res.destroyed) return;
@@ -623,9 +637,21 @@ function handleMessages(req, res, body) {
             upRes.on('error', () => claudeError(res, 502, 'upstream response error'));
         }
         if (upRes.statusCode !== 200) {
-            let errBody = '';
-            upRes.on('data', c => { if (!STRICT_TOOLS_VISION) errBody += c; });
+            let errBody = '', strictChunks = [], strictSize = 0, strictOverflow = false;
+            upRes.on('data', c => {
+                if (!STRICT_TOOLS_VISION) { errBody += c; return; }
+                if (!IS_A6API || strictOverflow) return;
+                if (strictSize + c.length > A6API_ERROR_BODY_MAX) {
+                    strictChunks = []; strictSize = 0; strictOverflow = true; return;
+                }
+                strictChunks.push(c); strictSize += c.length;
+            });
             upRes.on('end', () => {
+                const sellerError = !strictOverflow && a6apiSellerError(Buffer.concat(strictChunks, strictSize), openaiReq.model);
+                if (sellerError) {
+                    logLine(`upstream ${upRes.statusCode}: smart_route_no_active_candidates for ${openaiReq.model}`);
+                    return claudeError(res, sellerError.code, sellerError.message, sellerError.type);
+                }
                 let message = STRICT_TOOLS_VISION ? 'upstream HTTP ' + upRes.statusCode : errBody.slice(0, 500);
                 if (!STRICT_TOOLS_VISION) { try { message = JSON.parse(errBody).error?.message || message; } catch {} }
                 logLine(`upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);

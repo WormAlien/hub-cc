@@ -63,6 +63,8 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20190 = @{ UPSTREAM = 'https://api.apinex.bond'; KEY_FILE = "$profileDir\.claude\apinex-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'apinex-modelmap.json') }
   # KVOTUM: keepalive goes through the Anthropic-to-OpenAI converter on :20183
   # (the platform rejects /v1/messages for EVERY model, measured 2026-10-30).
   # The converter is spawned below if :20183 is not listening yet.

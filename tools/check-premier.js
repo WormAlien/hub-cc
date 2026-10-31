@@ -121,6 +121,23 @@ if (api) {
         ], now);
         assert.equal(cookie, 'sid=yes');
     });
+    // 29.10.2026: Premier логинит новых на второй домен eide.pro, старый kgpix остался.
+    // Кука доменно-Scoped: заголовок собирается только из домена, где лежит
+    // premier_session, чужие куки того же jar не подмешиваются.
+    test('cookie header picks the eide.pro session when kgpix has none', () => {
+        const cookie = api.siteCookieHeader([
+            { domain: 'github.com', name: 'user_session', value: 'gh' },
+            { domain: 'eide.pro', name: 'premier_session', value: 'new' },
+            { domain: 'ide.kgpix.bond', name: 'premier_lang', value: 'ru' },
+        ], now);
+        assert.equal(cookie, 'premier_session=new');
+    });
+    test('both domains are declared, old origin stays exported', () => {
+        assert.ok(api.HOSTS.includes('ide.kgpix.bond'));
+        assert.ok(api.HOSTS.includes('eide.pro'));
+        assert.equal(api.ORIGIN, 'https://ide.kgpix.bond');
+        assert.ok(api.ORIGINS.includes('https://eide.pro'));
+    });
 }
 test('Premier message billing disables hedged duplicate requests', () => {
     const match = source('routing/keepalive-proxy.js').match(/const FLAT_RATE_HOSTS = new Set\((\[[^;]+\])\);/);
@@ -219,6 +236,36 @@ if (session) testAsync('session import scopes cookies and localStorage to their 
     assert.deepEqual(run('https://ide.kgpix.bond'), {});
 });
 if (api) {
+    testAsync('quota probe tries each domain with its own cookie and takes the 200', async () => {
+    const key = 'prm_' + 'z'.repeat(43);
+    const seen = [];
+    const r = await api.fetchQuota([
+        { origin: 'https://ide.kgpix.bond', cookie: 'premier_lang=ru' },
+        { origin: 'https://eide.pro', cookie: 'premier_session=new' },
+    ], { apiKey: key, fetchImpl: async (url, opts) => {
+        seen.push([url, opts.headers.Cookie]);
+        if (url.startsWith('https://ide.kgpix.bond')) return { status: 401, ok: false };
+        return { status: 200, ok: true, json: async () => ({
+            user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],
+            usage: { used: 2, limit: 50 },
+        }) };
+    }});
+    assert.deepEqual(seen[0], ['https://ide.kgpix.bond/api/dev/state', 'premier_lang=ru']);
+    assert.deepEqual(seen[1], ['https://eide.pro/api/dev/state', 'premier_session=new']);
+    assert.equal(r.quota.remaining, 48);
+    assert.equal(r.binding.keyId, 'k1');
+});
+testAsync('a single string header is still probed against every domain', async () => {
+    const key = 'prm_' + 'z'.repeat(43);
+    const r = await api.fetchQuota('premier_session=new', { apiKey: key, fetchImpl: async url => {
+        if (url.startsWith('https://ide.kgpix.bond')) return { status: 401, ok: false };
+        return { status: 200, ok: true, json: async () => ({
+            user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],
+            usage: { used: 1, limit: 50 },
+        }) };
+    }});
+    assert.equal(r.quota.remaining, 49);
+});
     testAsync('quota request sends cookies only to the fixed destination', async () => {
         const key = 'prm_' + 'z'.repeat(43);
         const r = await api.fetchQuota('sid=owned', { apiKey: key, fetchImpl: async (url, opts) => {
@@ -259,6 +306,30 @@ if (api) {
         const r = await api.readQuota(row, {});
         assert.equal(row.quota, undefined); assert.equal(row.quotaBinding, undefined);
         assert.equal(r.authRequired, true);
+    });
+    test('maskKey knows both live key formats', () => {
+        // prm_ - аккаунты пула (3 символа до многоточия), sk-premier- - старые кабинеты,
+        // у владельца в списке только такой (7 символов, живой замер 31.10).
+        assert.equal(api.maskKey('prm_' + 'z'.repeat(43)), 'prm_zzz…zzzz');
+        assert.equal(api.maskKey('sk-premier-' + 'c'.repeat(40)), 'sk-premier-ccccccc…cccc');
+        assert.equal(api.maskKey('sk-other-key-abcdefghijklmnop'), null);
+        assert.equal(api.maskKey(''), null);
+    });
+    testAsync('cookieless domain 401 does not mask the sessioned domain diagnosis', async () => {
+        // Живой дефект 31.10: eide.pro (сессия жива) отвечал «ключ не в списке», а
+        // без-куковый kgpix перезаписывал это «Сессия истекла» - владелец видел «войди
+        // заново», будучи залогинен. Ошибку домена с premier_session приоритизируем.
+        const r = await api.fetchQuota([
+            { origin: 'https://eide.pro', cookie: 'premier_session=live' },
+            { origin: 'https://ide.kgpix.bond', cookie: 'premier_lang=ru' },
+        ], { apiKey: 'prm_' + 'z'.repeat(43), fetchImpl: async (url) => {
+            if (url.startsWith('https://eide.pro')) return { status: 200, ok: true, json: async () => ({
+                user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: 'prm_aaa…aaaa' }], usage: { used: 1, limit: 50 } }) };
+            return { status: 401, ok: false };
+        }});
+        assert.equal(r.authRequired, undefined, '401 без-кукового домена не должен стать вердиктом');
+        assert.equal(r.unverified, true);
+        assert.match(r.error, /владелец/);
     });
     for (const code of [401, 403, 429, 503]) testAsync('quota HTTP ' + code + ' never declares an API key dead', async () => {
         const r = await api.fetchQuota('sid=owned', { fetchImpl: async () => ({ status: code, ok: false }) });

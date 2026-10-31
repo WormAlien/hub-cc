@@ -437,6 +437,7 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/apinex-sessions.json
 routing/kvotum-sessions.json
 routing/threerouter-sessions.json
 # ThreeRouter: профили и снимки браузера (куки, localStorage, тысячи файлов кеша).

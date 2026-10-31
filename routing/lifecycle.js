@@ -155,6 +155,7 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20190, name: 'APINEX keepalive', respawn: false },
         { port: 20182, name: 'KVOTUM keepalive', respawn: false },
         // Конвертер KVOTUM (Anthropic → OpenAI): площадка НЕ принимает /v1/messages
         // ни для одной модели (осознанный 400, замер 30.10), а CC говорит только

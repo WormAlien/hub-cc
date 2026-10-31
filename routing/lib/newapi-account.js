@@ -243,6 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'api.apinex.bond': 'jwt',
     // myapi.buzz (KVOTUM, 2026-10-30) — НЕ New API вовсе: свой движок (FastAPI + SPA).
     // Инструмент вписал `jwt` копией от kktoken - для несуществующей панели. Панель
     // живёт JWT в localStorage (`localStorage.setItem('token', r.token)` бандла),

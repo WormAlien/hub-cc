@@ -1111,7 +1111,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com', 'api.apinex.bond']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1857,6 +1857,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'api.apinex.bond': 'ax',
   'myapi.buzz': 'kv',
   'api.threerouter.com': 'tr',
   'ide.kgpix.bond': 'pm',

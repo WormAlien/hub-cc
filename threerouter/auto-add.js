@@ -9,7 +9,7 @@
 //
 // Что делает один аккаунт:
 //   1. emailnator: ящик только .Gmail (адрес *@gmail.com проходит вайтлист панели);
-//   2. видимое окно: /register?aff=DADYQH35FHUJ, email + пароль заполняются сами;
+//   2. видимое окно: /register?aff=<код владельца>, email + пароль заполняются сами;
 //   3. владелец решает капчу; токен ловим из ответа POST /api/v1/auth/captcha/verify;
 //   4. скрипт жмёт Continue -> /email-verify, письмо ищет по НОВЫМ href (baseline до отправки),
 //      отправитель ThreeRouter, код - 6 символов букв/цифр (не только цифры);
@@ -38,8 +38,17 @@ const pp = require('../routing/lib/proxy-pool.js');
 const ORIGIN = 'https://www.threerouter.com';
 const API = `${ORIGIN}/api/v1`;
 const GATEWAY = 'https://api.threerouter.com';
-const REF = 'DADYQH35FHUJ';
-const REGISTER_URL = `${ORIGIN}/register?aff=${REF}`;
+// Код берём из routing/lib/ref-codes.js — тот же источник, что у кнопок дашборда:
+// переопределение владельца (💩 в «Настройках») важнее дефолта репозитория. 🪤 До 31.10
+// здесь лежал литерал DADYQH35FHUJ — код, забаненный 28.10 вместе со старыми
+// аккаунтами: авторега регистрировала по мёртвой рефке, а настройка в дашборде на неё
+// не влияла вовсе. Регистрация без рефки = молча потерянный кредит, поэтому падаем сразу.
+const REF = require('../routing/lib/ref-codes.js').code('threerouter');
+if (!REF) {
+    console.error('реф-код threerouter не найден: routing/ref-codes.json и routing/ref-codes.default.json пусты');
+    process.exit(2);
+}
+const REGISTER_URL = `${ORIGIN}/register?aff=${encodeURIComponent(REF)}`;
 const POOL_FILE = path.join(__dirname, '..', 'routing', 'threerouter-sessions.json');
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';

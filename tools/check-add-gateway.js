@@ -421,6 +421,7 @@ section('when · флаги условий');
     const notShown = used.filter((f) => !shown.includes(base(f)));
     check(notShown.length === 0, `каждый флаг из when показан в шапке прогона${notShown.length ? ' — нет: ' + notShown.join(', ') : ''}`);
     check(shown.includes('customPanel'), 'флаг «своя панель» показан в шапке — иначе чеклист ручных решений невидим');
+    check(shown.includes('paidHedge'), 'флаг «платный дубль» показан в шапке — иначе точка 3.2b гаснет молча');
 }
 
 // ── 6. контракт самого инструмента ────────────────────────────────────────────
@@ -778,7 +779,18 @@ section('маршруты и обвязка · полнота спеки (уро
     check(creates.length > 0, 'у тир-карты есть правило создания файла (иначе вечный пропуск)');
     const createFiles = creates.map(([id]) => ((spec.points || []).find((p) => p.id === id) || {}).file || '');
     check(createFiles.every((f) => !f.endsWith('.js')), `создание файлов не включено ни для одного .js (${createFiles.join(', ')})`);
-    check(creates.every(([, r]) => r.create === 'fromSource'), 'создание файлов идёт только от источника, не из воздуха');
+    // 🪤 Уточнено 31.10.2026 (правило владельца «новая вкладка без дублей»). Раньше здесь
+    // стояло «всегда fromSource», и для файлов, чья форма зависит от шлюза (тир-карта), это
+    // верно. Но keepalive-конфиг — runtime-артефакт и в gitignore: в чистом клоне его нет,
+    // источником его не взять, а безопасное значение от площадки не зависит (`maxHedges 0`).
+    // Поэтому ровно для него разрешён литерал из спеки; код и всё остальное — по-прежнему
+    // только fromSource. Проверка держит обе половины: литерал обязан быть строкой и
+    // разрешён только для keepalive-конфига.
+    const literalOk = (id) => /keepalive-config-[^/]*\.json$/.test(((spec.points || []).find((p) => p.id === id) || {}).file || '');
+    check(creates.every(([, r]) => r.create === 'fromSource' || (r.create === 'default' && typeof r.text === 'string')),
+        'создание файлов: fromSource или явный литерал (default) — без «воздуха»');
+    check(creates.every(([id, r]) => r.create !== 'default' || literalOk(id)),
+        'литералом из спеки создаётся только keepalive-конфиг, не код');
 
     // 🪤 Живая грабля 01.10, стоившая одной неверной правки: `tokenPairs` меняет
     // двухбуквенный префикс ГДЕ УГОДНО — в том числе внутри чужих слов. `ab` → `cp` превратил

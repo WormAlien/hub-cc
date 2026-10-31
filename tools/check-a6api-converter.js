@@ -56,11 +56,11 @@ async function freePort() {
             Promise.resolve(respond(req, res)).catch(e => { res.destroy(); console.error('fixture error: ' + e.message); });
         });
     });
-    async function start(strict) {
-        const tag = strict ? 'strict' : 'legacy', port = await freePort();
+    async function start(strict, providerName = 'fixture') {
+        const tag = strict ? 'strict-' + providerName : 'legacy', port = await freePort();
         const keyFile = path.join(dir, tag + '-key.txt'), configFile = path.join(dir, tag + '.json');
         fs.writeFileSync(keyFile, 'fixture-file-key\n');
-        fs.writeFileSync(configFile, JSON.stringify({ port, upstream: 'http://127.0.0.1:' + upstream.address().port + '/v1', keyFile, modelMap: {}, providerName: 'fixture', ...(strict ? { strictToolsVision: true } : {}) }));
+        fs.writeFileSync(configFile, JSON.stringify({ port, upstream: 'http://127.0.0.1:' + upstream.address().port + '/v1', keyFile, modelMap: {}, providerName, ...(strict ? { strictToolsVision: true } : {}) }));
         const child = spawn(process.execPath, [SCRIPT, configFile], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, OPENAI_API_KEY: 'fixture-env-key', PROXY_LOG_INGEST_URL: 'disabled', REASONING_AS: strict ? 'drop' : 'thinking' } });
         children.push(child); let output = '';
         child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { output += b; });
@@ -79,7 +79,7 @@ async function freePort() {
     }
     try {
         upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
-        const strict = await start(true), legacy = await start(false);
+        const strict = await start(true), a6api = await start(true, 'a6api'), legacy = await start(false);
         await test('strict key file is primary, never the caller or environment key', async () => {
             respond = normal; await ask(strict, baseRequest());
             assert.equal(calls.at(-1).headers.authorization, 'Bearer fixture-file-key');
@@ -243,8 +243,33 @@ async function freePort() {
             const events = parseEvents((await ask(strict, baseRequest({ stream: true }))).text);
             assert.equal(events.find(e => e.type === 'message_delta').delta.stop_reason, 'max_tokens'); assert.ok(events.some(e => e.type === 'message_stop'));
         });
-        await test('HTTP upstream failures are sanitized in strict mode', async () => {
-            respond = (_req, res) => { res.writeHead(401); res.end(JSON.stringify({ error: { message: 'fixture-file-key' } })); };
+        await test('a6api explains a missing seller instead of reporting overload', async () => {
+            respond = (_req, res) => {
+                res.writeHead(503, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ error: { type: 'new_api_error', code: 'smart_route_no_active_candidates', message: 'private upstream detail' } }));
+            };
+            const r = await ask(a6api, baseRequest());
+            assert.equal(r.status, 409);
+            const body = JSON.parse(r.text);
+            assert.equal(body.error.type, 'invalid_request_error');
+            assert.match(body.error.message, /a6api: у модели deepseek\/Flash-Test нет доступного продавца/);
+            assert.match(body.error.message, /Выберите другого продавца в кабинете a6api или смените модель/);
+            assert.ok(!r.text.includes('private upstream detail'));
+            assert.ok(!r.text.includes('overloaded_error'));
+        });
+        await test('seller translation is scoped to a6api and the exact route code', async () => {
+            const reply = code => (_req, res) => {
+                res.writeHead(503, { 'content-type': 'application/json' });
+                res.end(JSON.stringify({ error: { type: 'new_api_error', code, message: 'private upstream detail' } }));
+            };
+            respond = reply('smart_route_no_active_candidates');
+            let r = await ask(strict, baseRequest());
+            assert.equal(r.status, 503); assert.equal(JSON.parse(r.text).error.message, 'upstream HTTP 503');
+            respond = reply('smart_route_all_candidates_failed');
+            r = await ask(a6api, baseRequest());
+            assert.equal(r.status, 503); assert.equal(JSON.parse(r.text).error.message, 'upstream HTTP 503');
+        });
+        await test('HTTP upstream failures are sanitized in strict mode', async () => {            respond = (_req, res) => { res.writeHead(401); res.end(JSON.stringify({ error: { message: 'fixture-file-key' } })); };
             const r = await ask(strict, baseRequest()); assert.equal(r.status, 401); assert.ok(!r.text.includes('fixture-file-key'));
         });
         await test('client cancellation closes the upstream response', async () => {

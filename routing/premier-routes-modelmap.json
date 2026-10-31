@@ -1,6 +1,6 @@
 {
-  "default": "",
-  "opus": "deepseek-v4.1-flash-1017",
-  "sonnet": "deepseek-v4.1-flash-1017",
-  "haiku": "deepseek-v4.1-flash-1017"
+  "default": "glm-5.3-flash",
+  "opus": "glm-5.3-flash",
+  "sonnet": "glm-5.3-flash",
+  "haiku": "glm-5.3-flash"
 }

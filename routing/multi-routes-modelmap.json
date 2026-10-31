@@ -1,18 +1,18 @@
 {
   "default": {
-    "provider": "justwoker",
-    "model": "claude-opus-4-8"
+    "provider": "a6api",
+    "model": ""
   },
   "opus": {
-    "provider": "justwoker",
-    "model": "claude-opus-4-8"
+    "provider": "a6api",
+    "model": ""
   },
   "sonnet": {
-    "provider": "justwoker",
-    "model": "claude-opus-4-8"
+    "provider": "a6api",
+    "model": ""
   },
   "haiku": {
-    "provider": "agentrouter",
-    "model": "deepseek-v4-flash"
+    "provider": "a6api",
+    "model": ""
   }
 }

@@ -30,7 +30,7 @@ Chromium отдаёт "Verification failed" (живой скрин владел�
 
 Результат: запись в routing/threerouter-sessions.json (+ снимок сессии).
 """
-import asyncio, json, os, random, re, string, sys, time, traceback
+import asyncio, json, os, random, re, string, subprocess, sys, time, traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,7 +44,25 @@ PROFILE = OUT / "autoadd-profile"
 ORIGIN = "https://www.threerouter.com"
 API = ORIGIN + "/api/v1"
 GATEWAY = "https://api.threerouter.com"
-REF = "VWCYM3TATVDX"
+def owner_ref(prov: str) -> str:
+    """Действующий реф-код шлюза: переопределение владельца (routing/ref-codes.json)
+    важнее дефолта репозитория (routing/ref-codes.default.json) - ровно как у кнопок
+    дашборда. Порядок спрашиваем у routing/lib/ref-codes.js через его CLI, а не
+    разбираем те же JSON второй раз: своя копия разошлась бы с дашбордом при первой
+    правке формата. 🪤 До 31.10 здесь лежал литерал VWCYM3TATVDX - смена кода в
+    «Настройках» до автореги не доезжала.
+    """
+    try:
+        r = subprocess.run(["node", str(ROOT / "routing" / "lib" / "ref-codes.js"), prov],
+                           capture_output=True, text=True, timeout=20)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+REF = owner_ref("threerouter")
+if not REF:
+    raise SystemExit("реф-код threerouter не найден: routing/ref-codes.js и ref-codes*.json")
 REGISTER_URL = f"{ORIGIN}/register?aff={REF}"
 POOL_FILE = ROOT / "routing" / "threerouter-sessions.json"
 # Снимок сессии должен лежать там, где его ищет кнопка 🌐 дашборда: open-session.js

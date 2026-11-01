@@ -5,12 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const HOST = 'ide.kgpix.bond';
+const HOST = 'eide.pro';
 const ORIGIN = 'https://' + HOST;
-// Two domains serve the same Premier (live 29.10.2026): the old cabinet and eide.pro,
-// where new sign-ins land. Site cookies are domain-scoped, so the quota reader has to
-// pick the domain the session actually lives on instead of assuming the old one.
-const HOSTS = ['ide.kgpix.bond', 'eide.pro'];
+// eide.pro is the live Premier host (verified 01.11.2026). Keep the former host only
+// as a read fallback for browser profiles created before the migration.
+const HOSTS = [HOST, 'ide.kgpix.bond'];
 const ORIGINS = HOSTS.map(h => 'https://' + h);
 const ROOT = path.join(__dirname, '..', '..', 'premier');
 const POOL_FILE = path.join(os.homedir(), '.secrets', 'premier-sessions.json');
@@ -100,11 +99,9 @@ function applyResult(target, result, now = Date.now()) {
     target.authRequired = !!result.authRequired;
 }
 function siteCookieHeader(cookies, now = Date.now()) {
-    // Premier lives on two domains (29.10.2026): old cabinet and eide.pro where new
-    // sign-ins land. A Cookie header is domain-scoped - never mix two domains into
-    // one header. The auth cookie is premier_session (checked live); prefer the
-    // domain that holds it, and among those the newer login domain (eide.pro, last
-    // in HOSTS) wins so a migrated account is not answered by its stale side.
+    // Premier browser cookies may still live on either domain. A Cookie header is
+    // domain-scoped - never mix two domains into one header. Prefer the canonical host
+    // when both profiles contain a live session.
     const live = (cookies || []).filter(c => {
         const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
         return HOSTS.includes(d) && c.name && c.value && !/[\r\n;]/.test(c.name + c.value)
@@ -115,10 +112,10 @@ function siteCookieHeader(cookies, now = Date.now()) {
         .map(c => c.name + '=' + c.value).join('; ');
     const withAuth = HOSTS.filter(h => live.some(c =>
         String(c.domain || c.host || '').replace(/^\./, '').toLowerCase() === h && c.name === 'premier_session'));
-    if (withAuth.length) return header(withAuth[withAuth.length - 1]);
+    if (withAuth.length) return header(withAuth[0]);
     // No auth cookie on either domain: any Premier cookies still tell "the browser
     // reached the site" (hasSite checks in open-session), keep that meaning.
-    for (const domain of HOSTS.slice().reverse()) {
+    for (const domain of HOSTS) {
         const h = header(domain);
         if (h) return h;
     }
@@ -199,7 +196,7 @@ async function readQuota(target = {}, opts = {}) {
         // Domain-scoped headers paired with their origin: a kgpix header is useless
         // against eide.pro and vice versa, so never send a mixed jar to one host.
         const pairs = [];
-        for (const domain of HOSTS.slice().reverse()) {
+        for (const domain of HOSTS) {
             const hdr = (cookies || []).filter(c => {
                 const d = String(c.domain || c.host || '').replace(/^\./, '').toLowerCase();
                 return d === domain && c.name && c.value && !/[\r\n;]/.test(c.name + c.value)

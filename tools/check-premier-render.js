@@ -56,10 +56,10 @@ let rows = [
                 // подмену одного другим.
                 if (set !== null && row) { if (set) row.refCode = set; else delete row.refCode; }
                 const own = row && row.refCode ? row.refCode : null;
-                if (id === 'pm_demo1') return send({ ok: true, id, ref: own, code: '123260146087', link: 'https://ide.kgpix.bond/r/123260146087', source: own ? 'own' : 'account', referral: { on: true, active: 1, pending: 0, next: { n: 3, need: 2 } } });
+                if (id === 'pm_demo1') return send({ ok: true, id, ref: own, code: '123260146087', link: 'https://eide.pro/r/123260146087', source: own ? 'own' : 'account', referral: { on: true, active: 1, pending: 0, next: { n: 3, need: 2 } } });
                 // Демо-2: кода нет, пока его не впишут руками.
                 if (!own) return send({ ok: true, id, ref: null, code: null, link: null, source: 'none', referral: null });
-                return send({ ok: true, id, ref: own, code: own, link: 'https://ide.kgpix.bond/r/' + own, source: 'own', referral: null });
+                return send({ ok: true, id, ref: own, code: own, link: 'https://eide.pro/r/' + own, source: 'own', referral: null });
             }
             if (url.pathname === '/__switch/api/status') return send({ current: 'agentrouter', backends: {}, oauth: { loggedIn: false } });
             if (url.pathname.endsWith('/accounts')) return send({ accounts: [] });
@@ -90,7 +90,7 @@ let rows = [
         // перенос ссылки в форму «Добавить».
         await page.selectOption('#pm-ref-owner', 'pm_demo1');
         await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('/r/'));
-        assert.match(await page.locator('#pm-ref-link').inputValue(), /^https:\/\/ide\.kgpix\.bond\/r\/[A-Za-z0-9_-]+$/);
+        assert.match(await page.locator('#pm-ref-link').inputValue(), /^https:\/\/eide\.pro\/r\/[A-Za-z0-9_-]+$/);
         assert.match(await page.locator('#pm-ref-stats').innerText(), /активных 1/);
         assert.match(await page.locator('#pm-ref-note').innerText(), /код этого аккаунта/);
         await page.selectOption('#pm-ref-owner', 'pm_demo2');
@@ -102,11 +102,11 @@ let rows = [
         await page.fill('#pm-ref-code', '569d56342c5e');
         await page.locator('button[onclick="pmRefSave()"]').click();
         await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('569d56342c5e'));
-        assert.equal(await page.locator('#pm-ref-link').inputValue(), 'https://ide.kgpix.bond/r/569d56342c5e');
+        assert.equal(await page.locator('#pm-ref-link').inputValue(), 'https://eide.pro/r/569d56342c5e');
         assert.match(await page.locator('#pm-ref-note').innerText(), /код вписан руками/);
         await page.locator('button[onclick="pmRefToAdd()"]').click();
         assert.equal(await page.locator('#pm-add-form').isVisible(), true);
-        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://ide.kgpix.bond/r/569d56342c5e');
+        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://eide.pro/r/569d56342c5e');
         await page.locator('button[onclick="pmShowAdd(false)"]').click();
         // Снятие своего кода: аккаунт возвращается к коду из кэша окна.
         await page.fill('#pm-ref-code', '');
@@ -117,7 +117,7 @@ let rows = [
         await page.waitForFunction(() => document.querySelector('#pm-ref-link').value.includes('/r/'));
         await page.locator('button[onclick="pmRefToAdd()"]').click();
         assert.equal(await page.locator('#pm-add-form').isVisible(), true);
-        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://ide.kgpix.bond/r/123260146087');
+        assert.equal(await page.locator('#pm-add-ref').inputValue(), 'https://eide.pro/r/123260146087');
         await page.locator('button[onclick="pmShowAdd(false)"]').click();
         for (const tab of ['kktoken', 'vani', 'premier']) {
             await page.evaluate(name => showTab(name), tab);

@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const ENDPOINT = 'https://ide.kgpix.bond/v1/messages';
+const ENDPOINT = 'https://eide.pro/v1/messages';
 const MODEL = 'deepseek-v4.1-flash-1017';
 const SECRET_DIR = process.env.SECRET_DIR || path.join(os.homedir(), '.secrets');
 const SESSIONS = path.join(SECRET_DIR, 'premier-sessions.json');
@@ -57,7 +57,7 @@ function history(variant) {
         { role: 'user', content: 'Проверь ключ curl-ом.' },
         { role: 'assistant', content: [
             { type: 'thinking', thinking: 'Запущу curl.', signature: 'premier-gw' },
-            { type: 'tool_use', id: 'toolu_probe_1', name: 'Bash', input: { command: 'curl -s https://ide.kgpix.bond/v1/models' } },
+            { type: 'tool_use', id: 'toolu_probe_1', name: 'Bash', input: { command: 'curl -s https://eide.pro/v1/models' } },
         ] },
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_probe_1', content: '{"data":[]}' }] },
         { role: 'user', content: 'Ответь одним словом: да.' },

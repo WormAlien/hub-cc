@@ -23,7 +23,7 @@ const refUrl = (label) => {
         own = (Array.isArray(pool) ? pool : []).find(s => String(s.id) === id)?.ref || null;
     } catch {}
     return own
-        ? `https://ide.kgpix.bond/r/${encodeURIComponent(own)}`
+        ? `${api.ORIGIN}/r/${encodeURIComponent(own)}`
         : require('../routing/lib/ref-codes.js').url('premier');
 };
 // Сайт кладёт код сюда и снимает его после входа (см. `/login` inline-скрипт).
@@ -73,7 +73,7 @@ async function applyImportedSession(context, session) {
 // Which Premier domain is the browser actually signed in to? The session cookie is
 // domain-scoped, so probing /api/auth/me on each origin is the only honest answer.
 async function activeOrigin(context) {
-    for (const origin of api.ORIGINS.slice().reverse()) {
+    for (const origin of api.ORIGINS) {
         try {
             const me = await context.request.get(origin + '/api/auth/me', { timeout: 12000, maxRedirects: 0 });
             if (me.ok() && api.isAuthenticated(await me.json())) return origin;

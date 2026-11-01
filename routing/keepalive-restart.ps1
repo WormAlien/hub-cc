@@ -73,7 +73,7 @@ $perPort = @{
   20181 = @{ UPSTREAM = 'https://api.threerouter.com'; KEY_FILE = "$profileDir\.claude\threerouter-active-key.txt";
              SESSIONS_FILE = (Join-Path $dir 'threerouter-sessions.json');
              MODELMAP_FILE = (Join-Path $dir 'threerouter-modelmap.json') }
-  20189 = @{ UPSTREAM = 'https://ide.kgpix.bond'; KEY_FILE = "$profileDir\.secrets\premier-active-key.txt";
+  20189 = @{ UPSTREAM = 'https://eide.pro'; KEY_FILE = "$profileDir\.secrets\premier-active-key.txt";
              SESSIONS_FILE = "$profileDir\.secrets\premier-sessions.json";
              MODELMAP_FILE = (Join-Path $dir 'premier-modelmap.json') }
   20180 = @{ UPSTREAM = 'https://api.vani.ai'; KEY_FILE = "$profileDir\.claude\vani-active-key.txt";

@@ -386,13 +386,13 @@ const SIG_ERR_RE = /Invalid\s+`?signature`?\s+in\s+`?thinking`?\s+block/i;
 // То есть шлюз склеивает tool_result в роль `tool`, а его апстрим в reasoning-режиме
 // требует, чтобы разговор заканчивался пользовательским текстом. Текст берём
 // минимальный: он платный по квоте сообщений, но не по токенам смысла.
-// 🎯 Только Premier (иде.kgpix.bond): у остальных шлюзов хвост и так проходит, а лишний
+// 🎯 Только Premier (eide.pro): у остальных шлюзов хвост и так проходит, а лишний
 // текст в истории - это подмена запроса клиента, такую правку нельзя делать «на всякий».
 const PREMIER_TAIL_TEXT = 'Continue.';
 // Рубильник: PREMIER_TAIL=0 выключает дописку, гейт по хосту считается в PREMIER_TAIL ниже.
 // PREMIER_TAIL_HOST - только для тестов: регресс поднимает настоящий прокси против
 // локального макета, и подменить хост иначе нечем.
-const PREMIER_TAIL_HOST = process.env.PREMIER_TAIL_HOST || 'ide.kgpix.bond';
+const PREMIER_TAIL_HOST = process.env.PREMIER_TAIL_HOST || 'eide.pro';
 const REASONING_REQ_RE = /requires previous reasoning_content|must be passed back to the API/i;
 function hasTextBlock(c) {
     if (typeof c === 'string') return c.trim().length > 0;
@@ -1111,7 +1111,7 @@ const DEFAULT_CFG = {
 // апстрим досчитывает до конца и выставляет нам полный счёт за ответ, который никто не
 // увидел. То есть цена дубля та же, что у плоского тарифа, — хедж запрещаем
 // (maxHedges: 0). Пре-коммит и пинги остаются, они бесплатны.
-const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'ide.kgpix.bond', 'emtf.aipm9527.site', 'www.aikeysapi.com', 'api.apinex.bond']);
+const FLAT_RATE_HOSTS = new Set(['tabitoken.com', 'gorouter.app', 'xpeach.codes', 'api.justwoker.icu', 'seekai.cc', 'true-sota.com', 'kktoken.cc', 'eide.pro', 'emtf.aipm9527.site', 'www.aikeysapi.com', 'api.apinex.bond']);
 if (FLAT_RATE_HOSTS.has(upstream.hostname)) DEFAULT_CFG.maxHedges = 0;
 // Мульти-запрос считается выключенным и при maxHedges=0, и при hedgeMs=0 — для логов и UI.
 const hedgeOff = c => !(c.hedgeMs > 0 && c.maxHedges > 0);
@@ -1860,7 +1860,7 @@ const GW_BY_HOST = {
   'api.apinex.bond': 'ax',
   'myapi.buzz': 'kv',
   'api.threerouter.com': 'tr',
-  'ide.kgpix.bond': 'pm',
+  'eide.pro': 'pm',
   'api.vani.ai': 'vn',
   'api-ru.dacall.ai': 'dc',
   'cleanapis.com': 'cp',

@@ -254,7 +254,7 @@ const HOST_AUTH = {
     // 402-отказ инферсенса печатает точный остаток («на балансе -7,33 ₽»).
     'myapi.buzz': 'classic',
     'api.threerouter.com': 'jwt',
-    'ide.kgpix.bond': 'classic', // Custom site cookie; quota lives in premier-api, not New API billing.
+    'eide.pro': 'classic', // Custom site cookie; quota lives in premier-api, not New API billing.
     'api.vani.ai': 'jwt',
     'api-ru.dacall.ai': 'jwt',
     'cleanapis.com': 'jwt',

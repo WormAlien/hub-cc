@@ -7920,7 +7920,7 @@ window.finNavCount = async () => {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-amber">🅿️</span> <a href="https://ide.kgpix.bond/developers" target="_blank" rel="noopener" title="Кабинет Premier API" class="text-ink underline underline-offset-4 hover:text-amber">Premier</a>
+              <span class="text-amber">🅿️</span> <a href="https://eide.pro/developers" target="_blank" rel="noopener" title="Кабинет Premier API" class="text-ink underline underline-offset-4 hover:text-amber">Premier</a>
             </h1>
             <p class="text-sm text-muted mt-1">50 сообщений в день на Free · общий лимит API и чата · GitHub-вход · <code class="font-mono text-xs">:20189</code></p>
             <p class="text-xs text-muted mt-1">Claude в каталоге текущего ключа нет. Названия тиров ниже выбирают модели Premier; успешная генерация ещё не проверена.</p>
@@ -7946,7 +7946,7 @@ window.finNavCount = async () => {
             <label class="flex flex-col gap-1 flex-1 min-w-[260px]">
               <span class="text-[10px] text-faint">свой код · пусто = код аккаунта</span>
               <div class="flex gap-2">
-                <input id="pm-ref-code" placeholder="569d56342c5e или https://ide.kgpix.bond/r/…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none focus:border-amber/60">
+                <input id="pm-ref-code" placeholder="569d56342c5e или https://eide.pro/r/…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 flex-1 min-w-0 focus:outline-none focus:border-amber/60">
                 <button onclick="pmRefSave()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить код</button>
               </div>
             </label>
@@ -8066,8 +8066,8 @@ window.finNavCount = async () => {
               <input id="pm-add-key" placeholder="prm_… или пусто для входа через GitHub" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
             </label>
             <label class="flex flex-col gap-1 flex-1 max-w-[320px]">
-              <span class="text-[10px] text-faint" title="Под каким аккаунтом зачесть приглашение. Код = user.id, ссылка — ide.kgpix.bond/r/&lt;код&gt;">реф-ссылка — пусто = код по умолчанию</span>
-              <input id="pm-add-ref" placeholder="https://ide.kgpix.bond/r/… или код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
+              <span class="text-[10px] text-faint" title="Под каким аккаунтом зачесть приглашение. Код = user.id, ссылка - eide.pro/r/&lt;код&gt;">реф-ссылка - пусто = код по умолчанию</span>
+              <input id="pm-add-ref" placeholder="https://eide.pro/r/… или код" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-amber/60">
             </label>
             <button onclick="pmAdd()" class="text-xs px-4 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">Сохранить</button>
             <button onclick="newapiAddPickGithub('pm')" title="Выбрать GitHub и импортировать его сессию в профиль Premier; подтверждение доступа остаётся в браузере" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">🐙 из менеджера</button>
@@ -8096,13 +8096,13 @@ window.finNavCount = async () => {
         </div>
 
         <div class="text-xs text-faint">
-          <span>base → <code class="text-ink">http://localhost:20189</code> keepalive → <code class="text-ink">ide.kgpix.bond</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span>base → <code class="text-ink">http://localhost:20189</code> keepalive → <code class="text-ink">eide.pro</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">prm_… / sk-premier-…</code> - бери в кабинете разработчика после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <span>Квота читается с сервера, а не считается по локальным запросам.</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://ide.kgpix.bond/developers" target="_blank" rel="noopener" class="text-amber hover:underline">кабинет API</a>
+          <a href="https://eide.pro/developers" target="_blank" rel="noopener" class="text-amber hover:underline">кабинет API</a>
         </div>
       </div>
     </div>
@@ -18667,7 +18667,7 @@ const NEWAPI_SEED_PROV = {
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
   kv: { label: 'KVOTUM',     host: 'myapi.buzz',        color: 'violet', reload: () => loadKvSessions(), list: () => state.kvotum,  render: () => renderKv(), setKey: id => kvSetKey(id), open: id => kvOpenLk(id) },
-  pm: { label: 'Premier',     host: 'ide.kgpix.bond',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
+  pm: { label: 'Premier',     host: 'eide.pro',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
   cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
   ab: { label: 'Artbloom',     host: 'api.artbloom.tech',        color: 'pink', reload: () => loadAbSessions(), list: () => state.artbloom,  render: () => renderAb(), setKey: id => abSetKey(id), open: id => abOpenLk(id) },
   fx: { label: 'Fxqidian',     host: 'fxqidian.de5.net',        color: 'rose', reload: () => loadFxSessions(), list: () => state.fxqidian,  render: () => renderFx(), setKey: id => fxSetKey(id), open: id => fxOpenLk(id) },
@@ -22096,7 +22096,7 @@ function renderPm() {
     const activeTag = active ? '<span class="text-amber mr-1" title="активный">🌟</span>' : '';
     const balanceCell = pmBalanceCell(s, kJ);
     // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderPmModels.
-    const keyCell = noKey ? noKeyCell(`pmSetKey(${idJ})`) : `<button onclick='pmActivate(${kJ})' title="Сделать активным (keepalive :20189 → ide.kgpix.bond)"
+    const keyCell = noKey ? noKeyCell(`pmSetKey(${idJ})`) : `<button onclick='pmActivate(${kJ})' title="Сделать активным (keepalive :20189 → eide.pro)"
           class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-amber/10 border-amber/50 text-amber' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
       <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
         ${activeTag}${esc(email)}

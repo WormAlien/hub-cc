@@ -16,7 +16,7 @@ assert.ok(m, 'OUT_OF_BALANCE_RE не найден');
 const RE = new Function('return ' + m[1])();
 const dead = new Function('return ' + code.match(/const DEAD_KEY_RE = (\/.+\/i);/)[1])();
 
-const live = '{"type":"error","error":{"type":"rate_limit_error","message":"Сообщения на сегодня закончились (50 на тарифе Free; лимит общий с чатом). Обновится в 00:00 по Москве — через 12 ч 32 мин. Больше сообщений — на https://ide.kgpix.bond/chat. / Daily message limit reached; it resets at 00:00 Moscow time."}}';
+const live = '{"type":"error","error":{"type":"rate_limit_error","message":"Сообщения на сегодня закончились (50 на тарифе Free; лимит общий с чатом). Обновится в 00:00 по Москве - через 12 ч 32 мин. Больше сообщений - на https://eide.pro/chat. / Daily message limit reached; it resets at 00:00 Moscow time."}}';
 assert.ok(RE.test(live), 'живой 429 Premier обязан распознаваться как исчерпанная квота');
 assert.ok(!dead.test(live), 'исчерпанная квота не делает аккаунт мёртвым');
 

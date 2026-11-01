@@ -179,7 +179,7 @@ function makeWorld(opts = {}) {
             // Premier (25.10): та же ротация, но остаток считают в сообщениях. Пул - свой
             // файл, нужен для сцен квоты; живой чек возвращает quota.remaining.
             pm: {
-                tag: 'premier', label: 'Premier', host: 'ide.kgpix.bond', keyFile: 'pm.txt',
+                tag: 'premier', label: 'Premier', host: 'eide.pro', keyFile: 'pm.txt',
                 quotaMode: true,
                 load: () => world.pmPool,
                 save: () => { world.saves += 1; },

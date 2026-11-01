@@ -59,7 +59,7 @@ const SHAPES = {
     // на каждый бинд. Награды рефереру по активным (3 сообщения у приглашённого):
     // 3 → +50 сообщений, 10/25/50/100 → Pro 7/14/30 дней, Max. Приглашённый получает
     // +50 сообщений сразу при бинде. Разбор — вика «Premier - вкладка и квота сообщений».
-    premier:     { host: 'ide.kgpix.bond',   path: '/r/',           label: 'Premier' },
+    premier:     { host: 'eide.pro',          path: '/r/',           label: 'Premier' },
     // getunikey (2026-09-15) — New API, форма `/sign-up?aff=`. Реф-программа у площадки
     // ЕСТЬ (админ-настройки QuotaForInviter/QuotaForInvitee, живая карточка «Referral
     // Program» в кошельке), но начисляется от ПОПОЛНЕНИЯ приглашённого: «Earn rewards

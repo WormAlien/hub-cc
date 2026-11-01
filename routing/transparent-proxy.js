@@ -7804,7 +7804,7 @@ function handleKvAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kvotum', host: 'myapi.buzz', prefix: 'kv_', load: kvLoad, save: kvSave, sessionsDir: KV_SESSIONS_DIR });
 }
 function handlePmAddGithub(req, res) {
-    return newapiAddGithub(req, res, { tag: 'premier', host: 'ide.kgpix.bond', prefix: 'pm_', load: pmLoad, save: pmSave, sessionsDir: PM_SESSIONS_DIR });
+    return newapiAddGithub(req, res, { tag: 'premier', host: 'eide.pro', prefix: 'pm_', load: pmLoad, save: pmSave, sessionsDir: PM_SESSIONS_DIR });
 }
 function handleCpAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'cleanapis', host: 'cleanapis.com', prefix: 'cp_', load: cpLoad, save: cpSave, sessionsDir: CP_SESSIONS_DIR });
@@ -9390,7 +9390,7 @@ const NEWAPI_PROFILE_DIRS = {
     'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
     'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),
     'api.threerouter.com':      path.join(__dirname, '..', 'threerouter', 'profiles'),
-    'ide.kgpix.bond':      path.join(__dirname, '..', 'premier', 'profiles'),
+    'eide.pro':      path.join(__dirname, '..', 'premier', 'profiles'),
     'api.vani.ai':      path.join(__dirname, '..', 'vani', 'profiles'),
     'api-ru.dacall.ai':      path.join(__dirname, '..', 'dacall', 'profiles'),
     'cleanapis.com':      path.join(__dirname, '..', 'cleanapis', 'profiles'),
@@ -16517,9 +16517,9 @@ const premierApi = require('./lib/premier-api');
 const PM_SESSIONS_FILE = premierApi.POOL_FILE;
 const PM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.secrets', 'premier-active-key.txt');
 const PM_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'premier-active-model.txt');
-const PM_BASE_URL = 'https://ide.kgpix.bond/v1';
+const PM_BASE_URL = 'https://eide.pro/v1';
 // Premier counts weighted messages shared with web chat. No USD grant fallback.
-const PM_UPSTREAM = 'https://ide.kgpix.bond';
+const PM_UPSTREAM = 'https://eide.pro';
 const PM_KEEPALIVE_PORT = Number(process.env.PM_KEEPALIVE_PORT || 20189);
 const PM_KEEPALIVE_URL = `http://localhost:${PM_KEEPALIVE_PORT}`;
 const PM_MODELMAP_FILE = path.join(__dirname, 'premier-modelmap.json');
@@ -22766,8 +22766,8 @@ async function handleTrAdd(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 // Реф-код Premier из поля на вкладке. Принимаем и голый код, и ссылку
-// `https://ide.kgpix.bond/r/<код>`. Мусор → null, то есть «взять общий код рефки».
-const PM_REF_DEFAULT_HOST = 'https://ide.kgpix.bond';
+// `https://eide.pro/r/<код>`. Мусор → null, то есть «взять общий код рефки».
+const PM_REF_DEFAULT_HOST = 'https://eide.pro';
 async function handlePmRef(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -22778,7 +22778,7 @@ async function handlePmRef(req, res) {
         if (!row) return jsonRes(res, 404, { error: 'аккаунт не найден' });
         const set = body.set === undefined ? null : pmRefCode(body.set);
         if (body.set !== undefined && String(body.set).trim() && !set) {
-            return jsonRes(res, 400, { error: 'не код и не ссылка ide.kgpix.bond/r/<код>' });
+            return jsonRes(res, 400, { error: 'не код и не ссылка eide.pro/r/<код>' });
         }
         // Сохранение — только по явному set. Пустая строка снимает вписанный код:
         // аккаунт вернётся к своему коду из кэша окна или к общему из ref-codes.js.
@@ -22830,7 +22830,7 @@ function pmRefCode(raw) {
     let code = s;
     try {
         const u = new URL(s);
-        if (!/(^|\.)kgpix\.bond$/i.test(u.hostname)) return null;
+        if (u.hostname.toLowerCase() !== 'eide.pro') return null;
         const m = u.pathname.match(/^\/r\/([A-Za-z0-9_-]+)\/?$/);
         if (!m) return null;
         code = m[1];
@@ -24647,7 +24647,7 @@ async function handlePmActivate(req, res) {
             const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
             makeSettingsBackup('settings-pm');
             settings.env = settings.env || {};
-            settings.env.ANTHROPIC_BASE_URL = PM_KEEPALIVE_URL;   // keepalive :20189 → ide.kgpix.bond напрямую
+            settings.env.ANTHROPIC_BASE_URL = PM_KEEPALIVE_URL;   // keepalive :20189 → eide.pro напрямую
             delete settings.apiKeyHelper;
             // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
             // без [1m] → окно 200k. Источник правды — premier-active-model.txt (образец —
@@ -35757,7 +35757,7 @@ const MONEY_GW = {
     // подмену, а дашборд отвечал «денежная авторотация отключена», и отказ уезжал клиенту
     // при шести живых аккаунтах в пуле. Теперь у Premier своя единица: остаток сообщений
     // берётся из `quota.remaining`, планка 1 сообщение, живой чек - прежний `pmBalance`.
-    pm: { tag: 'premier',     label: 'Premier',     host: 'ide.kgpix.bond',     keyFile: PM_ACTIVE_KEY_FILE, load: pmLoad, save: pmSave, balanceFn: pmBalance, applyFn: pmApplyBalance, quotaMode: true },
+    pm: { tag: 'premier',     label: 'Premier',     host: 'eide.pro',     keyFile: PM_ACTIVE_KEY_FILE, load: pmLoad, save: pmSave, balanceFn: pmBalance, applyFn: pmApplyBalance, quotaMode: true },
     vn: { tag: 'vani',     label: 'Vani',     host: 'api.vani.ai',     keyFile: VN_ACTIVE_KEY_FILE, load: vnLoad, save: vnSave, balanceFn: vnBalance, applyFn: vnApplyBalance },
     dc: { tag: 'dacall',     label: 'dacall.AI',     host: 'api-ru.dacall.ai',     keyFile: DC_ACTIVE_KEY_FILE, load: dcLoad, save: dcSave, balanceFn: dcBalance, applyFn: dcApplyBalance },
     cp: { tag: 'cleanapis',     label: 'Clean APIs',     host: 'cleanapis.com',     keyFile: CP_ACTIVE_KEY_FILE, load: cpLoad, save: cpSave, balanceFn: cpBalance, applyFn: cpApplyBalance },

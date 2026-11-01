@@ -343,7 +343,7 @@
     "P": "PM",
     "full": "premier",
     "NAME": "Premier",
-    "HOST": "ide.kgpix.bond",
+    "HOST": "eide.pro",
     "PORT": 20189,
     "FOLDER": "premier",
     "KEY_RE": "/^prm_[A-Za-z0-9_-]{40,}$/",

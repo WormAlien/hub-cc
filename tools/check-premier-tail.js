@@ -107,7 +107,7 @@ const parse = b => JSON.parse(b.toString('utf8'));
     assert.ok(gate, 'гейт PREMIER_TAIL не найден');
     assert.ok(/PREMIER_TAIL !== '0'/.test(gate[1]), 'рубильник PREMIER_TAIL=0 выключает правку');
     assert.ok(/upstream\.hostname === PREMIER_TAIL_HOST/.test(gate[1]), 'гейт по хосту обязателен');
-    assert.ok(/const PREMIER_TAIL_HOST = process\.env\.PREMIER_TAIL_HOST \|\| 'ide\.kgpix\.bond';/.test(code),
+    assert.ok(/const PREMIER_TAIL_HOST = process\.env\.PREMIER_TAIL_HOST \|\| 'eide\.pro';/.test(code),
         'хост Premier указан явно, с подменой только для тестов');
     const sites = code.split('ensureTrailingUserText(reqBody').length - 1;
     assert.strictEqual(sites, 1, 'преобразование на пути запроса ровно одно');

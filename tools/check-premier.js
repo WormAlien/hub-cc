@@ -132,17 +132,46 @@ if (api) {
         ], now);
         assert.equal(cookie, 'premier_session=new');
     });
-    test('both domains are declared, old origin stays exported', () => {
+    test('eide.pro is canonical while the old origin remains readable for legacy sessions', () => {
+        assert.equal(api.HOST, 'eide.pro');
+        assert.equal(api.ORIGIN, 'https://eide.pro');
+        assert.equal(api.HOSTS[0], 'eide.pro');
         assert.ok(api.HOSTS.includes('ide.kgpix.bond'));
-        assert.ok(api.HOSTS.includes('eide.pro'));
-        assert.equal(api.ORIGIN, 'https://ide.kgpix.bond');
-        assert.ok(api.ORIGINS.includes('https://eide.pro'));
+        assert.equal(api.ORIGINS[0], 'https://eide.pro');
     });
 }
+test('Premier production API path uses eide.pro everywhere', () => {
+    const transparent = source('routing/transparent-proxy.js');
+    assert.match(transparent, /const PM_BASE_URL = 'https:\/\/eide\.pro\/v1';/);
+    assert.match(transparent, /const PM_UPSTREAM = 'https:\/\/eide\.pro';/);
+    const restart = source('routing/keepalive-restart.ps1');
+    assert.match(restart, /20189 = @\{ UPSTREAM = 'https:\/\/eide\.pro'/);
+    const keepalive = source('routing/keepalive-proxy.js');
+    assert.match(keepalive, /const PREMIER_TAIL_HOST = process\.env\.PREMIER_TAIL_HOST \|\| 'eide\.pro';/);
+    assert.ok(vm.runInNewContext(keepalive.match(/const FLAT_RATE_HOSTS = new Set\((\[[^;]+\])\);/)[1]).includes('eide.pro'));
+    assert.match(keepalive, /'eide\.pro': 'pm'/);
+    const sessionSource = source('premier/open-session.js');
+    assert.match(sessionSource, /for \(const origin of api\.ORIGINS\)/);
+    for (const file of [
+        'ARCHITECTURE.md',
+        'premier/open-session.js',
+        'routing/keepalive-proxy.js',
+        'routing/keepalive-restart.ps1',
+        'routing/proxy-dashboard.html',
+        'routing/transparent-proxy.js',
+        'routing/lib/github-session.js',
+        'routing/lib/newapi-account.js',
+        'routing/lib/ref-codes.js',
+        'tools/check-autorotate.js',
+        'tools/check-premier-render.js',
+        'tools/gateways.config.json',
+        'tools/probe-premier-reasoning.js',
+    ]) assert.ok(!source(file).includes('ide.kgpix.bond'), file + ' still routes Premier to the former host');
+});
 test('Premier message billing disables hedged duplicate requests', () => {
     const match = source('routing/keepalive-proxy.js').match(/const FLAT_RATE_HOSTS = new Set\((\[[^;]+\])\);/);
     assert.ok(match);
-    assert.ok(vm.runInNewContext(match[1]).includes('ide.kgpix.bond'));
+    assert.ok(vm.runInNewContext(match[1]).includes('eide.pro'));
 });
 test('Premier is excluded from USD totals in both summaries', () => {
     const front = source('routing/proxy-dashboard.html').split('\n').find(l => l.includes("id: 'premier'") && l.includes('stateKey:'));
@@ -236,40 +265,42 @@ if (session) testAsync('session import scopes cookies and localStorage to their 
     assert.deepEqual(run('https://ide.kgpix.bond'), {});
 });
 if (api) {
-    testAsync('quota probe tries each domain with its own cookie and takes the 200', async () => {
+    testAsync('quota probe prefers the canonical domain and keeps the former one as fallback', async () => {
     const key = 'prm_' + 'z'.repeat(43);
     const seen = [];
     const r = await api.fetchQuota([
-        { origin: 'https://ide.kgpix.bond', cookie: 'premier_lang=ru' },
         { origin: 'https://eide.pro', cookie: 'premier_session=new' },
+        { origin: 'https://ide.kgpix.bond', cookie: 'premier_lang=ru' },
     ], { apiKey: key, fetchImpl: async (url, opts) => {
         seen.push([url, opts.headers.Cookie]);
-        if (url.startsWith('https://ide.kgpix.bond')) return { status: 401, ok: false };
+        if (url.startsWith('https://eide.pro')) return { status: 401, ok: false };
         return { status: 200, ok: true, json: async () => ({
             user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],
             usage: { used: 2, limit: 50 },
         }) };
     }});
-    assert.deepEqual(seen[0], ['https://ide.kgpix.bond/api/dev/state', 'premier_lang=ru']);
-    assert.deepEqual(seen[1], ['https://eide.pro/api/dev/state', 'premier_session=new']);
+    assert.deepEqual(seen[0], ['https://eide.pro/api/dev/state', 'premier_session=new']);
+    assert.deepEqual(seen[1], ['https://ide.kgpix.bond/api/dev/state', 'premier_lang=ru']);
     assert.equal(r.quota.remaining, 48);
     assert.equal(r.binding.keyId, 'k1');
 });
-testAsync('a single string header is still probed against every domain', async () => {
+    testAsync('a single string header is probed against the canonical domain first', async () => {
     const key = 'prm_' + 'z'.repeat(43);
+    const seen = [];
     const r = await api.fetchQuota('premier_session=new', { apiKey: key, fetchImpl: async url => {
-        if (url.startsWith('https://ide.kgpix.bond')) return { status: 401, ok: false };
+        seen.push(url);
         return { status: 200, ok: true, json: async () => ({
             user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],
             usage: { used: 1, limit: 50 },
         }) };
     }});
+    assert.equal(seen[0], 'https://eide.pro/api/dev/state');
     assert.equal(r.quota.remaining, 49);
 });
-    testAsync('quota request sends cookies only to the fixed destination', async () => {
+    testAsync('quota request sends cookies only to the canonical destination', async () => {
         const key = 'prm_' + 'z'.repeat(43);
         const r = await api.fetchQuota('sid=owned', { apiKey: key, fetchImpl: async (url, opts) => {
-            assert.equal(url, 'https://ide.kgpix.bond/api/dev/state');
+            assert.equal(url, 'https://eide.pro/api/dev/state');
             assert.equal(opts.headers.Cookie, 'sid=owned'); assert.equal(opts.redirect, 'error');
             return { status: 200, ok: true, json: async () => ({
                 user: { email: 'a@b.c' }, keys: [{ id: 'k1', hint: api.maskKey(key) }],

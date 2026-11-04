@@ -552,7 +552,7 @@ async def acquire_proxy(tried=(), pin=None):
         cfg = parse_proxy_line(pin)
         if not cfg:
             raise RuntimeError(f"прокси «{pin}» не разобран")
-        return cfg, redact(pin)
+        return cfg, redact(pin), pin
 
     skip = ledger_used() | {redact(x) for x in tried}
     errors = []
@@ -570,9 +570,32 @@ async def acquire_proxy(tried=(), pin=None):
         label, cfg = alive[0]
         ledger_mark(redact(label))
         log("proxy", f"✅ {redact(label)} · ярус {tier} · живых в пачке: {len(alive)}")
-        return cfg, redact(label)
+        # Третий элемент - ПОЛНАЯ строка с кредами: нужна авто-решателю капчи
+        # (solver подключается сам, без Camoufox). В лог не печатается.
+        return cfg, redact(label), label
 
     raise RuntimeError("прокси нет: " + "; ".join(errors or ["пусто"]))
+
+
+def _exit_line_for_solver(full_label):
+    """Строка прокси для tools/tr-solver (--exit).
+
+    Camoufox'овский cfg {server, username, password} собираем обратно в URI,
+    который понимает parseProxy солвера. Наш скрапер пишет строки schemes://
+    (socks4/socks5/http), свои - с кредами в URI;Camoufox приводил их к cfg -
+    обратная сборка без потерь. Исключение - socks4: солвер его не умеет
+    (parseProxy возвращает null), тогда честно отказываем в auto.
+    """
+    if not full_label:
+        return None
+    m = re.match(r"^(?P<scheme>\w+)://(?:(?P<user>[^:@/]+):(?P<pass>[^@/]*)@)?"
+                 r"(?P<host>[^:/]+):(?P<port>\d+)/?$", full_label)
+    if not m:
+        return None
+    if m.group("scheme").lower() == "socks4":
+        return None
+    auth = f"{m.group('user')}:{m.group('pass')}@" if m.group("user") else ""
+    return f"{m.group('scheme')}://{auth}{m.group('host')}:{m.group('port')}"
 
 
 def page_of(browser):
@@ -598,13 +621,16 @@ async def tr_browser_ctx(use_proxy, tried, pin=None):
     Повтор нужен потому, что preflight пула проверяет ОДИН лёгкий запрос, а полная
     SPA тянет десятки ресурсов и слабый адрес умирает на них (живой случай 25.10 в
     JS-автореге: `page.goto: Timeout 30000ms` на прокси, который preflight прошёл).
+
+    Yield'ит (page, full_label): full_label - полная строка прокси с кредами для
+    авто-решателя капчи (в лог не печатается), None при прямом ходе.
     """
     cm = None
     try:
         for attempt in range(1, 4):
-            cfg, label = (None, "напрямую")
+            cfg, label, full = (None, "напрямую", None)
             if use_proxy:
-                cfg, label = await acquire_proxy(tried, pin)
+                cfg, label, full = await acquire_proxy(tried, pin)
             launch = dict(BASE_LAUNCH)
             if cfg:
                 launch["proxy"] = cfg
@@ -650,7 +676,7 @@ async def tr_browser_ctx(use_proxy, tried, pin=None):
                 log("proxy", f"страница не открылась через {label} - беру другой прокси")
                 continue
             log("tr", f"панель открыта через {label}")
-            yield page
+            yield page, full
             break
     finally:
         if cm is not None:
@@ -715,7 +741,9 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
         # Прокси у Camoufox на весь браузер, поэтому почта и панель - разные окна.
         # Адрес берём из общего пула через мост proxy-for.js (см. acquire_proxy).
         stage("register-form")
-        async with tr_browser_ctx(use_proxy, tried, proxy_pin) as tr:
+        async with tr_browser_ctx(use_proxy, tried, proxy_pin) as (tr, tr_proxy_full):
+            # Полная строка exit'а (с кредами) для авто-решателя капчи; None = напрямую.
+            tr_proxy_label = tr_proxy_full
             await asyncio.sleep(1.5)
 
             # 🔴 СОГЛАСИЕ ПОДСЕВАЕМ, А НЕ ПРОКЛИКИВАЕМ. Текст страницы (замер 07:54):
@@ -774,8 +802,48 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
             started = await click_exact_button(tr, START_TEXTS)
             log("tr", f"капча стартовала: {started or 'НЕТ - открой кнопкой сам'}")
 
-            # ── 4. капча руками ──
-            stage("captcha-manual")
+            # ── 4. капча ──
+            # 🔴 Симбиоз с F0Rextasy/threerouter-bulk-apikey (MIT, портирован в
+            # tools/tr-solver): токен можно получить БЕЗ браузера - challenge →
+            # solve (slider/image_click) → verify, всё через ТЕКУЩИЙ прокси-exit.
+            # TR_CAPTCHA_MODE=auto (дефолт): сначала авто-решатель; не вышел токен -
+            # фолбэк в ручной режим без потери ящика и прокси. manual - как раньше.
+            CAPTCHA_MODE = os.environ.get("TR_CAPTCHA_MODE", "auto").strip().lower()
+            ctok = None
+            captcha_meta = {"mode": "manual", "ms": 0, "challenge": ""}
+            if CAPTCHA_MODE == "auto" and tr_proxy_label:
+                stage("captcha-auto")
+                log("captcha", f"авто-решатель через {tr_proxy_label}…")
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "node", str(ROOT / "tools" / "tr-solver" / "tr-solver.js"),
+                        "--exit", _exit_line_for_solver(tr_proxy_label),
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    out, err = await asyncio.wait_for(proc.communicate(), timeout=300)
+                    line = next((l for l in reversed((out or b"").decode("utf-8", "replace").splitlines())
+                                 if l.strip().startswith("{")), "")
+                    ans = json.loads(line) if line else {}
+                    if ans.get("ok") and ans.get("token"):
+                        ctok = ans["token"]
+                        captcha_meta = {"mode": "auto", "ms": ans.get("ms", 0),
+                                        "challenge": ans.get("mode", "")}
+                        log("captcha", f"✅ токен авто ({ans.get('mode')}, {ans.get('ms', 0)} мс)")
+                    else:
+                        log("captcha", f"авто-решатель отказал: {str(ans.get('error', line or err))[:120]}")
+                except Exception as e:
+                    log("captcha", f"авто-решатель упал: {str(e)[:120]}")
+                if ctok is None:
+                    log("captcha", "фолбэк: ручной режим (окно уже открыто)")
+
+            if ctok is None:
+                stage("captcha-manual")
+                captcha_meta = {"mode": "manual", "ms": 0, "challenge": ""}
+                print("\n" + "=" * 70, flush=True)
+                print("  ✋ РЕШИ КАПЧУ В ОКНЕ Camoufox (4 зелёных круга / ползунок).", flush=True)
+                print(f"     email: {addr}", flush=True)
+                print(f"  Пароль: {password}", flush=True)
+                print("  Дальше скрипт продолжит сам.", flush=True)
+                print("=" * 70 + "\n", flush=True)
             print("\n" + "=" * 70, flush=True)
             print("  ✋ РЕШИ КАПЧУ В ОКНЕ Camoufox (4 зелёных круга / ползунок).", flush=True)
             print(f"     email: {addr}", flush=True)
@@ -816,6 +884,12 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                                         {"email": addr, "click_captcha_token": ctok})
             log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")
             if st_code >= 400:
+                # 🪤 Токен авто-решателя может не пройти «привязку к клиенту»:
+                # панель тогда отвечает 400 invalid or expired. Один ретрай
+                # вручную имеет смысл только в manual; в auto - честная ошибка.
+                if captcha_meta.get("mode") == "auto":
+                    log("tr", "⚠️ авто-токен не принят на send-code: отметка в пуле captcha.auto_rejected=true")
+                    captcha_meta["auto_rejected"] = True
                 raise RuntimeError(f"код не отправлен: {str(resp)[:160]}")
 
             stage("wait-mail")
@@ -966,6 +1040,7 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 "mailProvider": addr.split("@")[-1],
                 "mailService": "smailpro",
                 "refCode": REF,
+                "captcha": captcha_meta,
             }
             pool_append(rec)
             print("SP_AUTOADD_RESULT " + json.dumps(

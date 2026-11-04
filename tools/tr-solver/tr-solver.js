@@ -17,6 +17,13 @@
  *   --exit <line>   прокси-строка (socks5://host:port | http://user:pass@host:port).
  *                   Обязателен: напрямую не ходим - у панели лимит «1 регистрация
  *                   на IP в сутки», и токен капчи привязан к exit, который её решал.
+ *   --call <path> <method> [json]  вызвать панель ЧЕРЕЗ ТОТ ЖЕ транспорт, что
+ *                   решал капчу: --call /auth/send-verify-code POST '{"email":...,
+ *                   "click_captcha_token":"..."}'. Опциональный --token <jwt>
+ *                   добавляет Authorization. Нужен потому, что панель привязывает
+ *                   токен капчи к ОТПЕЧАТКУ клиента (замер 04.11: токен солвера,
+ *                   потраченный fetch'ем из Camoufox-страницы -> 400 invalid;
+ *                   тем же транспортом -> 200). Печатает {status,json,text}.
  *   --verify <file> не решать капчу, а перепроверить ключи: файл со строками sk-…
  *                   (или JSON-пулом routing/threerouter-sessions.json - берутся
  *                   живые записи с api_key). Живой ключ = короткий чат 200 с контентом.
@@ -40,7 +47,17 @@ const VERIFY_MODEL = process.env.TR_VERIFY_MODEL || 'minimax-m3';
 
 function arg(name) {
     const i = process.argv.indexOf('--' + name);
-    return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : '';
+    if (i < 0) return '';
+    // Значением может быть JSON с пробелами/скобками - берём всё до следующего --флага
+    // или конца. argv уже собран bash/Python'ом как отдельный аргумент, так что обычно
+    // достаточно argv[i+1]; на всякий случай клеим хвост, если склеился с пробелом.
+    const parts = [];
+    for (let j = i + 1; j < process.argv.length; j++) {
+        const a = process.argv[j];
+        if (a === '--' || (a.startsWith('--') && j > i + 1)) break;
+        parts.push(a);
+    }
+    return parts.join(' ');
 }
 
 function maskKey(k) {
@@ -113,10 +130,36 @@ async function verify() {
     emit({ ok: true, live, dead: results.length - live, total: results.length, results });
 }
 
+async function call() {
+    const exitLine = arg('exit');
+    const apiPath = arg('call');
+    const method = (arg('method') || 'GET').toUpperCase();
+    const bodyRaw = arg('body');
+    const jwt = arg('token');
+    if (!exitLine || !apiPath) {
+        return emit({ ok: false, error: '--call требует --exit и путь' });
+    }
+    const exit = upstream.parseProxy(exitLine);
+    if (!exit) return emit({ ok: false, error: `прокси не разобран: ${exitLine.slice(0, 40)}` });
+    const headers = { origin: upstream.BASE, referer: `${upstream.BASE}/register` };
+    if (jwt) headers.authorization = `Bearer ${jwt}`;
+    let body = null;
+    if (bodyRaw) {
+        body = bodyRaw; // exitJson сам выставит content-type json
+    }
+    const url = apiPath.startsWith('http') ? apiPath : `${upstream.API}${apiPath}`;
+    const r = await upstream.exitJson(exit, url, { method, headers, body, timeoutMs: 60000 });
+    let json = null;
+    try { json = JSON.parse(r.text); } catch (e) { /* not json */ }
+    emit({ ok: true, status: r.status, json, text: String(r.text).slice(0, 800) });
+}
+
 (async () => {
     try {
         if (arg('verify')) {
             await verify();
+        } else if (arg('call')) {
+            await call();
         } else {
             await solve();
         }

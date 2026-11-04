@@ -365,6 +365,50 @@ async def tr_api(page, path, method="GET", body=None, token=None):
     return raw.get("status", 0), unwrap(data)
 
 
+async def tr_api_solver(full_proxy_line, path, method="GET", body=None, token=None):
+    """API ThreeRouter через транспорт солвера (Node raw TLS + браузерные заголовки).
+
+    🔴 Панель привязывает токен капчи к отпечатку клиента (04.11: токен,
+    решённый солвером, но потраченный fetch'ем из страницы - 400 invalid;
+    тем же транспортом - 200). Поэтому в auto-режиме ВСЕ вызовы панели,
+    следующие за токеном, идут через tools/tr-solver --call.
+    """
+    args = ["node", str(ROOT / "tools" / "tr-solver" / "tr-solver.js"),
+            "--exit", _exit_line_for_solver(full_proxy_line),
+            "--call", path, "--method", method]
+    if body is not None:
+        args += ["--body", json.dumps(body)]
+    if token:
+        args += ["--token", token]
+    # 🔴 Скраперные socks5 рвут соединение на ровном месте (живые случаи 04.11:
+    # proxy timeout на challenge, на verify, на register). Диалог с панелью -
+    # до 4 попыток с паузой 3 с; ретраится ТОЛЬКО транспортная ошибка (status=0),
+    # ответ площадки 4xx - честный результат, не ретраим.
+    last = {"message": "нет попыток"}
+    for attempt in range(1, 5):
+        proc = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            last = {"message": "CLI-таймаут 120 с"}
+            await asyncio.sleep(3)
+            continue
+        line = next((l for l in reversed((out or b"").decode("utf-8", "replace").splitlines())
+                     if l.strip().startswith("{")), "")
+        ans = json.loads(line) if line else {}
+        if not ans.get("ok"):
+            last = {"message": str(ans.get("error", (err or b"").decode()[:160]))}
+            await asyncio.sleep(3)
+            continue
+        data = ans.get("json")
+        if data is None:
+            data = {"message": (ans.get("text") or "")[:200]}
+        return ans.get("status", 0), unwrap(data)
+    return 0, last
+
+
 def mail_kind(addr):
     a = (addr or "").lower()
     if a.endswith("@gmail.com") or a.endswith("@googlemail.com"):
@@ -846,14 +890,24 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 print("=" * 70 + "\n", flush=True)
 
             if ctok is not None:
-                # ── 4b. авто-токен: сразу send-code, окно не нужно ──
+                # ── 4b. авто-токен: ВСЯ панель через транспорт солвера ──
+                #
+                # 🔴 Замер 04.11: токен, потраченный fetch'ем из Camoufox-страницы,
+                # панель отвергает («token invalid or expired»), а тем же
+                # транспортом, что решал капчу (Node raw TLS + браузерные заголовки)
+                # - принимает (200 «Verification code sent successfully»).
+                # Панель привязывает токен к отпечатку клиента, а не к IP.
+                # Поэтому весь диалог с панелью (send-code, register, группы,
+                # ключ) идёт через tools/tr-solver --call - окно панели вообще
+                # не нужно. Ветка дублирует шаги 5-7 из ручного пути ниже.
                 stage("send-code")
-                st_code, resp = await tr_api(tr, "/auth/send-verify-code", "POST",
-                                            {"email": addr, "click_captcha_token": ctok})
+                st_code, resp = await tr_api_solver(
+                    tr_proxy_label, "/auth/send-verify-code", "POST",
+                    {"email": addr, "click_captcha_token": ctok})
                 log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")
                 if st_code >= 400:
                     captcha_meta["auto_rejected"] = True
-                    log("tr", "⚠️ авто-токен не принят на send-code: отметка captcha.auto_rejected=true")
+                    log("tr", "⚠️ авто-токен не принят даже тем же транспортом")
                     raise RuntimeError(f"код не отправлен: {str(resp)[:160]}")
             else:
                 # ── 4c. ручной путь: ждём токен из окна, решённого владельцем ──
@@ -952,10 +1006,14 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
 
             # ── 6. регистрация ──
             stage("register")
-            st_reg, auth = await tr_api(tr, "/auth/register", "POST", {
+            reg_body = {
                 "email": addr, "password": password, "verify_code": code,
                 "click_captcha_token": ctok, "aff_code": REF,
-            })
+            }
+            if captcha_meta.get("mode") == "auto":
+                st_reg, auth = await tr_api_solver(tr_proxy_label, "/auth/register", "POST", reg_body)
+            else:
+                st_reg, auth = await tr_api(tr, "/auth/register", "POST", reg_body)
             if st_reg >= 400 or not (auth or {}).get("access_token"):
                 raise RuntimeError(f"регистрация: {st_reg} {str(auth)[:200]}")
             token = auth["access_token"]
@@ -963,16 +1021,28 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
 
             # ── 7. группа + ключ ──
             stage("key")
-            st_g, groups = await tr_api(tr, "/groups/available", token=token)
+            if captcha_meta.get("mode") == "auto":
+                st_g, groups = await tr_api_solver(tr_proxy_label, "/groups/available", token=token)
+            else:
+                st_g, groups = await tr_api(tr, "/groups/available", token=token)
             lst = groups if isinstance(groups, list) else []
             grp = (next((g for g in lst if re.search("default", g.get("name", ""), re.I)), None)
                    or next((g for g in lst if re.search("claude|anthropic", g.get("name", ""), re.I)), None)
                    or next((g for g in lst if g.get("status") == "active"), None)
                    or (lst[0] if lst else None))
             if not grp:
+                # 🪤 В auto-ветке groups приходит тем же конвертом {code,message,data},
+                # но unwrap() уже сработал в tr_api_solver. Пустой список реален -
+                # панель отдаёт группы только НОВЫМ аккаунтам; залогиненный
+                # пользователь мог уже отработать грант. Диагностика:
+                log("tr", f"группы не найдены: raw={str(groups)[:200]}")
                 raise RuntimeError("нет доступных групп")
             kn = key_name()
-            st_k, key_rec = await tr_api(tr, "/keys", "POST", {"name": kn, "group_id": grp["id"]}, token=token)
+            if captcha_meta.get("mode") == "auto":
+                st_k, key_rec = await tr_api_solver(tr_proxy_label, "/keys", "POST",
+                                                    {"name": kn, "group_id": grp["id"]}, token=token)
+            else:
+                st_k, key_rec = await tr_api(tr, "/keys", "POST", {"name": kn, "group_id": grp["id"]}, token=token)
             if st_k >= 400 or not (key_rec or {}).get("key"):
                 raise RuntimeError(f"ключ: {st_k} {str(key_rec)[:160]}")
             if key_rec.get("group_id") is None:

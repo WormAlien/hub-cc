@@ -868,7 +868,7 @@ async function solveCaptcha({ type = 'auto', url = `${API}/auth/captcha/challeng
         method: 'POST',
         body: {},
         headers: { origin: BASE, referer: `${BASE}/register` },
-        timeoutMs: 25000,
+        timeoutMs: DEFAULT_TIMEOUT_MS,
       });
       data = ch.json && ch.json.data;
       if (!data) {
@@ -894,7 +894,7 @@ async function solveCaptcha({ type = 'auto', url = `${API}/auth/captcha/challeng
       method: 'POST',
       body,
       headers: { origin: BASE, referer: `${BASE}/register` },
-      timeoutMs: 25000,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
     });
     const token = vr.json && vr.json.data && vr.json.data.captcha_token;
     if (token) return { token, ms: Date.now() - t0, mode: data.mode };

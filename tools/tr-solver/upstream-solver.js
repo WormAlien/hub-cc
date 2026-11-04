@@ -46,7 +46,21 @@ const ROOT = path.basename(__dirname) === 'src' ? path.resolve(__dirname, '..') 
 const BASE = 'https://threerouter.com';
 const API = `${BASE}/api/v1`;
 const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+// Панель принимает sub2api-заголовки только в браузерном наборе: голый
+// exitFetch'евский {accept: */*} хватает WAF как не-браузер (авто-токен
+// 04.11 умер на «token invalid or expired» при правильном exit).
+// accept-language + sec-fetch-нода - минимум, с которым SPA-фронтенд ходит сам.
+const BROWSER_HEADERS = {
+  accept: 'application/json, text/plain, */*',
+  'accept-language': 'en-US,en;q=0.9',
+  'sec-ch-ua': '"Chromium";v="148", "Not(A:Brand";v="24"',
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  'sec-fetch-dest': 'empty',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-site': 'same-origin',
+};
 
 /** The per-request budget the CLI's `--timeout` lands on. */
 let DEFAULT_TIMEOUT_MS = 60000;
@@ -211,7 +225,7 @@ async function exitFetch(proxy, url, { method = 'GET', headers = {}, body = null
     method,
     path: u.pathname + u.search,
     createConnection: () => sock,
-    headers: { host: u.host, 'user-agent': UA, accept: '*/*', ...headers },
+    headers: { host: u.host, 'user-agent': UA, ...BROWSER_HEADERS, ...headers },
   });
   const t = setTimeout(() => {
     try {

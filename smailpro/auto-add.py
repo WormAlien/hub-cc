@@ -844,53 +844,53 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 print(f"  Пароль: {password}", flush=True)
                 print("  Дальше скрипт продолжит сам.", flush=True)
                 print("=" * 70 + "\n", flush=True)
-            print("\n" + "=" * 70, flush=True)
-            print("  ✋ РЕШИ КАПЧУ В ОКНЕ Camoufox (4 зелёных круга / ползунок).", flush=True)
-            print(f"     email: {addr}", flush=True)
-            print(f"  Пароль: {password}", flush=True)
-            print("  Дальше скрипт продолжит сам.", flush=True)
-            print("=" * 70 + "\n", flush=True)
 
-            captcha_token = [None]
-
-            def on_resp(res):
-                u = res.url
-                if "/auth/captcha/verify" not in u or captcha_token[0]:
-                    return
-
-                async def grab():
-                    try:
-                        data = unwrap(await res.json())
-                        tok = (data or {}).get("captcha_token")
-                        if tok:
-                            captcha_token[0] = tok
-                            log("captcha", f"токен получен: {tok[:10]}…")
-                    except Exception:
-                        pass
-                asyncio.create_task(grab())
-
-            tr.on("response", on_resp)
-
-            t0 = time.time()
-            while not captcha_token[0] and time.time() - t0 < CAPTCHA_WAIT_S:
-                await asyncio.sleep(2)
-            if not captcha_token[0]:
-                raise RuntimeError("капча не решена за 10 минут")
-            ctok = captcha_token[0]
-
-            # ── 5. код на почту ──
-            stage("send-code")
-            st_code, resp = await tr_api(tr, "/auth/send-verify-code", "POST",
-                                        {"email": addr, "click_captcha_token": ctok})
-            log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")
-            if st_code >= 400:
-                # 🪤 Токен авто-решателя может не пройти «привязку к клиенту»:
-                # панель тогда отвечает 400 invalid or expired. Один ретрай
-                # вручную имеет смысл только в manual; в auto - честная ошибка.
-                if captcha_meta.get("mode") == "auto":
-                    log("tr", "⚠️ авто-токен не принят на send-code: отметка в пуле captcha.auto_rejected=true")
+            if ctok is not None:
+                # ── 4b. авто-токен: сразу send-code, окно не нужно ──
+                stage("send-code")
+                st_code, resp = await tr_api(tr, "/auth/send-verify-code", "POST",
+                                            {"email": addr, "click_captcha_token": ctok})
+                log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")
+                if st_code >= 400:
                     captcha_meta["auto_rejected"] = True
-                raise RuntimeError(f"код не отправлен: {str(resp)[:160]}")
+                    log("tr", "⚠️ авто-токен не принят на send-code: отметка captcha.auto_rejected=true")
+                    raise RuntimeError(f"код не отправлен: {str(resp)[:160]}")
+            else:
+                # ── 4c. ручной путь: ждём токен из окна, решённого владельцем ──
+                captcha_token = [None]
+
+                def on_resp(res):
+                    u = res.url
+                    if "/auth/captcha/verify" not in u or captcha_token[0]:
+                        return
+
+                    async def grab():
+                        try:
+                            data = unwrap(await res.json())
+                            tok = (data or {}).get("captcha_token")
+                            if tok:
+                                captcha_token[0] = tok
+                                log("captcha", f"токен получен: {tok[:10]}…")
+                        except Exception:
+                            pass
+                    asyncio.create_task(grab())
+
+                tr.on("response", on_resp)
+
+                t0 = time.time()
+                while not captcha_token[0] and time.time() - t0 < CAPTCHA_WAIT_S:
+                    await asyncio.sleep(2)
+                if not captcha_token[0]:
+                    raise RuntimeError("капча не решена за 10 минут")
+                ctok = captcha_token[0]
+
+                # ── 5. код на почту ──
+                stage("send-code")
+                st_code, resp = await tr_api(tr, "/auth/send-verify-code", "POST",
+                                            {"email": addr, "click_captcha_token": ctok})
+                log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")
+                if st_code >= 400:
+                    raise RuntimeError(f"код не отправлен: {str(resp)[:160]}")
 
             stage("wait-mail")
             log("mail", f"жду письмо ThreeRouter на {addr} (до {OTP_WAIT_S} с)…")

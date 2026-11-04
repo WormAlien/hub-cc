@@ -14913,7 +14913,7 @@ function arCheckinBlockWhy(block) {
         : '';
     const code = block.code ? ` (код ${block.code}${when ? `, ${when}` : ''})` : '';
     return block.kind === 'gh_dead'
-        ? `вход в GitHub мёртв${code}: автоматика пароль и 2FA не вводит, нужен новый 🐙 «готовый GitHub»`
+        ? `вход в GitHub не состоялся${code}: автологин пробовал (логин и пароль вводит), но GitHub не пустил - нужен 🐙 «готовый GitHub» или одиночный ⚡ по строке`
         : `сбор закрыт${code}`;
 }
 
@@ -14947,10 +14947,10 @@ function arBuildBatch(limit) {
         // См. AR_COLLECT_SEEN: pid к этому моменту снят, а отметка в пул ещё не доехала,
         // поэтому оба прежних признака занятости здесь слепы.
         if (AR_COLLECT_SEEN.has(label)) { skipped.push(`${dispName}: уже брали в этом заходе`); continue; }
-        // Помеченный отказ (коды 3/5/9): вход в GitHub мёртв, автоматика пароль и 2FA не
-        // вводит - прогон повторит тот же отказ. Метка живёт в пуле и снимается сама, когда
-        // владелец перелогинит GitHub в менеджере (см. arCheckinBlockActive). Это про
-        // ПАЧКУ: одиночный ⚡ по строке остаётся - им владелец и проверяет, ожил ли вход.
+        // Помеченный отказ (коды 3/5/9): вход в GitHub не состоялся - прогон повторит тот же
+        // отказ. Метка живёт в пуле и снимается сама, когда появляется живая сессия, снятая
+        // ПОЗЖЕ отказа (см. arCheckinBlockActive). Это про ПАЧКУ: одиночный ⚡ по строке
+        // остаётся - им владелец и проверяет, ожил ли вход.
         const block = arCheckinBlockActive(s);
         if (block) { skipped.push(`${dispName}: ${arCheckinBlockWhy(block)}`); continue; }
         // Прогон в полёте или ждёт своей очереди. Ловит и одиночный ⚡, поставленный в
@@ -18337,9 +18337,12 @@ async function kvBalance(target, opts = {}) {
         currency: 'RUB',
         currencySymbol: '₽',
         currencyRate: rate,
-        balanceLocal: Number(me.user.balance),
-        spentLocal: keyRow ? Number(keyRow.spent) : Number(me.usage.totals?.revenue || 0),
-        grantedLocal: granted,
+        // 🪤 Панель ХРАНИТ USD и умножает на RATE только на показе (rub(u) = usd × RATE()).
+        // balanceLocal - это ЛОКАЛЬНАЯ цифра показа, а не сырой баланс: без × rate
+        // дашборд печатал «₽0.25» вместо «23,39 ₽» (владелец 04.11).
+        balanceLocal: Number(me.user.balance) * rate,
+        spentLocal: keyRow ? Number(keyRow.spent) * rate : Number(me.usage.totals?.revenue || 0) * rate,
+        grantedLocal: granted * rate,
     } : {};
     return {
         status: 'live',

@@ -55,6 +55,45 @@ const WALL_WHY = {
     totp_missing: 'GitHub спрашивает код 2FA, а TOTP-секрета в записи нет',
 };
 
+// Экран account chooser: `github.com/switch_account?return_to=…` («Your accounts»). GitHub
+// показывает его, когда в профилеChrome остался другой сохранённый аккаунт и он просит выбрать,
+// кем продолжить. Живой случай 04.11: greedybelieve - после пароля открылся выбор, исполнитель
+// его не знал, 90 секунд ждал и вернул общий таймаут, а дашборд написал «автоматика пароль и 2FA
+// не вводит» - при том что credentials ввёл. Жмём ТОЛЬКО точное совпадение логина: чужой
+// аккаунт выбрать нельзя (это вход в чужую учётку), а «выбрать другого» - это форма логина,
+// которую цикл и так умеет. Ссылка на аккаунт - кнопка с именем в заголовке формы.
+function isSwitchAccount(url) {
+    return /github\.com\/switch_account/i.test(String(url || ''));
+}
+
+async function pickSwitchAccount(page, login, log) {
+    // Основной путь GitHub рендерит: <form action="/switch_account?…"><button name="target" value="<login>">Continue as …</button></form>
+    let used = 'button[name="target"]';
+    let loc = page.locator(`button[name="target"][value="${login}"]`).first();
+    if (!(await loc.count().catch(() => 0))) {
+        // Фолбэк: элемент, в тексте которого наш логин (кнопка/ссылка «Continue as greedybelieve»).
+        loc = null; used = null;
+        if (typeof page.getByRole === 'function') {
+            loc = page.getByRole('button', { name: login, exact: false }).first();
+            used = 'button by text';
+        }
+        if (!loc || !(await loc.count().catch(() => 0))) {
+            loc = page.locator(`a:has-text("${login}")`).first();
+            used = 'link by text';
+        }
+    }
+    try {
+        if (await loc.count() && await loc.isVisible()) {
+            await loc.click({ timeout: 5000 });
+            log(`   🔀 account chooser: выбран «${login}» (${used})`);
+            return true;
+        }
+    } catch (e) {
+        log(`   ⚠️ account chooser: выбор не нажался: ${String(e.message || e).split('\n')[0]}`);
+    }
+    return false;
+}
+
 /** Первый видимый локатор из списка селекторов или null. */
 async function firstVisible(page, list) {
     for (const sel of list) {
@@ -126,12 +165,21 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     }
 
     let filledLogin = false, filledPass = false, lastCode = null, steps = 0;
+    let switchHandled = false, retriesAfterSubmit = 0;
     const deadline = Date.now() + budgetMs;
     const started = Date.now();
 
     while (Date.now() < deadline) {
         if (probe && await probe()) return { ok: true };
         if (onStep) await onStep({ step: ++steps, url: page.url() });
+        // Account chooser: выбрать НАШ логин ровно один раз. Повторная попытка на той же
+        // странице - цикл, поэтому после первой попытки экран либо уходит, либо это стенка.
+        if (!switchHandled && isSwitchAccount(page.url())) {
+            switchHandled = true;
+            await pickSwitchAccount(page, login, log);
+            await sleep(2500);
+            continue;
+        }
         // Стенку проверяем ПЕРВОЙ: пока она на экране, любые нажатия только вредят.
         const wall = detectWall(page.url(), await pageInfo(page));
         if (wall) return { ok: false, wall, why: WALL_WHY[wall] || 'стенка' };
@@ -139,6 +187,19 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
         const loginF = await firstVisible(page, SEL.login);
         const passF = await firstVisible(page, SEL.pass);
         const totpF = await firstVisible(page, SEL.totp);
+
+        // После submit поля могут исчезнуть на мгновение (переход, POST /session). Это
+        // НЕ успех и НЕ стенка: если формы нет дольше пары секунд, страницу перезагружаем -
+        // GitHub иногда отвечает на POST /session ошибкой 500 (живой случай 04.11:
+        // greedybelieve - Sign in нажат, /session отдал «Server Error», модуль ждал до конца
+        // бюджета). Ровно две перезагрузки, дальше действительно сдаёмся.
+        if (!loginF && !passF && !totpF && filledLogin && retriesAfterSubmit < 2) {
+            retriesAfterSubmit++;
+            log(`   ↻ поля исчезли после submit (попытка ${retriesAfterSubmit}/2) - перезагружаю /login`);
+            await page.goto('https://github.com/login', { waitUntil: 'domcontentloaded' }).catch(() => {});
+            await sleep(2500);
+            continue;
+        }
 
         if (loginF || passF) {
             if (loginF && !filledLogin) {
@@ -186,4 +247,4 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     return { ok: false, wall: null, why: `вход не подтвердился за ${spent} с` };
 }
 
-module.exports = { fillGithubLogin, detectWall, firstVisible, SEL, WALLS, WALL_WHY };
+module.exports = { fillGithubLogin, detectWall, firstVisible, SEL, WALLS, WALL_WHY, isSwitchAccount, pickSwitchAccount };

@@ -55,8 +55,15 @@ function makePage(script) {
     };
     const advance = () => { i++; vanished = false; };
     const elem = (sel) => ({
-        count: async () => (visible(sel) ? 1 : 0),
-        isVisible: async () => visible(sel),
+        count: async () => {
+            // Кнопка account chooser существует только на экране с её логином в сценарии.
+            if (cur().chooser && String(sel).includes(cur().chooser)) return 1;
+            return visible(sel) ? 1 : 0;
+        },
+        isVisible: async () => {
+            if (cur().chooser && String(sel).includes(cur().chooser)) return true;
+            return visible(sel);
+        },
         fill: async (v) => { log.push(['fill', sel, v]); if (cur().vanishOnFill && sel.includes('totp')) vanished = true; },
         click: async () => { log.push(['click', sel]); try { cur().onSubmit && cur().onSubmit(log); } catch { /* сценарий */ } advance(); },
         press: async () => { log.push(['press', sel]); advance(); },
@@ -216,6 +223,61 @@ const clicks = (p, sel) => p._log.filter(l => l[0] === 'click' && l[1] === sel).
         check(SEL.pass.includes('#password'), 'поле пароля: #password');
         check(SEL.totp.includes('#app_totp'), 'поле кода: #app_totp');
         check(SEL.submit.includes('input[name="commit"]'), 'подтверждение: input[name="commit"]');
+    }
+
+    // ── 12. account chooser: живой случай 04.11 (greedybelieve) ──
+    // GitHub после пароля открыл /switch_account, исполнитель экран не знал, 90 секунд
+    // ждал и вернул общий таймаут. Теперь выбираем ТОЛЬКО точное совпадение логина.
+    console.log('\n12. account chooser: наш логин выбирается, чужой - нет');
+    {
+        const { isSwitchAccount, pickSwitchAccount } = mod;
+        check(isSwitchAccount('https://github.com/switch_account?return_to=%2Flogin'), 'адрес /switch_account распознан');
+        check(!isSwitchAccount('https://github.com/login'), 'обычный /login не путается с chooser');
+
+        // Поддельная страница chooser: кнопка value="<наш логин>" и кнопка value="<чужой>".
+        {
+            const clicks2 = [];
+            const page = {
+                url: () => 'https://github.com/switch_account?return_to=https%3A%2F%2Fgithub.com%2Flogin',
+                waitForTimeout: async () => {},
+                locator: (sel) => ({
+                    first: () => ({
+                        count: async () => (sel.includes('greedybelieve') ? 1 : 0),
+                        isVisible: async () => sel.includes('greedybelieve'),
+                        click: async () => clicks2.push(sel),
+                    }),
+                }),
+                getByRole: () => ({ first: () => ({ count: async () => 0, isVisible: async () => false }) }),
+            };
+            const hit = await pickSwitchAccount(page, 'greedybelieve', () => {});
+            check(hit === true, 'наш логин на chooser выбран');
+            check(clicks2.length === 1 && clicks2[0].includes('greedybelieve'), 'нажата кнопка именно нашего логина');
+        }
+        // Чужого логина на странице нет - выбор не состоялся, но падения нет.
+        {
+            const page = {
+                url: () => 'https://github.com/switch_account?return_to=%2Flogin',
+                waitForTimeout: async () => {},
+                locator: () => ({ first: () => ({ count: async () => 0, isVisible: async () => false }) }),
+                getByRole: () => ({ first: () => ({ count: async () => 0, isVisible: async () => false }) }),
+            };
+            const hit = await pickSwitchAccount(page, 'greedybelieve', () => {});
+            check(hit === false, 'чужой аккаунт не выбран и прогон не падает');
+        }
+        // Полный цикл: login -> chooser -> 2FA, вход по пробе. Кнопка chooser живёт в
+        // `_chooserClick` сценария: клик по ней двигает фейк-страницу на следующий экран,
+        // как это делает настоящий submit.
+        {
+            const p = makePage([
+                { fields: ['login', 'password'], submit: true, url: 'https://github.com/login' },
+                { url: 'https://github.com/switch_account?return_to=%2Flogin', chooser: 'greedybelieve' },
+                { fields: ['totp'], submit: true, url: 'https://github.com/sessions/two-factor/app' },
+            ]);
+            const res = await fillGithubLogin(p, { ...CREDS, login: 'greedybelieve' }, { ...RUN, sessionProbe: async () => false });
+            check(fills(p, 'login').includes('greedybelieve'), 'логин вписан до chooser');
+            check(fills(p, 'totp').includes('123456'), 'после chooser цикл дошёл до поля 2FA');
+            check(res.wall !== 'device' && res.wall !== 'captcha', 'chooser не принят за стенку');
+        }
     }
 
     console.log(fail ? `\n× провалено проверок: ${fail}\n` : '\n· все проверки пройдены\n');

@@ -29,6 +29,12 @@ const fs = require('fs');
 const path = require('path');
 const upstream = require(path.join(__dirname, 'upstream-solver.js'));
 
+// Скраперные socks5 бывают медленные: дефолт 60 с на запрос не хватает на
+// challenge+solve+verify через чужой exit (живой случай 04.11: proxy timeout
+// на 25-секундных запросах). Поднимаем потолок; UI-опыта у CLI нет, задержка
+// безвредна - авторега всё равно держит окно открытым.
+upstream.setDefaultTimeout(Number(process.env.TR_SOLVER_TIMEOUT_MS || 90000));
+
 const CHAT_URL = 'https://api.threerouter.com/v1/chat/completions';
 const VERIFY_MODEL = process.env.TR_VERIFY_MODEL || 'minimax-m3';
 

@@ -304,22 +304,50 @@ def unwrap(j):
 
 
 def pool_append(rec):
-    rows = []
+    # 🔒 Пачка гонит N корутин параллельно: append без блокировки резал бы записи.
+    return _pool_append_locked(rec)
+
+
+_POOL_LOCK_FILE = Path(str(POOL_FILE) + ".lock")
+
+
+def _pool_append_locked(rec):
+    # Простой spin-lock на файле: O_CREAT|O_EXCL даёт атомарность на NTFS.
+    # Захват с таймаутом 30 с, держим открытым дескриптором.
+    import time as _t
+    deadline = _t.time() + 30
+    lock_fd = None
+    while _t.time() < deadline:
+        try:
+            lock_fd = os.open(str(_POOL_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            _t.sleep(0.05)
+    if lock_fd is None:
+        raise RuntimeError("pool lock: не дождались 30 с")
     try:
-        raw = POOL_FILE.read_text(encoding="utf-8")
-        if raw.startswith("﻿"):
-            raw = raw[1:]
-        rows = json.loads(raw)
-        if not isinstance(rows, list):
-            rows = []
-    except Exception:
         rows = []
-    have = {r.get("api_key") for r in rows if isinstance(r, dict)}
-    if rec.get("api_key") in have:
-        return 0
-    rows.insert(0, rec)
-    POOL_FILE.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    return 1
+        try:
+            raw = POOL_FILE.read_text(encoding="utf-8")
+            if raw.startswith("﻿"):
+                raw = raw[1:]
+            rows = json.loads(raw)
+            if not isinstance(rows, list):
+                rows = []
+        except Exception:
+            rows = []
+        have = {r.get("api_key") for r in rows if isinstance(r, dict)}
+        if rec.get("api_key") in have:
+            return 0
+        rows.insert(0, rec)
+        POOL_FILE.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        return 1
+    finally:
+        try:
+            os.close(lock_fd)
+            os.unlink(str(_POOL_LOCK_FILE))
+        except OSError:
+            pass
 
 
 # Вызов API ThreeRouter ИЗ САМОЙ СТРАНИЦЫ.
@@ -1180,9 +1208,6 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 "captcha": captcha_meta,
             }
             pool_append(rec)
-            print("SP_AUTOADD_RESULT " + json.dumps(
-                {"ok": True, "id": rec["id"], "email": addr, "group": grp["name"],
-                 "key": key_rec["key"][:6] + "…"}, ensure_ascii=False), flush=True)
             return rec
 
 
@@ -1200,25 +1225,38 @@ async def main():
             count = int(a)
 
     pid_write()
-    log("main", f"аккаунтов: {count} · реф {REF} · почта smailpro ·"
-                f" прокси {proxy_pin or ('скрапер: '+','.join(PROXY_ORDER) if use_proxy else 'напрямую')}")
+    # 🔀 Параллельная пачка: TR_BATCH - сколько аккаунтов гоним одновременно.
+    # Каждая корутина берёт СВОЙ прокси из скрапер-пула (acquire_proxy с ledger'ом
+    # исключает повтор) и СВОЙ smailpro-ящик. Окна Camoufox умножаются: TR_BATCH=5
+    # это до 10 окон (ящик+панель) - на слабой машине снижать.
+    batch = max(1, int(os.environ.get("TR_BATCH", "3") or 3))
+    log("main", f"аккаунтов: {count} · пачка {batch} параллельно · реф {REF} ·"
+                f" почта smailpro · прокси {proxy_pin or ('скрапер: '+','.join(PROXY_ORDER) if use_proxy else 'напрямую')}")
 
-    ok = 0
-    try:
-        for i in range(count):
+    sem = asyncio.Semaphore(batch)
+    results = []
+
+    async def one(n):
+        async with sem:
             try:
-                await run_account(i + 1, use_proxy, proxy_pin)
-                ok += 1
-            except Exception as e:
-                log("main", f"❌ аккаунт {i + 1}: {e}")
+                rec = await run_account(n, use_proxy, proxy_pin)
+                results.append(rec)
                 print("SP_AUTOADD_RESULT " + json.dumps(
-                    {"ok": False, "n": i + 1, "error": str(e)[:200]}, ensure_ascii=False), flush=True)
-                traceback.print_exc()
+                    {"ok": True, "id": rec["id"], "email": rec["email"],
+                     "group": rec["groupName"], "key": rec["api_key"][:6] + "…"},
+                    ensure_ascii=False), flush=True)
+            except Exception as e:
+                log("main", f"❌ аккаунт {n}: {e}")
+                print("SP_AUTOADD_RESULT " + json.dumps(
+                    {"ok": False, "n": n, "error": str(e)[:200]}, ensure_ascii=False), flush=True)
+
+    try:
+        await asyncio.gather(*(one(i + 1) for i in range(count)))
     finally:
         # PID снимаем всегда: и по нормальному выходу, и по Ctrl+C, и по «Стоп» с вкладки.
         pid_clear()
-    log("main", f"готово: {ok}/{count}")
-    return 0 if ok == count else 2
+    log("main", f"готово: {len(results)}/{count}")
+    return 0 if len(results) == count else 2
 
 
 if __name__ == "__main__":

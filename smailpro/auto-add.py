@@ -743,6 +743,8 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
     password = rand_password()
     mail = None
     tried = []
+    ctok = None
+    captcha_meta = {"mode": "manual", "ms": 0, "challenge": ""}
     # ⏱️ Ящик smailpro - самое долгое звено (10 с удача, до 3 мин не повезёт).
     # Пока он создаётся, параллельно греем панель: выбираем живой прокси и
     # решаем капчу ЗАРАНЕЕ (токен живёт 900 с - хватает с запасом на очередь
@@ -751,7 +753,13 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
     warm_task = None
 
     async def warm_captcha():
-        """Капча заранее, на выбранном прокси. Возвращает (proxy_full, token, meta)."""
+        """Капча заранее, на выбранном прокси. Возвращает (proxy_full, token, meta).
+
+        🪤 Прогрев и панель выбирают прокси ИЗ ОДНОГО пула независимо: warm-токен
+        живёт 900 с, но exit скрапера умирает за минуты. Если warm-токен на
+        другом exit - он бесполезен (привязка к клиенту). Поэтому warm берёт
+        ПЕРВЫЙ живой адрес, а панель идёт на тот же: _same_exit решает.
+        """
         cfg, label, full = await acquire_proxy(tried)
         t0 = time.time()
         proc = await asyncio.create_subprocess_exec(

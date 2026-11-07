@@ -691,6 +691,17 @@ Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить
   `check-a6api-integration`, `check-a6api-converter`, `check-a6api-stack`,
   `check-a6api-tab`, `check-a6api-ui-browser` в `tools/`.
 
+## ThreeRouter: автоматическая капча и пакетная авторега
+
+`smailpro/auto-add.py` по умолчанию решает slider/image-click капчу через
+`tools/tr-solver/` и проводит весь API-диалог тем же pinned proxy transport, который
+получил токен: смешивать Camoufox и solver transport нельзя, токен привязан к
+отпечатку клиента. Ручной путь остаётся fallback. `TR_BATCH=N` задаёт параллельность
+(по умолчанию 3); запись пула защищена lock-файлом, runtime lock и `_tmp-*.json`
+исключены из git. Код решателя перенесён и адаптирован из
+`F0Rextasy/threerouter-bulk-apikey`; upstream MIT-текст сохранён в
+`tools/tr-solver/LICENSE`.
+
 Наличие кода на диске не означает загруженный backend: рестарт и живая активация
 выполняются только после разрешения владельца. Состояние приёмки и рабочие ID - в
 приватной вике, страница «a6api - модели, маршрутизация и баланс».

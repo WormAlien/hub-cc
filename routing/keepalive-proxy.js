@@ -1800,7 +1800,7 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
 // была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
 // обычный «too many requests» по-прежнему аккаунт не меняет.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|daily free limit(?:\s*\([^)]*\))?\s+is\s+used\s+up|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -2020,6 +2020,23 @@ function estimateTokens(body) {
     return Math.max(1, Math.ceil(chars / 4));
   } catch (e) {
     return 1;   // тело битое/пустое — лучше отдать 1, чем пробросить 404
+  }
+}
+
+function isModelValidationProbe(method, reqPath, body) {
+  if (method !== 'POST' || reqPath.replace(/\?.*$/, '') !== '/v1/messages') return false;
+  try {
+    const r = JSON.parse(body.toString('utf8') || '{}');
+    if (r.stream === true || r.max_tokens !== 1 || (Array.isArray(r.tools) && r.tools.length)) return false;
+    if (!Array.isArray(r.messages) || r.messages.length !== 1 || r.messages[0].role !== 'user') return false;
+    const c = r.messages[0].content;
+    const text = typeof c === 'string' ? c : Array.isArray(c)
+      ? c.filter(b => b && b.type === 'text').map(b => b.text || '').join('') : '';
+    const sys = typeof r.system === 'string' ? r.system : Array.isArray(r.system)
+      ? r.system.map(b => (b && b.text) || '').join('\n') : '';
+    return text.trim() === 'Hi' && /Claude Code, Anthropic's official CLI/i.test(sys);
+  } catch (e) {
+    return false;
   }
 }
 
@@ -3551,7 +3568,8 @@ const server = http.createServer((req, res) => {
     // Не-стримовый запрос за сообщением (`/compact` и всё, что просит готовый JSON):
     // пингов там быть не может, поэтому через jsonHoldMs начинаем капать пробел.
     // count_tokens сюда не попадает — на него прокси отвечает локально и мгновенно.
-    if (!streaming && cfg.jsonHoldMs > 0 && jsonTimer === null
+    if (!streaming && !isModelValidationProbe(req.method, reqPath, reqBody)
+        && cfg.jsonHoldMs > 0 && jsonTimer === null
         && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath) && !isCountTokens(req.method, reqPath)) {
       jsonTimer = setTimeout(commitJson, cfg.jsonHoldMs);
     }

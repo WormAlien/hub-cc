@@ -54,6 +54,11 @@ function routeView(s, pins = []) {
 }
 function readPanelToken(secretDir = SECRET_DIR) {
     try {
+        const config = JSON.parse(fs.readFileSync(path.join(secretDir, 'a6api-config.json'), 'utf8').replace(/^﻿/, ''));
+        const token = typeof config?.panelToken === 'string' ? config.panelToken.trim() : '';
+        if (token) return token;
+    } catch { /* legacy installations keep the token in a separate file */ }
+    try {
         const text = fs.readFileSync(path.join(secretDir, 'a6api.token'), 'utf8').replace(/^﻿/, '');
         const token = text.split(/\r?\n/).map(s => s.trim()).find(s => s && !s.startsWith('#'));
         if (token) return token;

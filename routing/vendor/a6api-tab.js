@@ -13,7 +13,7 @@
     const d = new Date(typeof v === 'number' && v < 1e11 ? v * 1000 : v);
     return Number.isFinite(d.getTime()) ? d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'нет данных';
   };
-  const S = { wired: false, loading: false, modelLoading: false, busy: false, sequence: 0,
+  const S = { wired: false, loading: false, modelLoading: false, busy: false, setupEditing: false, sequence: 0,
     state: null, tokenId: null, models: [], modelsReady: false, drafts: new Map(), routeObserver: null, routeTimer: null };
   const token = () => S.state?.tokens.find(t => t.id === S.tokenId);
   // 🪤 В выпадашке только рабочие ключи. Выключенный (`status !== 1`) выбрать нельзя -
@@ -51,9 +51,18 @@
     const root = byId('a6api-root'); if (!root) return;
     root.innerHTML = `
       <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Claude Code на одном платном аккаунте</p></div>
-        <div class="a6-row"><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.vip/console" target="_blank" rel="noopener">Кабинет</a></div></header>
+        <div class="a6-row"><span id="a6-setup-chip" class="a6-setup-chip"><span>Аккаунт подключён</span><button id="a6-change-account" class="a6-btn a6-small" data-a6="change-account">Изменить данные</button></span><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.vip/?auth=register&amp;aff=9eKT" target="_blank" rel="noopener">Кабинет</a></div></header>
       <div id="a6-error" class="a6-notice a6-error" role="alert" hidden></div>
       <div id="a6-local" class="a6-notice" hidden>Только просмотр. Чтобы изменить настройки, откройте дашборд через localhost на основной машине.</div>
+      <section id="a6-connect-panel" class="a6-connect-panel a6-panel" aria-labelledby="a6-connect-title">
+        <div class="a6-connect-head"><div><h2 id="a6-connect-title">Подключение аккаунта a6api</h2><p id="a6-connect-status" class="a6-muted"></p></div></div>
+        <form id="a6-connect-form" class="a6-connect-form" autocomplete="off">
+          <div class="a6-connect-help"><p>1. <a href="https://a6api.vip/?auth=register&amp;aff=9eKT" target="_blank" rel="noopener">Создать аккаунт / войти в a6api</a>.</p><p>2. В кабинете откройте «Настройки» → «Настройки безопасности» → «Системный токен доступа» и скопируйте токен. Если он скрыт, нажмите «Перегенерировать».</p><p>3. Там же в профиле скопируйте число после «ID:».</p><p class="a6-muted">Не вставляйте модельный <code>sk-...</code> из раздела API Keys: он не открывает кабинет.</p></div>
+          <div class="a6-connect-fields"><label class="a6-field"><span>Системный токен кабинета</span><input id="a6-panel-token" class="a6-select a6-mono" type="password" autocomplete="new-password" spellcheck="false"></label><label class="a6-field"><span>ID пользователя</span><input id="a6-user-id" class="a6-select a6-mono" type="number" min="1" step="1" inputmode="numeric" autocomplete="off"></label></div>
+          <div class="a6-connect-actions"><button id="a6-connect" class="a6-btn a6-primary" type="button" data-a6="connect-account">Проверить и сохранить</button><button id="a6-cancel-connect" class="a6-btn" type="button" data-a6="cancel-connect">Отмена</button></div>
+        </form>
+      </section>
+      <div id="a6-controls">
       <section class="a6-account" aria-label="Аккаунт a6api"><div><span class="a6-muted">Общий баланс</span><strong id="a6-balance" class="a6-balance a6-mono">нет данных</strong></div>
         <div class="a6-account-spend"><span class="a6-muted">Расход аккаунта</span><span id="a6-account-spent" class="a6-mono">нет данных</span></div>
         <span id="a6-connection" class="a6-status" role="status">Не подготовлен</span></section>
@@ -73,15 +82,17 @@
         </section>
       </div>
       <section class="a6-activation" aria-label="Подключение Claude Code"><div><button id="a6-activate" class="a6-btn a6-primary" data-a6="activate">Активировать для Claude Code</button><p id="a6-activation-note" class="a6-muted">Переключит текущий бэкенд Claude Code на a6api.</p></div>
-        <div class="a6-command"><span class="a6-muted">Для отдельного окна</span><button class="a6-btn a6-mono" data-a6="copy-command" aria-label="Скопировать /model a6api[1m]">/model a6api[1m]</button></div></section>`;
+        <div class="a6-command"><span class="a6-muted">Для отдельного окна</span><button class="a6-btn a6-mono" data-a6="copy-command" aria-label="Скопировать /model a6api[1m]">/model a6api[1m]</button></div></section>
+      </div>`;
     root.addEventListener('click', e => {
       const b = e.target.closest('[data-a6]'); if (!b || b.disabled) return;
       // Команда у конкретной модели: текст берём из её же data-cmd, чтобы бейдж и
       // буфер не могли разойтись.
       if (b.dataset.a6 === 'copy-cmd') return copyRendered(b);
-      const actions = { refresh: load, 'use-key': useKey, save: saveModels, activate, routes: openRoutes, 'copy-command': copyCommand };
+      const actions = { refresh: load, 'connect-account': connectAccount, 'change-account': changeAccount, 'cancel-connect': cancelConnect, 'use-key': useKey, save: saveModels, activate, routes: openRoutes, 'copy-command': copyCommand };
       return Promise.resolve(actions[b.dataset.a6]?.()).catch(e => error(e.message));
     });
+    byId('a6-connect-form').addEventListener('submit', e => { e.preventDefault(); connectAccount(); });
     byId('a6-token').addEventListener('change', () => selectToken(Number(byId('a6-token').value)));
     for (const slot of SLOTS) byId('a6-model-' + slot).addEventListener('change', () => selectModel(slot));
     S.wired = true;
@@ -144,6 +155,46 @@
     catch { error('Буфер обмена недоступен. Скопируйте вручную: ' + cmd); }
   }
 
+  function renderSetup() {
+    const connected = S.state?.connected === true;
+    const editing = !connected || S.setupEditing;
+    byId('a6-connect-panel').hidden = connected && !editing;
+    byId('a6-connect-form').hidden = !editing;
+    byId('a6-controls').hidden = !connected;
+    byId('a6-setup-chip').hidden = !connected || editing;
+    byId('a6-cancel-connect').hidden = !connected;
+    byId('a6-connect-status').textContent = connected ? 'Аккаунт подключён. Системный токен хранится только локально.' :
+      S.state?.configured ? (S.state.setupError || 'Сохранённые данные требуют повторной проверки.') : 'Введите данные своего кабинета. Они сохранятся только на этой машине.';
+    byId('a6-connect').disabled = !S.state?.canWrite || locked();
+    byId('a6-panel-token').disabled = !S.state?.canWrite || locked();
+    byId('a6-user-id').disabled = !S.state?.canWrite || locked();
+  }
+  function changeAccount() {
+    if (!S.state?.canWrite || locked()) return;
+    S.setupEditing = true; byId('a6-panel-token').value = ''; byId('a6-user-id').value = ''; error(''); renderSetup();
+  }
+  function cancelConnect() {
+    if (!S.state?.connected || locked()) return;
+    S.setupEditing = false; byId('a6-panel-token').value = ''; byId('a6-user-id').value = ''; error(''); renderSetup();
+  }
+  async function connectAccount() {
+    if (!S.state?.canWrite || locked()) return;
+    const panelToken = byId('a6-panel-token').value;
+    const userId = Number(byId('a6-user-id').value);
+    if (!panelToken.trim()) return error('Введите системный токен кабинета a6api');
+    if (!Number.isSafeInteger(userId) || userId < 1) { byId('a6-panel-token').value = ''; return error('Введите корректный ID пользователя'); }
+    S.busy = true; error(''); render();
+    let success = false;
+    try {
+      const d = await api('connect', { panelToken, userId });
+      if (d.configured !== true) throw new Error('Сервер не подтвердил подключение аккаунта');
+      S.setupEditing = false; S.tokenId = null; S.models = []; S.modelsReady = false; S.drafts.clear(); success = true;
+      window.toast?.('Аккаунт a6api подключён', 'success');
+    } catch (e) { error(e.message); }
+    finally { byId('a6-panel-token').value = ''; S.busy = false; render(); }
+    if (success) await load();
+  }
+
   function renderModels() {
     const d = draft();
     for (const slot of SLOTS) {
@@ -167,9 +218,12 @@
     byId('a6-activate').disabled = !canActivate();
   }
   function render() {
+    renderSetup();
+    byId('a6-local').hidden = !S.state || !!S.state.canWrite;
+    byId('a6-refresh').disabled = S.busy || S.loading;
+    if (S.state?.connected !== true) return;
     byId('a6-balance').textContent = money(S.state?.account?.balanceUsd);
     byId('a6-account-spent').textContent = money(S.state?.account?.spentUsd);
-    byId('a6-local').hidden = !S.state || !!S.state.canWrite;
     const connection = byId('a6-connection');
     connection.textContent = S.state?.active ? 'Активен в Claude Code' : S.state?.prepared ? 'Подготовлен, не активен' : 'Не подготовлен';
     connection.dataset.active = String(!!S.state?.active);
@@ -184,7 +238,6 @@
       <dl class="a6-key-facts"><div><dt>Расход ключа</dt><dd class="a6-mono">${money(t.spentUsd)}</dd></div><div><dt>Остаток лимита</dt><dd>${t.unlimited ? 'В пределах баланса' : money(t.remainingUsd)}</dd></div><div><dt>Действует до</dt><dd>${time(t.expires)}</dd></div></dl>` : '<p class="a6-muted">Ключей нет. Создайте ключ в кабинете a6api.</p>';
     byId('a6-use-key').disabled = !canUseKey();
     byId('a6-key-note').textContent = prepared() ? 'Этот ключ подготовлен для a6api.' : 'Подготовит a6api локально, не переключая Claude Code.';
-    byId('a6-refresh').disabled = S.busy || S.loading;
     renderModels();
   }
   function acceptModels(models) {
@@ -227,7 +280,7 @@
   // навсегда в состоянии «идёт загрузка», то есть ровно в том же «кнопки серые».
   async function load(opts = {}) {
     shell(); if (!S.wired || S.loading || S.busy) return;
-    if (opts.quiet && S.state && S.modelsReady && !S.modelLoading) {
+    if (opts.quiet && S.state && !S.modelLoading && (S.state.connected !== true || S.modelsReady)) {
       try {
         const d = await api('state');
         if (!Array.isArray(d.tokens)) return;
@@ -243,6 +296,10 @@
       if (sequence !== S.sequence) return;
       if (!Array.isArray(d.tokens)) throw new Error('Не удалось прочитать ключи a6api');
       S.state = d;
+      if (d.connected !== true) {
+        S.tokenId = null; S.models = []; S.modelsReady = false; S.modelLoading = false;
+        return;
+      }
       if (!d.tokens.some(t => t.id === S.tokenId)) S.tokenId = d.tokens.find(t => t.id === d.selectedTokenId)?.id || d.tokens.find(t => t.status === 1)?.id || d.tokens[0]?.id || null;
       if (S.tokenId && S.tokenId === d.selectedTokenId) acceptModels(d.models);
       else await loadModels();

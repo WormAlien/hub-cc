@@ -24,6 +24,7 @@ assert.ok(!dead.test(live), 'исчерпанная квота не делает
 assert.ok(RE.test('Daily message limit reached; it resets at 00:00 Moscow time.'), 'английская фраза');
 assert.ok(RE.test('Сообщения на сегодня закончились'), 'русская фраза');
 assert.ok(RE.test('Сообщения закончились'), 'короткая русская фраза');
+assert.ok(RE.test('Your daily free limit (5M tokens) is used up. It resets at 00:00 (UTC+3).'), 'Premier 5M daily free limit');
 assert.ok(RE.test('You have used this week\'s allowance'), 'прежняя метка не сломана');
 
 // Обычный rate-limit аккаунт не меняет: иначе ротация зациклится на живом пуле.
@@ -38,4 +39,4 @@ assert.ok(rr, 'rotateReason не найден');
 assert.ok(/if \(status !== 401 && status !== 402 && status !== 403 && status !== 429\) return null;/.test(rr[0]),
     'гейт по статусу на месте');
 
-console.log(JSON.stringify({ ok: true, tests: 12 }));
+console.log(JSON.stringify({ ok: true, tests: 13 }));

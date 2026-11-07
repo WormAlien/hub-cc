@@ -294,12 +294,12 @@ async function freePort() {
                 assert.equal(calls.length, before);
             } finally { fs.writeFileSync(strict.keyFile, 'fixture-file-key\n'); }
         });
-        await test('legacy mode keeps header-first key and prior thinking/model behavior', async () => {
+        await test('legacy mode keeps header-first key, model case and prior thinking behavior', async () => {
             respond = normal;
             await ask(legacy, baseRequest({ thinking: { type: 'enabled', budget_tokens: 1500 }, messages: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'old' }, { type: 'tool_use', id: 'call', name: 'read', input: {} }] }] }));
             const sent = calls.at(-1);
             assert.equal(sent.headers.authorization, 'Bearer fixture-client-key'); assert.equal(sent.body.thinking, undefined);
-            assert.equal(sent.body.messages[0].reasoning_content, undefined); assert.equal(sent.body.model, 'deepseek/flash-test');
+            assert.equal(sent.body.messages[0].reasoning_content, undefined); assert.equal(sent.body.model, 'deepseek/Flash-Test');
         });
         // 25.10: Claude Code кладёт сводку компакта в историю с тегами <analysis>/<summary>,
         // модель на a6api видит образец и начинает отвечать тем же форматом вместо ответа.

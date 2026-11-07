@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
+const { ApiError } = require('../routing/lib/a6api-api');
 const file = path.join(__dirname, '../routing/lib/a6api-routes.js');
 let passed = 0;
 async function test(name, fn) {
@@ -68,6 +69,10 @@ async function test(name, fn) {
         state: async () => ({ tokens: [{ id: 9, name: 'test', mask: 'sk-***' }], models: ['model'], account: { balanceUsd: 2 }, selectedTokenId: 9, prepared: true, active: false,
             modelMap: { default: 'model', opus: 'model', sonnet: 'model', haiku: 'model' }, routesMap: { default: 'other' } }),
         models: async id => { assert.equal(id, 9); return ['model']; },
+        connect: async input => {
+            assert.deepEqual(input, { panelToken: 'fixture-panel-token', userId: 314 });
+            writes++; return { ok: true, configured: true };
+        },
         selectKey: async id => { assert.equal(id, 9); writes++; return { ok: true, selectedTokenId: id }; },
         saveModels: async (id, patch) => { assert.equal(id, 9); writes++; return { ok: true, modelMap: patch, routesMap: { default: 'other' } }; },
         activate: async id => { assert.equal(id, 9); writes++; return { ok: true, active: true }; },
@@ -95,24 +100,44 @@ async function test(name, fn) {
             }
             assert.equal(writes, 0);
         });
-        await test('GET cannot select keys, save models or activate Claude Code', async () => {
-            for (const name of ['key', 'modelmap', 'activate']) assert.equal((await fetch(base + name)).status, 405);
+        await test('GET cannot connect accounts, select keys, save models or activate Claude Code', async () => {
+            for (const name of ['connect', 'key', 'modelmap', 'activate']) assert.equal((await fetch(base + name)).status, 405);
             assert.equal(writes, 0);
+        });
+        await test('account connection uses one guarded explicit POST without leaking its token', async () => {
+            const secret = 'fixture-panel-token';
+            let r = await post('connect', { panelToken: secret, userId: 314 });
+            const text = await r.text();
+            assert.equal(r.status, 200); assert.equal(JSON.parse(text).configured, true);
+            assert.ok(!text.includes(secret)); assert.equal(writes, 1);
+            r = await fetch(base + 'connect', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: JSON.stringify({ panelToken: secret, userId: 314 }) });
+            assert.equal(r.status, 403); assert.ok(!(await r.text()).includes(secret)); assert.equal(writes, 1);
+        });
+        await test('account connection errors are sanitized and do not echo the submitted token', async () => {
+            const original = gateway.connect;
+            gateway.connect = async () => { throw new ApiError('credentials_rejected', 'fixture-secret-should-never-return', 401); };
+            const secret = 'fixture-secret-should-never-return';
+            const r = await post('connect', { panelToken: secret, userId: 314 });
+            const text = await r.text();
+            assert.equal(r.status, 401); assert.ok(!text.includes(secret)); assert.equal(writes, 1);
+            gateway.connect = original;
         });
         await test('plain form and cross-origin writes are denied', async () => {
             assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: '{}' })).status, 415);
             assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: '{}' })).status, 403);
-            assert.equal(writes, 0);
+            assert.equal(writes, 1);
         });
         await test('key, modelmap and activate are distinct explicit operations', async () => {
-            let r = await post('key', { tokenId: 9 }); assert.equal((await r.json()).selectedTokenId, 9); assert.equal(writes, 1);
+            let r = await post('key', { tokenId: 9 }); assert.equal((await r.json()).selectedTokenId, 9); assert.equal(writes, 2);
             const patch = { default: 'model', opus: 'model', sonnet: 'model', haiku: 'model' };
-            r = await post('modelmap', { tokenId: 9, modelMap: patch }); assert.deepEqual((await r.json()).modelMap, patch); assert.equal(writes, 2);
-            r = await post('activate', { tokenId: 9 }); assert.equal((await r.json()).active, true); assert.equal(writes, 3);
+            r = await post('modelmap', { tokenId: 9, modelMap: patch }); assert.deepEqual((await r.json()).modelMap, patch); assert.equal(writes, 3);
+            r = await post('activate', { tokenId: 9 }); assert.equal((await r.json()).active, true); assert.equal(writes, 4);
         });
         await test('malformed JSON and oversized bodies do not mutate', async () => {
             assert.equal((await fetch(base + 'key', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' })).status, 400);
-            assert.equal((await post('key', { a: 'x'.repeat(70000) })).status, 413); assert.equal(writes, 3);
+            assert.equal((await post('key', { a: 'x'.repeat(70000) })).status, 413);
+            assert.equal((await post('connect', { panelToken: 'x'.repeat(70000), userId: 314 })).status, 413);
+            assert.equal(writes, 4);
         });
         await test('unrelated routes remain untouched', async () => assert.equal((await fetch(base.replace('/a6api/', '/other/'))).status, 404));
     } finally { await new Promise(resolve => server.close(resolve)); fs.rmSync(dir, { recursive: true, force: true }); }

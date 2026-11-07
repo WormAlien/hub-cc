@@ -20,7 +20,19 @@
 .a6-small { padding: 6px 10px; min-height: 32px; font-size: 12px; }
 .a6-notice { border: 1px solid var(--color-line); border-radius: 7px; padding: 11px 13px; margin-bottom: 14px; color: var(--color-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .a6-error { border-color: var(--color-crimson); color: var(--color-ink); }
+.a6-setup-chip { display: inline-flex; align-items: center; gap: 8px; color: var(--color-muted); font-size: 11px; }
+.a6-connect-head, .a6-connect-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.a6-connect-head > div { min-width: 0; }
+#a6-connect-status { font-size: 11px; }
+.a6-connect-form { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-line-soft); }
+.a6-connect-help { line-height: 1.5; }
+.a6-connect-help a { color: var(--color-azure); text-underline-offset: 3px; }
+.a6-connect-help code { font-family: 'Geist Mono', ui-monospace, Consolas, monospace; }
+.a6-connect-fields { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(150px, .4fr); gap: 12px; margin-top: 16px; }
+.a6-connect-fields input { width: 100%; }
+.a6-connect-actions { justify-content: flex-start; margin-top: 14px; }
 .a6-account { display: flex; align-items: center; flex-wrap: wrap; gap: 18px 32px; border-top: 1px solid var(--color-line-soft); border-bottom: 1px solid var(--color-line-soft); padding: 16px 0; margin-bottom: 20px; }
+
 .a6-account > div { display: flex; flex-direction: column; gap: 5px; }
 .a6-account > div > .a6-muted { font-size: 11px; }
 .a6-balance { font-size: 25px; line-height: 1.1; font-weight: 500; letter-spacing: -.035em; }
@@ -79,6 +91,9 @@
   #a6api-root { padding: 18px 12px; }
   .a6-head { align-items: flex-start; gap: 14px; }
   .a6-panel { padding: 16px; }
+  .a6-connect-head { align-items: flex-start; }
+  .a6-connect-fields { grid-template-columns: 1fr; }
+  .a6-connect-actions .a6-btn { width: 100%; }
   .a6-account { gap: 16px 24px; }
   .a6-status { margin-left: 0; flex-basis: 100%; }
   .a6-key-facts { grid-template-columns: 1fr; }

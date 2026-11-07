@@ -1,5 +1,5 @@
 {
-  "opus": "glm-5.3-flash",
-  "sonnet": "glm-5.3-flash",
-  "haiku": "glm-5.3-flash-uncensored"
+  "opus": "free/MiniMax-M3.1-Flash",
+  "sonnet": "free/MiniMax-M3.1-Flash",
+  "haiku": "free/MiniMax-M3.1-Flash"
 }

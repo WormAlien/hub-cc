@@ -29,7 +29,7 @@ function fixture() {
         return els.get(id);
     }
     const token = { id: 9, name: 'primary', mask: 'hidden-9', status: 1, unlimited: true, spentUsd: .000012, expires: -1, restricted: true, models: [model, alternate] };
-    const state = { ok: true, canWrite: true, account: { balanceUsd: 5.58, spentUsd: .42 }, tokens: [token, { ...token, id: 10, name: 'secondary', mask: 'hidden-10', models: [other] }],
+    const state = { ok: true, configured: true, connected: true, setupError: null, canWrite: true, account: { balanceUsd: 5.58, spentUsd: .42 }, tokens: [token, { ...token, id: 10, name: 'secondary', mask: 'hidden-10', models: [other] }],
         selectedTokenId: 9, models: [model, alternate], modelMap: { ...mapOf(model), gpt: 'server-only-gpt' },
         routesMap: { ...mapOf(model), default: 'independent-routes-default', gpt: 'server-only-gpt' }, active: false, prepared: true };
     const catalogs = new Map([[9, [model, alternate]], [10, [other]]]);
@@ -46,6 +46,10 @@ function fixture() {
             let d;
             if (handlers[name]) d = await handlers[name](call);
             else if (name === 'state') d = state;
+            else if (name === 'connect') {
+                state.configured = true; state.connected = true; state.setupError = null;
+                d = { ok: true, configured: true };
+            }
             else if (name === 'models') { const tokenId = Number(call.params.get('tokenId')); d = { ok: true, tokenId, models: catalogs.get(tokenId) || [] }; }
             else if (name === 'key') {
                 state.selectedTokenId = call.body.tokenId; state.models = catalogs.get(call.body.tokenId) || []; state.prepared = true;
@@ -67,6 +71,59 @@ function fixture() {
     return { el, calls, handlers, state, catalogs, window, tab, select, click, setMap, writes, copied, tabs };
 }
 (async () => {
+    await test('fresh install shows manual account setup and exact referral link', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.tokens = []; f.state.models = [];
+        await f.tab.load(); const html = f.el('a6api-root').innerHTML;
+        assert.match(html, /Подключение аккаунта a6api/);
+        assert.ok(html.includes('https://a6api.vip/?auth=register&amp;aff=9eKT'));
+        assert.ok(!html.includes('https://a6api.vip/console'), 'прямой вход не должен обходить реферальную ссылку');
+        const a6Links = [...html.matchAll(/href="(https:\/\/a6api\.vip[^"]*)"/g)].map(m => m[1]);
+        assert.ok(a6Links.length >= 2); assert.ok(a6Links.every(x => x === 'https://a6api.vip/?auth=register&amp;aff=9eKT'));
+        assert.match(html, /Настройки безопасности/); assert.match(html, /Системный токен доступа/);
+        assert.match(html, /type="password"/); assert.match(html, /ID пользователя/); assert.match(html, /sk-\.\.\./);
+        assert.equal(f.el('a6-controls').hidden, true);
+        assert.ok(!f.calls.some(c => c.name === 'models'));
+    });
+    await test('successful manual connection sends two fields, clears the secret and reloads controls', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.tokens = []; f.state.models = [];
+        await f.tab.load();
+        f.el('a6-panel-token').value = 'fixture-panel-token'; f.el('a6-user-id').value = '314';
+        await f.click('connect-account');
+        assert.deepEqual(f.writes().map(c => c.name), ['connect']);
+        assert.deepEqual(f.writes()[0].body, { panelToken: 'fixture-panel-token', userId: 314 });
+        assert.equal(f.el('a6-panel-token').value, ''); assert.equal(f.el('a6-controls').hidden, false);
+        assert.equal(f.state.connected, true);
+    });
+    await test('failed connection never repeats the token and leaves the setup editable', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.tokens = []; f.state.models = [];
+        const secret = 'fixture-secret-not-for-ui';
+        f.handlers.connect = () => ({ ok: false, error: 'Системный токен или ID пользователя не приняты a6api.' });
+        await f.tab.load(); f.el('a6-panel-token').value = secret; f.el('a6-user-id').value = '314';
+        await f.click('connect-account');
+        assert.equal(f.el('a6-panel-token').value, ''); assert.ok(!f.el('a6-error').textContent.includes(secret));
+        assert.equal(f.el('a6-connect-form').hidden, false); assert.equal(f.el('a6-controls').hidden, true);
+    });
+    await test('client-side validation clears a typed secret before showing the ID error', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.tokens = []; f.state.models = [];
+        await f.tab.load(); f.el('a6-panel-token').value = 'fixture-secret-invalid-id'; f.el('a6-user-id').value = '0';
+        await f.click('connect-account');
+        assert.equal(f.el('a6-panel-token').value, ''); assert.match(f.el('a6-error').textContent, /ID пользователя/);
+        assert.equal(f.writes().length, 0);
+    });
+    await test('connected setup is collapsed and changing data never pre-fills the old secret', async () => {
+        const f = fixture(); await f.tab.load();
+        assert.equal(f.el('a6-connect-panel').hidden, true); assert.equal(f.el('a6-controls').hidden, false);
+        await f.click('change-account');
+        assert.equal(f.el('a6-connect-panel').hidden, false); assert.equal(f.el('a6-connect-form').hidden, false); assert.equal(f.el('a6-panel-token').value, '');
+        await f.click('cancel-connect'); assert.equal(f.el('a6-connect-panel').hidden, true);
+        assert.equal(f.writes().length, 0);
+    });
+    await test('LAN clients can read setup instructions but cannot submit credentials', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.canWrite = false; f.state.tokens = []; f.state.models = [];
+        await f.tab.load(); f.el('a6-panel-token').value = 'fixture-panel-token'; f.el('a6-user-id').value = '314';
+        await f.click('connect-account'); assert.equal(f.writes().length, 0);
+        assert.equal(f.el('a6-connect').disabled, true); assert.equal(f.el('a6-local').hidden, false);
+    });
     await test('renders Claude Code controls instead of seller management', async () => {
         const f = fixture(); await f.tab.load(); const html = f.el('a6api-root').innerHTML;
         for (const text of ['Основное окно', 'Субагенты', 'Использовать ключ', 'Сохранить модели', 'Активировать для Claude Code', '/model a6api[1m]', 'Маршруты']) assert.ok(html.includes(text), text);
@@ -215,6 +272,18 @@ function fixture() {
     // 25.10: «кнопки тухнут сами». Дашборд дёргает вкладку раз в 15 с, а обычная
     // загрузка на время запроса ставила `locked()` - гасли все кнопки и селекты.
     // Тихий прогон обязан обновить цифры, ничего не заблокировав и не перечитав модели.
+    await test('background refresh on a fresh install never blocks setup fields', async () => {
+        const f = fixture(); f.state.configured = false; f.state.connected = false; f.state.tokens = []; f.state.models = [];
+        await f.tab.load(); const before = f.calls.length;
+        const pending = deferred(); f.handlers.state = () => pending.promise;
+        const tick = f.tab.load({ quiet: true });
+        try {
+            assert.equal(f.el('a6-panel-token').disabled, false);
+            assert.equal(f.el('a6-user-id').disabled, false);
+            assert.equal(f.el('a6-connect').disabled, false);
+        } finally { pending.resolve(clone(f.state)); await tick; }
+        assert.deepEqual(f.calls.slice(before).map(c => c.name), ['state']);
+    });
     await test('background refresh never blocks controls or reloads models', async () => {
         const f = fixture(); await f.tab.load();
         const before = f.calls.length;

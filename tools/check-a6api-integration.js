@@ -26,9 +26,14 @@ test('gateway is registered in backend, prefixes, alias and routes catalog', () 
     assert.ok(switchBlock.includes("target === 'a6api'") && switchBlock.includes('a6Routes.canWrite(req)'), 'generic switch must not bypass a6api write guard');
 });
 test('both model maps are present with independent defaults and shared tiers', () => {
-    for (const suffix of ['-modelmap.json', '-routes-modelmap.json']) {
-        const map = JSON.parse(fs.readFileSync(path.join(root, 'routing/a6api' + suffix), 'utf8'));
-        for (const k of ['default', 'opus', 'sonnet', 'haiku']) assert.equal(map[k], 'deepseek-v4.1-flash-1017');
+    const active = JSON.parse(fs.readFileSync(path.join(root, 'routing/a6api-modelmap.json'), 'utf8'));
+    const routes = JSON.parse(fs.readFileSync(path.join(root, 'routing/a6api-routes-modelmap.json'), 'utf8'));
+    assert.equal(active.default, 'glm-5.3-flash');
+    assert.equal(routes.default, 'deepseek-v4.1-flash-1017');
+    assert.notEqual(active.default, routes.default);
+    for (const tier of ['opus', 'sonnet', 'haiku']) {
+        assert.equal(active[tier], 'deepseek-v4.1-flash-1017');
+        assert.equal(routes[tier], active[tier]);
     }
 });
 test('a6api activation uses the existing settings writer and preserves unrelated config', () => {

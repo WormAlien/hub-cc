@@ -52,11 +52,16 @@ function mapModel(claudeModel) {
     // иначе claude-opus-4-6-thinking[1m] с пустой картой уезжает апстриму как есть
     // и тот отвечает model_not_found. Суффикс режут прокси — канон 1M-context-pin.
     const original = String(claudeModel || '').replace(/\[1m\]$/, '');
-    const m = original.toLowerCase(), passthrough = STRICT_TOOLS_VISION ? original : m;
-    if (m.includes('opus')) return MODEL_MAP.opus || passthrough;
-    if (m.includes('sonnet')) return MODEL_MAP.sonnet || passthrough;
-    if (m.includes('haiku')) return MODEL_MAP.haiku || passthrough;
-    return passthrough;
+    const m = original.toLowerCase();
+    // Тир сматчился → цель из карты (она уже в регистре площадки). НЕ сматчился →
+    // это замапленная выше цель (keepalive отдаёт `free/MiniMax-M3.1-Flash`) или
+    // прямой прогон: понижать регистр нельзя, площадки бывают регистрозависимы
+    // (myapi.buzz: «Модель free/minimax-m3.1-flash не найдена», владелец 04.11).
+    // STRICT_TOOLS_VISION и раньше шёл оригинал - сохраняем контракт.
+    if (m.includes('opus')) return MODEL_MAP.opus || original;
+    if (m.includes('sonnet')) return MODEL_MAP.sonnet || original;
+    if (m.includes('haiku')) return MODEL_MAP.haiku || original;
+    return original;
 }
 
 function resolveKey(req) {

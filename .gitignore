@@ -1,6 +1,9 @@
 # Node modules
 node_modules/
 
+# Root-level probe payloads and downloaded responses are local working artefacts.
+/_tmp-*.json
+
 # Логи и данные
 logs/
 output/
@@ -440,6 +443,7 @@ routing/kktoken-sessions.json
 routing/apinex-sessions.json
 routing/kvotum-sessions.json
 routing/threerouter-sessions.json
+routing/threerouter-sessions.json.lock
 # ThreeRouter: профили и снимки браузера (куки, localStorage, тысячи файлов кеша).
 threerouter/profiles/
 threerouter/sessions/

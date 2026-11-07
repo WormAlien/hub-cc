@@ -1,5 +1,5 @@
 {
-  "opus": "glm-5.3-flash",
-  "sonnet": "glm-5.3-flash",
-  "haiku": "glm-5.3-flash"
+  "opus": "deepseek-v4.1-flash",
+  "sonnet": "deepseek-v4.1-flash",
+  "haiku": "deepseek-v4.1-flash"
 }

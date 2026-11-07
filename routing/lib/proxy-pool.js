@@ -717,12 +717,22 @@ const HEALTH = new Map();   // `${proxyId}|${host}|${path}` → { ok, error, at,
 
 // `path` необязателен и по умолчанию прежний — соседние вкладки (New API: aikeysapi,
 // agentrouter) ничего не замечают. Нужен он движкам, где `/api/status` не существует.
+// Явный предикат актуальности нужен обоим читателям кеша: `health()` не переиспользует
+// протухший вердикт, и `deadProxiesFor()` тоже не должен исключать адрес навсегда.
+// Живой случай 01.11: CH оставался `dead` 12,5 часа при TTL 10 минут, хотя снова работал;
+// ротация жгла единственный NL и затем врала «все адреса в отстое».
+function healthRecordCurrent(rec, ttlMs = config().preflightTtlMs, now = Date.now()) {
+    const ttl = Number(ttlMs);
+    const at = rec && Number(rec.at);
+    return Number.isFinite(ttl) && ttl > 0 && Number.isFinite(at) && at > 0 && (now - at) < ttl;
+}
+
 async function health(proxy, host, { ttlMs = null, force = false, path: urlPath = DEFAULT_PREFLIGHT_PATH } = {}) {
     const ttl = ttlMs == null ? config().preflightTtlMs : ttlMs;
     if (ttl === 0) return { ok: true, skipped: true };      // проверка выключена настройкой
     const key = `${proxy.id}|${host}|${urlPath}`;
     const hit = HEALTH.get(key);
-    if (!force && hit && (Date.now() - hit.at) < ttl) return { ...hit, cached: true };
+    if (!force && healthRecordCurrent(hit, ttl)) return { ...hit, cached: true };
     const r = await preflight(proxy, { host, path: urlPath });
     const rec = { ok: r.ok, error: r.error || null, status: r.status, ms: r.ms, at: Date.now() };
     HEALTH.set(key, rec);
@@ -862,10 +872,15 @@ function ledgerSnapshot() {
 // достучавшийся до панели, работать через себя не даст ни на каком пути.
 function healthCacheGet(proxyId = '', host = '') {
     const prefix = `${proxyId}|${host}|`;
+    const ttl = config().preflightTtlMs;
     let any = null;
     for (const [k, v] of HEALTH) {
         if (!k.startsWith(prefix)) continue;
-        if (v && v.ok === false) return v;   // провал важнее: он и решает
+        if (!healthRecordCurrent(v, ttl)) {
+            HEALTH.delete(k);
+            continue;
+        }
+        if (v && v.ok === false) return v;   // свежий провал важнее: он и решает
         any = any || v;
     }
     return any;
@@ -1725,7 +1740,7 @@ module.exports = {
     capacity, liveProxiesFor, assignedForHost, mergeOwnList,
     // сеть
     tunnel, tunnelKind, httpTunnel, socksTunnel, agentFor, fetchVia,
-    preflight, preflightVerdict, health, forgetHealth, healthCacheGet, healthSnapshot,
+    preflight, preflightVerdict, health, healthRecordCurrent, forgetHealth, healthCacheGet, healthSnapshot,
     // липкость
     stickyKey, forAccount, assignments, assignmentFor, release, reassign, leastLoaded,
     // счётчик и отстой адреса (ротация под перелогины)

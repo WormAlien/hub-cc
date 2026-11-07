@@ -649,6 +649,11 @@ front-door отдельно сохраняет суффикс по `preserveGpt5
 Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить модели» и «Активировать» - разные
 явные операции. Управление продавцами и создание ключей остаются в кабинете a6api.
 
+На свежей установке вкладка сама показывает ручное подключение аккаунта: системный токен
+кабинета и числовой user ID, без автоматизации браузера. Ссылка регистрации и входа ведёт
+через реферал владельца `https://a6api.vip/?auth=register&aff=9eKT`. Данные проверяются через
+`/api/user/self` до локальной durable-записи; модельный `sk-...` в эту форму не подходит.
+
 - Публичные адреса после миграции 29.10.2026: сайт `https://a6api.vip`, API
   `https://api.a6api.vip`, OpenAI base URL `https://api.a6api.vip/v1`. Старые домены
   `a6api.com` и `api.a6api.com` в коде дашборда не используются; это сторожит
@@ -659,8 +664,9 @@ Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить
 - `routing/lib/a6api-gateway.js`: локальная подготовка ключа, проверка разрешённых моделей,
   интеграция со штатными `writeSettings`, `writeTierMap`, `writeBackendsRegistry`.
 - `routing/lib/a6api-routes.js`: GET `/__switch/api/a6api/state` и `/models?tokenId=...`;
-  POST `/key`, `/modelmap`, `/activate`. Старые `/route`, `/enable-model`, `/reveal`,
-  `/reviews` и `/logs` удалены из HTTP-интерфейса. Записи только loopback + Origin/JSON guard.
+  POST `/connect`, `/key`, `/modelmap`, `/activate`. `/connect` принимает только системный
+  токен кабинета + user ID, проверяет их до записи; все записи только loopback + Origin/JSON guard.
+  Старые `/route`, `/enable-model`, `/reveal`, `/reviews` и `/logs` удалены из HTTP-интерфейса.
 - `a6api-modelmap.json` и `a6api-routes-modelmap.json`: активный и префиксный пути.
   Opus/Sonnet/Haiku зеркалируются штатным механизмом; default у каждого пути свой.
 - `/model a6api[1m]` использует общий Front Door, зарегистрированные префиксы и каталоги
@@ -674,8 +680,10 @@ Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить
   сохраняют прежнее поведение. `count_tokens` остаётся локальной оценкой.
 - `PAID_SINGLE_KEY=1`: одна upstream-попытка, без хеджей, авторотации, автофолбэка модели
   и отдельного vision-моста. Опустевший баланс не лечится перебором ключей одного аккаунта.
-- Секреты: `~/.secrets/a6api.token`, `a6api-config.json` (`userId`), `a6api-gateway.json`
-  (выбранный ID и хеш), `a6api-active-key.txt`. Runtime-конфиги и логи тоже в `.secrets`.
+- Секреты новой установки: `~/.secrets/a6api-config.json` (`userId`, `panelToken`),
+  `a6api-gateway.json` (выбранный ID и хеш), `a6api-active-key.txt`. Старый формат
+  `a6api.token` + `a6api-config.json` только с `userId` продолжает читаться. Runtime-конфиги
+  и логи тоже в `.secrets`.
 - Подъём ленивый, существующие порты проверяются по HTTP. Зарегистрирован в lifecycle,
   Health и fallback `keepalive-restart.ps1 -Port 20191`; чужой слушатель не убивается
   собственной процедурой a6api. Настройки/чтение UI сами не запускают шлюз.

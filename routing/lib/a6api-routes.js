@@ -25,6 +25,15 @@ function json(res, status, data) {
     res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(JSON.stringify(data));
 }
+function publicErrorMessage(e) {
+    const setup = {
+        panel_token_invalid: 'Введите системный токен кабинета a6api',
+        invalid_id: 'Некорректный ID пользователя',
+        credentials_rejected: 'Системный токен или ID пользователя не приняты a6api.',
+        account_mismatch: 'ID пользователя не совпадает с владельцем системного токена',
+    };
+    return setup[e?.code] || (e instanceof ApiError ? e.message : 'Не удалось выполнить запрос a6api');
+}
 function readBody(req) {
     return new Promise((resolve, reject) => {
         const chunks = []; let size = 0, overflow = false;
@@ -84,7 +93,7 @@ function createRoutes({ gateway = require('./a6api-gateway').createGateway(), se
     async function dispatch(req, res, url) {
         const action = url.pathname.slice(PREFIX.length);
         if (req.method === 'GET') {
-            if (['key', 'modelmap', 'activate'].includes(action)) return json(res, 405, { error: 'Нужен явный POST' });
+            if (['connect', 'key', 'modelmap', 'activate'].includes(action)) return json(res, 405, { error: 'Нужен явный POST' });
             if (action === 'state') return json(res, 200, { ok: true, ...await gateway.state(), canWrite: canWrite(req) });
             if (action === 'balance') {
                 // Статусбар живёт доли секунды: с `nudge=1` отвечаем сразу, а чтение
@@ -104,8 +113,10 @@ function createRoutes({ gateway = require('./a6api-gateway').createGateway(), se
         if (req.method !== 'POST') return json(res, 405, { error: 'Метод не разрешён' });
         if (!canWrite(req)) return json(res, 403, { error: 'Управление Claude Code доступно только через localhost на этой машине', code: 'local_only' });
         if (!/^application\/json(?:;|$)/i.test(String(req.headers['content-type'] || ''))) return json(res, 415, { error: 'Нужен Content-Type application/json' });
-        if (!['key', 'modelmap', 'activate'].includes(action)) return json(res, 404, { error: 'Ручка a6api не найдена' });
-        const body = await readBody(req), tokenId = idOf(body.tokenId);
+        if (!['connect', 'key', 'modelmap', 'activate'].includes(action)) return json(res, 404, { error: 'Ручка a6api не найдена' });
+        const body = await readBody(req);
+        if (action === 'connect') return json(res, 200, await gateway.connect({ panelToken: body.panelToken, userId: body.userId }));
+        const tokenId = idOf(body.tokenId);
         if (action === 'key') return json(res, 200, await gateway.selectKey(tokenId));
         if (action === 'modelmap') return json(res, 200, await gateway.saveModels(tokenId, body.modelMap));
         return json(res, 200, await gateway.activate(tokenId));
@@ -114,7 +125,7 @@ function createRoutes({ gateway = require('./a6api-gateway').createGateway(), se
         let url; try { url = new URL(req.url, 'http://localhost'); } catch { return false; }
         if (!url.pathname.startsWith(PREFIX)) return false;
         dispatch(req, res, url).catch(e => json(res, e instanceof ApiError ? e.status : 500, {
-            ok: false, code: e instanceof ApiError ? e.code : 'a6api_error', error: e instanceof ApiError ? e.message : 'Не удалось выполнить запрос a6api',
+            ok: false, code: e instanceof ApiError ? e.code : 'a6api_error', error: publicErrorMessage(e),
             writeAccepted: e.writeAccepted === true,
         }));
         return true;

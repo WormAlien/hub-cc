@@ -55,6 +55,121 @@ function fixture(createGateway) {
     await test('local gateway module exists', () => assert.ok(fs.existsSync(file), 'a6api-gateway.js is missing'));
     if (!fs.existsSync(file)) return;
     const { createGateway, buildRuntimeConfig } = require(file);
+    const { ApiError } = require(path.join(root, 'routing/lib/a6api-api.js'));
+    await test('account connection verifies identity before durable local storage', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-connect-ok-'));
+        const calls = [];
+        try {
+            fs.writeFileSync(path.join(dir, 'a6api-active-key.txt'), 'sk-old-account-key');
+            fs.writeFileSync(path.join(dir, 'a6api-gateway.json'), JSON.stringify({ tokenId: 9, keyHash: 'old' }));
+            const gateway = createGateway({ secretDir: dir, routingDir: dir,
+                api: { state: async () => ({ account: {}, tokens: [], models: [] }) },
+                clientFactory: options => {
+                    assert.equal(options.token, 'fixture-panel-token'); assert.equal(options.userId, 314);
+                    return { request: async p => { calls.push(p); return { id: 314, username: 'friend' }; } };
+                } });
+            const result = await gateway.connect({ panelToken: '  fixture-panel-token  ', userId: '314' });
+            assert.deepEqual(result, { ok: true, configured: true });
+            assert.deepEqual(calls, ['/api/user/self']);
+            assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'a6api-config.json'), 'utf8')),
+                { userId: 314, panelToken: 'fixture-panel-token' });
+            assert.equal(fs.readFileSync(path.join(dir, 'a6api-active-key.txt'), 'utf8').trim(), '');
+            assert.equal(gateway.readSelection(), null);
+            assert.ok(!JSON.stringify(result).includes('fixture-panel-token'));
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+    await test('credential write failure cannot leave the previous model key prepared for a new account', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-connect-disk-fail-'));
+        const durable = require(path.join(root, 'routing/lib/durable-write.js'));
+        const originalWriteJson = durable.writeJsonSync;
+        try {
+            fs.writeFileSync(path.join(dir, 'a6api-config.json'), JSON.stringify({ userId: 7, panelToken: 'old-token' }) + '\n');
+            fs.writeFileSync(path.join(dir, 'a6api-active-key.txt'), 'sk-old-account-key\n');
+            fs.writeFileSync(path.join(dir, 'a6api-gateway.json'), JSON.stringify({ tokenId: 9, keyHash: 'old' }) + '\n');
+            durable.writeJsonSync = (target, value) => {
+                if (target === path.join(dir, 'a6api-config.json')) throw Object.assign(new Error('fixture disk failure'), { code: 'EIO' });
+                return originalWriteJson(target, value);
+            };
+            const gateway = createGateway({ secretDir: dir, routingDir: dir,
+                api: { state: async () => ({ account: {}, tokens: [], models: [] }) },
+                clientFactory: () => ({ request: async () => ({ id: 314 }) }) });
+            await assert.rejects(gateway.connect({ panelToken: 'new-token', userId: 314 }), /fixture disk failure/);
+            assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'a6api-config.json'), 'utf8')), { userId: 7, panelToken: 'old-token' });
+            assert.equal(gateway.readSelection(), null);
+            assert.equal(fs.readFileSync(path.join(dir, 'a6api-active-key.txt'), 'utf8').trim(), '');
+        } finally {
+            durable.writeJsonSync = originalWriteJson;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+    await test('invalid account credentials never change files or reach unrelated endpoints', async () => {
+        const cases = [
+            { input: { panelToken: '', userId: 314 }, code: 'panel_token_invalid' },
+            { input: { panelToken: 'bad\nheader', userId: 314 }, code: 'panel_token_invalid' },
+            { input: { panelToken: 'x'.repeat(8193), userId: 314 }, code: 'panel_token_invalid' },
+            { input: { panelToken: 'fixture-secret', userId: 0 }, code: 'invalid_id' },
+        ];
+        for (const c of cases) {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-connect-invalid-')); let calls = 0;
+            try {
+                const gateway = createGateway({ secretDir: dir, routingDir: dir,
+                    api: { state: async () => ({ account: {}, tokens: [], models: [] }) },
+                    clientFactory: () => { calls++; return { request: async () => ({ id: 314 }) }; } });
+                await assert.rejects(gateway.connect(c.input), e => e.code === c.code && !e.message.includes('fixture-secret'));
+                assert.equal(calls, 0); assert.deepEqual(fs.readdirSync(dir), []);
+            } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+        }
+    });
+    await test('rejected or mismatched panel identity leaves the previous local state untouched', async () => {
+        for (const mode of ['mismatch', 'unauthorized']) {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-connect-reject-'));
+            const old = JSON.stringify({ userId: 7, panelToken: 'old-token' }) + '\n';
+            try {
+                fs.writeFileSync(path.join(dir, 'a6api-config.json'), old);
+                const gateway = createGateway({ secretDir: dir, routingDir: dir,
+                    api: { state: async () => ({ account: {}, tokens: [], models: [] }) },
+                    clientFactory: () => ({ request: async p => {
+                        assert.equal(p, '/api/user/self');
+                        if (mode === 'unauthorized') throw new ApiError('upstream_http', 'a6api: HTTP 401', 401, 401);
+                        return { id: 999 };
+                    } }) });
+                await assert.rejects(gateway.connect({ panelToken: 'new-secret-token', userId: 314 }), e => {
+                    assert.ok(['account_mismatch', 'credentials_rejected'].includes(e.code));
+                    return !e.message.includes('new-secret-token');
+                });
+                assert.equal(fs.readFileSync(path.join(dir, 'a6api-config.json'), 'utf8'), old);
+                assert.deepEqual(fs.readdirSync(dir), ['a6api-config.json']);
+            } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+        }
+    });
+    await test('state distinguishes a fresh install from saved but disconnected credentials', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-setup-state-'));
+        try {
+            const missing = createGateway({ secretDir: dir, routingDir: dir,
+                api: { state: async () => { throw new ApiError('panel_token_missing', 'missing', 503); } } });
+            let state = await missing.state();
+            assert.equal(state.configured, false); assert.equal(state.connected, false);
+            assert.deepEqual(state.tokens, []); assert.ok(!JSON.stringify(state).includes('missing'));
+            fs.writeFileSync(path.join(dir, 'a6api-config.json'), JSON.stringify({ userId: 314, panelToken: 'saved-secret' }));
+            const rejected = createGateway({ secretDir: dir, routingDir: dir,
+                api: { state: async () => { throw new ApiError('upstream_http', 'saved-secret', 401, 401); } } });
+            state = await rejected.state();
+            assert.equal(state.configured, true); assert.equal(state.connected, false);
+            assert.match(state.setupError, /токен|ID/i); assert.ok(!JSON.stringify(state).includes('saved-secret'));
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+    await test('legacy split credentials are still recognized as configured when the panel rejects them', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-legacy-state-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'a6api-config.json'), JSON.stringify({ userId: 314 }));
+            fs.writeFileSync(path.join(dir, 'a6api.token'), 'legacy-panel-token\n');
+            const gateway = createGateway({ secretDir: dir, routingDir: dir,
+                api: { state: async () => { throw new ApiError('upstream_http', 'legacy-panel-token', 401, 401); } } });
+            const state = await gateway.state();
+            assert.equal(state.configured, true); assert.equal(state.connected, false);
+            assert.ok(!JSON.stringify(state).includes('legacy-panel-token'));
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
     await test('reading state caches only the non-secret account balance for the statusline', async () => {
         const f = fixture(createGateway); try {
             const s = await f.gateway.state();
@@ -158,7 +273,10 @@ function fixture(createGateway) {
         for (const [rel, source] of Object.entries(sources)) assert.doesNotMatch(source, OLD_ORIGINS, rel + ' still uses an old a6api domain');
         assert.match(sources['routing/lib/a6api-api.js'], new RegExp(`const ORIGIN = '${API_ORIGIN.replaceAll('.', '\\.')}'`));
         assert.match(sources['routing/lib/a6api-probe.js'], new RegExp(`${API_ORIGIN.replaceAll('.', '\\.')}\\/v1\\/chat\\/completions`));
-        assert.match(sources['routing/vendor/a6api-tab.js'], new RegExp(`${WEB_ORIGIN.replaceAll('.', '\\.')}\\/console`));
+        const tab = sources['routing/vendor/a6api-tab.js'];
+        assert.doesNotMatch(tab, /https:\/\/a6api\.vip\/console/);
+        assert.equal((tab.match(/https:\/\/a6api\.vip\/\?auth=register&amp;aff=9eKT/g) || []).length, 2,
+            'both a6api site links must use the owner referral');
         for (const rel of ['tools/probe-pro-full.js', 'tools/probe-pro-vision.js']) assert.match(sources[rel], /hostname: 'api\.a6api\.vip'/, rel + ' does not use the new API hostname');
     });
     await test('new runtime is isolated, private, non-rotating and single-attempt', () => {

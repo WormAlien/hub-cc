@@ -306,6 +306,28 @@ const ENV = {
             'в привязке теперь скраперный адрес');
     });
 
+    // ── 12. протухший health-отказ больше не исключает адрес навсегда ──
+    // Живой случай 01.11: CH лежал в кеше мёртвым 12,5 часа при TTL 10 минут, поэтому
+    // ротация видела три «мёртвых» адреса, жгла один NL и затем врала «все в отстое».
+    console.log('\n12. протухший health-отказ перестаёт влиять после TTL');
+    {
+        const now = Date.parse('2026-11-01T08:00:00.000Z');
+        check(typeof PROXY.healthRecordCurrent === 'function',
+            'есть единый предикат актуальности health-записи');
+        if (typeof PROXY.healthRecordCurrent === 'function') {
+            check(PROXY.healthRecordCurrent({ ok: false, at: now - 9 * 60_000 }, 10 * 60_000, now) === true,
+                'свежий отрицательный вердикт ещё исключает адрес');
+            check(PROXY.healthRecordCurrent({ ok: false, at: now - 11 * 60_000 }, 10 * 60_000, now) === false,
+                'отрицательный вердикт старше TTL уже не исключает адрес');
+            check(PROXY.healthRecordCurrent({ ok: false, at: now - 1000 }, 0, now) === false,
+                'TTL 0 отключает влияние health-кеша');
+        }
+        const src = fs.readFileSync(path.join(ROOT, 'routing', 'lib', 'proxy-pool.js'), 'utf8');
+        const body = src.slice(src.indexOf('function healthCacheGet('), src.indexOf('function healthSnapshot('));
+        check(/healthRecordCurrent\(/.test(body),
+            'deadProxiesFor получает только актуальные записи через healthCacheGet');
+    }
+
     console.log(fail ? `\nПРОВАЛОВ: ${fail}` : '\nвсе проверки прошли');
     process.exit(fail ? 1 : 0);
 })();

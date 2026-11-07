@@ -35,6 +35,39 @@ const listing = (id = 6038, model = MODEL) => ({ channel_id: id, listing_id: id 
             await api.models(); assert.equal(calls, 1);
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
     });
+    await test('panel token and user ID may live together in the private config', async () => {
+        const os = require('node:os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-account-config-'));
+        let calls = 0;
+        try {
+            fs.writeFileSync(path.join(dir, 'a6api-config.json'), JSON.stringify({ userId: 314, panelToken: 'fixture-config-token' }));
+            const api = createClient({ secretDir: dir, fetchImpl: async (_, opts) => {
+                calls++; assert.equal(opts.headers.Authorization, 'Bearer fixture-config-token');
+                assert.equal(opts.headers['New-Api-User'], '314'); return response([]);
+            } });
+            await api.models(); assert.equal(calls, 1);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+    await test('legacy token file remains compatible when config has only user ID', async () => {
+        const os = require('node:os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-account-legacy-'));
+        try {
+            fs.writeFileSync(path.join(dir, 'a6api-config.json'), JSON.stringify({ userId: 271 }));
+            fs.writeFileSync(path.join(dir, 'a6api.token'), '# local\nfixture-legacy-token\n');
+            const api = createClient({ secretDir: dir, fetchImpl: async (_, opts) => {
+                assert.equal(opts.headers.Authorization, 'Bearer fixture-legacy-token');
+                assert.equal(opts.headers['New-Api-User'], '271'); return response([]);
+            } });
+            await api.models();
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+    await test('missing both private credential formats fails before transport', async () => {
+        const os = require('node:os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-account-empty-'));
+        let calls = 0;
+        try {
+            const api = createClient({ secretDir: dir, fetchImpl: async () => { calls++; return response([]); } });
+            await assert.rejects(api.models(), e => e.code === 'panel_token_missing' && e.status === 503);
+            assert.equal(calls, 0);
+        } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
     await test('missing private account config fails before transport', async () => {
         const os = require('node:os'), dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-user-missing-'));
         let calls = 0;

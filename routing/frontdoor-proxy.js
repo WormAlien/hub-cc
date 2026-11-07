@@ -520,7 +520,7 @@ function routeByModel(method, body, reg) {
     // Явный `/provider/model` - это выбор окна, запоминаем его для будущих агентов.
     // Это не меняет active-backend и не смешивает соседние окна: ключом служит session_id.
     rememberSessionRoute(j, state);
-    const model = j.model.slice(slash + 1);
+    const model = j.model.slice(slash + 1).trim();
     if (!model) return null;                           // `aipm/` без модели
     return {
         state,
@@ -968,6 +968,7 @@ if (process.argv[2] === 'selftest') {
     assert.strictEqual(JSON.parse(rb('aipm/claude-opus-4-6').body).max_tokens, 1, 'остальное тело сохранено');
     assert.strictEqual(rb('ap/claude-opus-4-6').state.backend, 'aipm', 'алиас резолвится');
     assert.strictEqual(rb('AIPM/claude-opus-4-6').state.backend, 'aipm', 'регистр имени провайдера не важен');
+    assert.strictEqual(rb('aipm/ claude-opus-4-6').to, 'claude-opus-4-6', 'пробел после provider/ не становится частью model id');
     assert.strictEqual(rb('anthropic/claude-opus-4-8'), null, 'чужой префикс не трогаем и не гадаем');
     assert.strictEqual(rb('openai/gpt-4o'), null, 'легитимное имя с / у кастом-провайдера — тоже мимо');
     assert.strictEqual(rb('claude-opus-5[1m]'), null, 'без префикса — глобальный бэкенд');

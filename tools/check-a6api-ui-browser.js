@@ -25,7 +25,7 @@ const fixture = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><met
 <style>body{margin:0;background:var(--color-bg);font-family:var(--font-sans)} [data-tab-content]{display:block}</style>
 </head><body>${tabMarkup}<div id="routes-box" hidden></div>${uiScript}</body></html>`;
 const token = { id: 9, name: 'Основной', mask: 'hidden-9', status: 1, unlimited: true, spentUsd: .000012, expires: -1, restricted: true, models: [model, alternate] };
-const state = { ok: true, canWrite: true, account: { balanceUsd: 5.58, spentUsd: .42 }, tokens: [token,
+const state = { ok: true, configured: true, connected: true, setupError: null, canWrite: true, account: { balanceUsd: 5.58, spentUsd: .42 }, tokens: [token,
     { ...token, id: 10, name: 'Дополнительный <img src=x>', mask: 'hidden-10', models: [other], unlimited: false, remainingUsd: 1 }],
     selectedTokenId: 9, models: [model, alternate], modelMap: { ...mapOf(model), gpt: 'server-owned' },
     routesMap: { ...mapOf(model), default: 'independent-routes-default', gpt: 'server-owned' }, prepared: true, active: false };
@@ -53,6 +53,10 @@ let scenarios = 0, layouts = 0;
                 requests.push(call);
                 let result;
                 if (name === 'state' && call.method === 'GET') result = state;
+                else if (name === 'connect' && call.method === 'POST') {
+                    state.configured = true; state.connected = true; state.setupError = null;
+                    result = { ok: true, configured: true };
+                }
                 else if (name === 'models' && call.method === 'GET') result = failModels ? { ok: false, error: 'fixture-models-failed' } : { ok: true, tokenId: call.tokenId, models: catalogs.get(call.tokenId) || [] };
                 else if (name === 'key' && call.method === 'POST') {
                     state.selectedTokenId = call.body.tokenId; state.prepared = true; state.models = catalogs.get(call.body.tokenId) || [];
@@ -97,6 +101,40 @@ let scenarios = 0, layouts = 0;
         assert.match(await page.locator('#a6-key-info').innerText(), /\$0\.000012/);
         assert.equal(await page.locator('#a6-model-default').inputValue(), model);
         scenarios++;
+        state.configured = false; state.connected = false;
+        await page.evaluate(() => window.A6API.load());
+        assert.equal(await page.locator('#a6-controls').isHidden(), true);
+        assert.equal(await page.locator('#a6-connect-form').isVisible(), true);
+        assert.equal(await page.locator('#a6-connect-panel a').getAttribute('href'), 'https://a6api.vip/?auth=register&aff=9eKT');
+        assert.match(await page.locator('.a6-connect-help').innerText(), /Настройки безопасности/);
+        assert.match(await page.locator('.a6-connect-help').innerText(), /Системный токен доступа/);
+        assert.match(await page.locator('.a6-connect-help').innerText(), /sk-\.\.\./);
+        for (const themeId of ['zen', 'daylight']) {
+            await page.evaluate(id => applyTheme(id, false), themeId);
+            for (const width of [1365, 390]) {
+                await page.setViewportSize({ width, height: 900 });
+                const setupLayout = await page.evaluate(() => ({
+                    overflow: document.documentElement.scrollWidth - innerWidth,
+                    panel: document.getElementById('a6-connect-panel').getBoundingClientRect().toJSON(),
+                    fields: [...document.querySelectorAll('.a6-connect-fields input')].map(x => x.getBoundingClientRect().toJSON()),
+                }));
+                assert.ok(setupLayout.overflow <= 1, `${themeId}/${width}: setup page overflow ${setupLayout.overflow}`);
+                assert.ok(setupLayout.panel.left >= -1 && setupLayout.panel.right <= width + 1, `${themeId}/${width}: setup panel overflow`);
+                assert.ok(setupLayout.fields.every(x => x.left >= setupLayout.panel.left && x.right <= setupLayout.panel.right), `${themeId}/${width}: setup field overflow`);
+                await page.screenshot({ path: path.join(out, `setup-${themeId}-${width}.png`), fullPage: true });
+            }
+        }
+        await page.setViewportSize({ width: 1365, height: 900 });
+        await page.locator('#a6-panel-token').fill('fixture-panel-token');
+        await page.locator('#a6-user-id').fill('314');
+        await page.locator('#a6-connect').click();
+        await page.waitForFunction(() => !document.getElementById('a6-controls').hidden);
+        const connect = requests.find(r => r.name === 'connect');
+        assert.deepEqual(connect.body, { panelToken: 'fixture-panel-token', userId: 314 });
+        assert.equal(await page.locator('#a6-panel-token').inputValue(), '');
+        assert.ok(!(await page.locator('body').innerText()).includes('fixture-panel-token'));
+        requests.length = 0;
+        scenarios++;
         await page.locator('#a6-model-default').selectOption(alternate);
         await page.locator('#a6-model-haiku').selectOption(alternate);
         await page.locator('#a6-refresh').click();
@@ -125,7 +163,7 @@ let scenarios = 0, layouts = 0;
                 assert.ok(layout.mainHeight > layout.tierHeight && layout.mainFont > layout.tierFont, `${themeId}/${width}: main-window hierarchy missing`);
                 assert.ok(layout.mainBottom < layout.tiersTop, `${themeId}/${width}: subagents must be below main window`);
                 assert.equal(layout.scheme, themeId === 'daylight' ? 'light' : 'dark'); assert.notEqual(layout.panelBg, 'rgba(0, 0, 0, 0)');
-                if (width === 1365) assert.ok(layout.totalHeight < 850, 'desktop control surface is not compact');
+                if (width === 1365) assert.ok(layout.totalHeight < 850, `${themeId}/${width}: desktop control surface is ${layout.totalHeight}px`);
                 if (width === 1365 || width === 390) await page.screenshot({ path: path.join(out, `${themeId}-${width}.png`), fullPage: true });
                 layouts++;
             }

@@ -35,15 +35,33 @@ function buildRuntimeConfig({ secretDir = SECRET_DIR, routingDir = ROUTING, port
         },
     };
 }
-function createGateway({ api = createClient(), secretDir = SECRET_DIR, routingDir = ROUTING, hub: initialHub = {}, fetchImpl = globalThis.fetch } = {}) {
+function createGateway({ api = createClient(), clientFactory = createClient, secretDir = SECRET_DIR, routingDir = ROUTING, hub: initialHub = {}, fetchImpl = globalThis.fetch } = {}) {
+    const configFile = path.join(secretDir, 'a6api-config.json');
     const selectionFile = path.join(secretDir, 'a6api-gateway.json');
     const keyFile = path.join(secretDir, 'a6api-active-key.txt');
     const runtime = buildRuntimeConfig({ secretDir, routingDir });
     let hub = initialHub, busy = false, preparing = null;
     function setHub(next) { hub = { ...hub, ...next }; }
+    function hasSavedConfig() {
+        try {
+            const config = JSON.parse(durable.assertNotZeroed(fs.readFileSync(configFile, 'utf8').replace(/^﻿/, ''), 'a6api'));
+            if (!Number.isSafeInteger(Number(config?.userId)) || Number(config.userId) < 1) return false;
+            if (typeof config?.panelToken === 'string' && !!config.panelToken.trim()) return true;
+            const legacy = fs.readFileSync(path.join(secretDir, 'a6api.token'), 'utf8').replace(/^﻿/, '');
+            return legacy.split(/\r?\n/).some(line => line.trim() && !line.trim().startsWith('#'));
+        } catch { return false; }
+    }
+    function emptyState({ configured = hasSavedConfig(), setupError = null } = {}) {
+        return {
+            configured, connected: false, setupError, account: { balanceUsd: null, spentUsd: null },
+            tokens: [], models: [], selectedTokenId: null, prepared: false, active: !!hub.isActive?.(),
+            modelMap: readMap(), routesMap: readMap(true),
+        };
+    }
     function readSelection() {
         try {
             const s = JSON.parse(durable.assertNotZeroed(fs.readFileSync(selectionFile, 'utf8').replace(/^﻿/, ''), 'a6api'));
+            if (s?.reset === true) return null;
             if (!s || !Number.isSafeInteger(s.tokenId) || s.tokenId < 1 || typeof s.keyHash !== 'string') throw new Error();
             return s;
         } catch (e) {
@@ -96,13 +114,43 @@ function createGateway({ api = createClient(), secretDir = SECRET_DIR, routingDi
         busy = true; try { return await fn(); } finally { busy = false; }
     }
     async function state() {
-        const s = readSelection(), p = await api.state();
+        const s = readSelection(); let p;
+        try { p = await api.state(); }
+        catch (e) {
+            if (['panel_token_missing', 'panel_config_missing', 'panel_config_invalid'].includes(e?.code)) return emptyState({ configured: false });
+            if (hasSavedConfig()) {
+                const rejected = e?.status === 401 || e?.upstreamStatus === 401;
+                return emptyState({ configured: true,
+                    setupError: rejected ? 'Системный токен или ID пользователя не приняты a6api.' : 'Не удалось проверить сохранённый аккаунт a6api. Повторите позже или измените данные.' });
+            }
+            throw e;
+        }
         cacheBalance(p);
         const t = s && p.tokens.find(t => Number(t.id) === s.tokenId);
         const usable = t && Number(t.status) === 1 && !(Number(t.expires) > 0 && t.expires <= Date.now() / 1000);
         const allowed = t ? textOnly(p.models).filter(m => !t.restricted || t.models.includes(m)) : [];
-        return { ...p, models: allowed, selectedTokenId: s ? s.tokenId : null,
+        return { ...p, configured: true, connected: true, setupError: null, models: allowed, selectedTokenId: s ? s.tokenId : null,
             prepared: !!usable && prepared(s), active: !!hub.isActive?.(), modelMap: readMap(), routesMap: readMap(true) };
+    }
+    async function connect({ panelToken, userId } = {}) {
+        return exclusive(async () => {
+            const token = typeof panelToken === 'string' ? panelToken.trim() : '';
+            if (!token || token.length > 8192 || /[\r\n\0]/.test(token)) problem('panel_token_invalid', 'Введите системный токен кабинета a6api', 400);
+            userId = idOf(userId);
+            const candidate = clientFactory({ token, userId, secretDir });
+            let self;
+            try { self = await candidate.request('/api/user/self'); }
+            catch (e) {
+                if (e?.status === 401 || e?.upstreamStatus === 401) problem('credentials_rejected', 'Системный токен или ID пользователя не приняты a6api.', 401);
+                throw e;
+            }
+            if (!self || Number(self.id) !== userId) problem('account_mismatch', 'ID пользователя не совпадает с владельцем системного токена', 409);
+            durable.writeTextSync(keyFile, '');
+            durable.writeJsonSync(selectionFile, { reset: true, resetAt: new Date().toISOString() });
+            durable.writeJsonSync(configFile, { userId, panelToken: token });
+            hub.publish?.();
+            return { ok: true, configured: true };
+        });
     }
     // Лёгкое чтение баланса для статусбара. `state()` тянет ещё каталог и список
     // ключей (три запроса) и пересобирает всю вкладку - для тика раз в минуту это
@@ -238,7 +286,7 @@ function createGateway({ api = createClient(), secretDir = SECRET_DIR, routingDi
         }
         return spawnGateway();
     }
-    return { state, balance, models, selectKey, saveModels, saveRouteTier, activate, selected, prepared, readSelection, setHub, spawn: spawnGateway, restart: restartGateway, runtime };
+    return { state, balance, models, connect, selectKey, saveModels, saveRouteTier, activate, selected, prepared, readSelection, setHub, spawn: spawnGateway, restart: restartGateway, runtime };
 }
 module.exports = { createGateway, buildRuntimeConfig, PORT, CONVERTER_PORT, TIERS, DEFAULT_MAP };
 

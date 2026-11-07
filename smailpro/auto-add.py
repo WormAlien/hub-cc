@@ -621,6 +621,14 @@ async def acquire_proxy(tried=(), pin=None):
     raise RuntimeError("прокси нет: " + "; ".join(errors or ["пусто"]))
 
 
+def _same_exit(a, b):
+    """Один ли это выход: сравниваем по host:port без кредов и схемы."""
+    def key(s):
+        m = re.match(r"^(?:(?:\w+)://)?(?:[^@/]+@)?([^:/]+):(\d+)", str(s or ""))
+        return (m.group(1), m.group(2)) if m else None
+    return key(a) is not None and key(a) == key(b)
+
+
 def _exit_line_for_solver(full_label):
     """Строка прокси для tools/tr-solver (--exit).
 
@@ -735,6 +743,33 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
     password = rand_password()
     mail = None
     tried = []
+    # ⏱️ Ящик smailpro - самое долгое звено (10 с удача, до 3 мин не повезёт).
+    # Пока он создаётся, параллельно греем панель: выбираем живой прокси и
+    # решаем капчу ЗАРАНЕЕ (токен живёт 900 с - хватает с запасом на очередь
+    # из send-code/register). Экономия ~60-100 с на удачном прогоне.
+    warm_proxy = None
+    warm_task = None
+
+    async def warm_captcha():
+        """Капча заранее, на выбранном прокси. Возвращает (proxy_full, token, meta)."""
+        cfg, label, full = await acquire_proxy(tried)
+        t0 = time.time()
+        proc = await asyncio.create_subprocess_exec(
+            "node", str(ROOT / "tools" / "tr-solver" / "tr-solver.js"),
+            "--exit", _exit_line_for_solver(full),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=300)
+        line = next((l for l in reversed((out or b"").decode("utf-8", "replace").splitlines())
+                     if l.strip().startswith("{")), "")
+        ans = json.loads(line) if line else {}
+        if not (ans.get("ok") and ans.get("token")):
+            raise RuntimeError(f"warm-captcha: {str(ans.get('error', line or err))[:120]}")
+        ms = int((time.time() - t0) * 1000)
+        log("captcha", f"капча прогрета заранее ({ans.get('mode')}, {ms} мс)")
+        return full, ans["token"], {"mode": "auto", "ms": ms, "challenge": ans.get("mode", "")}
+
+    if os.environ.get("TR_CAPTCHA_MODE", "auto") == "auto" and use_proxy:
+        warm_task = asyncio.create_task(warm_captcha())
 
     # Почта - СВОИМ окном и НАПРЯМУЮ: smailpro за Cloudflare, скраперный выход там
     # только ухудшает прохождение Turnstile. Панель поднимется отдельным окном ниже.
@@ -765,6 +800,8 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 break
             await asyncio.sleep(3)
         if not addr:
+            if warm_task:
+                warm_task.cancel()
             raise RuntimeError(f"smailpro не выдал ящик за {MAILBOX_WAIT_S} с")
         log("mail", f"✅ ящик: {addr} ({st.get('limit')})")
 
@@ -785,77 +822,99 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
         # Прокси у Camoufox на весь браузер, поэтому почта и панель - разные окна.
         # Адрес берём из общего пула через мост proxy-for.js (см. acquire_proxy).
         stage("register-form")
+        # ⏱️ Если прогрев капчи уже закончился с готовым токеном - окно панели
+        # вообще не открываем: весь диалог с панелью идёт через транспорт солвера
+        # (правило «кто решал капчу, тот и говорит с панелью»). Экономия 30-80 с
+        # открытия SPA через медленный прокси. Прогрев ещё идёт - окно открываем
+        # (фолбэк в manual требует окно).
+        warm_done = None
+        if warm_task is not None and warm_task.done():
+            try:
+                warm_done = warm_task.result()
+            except Exception:
+                warm_done = None
+
         async with tr_browser_ctx(use_proxy, tried, proxy_pin) as (tr, tr_proxy_full):
-            # Полная строка exit'а (с кредами) для авто-решателя капчи; None = напрямую.
             tr_proxy_label = tr_proxy_full
-            await asyncio.sleep(1.5)
+            skip_panel = False
+            if warm_done is not None:
+                warm_full, warm_tok, warm_meta = warm_done
+                if _same_exit(warm_full, tr_proxy_label):
+                    ctok = warm_tok
+                    captcha_meta = warm_meta
+                    tr_proxy_label = warm_full
+                    skip_panel = True
+                    log("tr", f"✅ прогретый токен ({warm_meta['challenge']}) - панель не открываю")
+                else:
+                    log("tr", "прогретый токен на другом exit - не тратим")
+                    warm_done = None
 
-            # 🔴 СОГЛАСИЕ ПОДСЕВАЕМ, А НЕ ПРОКЛИКИВАЕМ. Текст страницы (замер 07:54):
-            #   «Accept the latest terms before continuing. Account/password login and
-            #    quick sign-in stay disabled until you accept.»
-            # Пока согласие не дано, кнопка `Click to start verification` ОТКЛЮЧЕНА и
-            # клик по ней ничего не делает - живой прогон дал `started: НЕТ`, модалка
-            # при этом даже не показывалась (`agreed: не появилась`), потому что её
-            # нет при живом заголовке Accept иначе, чем через localStorage-ключ.
-            # Приём из рабочего threerouter/open-session.js: ключ согласия с ЖИВОЙ
-            # ревизией + перезагрузка (без reload localStorage-запись SPA не подхватит).
-            rev = await fetch_agreement_revision(tr)
-            if rev:
-                await tr.evaluate("""(a) => {
-                    try {
-                        localStorage.setItem(a.key, JSON.stringify({
-                            revision: a.rev, accepted_at: new Date().toISOString(),
-                        }));
-                    } catch (e) {}
-                }""", {"key": CONSENT_KEY, "rev": rev})
-                log("tr", f"согласие подсеяно (ревизия {rev[:16]}…), перезагружаю")
-                await tr.reload(wait_until="domcontentloaded")
-                # Через прокси reload иногда приезжает не на ту страницу (обрыв,
-                # редирект): тогда один повторный заход по прямому адресу.
-                if "/register" not in (tr.url or ""):
-                    log("tr", f"после reload мы на {tr.url!r} - открываю форму заново")
-                    await tr.goto(REGISTER_URL, wait_until="domcontentloaded", timeout=45000)
-                await asyncio.sleep(2.0)
-            else:
-                log("tr", "⚠️ ревизия соглашения не получена - жму кнопку вручную")
+            if not skip_panel:
+                # 🔴 СОГЛАСИЕ ПОДСЕВАЕМ, А НЕ ПРОКЛИКИВАЕМ. Текст страницы (замер 07:54):
+                #   «Accept the latest terms before continuing. Account/password login and
+                #    quick sign-in stay disabled until you accept.»
+                # Пока согласие не дано, кнопка `Click to start verification` ОТКЛЮЧЕНА и
+                # клик по ней ничего не делает - живой прогон дал `started: НЕТ`, модалка
+                # при этом даже не показывалась (`agreed: не появилась`), потому что её
+                # нет при живом заголовке Accept иначе, чем через localStorage-ключ.
+                # Приём из рабочего threerouter/open-session.js: ключ согласия с ЖИВОЙ
+                # ревизией + перезагрузка (без reload localStorage-запись SPA не подхватит).
+                rev = await fetch_agreement_revision(tr)
+                if rev:
+                    await tr.evaluate("""(a) => {
+                        try {
+                            localStorage.setItem(a.key, JSON.stringify({
+                                revision: a.rev, accepted_at: new Date().toISOString(),
+                            }));
+                        } catch (e) {}
+                    }""", {"key": CONSENT_KEY, "rev": rev})
+                    log("tr", f"согласие подсеяно (ревизия {rev[:16]}…), перезагружаю")
+                    await tr.reload(wait_until="domcontentloaded")
+                    # Через прокси reload иногда приезжает не на ту страницу (обрыв,
+                    # редирект): тогда один повторный заход по прямому адресу.
+                    if "/register" not in (tr.url or ""):
+                        log("tr", f"после reload мы на {tr.url!r} - открываю форму заново")
+                        await tr.goto(REGISTER_URL, wait_until="domcontentloaded", timeout=45000)
+                    await asyncio.sleep(2.0)
+                else:
+                    log("tr", "⚠️ ревизия соглашения не получена - жму кнопку вручную")
 
-            # Клики - настоящими кликами Playwright, а не JS-.click(): см. click_exact_button().
-            agreed = await click_exact_button(tr, AGREE_TEXTS)
-            if agreed:
-                log("tr", f"модалка условий была на экране - нажал «{agreed}»")
+                # Клики - настоящими кликами Playwright, а не JS-.click(): см. click_exact_button().
+                agreed = await click_exact_button(tr, AGREE_TEXTS)
+                if agreed:
+                    log("tr", f"модалка условий была на экране - нажал «{agreed}»")
 
-            # 🪤 Через медленный прокси SPA после reload отрисовывается дольше двух
-            # секунд: живой прогон 23:01 получил `{'okEmail': False, 'okPass': False}`
-            # на живом окне. Ждём появление полей и заполняем с повторами, а не
-            # один раз «на глазок».
-            filled = {}
-            for attempt in range(1, 6):
-                try:
-                    await tr.wait_for_selector("#email, input[type='email']", timeout=20000)
-                except Exception:
-                    pass
-                filled = await tr.evaluate(FILL_FORM_JS, {"email": addr, "password": password})
-                if filled.get("okEmail") and filled.get("okPass"):
-                    break
-                log("tr", f"поля ещё не готовы (попытка {attempt}): {filled}")
-                await asyncio.sleep(2.5)
-            log("tr", f"форма: {filled}")
-            if not filled.get("okEmail") or not filled.get("okPass"):
-                raise RuntimeError("поля формы не заполнились")
+                # 🪤 Через медленный прокси SPA после reload отрисовывается дольше двух
+                # секунд: живой прогон 23:01 получил `{'okEmail': False, 'okPass': False}`
+                # на живом окне. Ждём появление полей и заполняем с повторами, а не
+                # один раз «на глазок».
+                filled = {}
+                for attempt in range(1, 6):
+                    try:
+                        await tr.wait_for_selector("#email, input[type='email']", timeout=20000)
+                    except Exception:
+                        pass
+                    filled = await tr.evaluate(FILL_FORM_JS, {"email": addr, "password": password})
+                    if filled.get("okEmail") and filled.get("okPass"):
+                        break
+                    log("tr", f"поля ещё не готовы (попытка {attempt}): {filled}")
+                    await asyncio.sleep(2.5)
+                log("tr", f"форма: {filled}")
+                if not filled.get("okEmail") or not filled.get("okPass"):
+                    raise RuntimeError("поля формы не заполнились")
 
-            started = await click_exact_button(tr, START_TEXTS)
-            log("tr", f"капча стартовала: {started or 'НЕТ - открой кнопкой сам'}")
+                started = await click_exact_button(tr, START_TEXTS)
+                log("tr", f"капча стартовала: {started or 'НЕТ - открой кнопкой сам'}")
 
             # ── 4. капча ──
             # 🔴 Симбиоз с F0Rextasy/threerouter-bulk-apikey (MIT, портирован в
             # tools/tr-solver): токен можно получить БЕЗ браузера - challenge →
             # solve (slider/image_click) → verify, всё через ТЕКУЩИЙ прокси-exit.
-            # TR_CAPTCHA_MODE=auto (дефолт): сначала авто-решатель; не вышел токен -
-            # фолбэк в ручной режим без потери ящика и прокси. manual - как раньше.
+            # TR_CAPTCHA_MODE=auto (дефолт): warm-токен уже проверен выше
+            # (skip_panel); здесь только фолбэк - солвер на текущем exit, дальше
+            # ручной режим.
             CAPTCHA_MODE = os.environ.get("TR_CAPTCHA_MODE", "auto").strip().lower()
-            ctok = None
-            captcha_meta = {"mode": "manual", "ms": 0, "challenge": ""}
-            if CAPTCHA_MODE == "auto" and tr_proxy_label:
+            if CAPTCHA_MODE == "auto" and ctok is None and tr_proxy_label:
                 stage("captcha-auto")
                 log("captcha", f"авто-решатель через {tr_proxy_label}…")
                 try:

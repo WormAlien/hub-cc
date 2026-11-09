@@ -899,7 +899,11 @@ function convertResponsesToClaude(resp, claudeReq) {
 // Плата — ожидание первого события перед отдачей заголовков; на этом пути оно и так есть,
 // потому что шлюз молчит до первого токена.
 const RESPONSES_TRANSIENT_CODES = new Set(['rate_limit_exceeded', 'too_many_requests', 'server_error', 'overloaded']);
-const RESPONSES_ATTEMPTS = 3;   // 1 попытка + 2 повтора на транзиентном отказе
+const CONTENT_FILTER_REFUSAL_TEXT = "I'm sorry, but I cannot assist with that request.";
+// Live 09.11 probe: the same safe body passed 7/20 times, with up to four free
+// content_filter results in a row. Twelve total attempts keep the retry bounded and
+// reduce the measured all-filtered chance to about 1%. Only usage 0/0 terminals use it.
+const RESPONSES_CONTENT_FILTER_ATTEMPTS = 12;
 
 // Текст отказа из события `response.failed`/`error`. Формы различаются: у `error` полезное
 // лежит в `.error`, у `response.failed` — в `.response.error`. Читаем обе, не угадывая.
@@ -922,40 +926,81 @@ function responsesErrorInfo(ev) {
     };
 }
 
-// Обёртка: буферизует до первого осмысленного события, на транзиентном отказе повторяет
-// запрос целиком, и только если все попытки провалились — отдаёт клиенту честный код.
-// Стриминговый ответ Responses → Anthropic SSE, БЕЗ внутренних повторов.
-//
-// 🪤 История: сначала здесь стояла обёртка с автоповтором (1 попытка + 2 на транзиентном
-// отказе). Она подвесила астру в бою: стриминг-запрос не отдавал ни байта и висел до
-// таймаута. Повтор внутри стрима — лишняя сложность на нашем слое, и цена ошибки высока.
-//
-// Повтор отдан тому, кто умеет его делать правильно: отказ перед первым контентом
-// превращается в честный HTTP-код (429), а ретраит его сам Claude Code — это его штатное
-// поведение, и он умеет уважать `retry-after`, чего наша обёртка не умела.
-//
-// Что осталось от пре-коммита: заголовки клиенту отдаются только на первом осмысленном
-// событии, поэтому отказ до контента можно превратить в КОД, а не в пустой 200.
-function handleResponsesStreaming(clientRes, claudeReq, upRes) {
-    const stream = createResponsesEmitter(clientRes, claudeReq, {
-        onCommit: () => {},
-        onTransientFail: (info) => {
-            logLine(`responses: отказ до контента (${info.code}) — отдаю 429, ретраит клиент`);
-            claudeError(clientRes, 429, info.message, 'rate_limit_error');
-        },
-        onHardFail: (info) => {
-            logLine(`responses: отказ до контента (${info.code}) — отдаю 502`);
-            claudeError(clientRes, 502, info.message, 'api_error');
-        },
+// Responses streaming wrapper. A normal response is still piped on its first attempt.
+// The only internal retry is the upstream's false safety terminal:
+// `response.incomplete` + `content_filter` + usage 0/0. This class is free, happened on
+// safe first turns, and is retryable before any bytes reach Claude Code. Rate limits and
+// all other failures keep their old behavior: return a truthful error to the client.
+function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody) {
+    let attempt = 0;
+    let activeRequest = null;
+    let finished = false;
+
+    const run = () => {
+        if (finished || clientRes.writableEnded || clientRes.destroyed) return;
+        attempt += 1;
+        activeRequest = makeRequest((upRes) => {
+            if (upRes.statusCode !== 200) {
+                let errBody = '';
+                upRes.on('data', c => errBody += c);
+                upRes.on('end', () => {
+                    let message = errBody.slice(0, 500);
+                    try { message = JSON.parse(errBody).error?.message || message; } catch {}
+                    logLine(`responses upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);
+                    if (CONTENT_FILTER_RE.test(message) && blockedBody) dumpBlocked(blockedBody, upRes.statusCode);
+                    finished = true;
+                    claudeError(clientRes, upRes.statusCode, message,
+                        upRes.statusCode === 429 ? 'rate_limit_error'
+                            : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error');
+                });
+                return;
+            }
+
+            const stream = createResponsesEmitter(clientRes, claudeReq, {
+                onCommit: () => { finished = true; },
+                onContentFilter: (info) => {
+                    if (attempt < RESPONSES_CONTENT_FILTER_ATTEMPTS) {
+                        stats.contentFilterRetries += 1;
+                        logLine(`responses: ложный content_filter usage 0/0, повтор ${attempt + 1}/${RESPONSES_CONTENT_FILTER_ATTEMPTS}`);
+                        return run();
+                    }
+                    stats.contentFilterExhausted += 1;
+                    finished = true;
+                    logLine(`responses: content_filter usage 0/0 не прошёл за ${attempt} попыток - отдаю 502`);
+                    claudeError(clientRes, 502, info.message, 'api_error');
+                },
+                onTransientFail: (info) => {
+                    finished = true;
+                    logLine(`responses: отказ до контента (${info.code}) - отдаю 429, ретраит клиент`);
+                    claudeError(clientRes, 429, info.message, 'rate_limit_error');
+                },
+                onHardFail: (info) => {
+                    finished = true;
+                    logLine(`responses: отказ до контента (${info.code}) - отдаю 502`);
+                    claudeError(clientRes, 502, info.message, 'api_error');
+                },
+            });
+            upRes.on('data', (d) => stream.push(d.toString('utf8')));
+            upRes.on('end', () => stream.finish());
+            upRes.on('error', () => stream.abort('upstream stream error'));
+        }, (err) => {
+            if (finished) return;
+            finished = true;
+            logLine(`responses upstream error: ${err.message}`);
+            claudeError(clientRes, 502, 'upstream: ' + err.message);
+        });
+    };
+
+    run();
+    clientRes.on('close', () => {
+        if (!clientRes.writableEnded && activeRequest && !activeRequest.destroyed) activeRequest.destroy();
     });
-    upRes.on('data', (d) => stream.push(d.toString('utf8')));
-    upRes.on('end', () => stream.finish());
-    upRes.on('error', () => stream.abort('upstream stream error'));
+    return activeRequest;
 }
 
-// Разбор событий Responses в Anthropic-SSE. Заголовки отдаёт только при commit() —
-// то есть когда пришло первое осмысленное событие (текст, тул или терминальное).
-function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFail, onHardFail }) {
+// Разбор событий Responses в Anthropic-SSE. Заголовки отдаёт только при commit() -
+// то есть когда terminal event подтвердил, что накопленный ответ не content_filter.
+function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilter, onTransientFail, onHardFail }) {
     let started = false;
     let ended = false;
     let failed = false;   // отказ уже отдан наружу — finish() не должен перекрыть его «пустотой»
@@ -964,7 +1009,24 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFai
     const toolBlocks = new Map();
     let usage = { input_tokens: 0, output_tokens: 0 };
     let stopReason = 'end_turn';
+    let pendingRefusal = '';
     let buffer = '';
+
+    function emitText(text) {
+        if (!text) return;
+        const idx = ensureTextBlock();
+        sseWrite(clientRes, 'content_block_delta', {
+            type: 'content_block_delta', index: idx,
+            delta: { type: 'text_delta', text: cyrDecode(text) },
+        });
+    }
+
+    function flushPendingRefusal() {
+        if (!pendingRefusal) return;
+        const text = pendingRefusal;
+        pendingRefusal = '';
+        emitText(text);
+    }
 
     function commit() {
         if (started) return;
@@ -1045,11 +1107,16 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFai
         }
 
         if (type === 'response.output_text.delta') {
-            const idx = ensureTextBlock();
-            sseWrite(clientRes, 'content_block_delta', {
-                type: 'content_block_delta', index: idx,
-                delta: { type: 'text_delta', text: cyrDecode(ev.delta || '') },
-            });
+            const delta = String(ev.delta || '');
+            const candidate = pendingRefusal + delta;
+            // Hold only while the accumulated text can still be the exact upstream
+            // refusal. Any divergence proves it is real model output and flushes it.
+            if (CONTENT_FILTER_REFUSAL_TEXT.startsWith(candidate)) {
+                pendingRefusal = candidate;
+                return;
+            }
+            flushPendingRefusal();
+            emitText(delta);
             return;
         }
 
@@ -1095,8 +1162,41 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFai
             return;
         }
 
+        if (type === 'response.incomplete') {
+            const r = ev.response || {};
+            const reason = r.incomplete_details && r.incomplete_details.reason;
+            const u = r.usage || {};
+            const freeContentFilter = reason === 'content_filter'
+                && r.usage
+                && Number(u.input_tokens) === 0
+                && Number(u.output_tokens) === 0
+                && pendingRefusal === CONTENT_FILTER_REFUSAL_TEXT
+                && !started;
+            if (freeContentFilter) {
+                failed = true;
+                ended = true;
+                pendingRefusal = '';
+                return onContentFilter({
+                    code: 'content_filter',
+                    message: 'upstream false content_filter (usage 0/0)',
+                });
+            }
+            // Unknown/paid/inexact incomplete responses are never retried. Preserve any
+            // text and finish them truthfully instead of guessing that they are free.
+            flushPendingRefusal();
+            if (r.usage) {
+                usage = {
+                    input_tokens: r.usage.input_tokens || 0,
+                    output_tokens: r.usage.output_tokens || 0,
+                };
+            }
+            stopReason = reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
+            return;
+        }
+
         if (type === 'response.completed') {
             const r = ev.response || {};
+            flushPendingRefusal();
             if (r.usage) {
                 usage = {
                     input_tokens: r.usage.input_tokens || 0,
@@ -1164,7 +1264,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onTransientFai
 
 // ══════════════════════ HANDLERS ══════════════════════
 
-const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
+const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, contentFilterRetries: 0, contentFilterExhausted: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
 
 function claudeError(res, code, message, errType) {
     stats.errors++;
@@ -1230,30 +1330,7 @@ function handleMessages(req, res, body) {
 
         if (claudeReq.stream) {
             stats.streamed++;
-            const streamReq = makeRequest((upRes) => {
-                if (upRes.statusCode !== 200) {
-                    let errBody = '';
-                    upRes.on('data', c => errBody += c);
-                    upRes.on('end', () => {
-                        let message = errBody.slice(0, 500);
-                        try { message = JSON.parse(errBody).error?.message || message; } catch {}
-                        logLine(`responses upstream ${upRes.statusCode}: ${message.slice(0, 200)}`);
-                        if (CONTENT_FILTER_RE.test(message)) dumpBlocked(san.text, upRes.statusCode);
-                        claudeError(res, upRes.statusCode, message,
-                            upRes.statusCode === 429 ? 'rate_limit_error'
-                                : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error');
-                    });
-                    return;
-                }
-                handleResponsesStreaming(res, claudeReq, upRes);
-            }, (err) => {
-                // 🪤 Этот обработчик пропустить нельзя: без него сокет апстрима умирает
-                // молча, клиент не получает ни байта и висит до своего таймаута — ровно
-                // то, чем закончилась первая версия этой ветки.
-                logLine(`responses upstream error: ${err.message}`);
-                claudeError(res, 502, 'upstream: ' + err.message);
-            });
-            res.on('close', () => { if (!res.writableEnded && streamReq && !streamReq.destroyed) streamReq.destroy(); });
+            handleResponsesStreaming(res, claudeReq, makeRequest, san.text);
             return;
         }
 
@@ -1902,6 +1979,111 @@ if (process.argv[2] === 'selftest') {
     const t3 = runEmitter([{ type: 'response.created' }, { type: 'response.in_progress' }]);
     assert.strictEqual(t3.seen.hard && t3.seen.hard.code, 'empty_stream', 'пустой поток = отказ, а не пустой 200');
     assert.strictEqual(t3.res.headers, null, 'клиенту ничего не отдано');
+
+    // 4. Full retry loop: four free content_filter terminals are hidden, the fifth
+    // successful attempt is the only response visible to the client. This mirrors the
+    // live 09.11 measurement where three attempts were insufficient and the longest
+    // observed refusal run was four.
+    function fakeUpstream(events) {
+        const handlers = {};
+        return {
+            statusCode: 200,
+            headers: { 'content-type': 'text/event-stream' },
+            on(name, fn) {
+                handlers[name] = fn;
+                // handleResponsesStreaming registers data, end, then error. Emit only
+                // after the last listener exists so this stays synchronous and deterministic.
+                if (name === 'error') {
+                    handlers.data(events.map(SSE).join(''));
+                    handlers.end();
+                }
+                return this;
+            },
+            destroy() {},
+        };
+    }
+    const blockedEvents = [
+        { type: 'response.created' },
+        { type: 'response.output_text.delta', delta: "I'm sorry, but I cannot assist with that request." },
+        { type: 'response.incomplete', response: {
+            status: 'incomplete',
+            incomplete_details: { reason: 'content_filter' },
+            usage: { input_tokens: 0, output_tokens: 0 },
+        } },
+    ];
+    const successEvents = [
+        { type: 'response.created' },
+        { type: 'response.output_text.delta', delta: 'OK' },
+        { type: 'response.completed', response: {
+            status: 'completed', usage: { input_tokens: 716, output_tokens: 5 },
+        } },
+    ];
+    const retryRes = fakeRes();
+    let retryCalls = 0;
+    const fakeRequest = (onResponse) => {
+        retryCalls += 1;
+        const up = fakeUpstream(retryCalls <= 4 ? blockedEvents : successEvents);
+        onResponse(up);
+        return up;
+    };
+    handleResponsesStreaming(retryRes, { model: 'gpt-5.6-sol' }, fakeRequest);
+    const retryOutput = retryRes.chunks.join('');
+    assert.strictEqual(retryCalls, 5, 'four free content_filter results are retried before success');
+    assert.ok(/OK/.test(retryOutput), 'successful fifth response reaches the client');
+    assert.ok(!/I cannot assist/.test(retryOutput), 'filtered refusal never reaches the client');
+    assert.strictEqual(retryRes.headers && retryRes.headers.code, 200, 'client sees only successful 200');
+
+    // Exact same text with a normal completed terminal is legitimate model output, not
+    // a retry signal. The terminal classification, not wording alone, decides.
+    const legitimateRes = fakeRes();
+    let legitimateCalls = 0;
+    handleResponsesStreaming(legitimateRes, { model: 'gpt-5.6-sol' }, (onResponse) => {
+        legitimateCalls += 1;
+        const up = fakeUpstream([
+            { type: 'response.created' },
+            { type: 'response.output_text.delta', delta: CONTENT_FILTER_REFUSAL_TEXT },
+            { type: 'response.completed', response: {
+                status: 'completed', usage: { input_tokens: 10, output_tokens: 10 },
+            } },
+        ]);
+        onResponse(up);
+        return up;
+    });
+    assert.strictEqual(legitimateCalls, 1, 'completed refusal text is not retried');
+    assert.ok(/I cannot assist/.test(legitimateRes.chunks.join('')), 'completed refusal text is preserved');
+
+    // Missing usage is not proof that the filtered attempt was free. Preserve it and do
+    // not retry unless both zero counters are explicitly present.
+    const missingUsageRes = fakeRes();
+    let missingUsageCalls = 0;
+    handleResponsesStreaming(missingUsageRes, { model: 'gpt-5.6-sol' }, (onResponse) => {
+        missingUsageCalls += 1;
+        const up = fakeUpstream([
+            { type: 'response.created' },
+            { type: 'response.output_text.delta', delta: CONTENT_FILTER_REFUSAL_TEXT },
+            { type: 'response.incomplete', response: {
+                status: 'incomplete', incomplete_details: { reason: 'content_filter' },
+            } },
+        ]);
+        onResponse(up);
+        return up;
+    });
+    assert.strictEqual(missingUsageCalls, 1, 'content_filter without explicit usage 0/0 is not retried');
+    assert.ok(/I cannot assist/.test(missingUsageRes.chunks.join('')), 'unknown-cost refusal is preserved');
+
+    // Bound the loop: after twelve exact free terminals the client gets one truthful
+    // 502 and no refusal text. This must never spin forever if the upstream stays broken.
+    const exhaustedRes = fakeRes();
+    let exhaustedCalls = 0;
+    handleResponsesStreaming(exhaustedRes, { model: 'gpt-5.6-sol' }, (onResponse) => {
+        exhaustedCalls += 1;
+        const up = fakeUpstream(blockedEvents);
+        onResponse(up);
+        return up;
+    });
+    assert.strictEqual(exhaustedCalls, RESPONSES_CONTENT_FILTER_ATTEMPTS, 'content_filter retry loop is bounded');
+    assert.strictEqual(exhaustedRes.headers && exhaustedRes.headers.code, 502, 'exhausted retries return truthful 502');
+    assert.ok(!/I cannot assist/.test(exhaustedRes.chunks.join('')), 'exhausted retries never leak refusal text');
 
     console.log('agentrouter-proxy selftest: OK');
     process.exit(0);

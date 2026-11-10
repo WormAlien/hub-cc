@@ -1014,6 +1014,10 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
 
     function emitText(text) {
         if (!text) return;
+        // A provider may announce a function_call before a text item. Those tool blocks
+        // were waiting for terminal usage; once text commits the stream, release them
+        // immediately so mixed-order output is not lost.
+        if (!started && toolBlocks.size) flushDeferredTools();
         const idx = ensureTextBlock();
         sseWrite(clientRes, 'content_block_delta', {
             type: 'content_block_delta', index: idx,
@@ -1043,7 +1047,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             message: {
                 id: msgId, type: 'message', role: 'assistant', model: claudeReq.model,
                 content: [], stop_reason: null, stop_sequence: null,
-                usage: { input_tokens: 0, output_tokens: 0 },
+                usage: { input_tokens: usage.input_tokens, output_tokens: 0 },
             },
         });
         sseWrite(clientRes, 'ping', { type: 'ping' });
@@ -1089,6 +1093,28 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
         tb.started = true;
     }
 
+    function emitToolArguments(tb, delta) {
+        if (!tb.started || !delta) return;
+        sseWrite(clientRes, 'content_block_delta', {
+            type: 'content_block_delta', index: tb.claudeIndex,
+            delta: { type: 'input_json_delta', partial_json: cyrDecode(delta) },
+        });
+    }
+
+    function closeToolBlock(tb) {
+        if (!tb.started || tb.closed) return;
+        sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
+        tb.closed = true;
+    }
+
+    function flushDeferredTools() {
+        for (const [index, tb] of [...toolBlocks.entries()].sort((a, b) => a[0] - b[0])) {
+            onToolBlock(index, tb);
+            emitToolArguments(tb, tb.arguments);
+            closeToolBlock(tb);
+        }
+    }
+
     function processEvent(ev) {
         const type = ev.type;
 
@@ -1124,9 +1150,11 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             const it = ev.item || {};
             if (it.type === 'function_call') {
                 const oi = ev.output_index || 0;
-                const tb = { claudeIndex: -1, id: it.call_id || it.id, name: it.name || '', started: false, closed: false };
+                const tb = { claudeIndex: -1, id: it.call_id || it.id, name: it.name || '', arguments: '', started: false, closed: false };
                 toolBlocks.set(oi, tb);
-                onToolBlock(oi, tb);
+                // Pure tool-use responses wait for response.completed so Workflow gets
+                // exact usage. If text already committed the stream, emit immediately.
+                if (started) onToolBlock(oi, tb);
             }
             return;
         }
@@ -1135,15 +1163,13 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             const oi = ev.output_index || 0;
             let tb = toolBlocks.get(oi);
             if (!tb) {
-                tb = { claudeIndex: -1, id: null, name: '', started: false, closed: false };
+                tb = { claudeIndex: -1, id: null, name: '', arguments: '', started: false, closed: false };
                 toolBlocks.set(oi, tb);
             }
-            onToolBlock(oi, tb);
-            if (tb.started && ev.delta) {
-                sseWrite(clientRes, 'content_block_delta', {
-                    type: 'content_block_delta', index: tb.claudeIndex,
-                    delta: { type: 'input_json_delta', partial_json: cyrDecode(ev.delta) },
-                });
+            if (tb.started) {
+                emitToolArguments(tb, ev.delta);
+            } else if (ev.delta) {
+                tb.arguments += ev.delta;
             }
             return;
         }
@@ -1154,10 +1180,9 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             const tb = toolBlocks.get(oi);
             if (tb) {
                 if (!tb.id && (it.call_id || it.id)) tb.id = it.call_id || it.id;
-                if (tb.started && !tb.closed) {
-                    sseWrite(clientRes, 'content_block_stop', { type: 'content_block_stop', index: tb.claudeIndex });
-                    tb.closed = true;
-                }
+                if (!tb.name && it.name) tb.name = it.name;
+                if (!tb.arguments && it.arguments) tb.arguments = it.arguments;
+                if (tb.started) closeToolBlock(tb);
             }
             return;
         }
@@ -1191,6 +1216,10 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
                 };
             }
             stopReason = reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
+            if (toolBlocks.size) {
+                stopReason = 'tool_use';
+                if (!started) flushDeferredTools();
+            }
             return;
         }
 
@@ -1206,7 +1235,10 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             if (r.status === 'incomplete' && r.incomplete_details) {
                 stopReason = r.incomplete_details.reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
             }
-            if (toolBlocks.size) stopReason = 'tool_use';
+            if (toolBlocks.size) {
+                stopReason = 'tool_use';
+                if (!started) flushDeferredTools();
+            }
             return;
         }
         // Прочее (response.created, in_progress, reasoning.*) — молча мимо.
@@ -1973,7 +2005,25 @@ if (process.argv[2] === 'selftest') {
     assert.ok(/content_block_start/.test(t2all), 'блок тула открыт');
     assert.ok(/"name":"get_weather"/.test(t2all), 'имя тула уехало');
     assert.ok(/tool_use/.test(t2all), 'stop_reason tool_use');
+    assert.ok(/"message_start"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":0\}/.test(t2all),
+        'tool-use message_start сразу несёт точный input usage для Workflow UI');
+    assert.ok(/"message_delta"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":7\}/.test(t2all),
+        'tool-use message_delta сохраняет полный финальный usage');
     assert.strictEqual(t2.seen.transient, null, 'повтор не потребовался');
+
+    // If a provider emits a tool item before text, deferring that tool for usage
+    // must not lose it when the later text commits the stream early.
+    const mixed = runEmitter([
+        { type: 'response.created' },
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_mixed', name: 'get_weather' } },
+        { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"city":"Rostov"}' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'call_mixed' } },
+        { type: 'response.output_text.delta', delta: 'Checking.' },
+        { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 6, output_tokens: 8 } } },
+    ]);
+    const mixedAll = mixed.res.chunks.join('');
+    assert.ok(/"name":"get_weather"/.test(mixedAll), 'tool-before-text is not lost');
+    assert.ok(/Checking\./.test(mixedAll), 'text after deferred tool is not lost');
 
     // 3. Поток без содержимого и БЕЗ события-ошибки: это тоже отказ, а не «пустой ответ».
     const t3 = runEmitter([{ type: 'response.created' }, { type: 'response.in_progress' }]);

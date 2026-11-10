@@ -15,6 +15,7 @@
 
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -730,6 +731,16 @@ function isSolModel(m) { return SOL_RE.test(stripWindow(m)); }
 function isResponsesModel(m) { return isAstraModel(m) || isSolModel(m); }
 function useResponsesPath(model) { return ASTRA_RESPONSES_ENABLED && isResponsesModel(model); }
 
+// Responses limits call_id to 64 characters. Other providers can legally leave longer
+// Anthropic tool_use IDs in the conversation history (Grok produced 72-74 chars live).
+// Hashing is stateless and deterministic, so tool_use and its later tool_result stay paired
+// even when they are separated by other messages. Short IDs remain byte-for-byte unchanged.
+function responsesCallId(value) {
+    const id = String(value || '');
+    if (id.length <= 64) return id;
+    return 'call_' + crypto.createHash('sha256').update(id, 'utf8').digest('hex').slice(0, 59);
+}
+
 // Tools у Responses плоские: не {type:'function', function:{...}}, а {type:'function', name, parameters}.
 // strict не ставим (СС-схемы не всегда его переживают), но additionalProperties:false нужен,
 // иначе строгий валидатор апстрима может отвергнуть схему.
@@ -761,7 +772,7 @@ function convertClaudeToResponses(claudeReq) {
             for (const tr of content.filter(b => b.type === 'tool_result')) {
                 input.push({
                     type: 'function_call_output',
-                    call_id: tr.tool_use_id,
+                    call_id: responsesCallId(tr.tool_use_id),
                     output: cyrEncode(toolResultToText(tr)) || '(empty)',
                 });
             }
@@ -782,7 +793,7 @@ function convertClaudeToResponses(claudeReq) {
             for (const tu of content.filter(b => b.type === 'tool_use')) {
                 input.push({
                     type: 'function_call',
-                    call_id: tu.id,
+                    call_id: responsesCallId(tu.id),
                     name: tu.name,
                     arguments: JSON.stringify(tu.input || {}),
                 });
@@ -1893,6 +1904,26 @@ if (process.argv[2] === 'selftest') {
     assert.ok(fco, 'tool_result → function_call_output');
     assert.strictEqual(fco.call_id, 'toolu_1', 'output связан тем же call_id');
     assert.strictEqual(fco.output, 'солнечно', 'содержимое результата на месте');
+
+    // История другого провайдера может содержать tool_use.id длиннее лимита Responses.
+    // Живой Grok ID 10.11 имел 72 символа и ронял весь следующий ход AgentRouter 400.
+    // Вызов и результат обязаны получить один детерминированный call_id <= 64.
+    const grokId = 'toolu_pmY2FsbC01MGQ5NGI1Mi03NDliLTRjYTMtOGE1Mi00YThlMjA0YmUzZDgtMAqubiCD';
+    const grokId2 = 'toolu_pmY2FsbC1mMTYxMjkzZC1iNDFmLTQwMmMtOWIxMy1lMWQ2OWUwNjAwMDMtMQcvnlzW';
+    const longIds = convertClaudeToResponses({
+        model: 'gpt-5.6-sol',
+        messages: [
+            { role: 'assistant', content: [{ type: 'tool_use', id: grokId, name: 'Grep', input: { pattern: 'x' } }] },
+            { role: 'user', content: [{ type: 'tool_result', tool_use_id: grokId, content: 'found' }] },
+        ],
+    });
+    const longCall = longIds.input.find(i => i.type === 'function_call');
+    const longOutput = longIds.input.find(i => i.type === 'function_call_output');
+    assert.ok(longCall.call_id.length <= 64, `Grok call_id должен быть <= 64, получено ${longCall.call_id.length}`);
+    assert.strictEqual(longOutput.call_id, longCall.call_id, 'длинные tool_use/tool_result остаются парой');
+    assert.strictEqual(responsesCallId(grokId), longCall.call_id, 'маппинг детерминирован между запросами');
+    assert.notStrictEqual(responsesCallId(grokId2), longCall.call_id, 'разные длинные ID не склеиваются');
+    assert.strictEqual(responsesCallId('toolu_short'), 'toolu_short', 'короткий ID не меняется');
 
     // Astra не глушит reasoning НИ НА ОДНОМ пути. Раньше chat-путь подставлял
     // reasoning_effort:"none" как костыль — 16.09 апстрим стал отвергать само это

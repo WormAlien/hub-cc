@@ -31,6 +31,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const SCRIPT = path.join(__dirname, '..', 'routing', 'statusline-autoreger.sh').replace(/\\/g, '/');
+const POOL_SUCCESS_HELPER = path.join(__dirname, '..', 'routing', 'statusline-pool-success.js');
+const AGENTROUTER_STATE_HELPER = path.join(__dirname, '..', 'routing', 'statusline-agentrouter-state.js');
 
 const ESC = '\u001b';
 const RESET = `${ESC}[0m`;
@@ -109,6 +111,8 @@ const STAGE = fs.mkdtempSync(path.join(os.tmpdir(), 'statusline-stage-'));
 fs.mkdirSync(path.join(STAGE, 'routing'));
 const STAGE_SCRIPT = path.join(STAGE, 'routing', 'statusline-autoreger.sh').replace(/\\/g, '/');
 fs.copyFileSync(SCRIPT, STAGE_SCRIPT);
+fs.copyFileSync(POOL_SUCCESS_HELPER, path.join(STAGE, 'routing', 'statusline-pool-success.js'));
+fs.copyFileSync(AGENTROUTER_STATE_HELPER, path.join(STAGE, 'routing', 'statusline-agentrouter-state.js'));
 const GW_MAP = path.join(STAGE, 'routing', 'ar-modelmap.json');
 const RT_MAP = path.join(STAGE, 'routing', 'ar-routes-modelmap.json');
 
@@ -127,14 +131,14 @@ function registry(home, modelmap) {
         aliases: { ar: 'agentrouter' },
     }, null, 2) + '\n');
 }
-function barModel(id, { home = FAKE } = {}) {
+function barModel(id, { home = FAKE, timeout = 20000 } = {}) {
     const p = JSON.parse(payload());
     p.model.id = id;
     return execFileSync('bash', [STAGE_SCRIPT], {
         input: JSON.stringify(p) + '\n',
         env: { ...process.env, HOME: home, STATUSLINE_PAYLOAD: '' },
         encoding: 'utf8',
-        timeout: 20000,
+        timeout,
     });
 }
 const head = (s) => s.split(' ')[0];
@@ -336,10 +340,52 @@ try {
         opus: { state, checkedAt: new Date().toISOString(), dropAt: new Date(dropMs).toISOString(), keyTail: 'AAAA' },
     }) + '\n');
     const curDrop = Date.now() - (Date.now() % 28800000);
+    const dropDate = new Date(curDrop);
+    const dropHhmm = `${String(dropDate.getUTCHours()).padStart(2, '0')}:${String(dropDate.getUTCMinutes()).padStart(2, '0')}`;
+    fs.writeFileSync(path.join(FAKE, '.claude', 'ar-quota-schedule.json'), JSON.stringify({
+        tz: 'UTC', times: [dropHhmm],
+    }) + '\n');
     qWrite('exhausted', curDrop);
     const dry = barModel('claude-opus-5[1m]', { home: FAKE });
     ok(dry.includes('пул пуст'), `пул пуст виден в баре (${show(dry.slice(0, 70))})`);
     ok(dry.includes('deepseek-v4-flash'), 'и назван адрес, куда уедет: без него пометка бесполезна');
+
+    // Success-only usage journal is newer evidence than a failed quota probe. A successful
+    // actual model from the same pool must clear the warning; a fallback success must not.
+    const usageFile = path.join(STAGE, 'routing', 'token-usage.jsonl');
+    const quotaChecked = Date.now() - 60_000;
+    fs.writeFileSync(qFile, JSON.stringify({
+        opus: { state: 'exhausted', checkedAt: new Date(quotaChecked).toISOString(), dropAt: new Date(curDrop).toISOString(), keyTail: 'AAAA' },
+    }) + '\n');
+    fs.writeFileSync(usageFile, JSON.stringify({
+        t: new Date(quotaChecked + 30_000).toISOString(),
+        m: 'claude-opus-5[1m]', bk: 'agentrouter', st: 1, in: 1, out: 1,
+        am: 'deepseek-v4-flash',
+    }) + '\n');
+    ok(barModel('claude-opus-5[1m]', { home: FAKE }).includes('пул пуст'),
+        'более свежий успех fallback-модели не опровергает пустой Opus-пул');
+    fs.appendFileSync(usageFile, JSON.stringify({
+        t: new Date(quotaChecked + 45_000).toISOString(),
+        m: 'claude-opus-5[1m]', bk: 'agentrouter', st: 1, in: 1, out: 1,
+        am: 'claude-opus-5',
+    }) + '\n');
+    ok(!barModel('claude-opus-5[1m]', { home: FAKE }).includes('пул пуст'),
+        'более свежий успешный actual model той же полосы отменяет exhausted');
+
+    // Live journal can contain tens of thousands of rows. The stale-state check must stay
+    // bounded; spawning `date` once per row made each statusline render hang on Windows.
+    const oldSuccess = JSON.stringify({
+        t: new Date(quotaChecked - 60_000).toISOString(),
+        m: 'gpt-5.6-sol[1m]', bk: 'agentrouter', st: 1, in: 1, out: 1, am: 'gpt-5.6-sol',
+    }) + '\n';
+    fs.writeFileSync(usageFile, oldSuccess.repeat(2500) + JSON.stringify({
+        t: new Date(quotaChecked + 45_000).toISOString(),
+        m: 'claude-opus-5[1m]', bk: 'agentrouter', st: 1, in: 1, out: 1, am: 'claude-opus-5',
+    }) + '\n');
+    ok(!barModel('claude-opus-5[1m]', { home: FAKE, timeout: 4000 }).includes('пул пуст'),
+        'большой usage journal проверяется bounded без тысяч subprocess');
+    fs.writeFileSync(usageFile, '');
+
     qWrite('exhausted', curDrop - 28800000);
     ok(!barModel('claude-opus-5[1m]', { home: FAKE }).includes('пул пуст'),
         'запись прошлой партии мертва: после налива пул как раз полон, и «пуст» было бы враньём');
@@ -352,6 +398,37 @@ try {
     }) + '\n');
     ok(!barModel('gpt-6-astra[1m]', { home: FAKE }).includes('пул пуст'),
         'пустая полоса Opus не красит запрос к GPT: полосы кончаются порознь');
+
+    // A production-sized AgentRouter session cache used to make one render take about
+    // ten seconds in Git Bash: Bash scanned the 40 KiB JSON, then grep/awk scanned it
+    // twice more for the check-in badge. Keep the complete real render below 2.5 seconds.
+    const activeArKey = 'statusline-test-active-key';
+    fs.writeFileSync(path.join(FAKE, '.claude', 'ar-active-key.txt'), activeArKey + '\n');
+    const sessionNow = new Date().toISOString();
+    const arSessions = Array.from({ length: 50 }, (_, index) => ({
+        api_key: index === 31 ? activeArKey : `statusline-test-key-${index}`,
+        status: 'live',
+        balance: index === 31 ? 12.34 : 1,
+        granted: 25,
+        balanceCheckedAt: index === 31 ? new Date(Date.now() - 10 * 60_000).toISOString() : sessionNow,
+        checkinAt: index < 40 ? sessionNow : '2000-01-01T00:00:00.000Z',
+        name: `fixture-${index}`,
+        padding: 'x'.repeat(500),
+    }));
+    fs.writeFileSync(path.join(STAGE, 'routing', 'agentrouter-sessions.json'),
+        JSON.stringify(arSessions, null, 2) + '\n');
+    fs.writeFileSync(path.join(STAGE, 'routing', 'ar-checkin.json'),
+        JSON.stringify({ resetHhmmMsk: '20:30' }) + '\n');
+    fs.writeFileSync(qFile, JSON.stringify({
+        gpt: { state: 'exhausted', checkedAt: new Date(quotaChecked).toISOString(), dropAt: new Date(curDrop).toISOString(), keyTail: 'AAAA' },
+    }) + '\n');
+    fs.writeFileSync(usageFile, JSON.stringify({
+        t: new Date(quotaChecked + 45_000).toISOString(),
+        m: 'gpt-6-astra[1m]', bk: 'agentrouter', st: 1, in: 1, out: 1, am: 'gpt-5.6-sol',
+    }) + '\n');
+    const liveSized = barModel('gpt-6-astra[1m]', { home: FAKE, timeout: 2500 });
+    ok(liveSized.includes('$12.34') && liveSized.includes('🎁10') && !liveSized.includes('пул пуст'),
+        'production-sized exhausted AgentRouter render finishes within 2.5 seconds, preserves check-in count, and clears stale warning');
 } finally {
     try { fs.rmSync(FAKE, { recursive: true, force: true }); } catch { /* temp */ }
     try { fs.rmSync(STAGE, { recursive: true, force: true }); } catch { /* temp */ }

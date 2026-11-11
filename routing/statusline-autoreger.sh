@@ -526,6 +526,31 @@ stale=0
 balance_age_s=-1   # возраст цифры баланса в секундах; -1 = провайдер без кеша баланса
 balance_err=""     # непустая = последняя проверка баланса не удалась (таймаут/dead)
 active_name=""
+ar_state_loaded=0
+ar_ready=0
+ar_have_gauge=0
+ar_balance="0.00"
+ar_percent=0
+ar_balance_age_s=-1
+ar_balance_error=0
+
+# AgentRouter needs both the active balance and the all-account check-in count. One
+# bounded Node parse replaces a slow Bash scan plus two grep/awk scans of the same JSON.
+load_agentrouter_state() {
+    [ "$ar_state_loaded" = "0" ] || return 0
+    ar_state_loaded=1
+    [ -f "$ROUTING/agentrouter-sessions.json" ] || return 0
+    [ -f "$ROUTING/statusline-agentrouter-state.js" ] || return 0
+
+    local ar_state_raw ar_version
+    ar_state_raw="$(node "$ROUTING/statusline-agentrouter-state.js" \
+        "$ROUTING/agentrouter-sessions.json" \
+        "$PROF/.claude/ar-active-key.txt" \
+        "$ROUTING/ar-checkin.json" 2>/dev/null)" || return 0
+    IFS=$'\t' read -r ar_version ar_have_gauge ar_balance ar_percent \
+        ar_balance_age_s ar_balance_error ar_ready <<< "$ar_state_raw"
+    [ "$ar_version" = "v1" ] || return 0
+}
 
 # Общий gauge для провайдеров с кешем баланса в <sessions_file> (agentrouter/tabi/gorouter/xpeach/justwoker/seekai/truesota/kktoken/hcnsec):
 # дашборд держит там balance/granted/balanceCheckedAt активного ключа. Читаем блок активного
@@ -751,7 +776,23 @@ elif [ "$provider" = "rumeng" ] && [ -f "$ROUTING/rumeng-sessions.json" ]; then
     # There is no subscription grant; dashboard's balance is the authoritative value.
     gauge_from_balance_cache "$ROUTING/rumeng-sessions.json" "$PROF/.claude/rumeng-active-key.txt" "rm/balance" 90
 elif [ "$provider" = "agentrouter" ] && [ -f "$ROUTING/agentrouter-sessions.json" ]; then
-    gauge_from_balance_cache "$ROUTING/agentrouter-sessions.json" "$PROF/.claude/ar-active-key.txt" "ar/balance" 90
+    load_agentrouter_state
+    if [ "$ar_have_gauge" = "1" ]; then
+        have_gauge=1
+        avail_sum="$ar_balance"
+        pct="$ar_percent"
+        balance_age_s="$ar_balance_age_s"
+        stale_age_s="$ar_balance_age_s"
+        [ "$ar_balance_error" = "1" ] && balance_err="error"
+        if [ "$stale_age_s" -gt 90 ] 2>/dev/null; then
+            stale=1
+            ar_key=""; read -r ar_key < "$PROF/.claude/ar-active-key.txt" 2>/dev/null || true
+            ar_key="${ar_key//[$' \t\r\n']/}"
+            [ -n "$ar_key" ] && ("$CURL_BIN" -s -m 1 \
+                "http://localhost:8200/__switch/api/ar/balance?api_key=$ar_key&nudge=1" \
+                >/dev/null 2>&1 &) >/dev/null 2>&1
+        fi
+    fi
 elif [ "$provider" = "tabi" ] && [ -f "$ROUTING/tabi-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/tabi-sessions.json" "$PROF/.claude/tabi-active-key.txt" "tb/balance" 90
 elif [ "$provider" = "gorouter" ] && [ -f "$ROUTING/gorouter-sessions.json" ]; then
@@ -816,7 +857,7 @@ if [ "${map_prefix:-}" = "ar" ]; then
         esac
     fi
     if [ -n "$pool_pfx" ] && [ -r "$HOME/.claude/ar-quota-state.json" ]; then
-        q_raw="$(cat "$HOME/.claude/ar-quota-state.json" 2>/dev/null)"
+        q_raw="$(<"$HOME/.claude/ar-quota-state.json")"
         q_state=""
         # Полосы лежат словарём: {"opus":{"state":…},"gpt":{…}}. Формат v1 (плоская
         # запись без ключей полос) читается как opus — он лежит на диске у всех, кто
@@ -836,8 +877,10 @@ if [ "${map_prefix:-}" = "ar" ]; then
         # зоны берём таблицей, а не `date`; незнакомую зону добираем ручкой расписания.
         if [ "$q_state" = "exhausted" ]; then
             q_drop_ms=0
+            q_drop_iso=""
             if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"dropAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-                q_drop_ms=$(( $(date -d "${BASH_REMATCH[1]}" +%s 2>/dev/null || echo 0) * 1000 ))
+                q_drop_iso="${BASH_REMATCH[1]}"
+                q_drop_ms=$(( $(date -d "$q_drop_iso" +%s 2>/dev/null || echo 0) * 1000 ))
             fi
             q_now_ms=$(( $(date +%s) * 1000 ))
             q_sched_raw=""
@@ -854,7 +897,12 @@ if [ "${map_prefix:-}" = "ar" ]; then
             if [ -n "$q_off" ] && [ -n "$q_sched_raw" ]; then
                 # локальное HH:MM → минута дня UTC (может уйти в ±сутки — перебираем -1/0/+1)
                 q_day0=$(( q_now_ms / 1000 - (q_now_ms / 1000) % 86400 ))
-                while read -r q_t; do
+                # Extract quoted HH:MM values in-process. Spawning grep|tr here added about
+                # a second to every exhausted-pool render under Git Bash on Windows.
+                q_times="$q_sched_raw"
+                while [[ "$q_times" =~ \"([0-9][0-9]:[0-9][0-9])\" ]]; do
+                    q_t="${BASH_REMATCH[1]}"
+                    q_times="${q_times#*\"$q_t\"}"
                     [ -n "$q_t" ] || continue
                     q_hh=${q_t%%:*}; q_mm=${q_t#*:}
                     q_um=$(( 10#$q_hh * 60 + 10#$q_mm - q_off ))
@@ -862,7 +910,7 @@ if [ "${map_prefix:-}" = "ar" ]; then
                         q_b=$(( (q_day0 + q_d * 86400 + q_um * 60) * 1000 ))
                         [ "$q_b" -le "$q_now_ms" ] && [ "$q_b" -gt "$q_cur_ms" ] && q_cur_ms=$q_b
                     done
-                done <<< "$(printf '%s' "$q_sched_raw" | grep -oE '"[0-9]{2}:[0-9]{2}"' | tr -d '"')"
+                done
             else
                 # Зоны нет в таблице (или файла нет): спросим сервер. Ветка редкая — пул уже
                 # пуст, и один короткий curl тут дешевле, чем молчащая метка.
@@ -871,6 +919,30 @@ if [ "${map_prefix:-}" = "ar" ]; then
                 [ -n "$q_last" ] && q_cur_ms=$(( $(date -d "$q_last" +%s 2>/dev/null || echo 0) * 1000 ))
             fi
             [ "$q_drop_ms" != "0" ] && [ "$q_drop_ms" = "$q_cur_ms" ] && pool_dry=1
+
+            # `exhausted` — снимок одной неудачной пробы, а token-usage.jsonl содержит
+            # только успешные 2xx-ответы. Более свежий успех ТОЙ ЖЕ реальной полосы
+            # опровергает снимок. Смотрим `am` (actual model), а не `m`: при fallback
+            # клиент всё ещё просил GPT/Claude, но реально отвечал deepseek/glm, и такой
+            # успех не означает, что пул ожил. Проверяем только уже-красную текущую партию,
+            # поэтому обычный рендер бара файл журнала вообще не читает.
+            if [ "$pool_dry" = "1" ] && [ -r "$ROUTING/token-usage.jsonl" ]; then
+                q_checked_iso=""
+                if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"checkedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+                    q_checked_iso="${BASH_REMATCH[1]}"
+                elif [ "$pool_pfx" = "opus" ] && [[ "$q_raw" =~ ^[[:space:]]*\{[^}]*\"checkedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+                    q_checked_iso="${BASH_REMATCH[1]}"
+                fi
+                # All writers use canonical UTC ISO timestamps. One bounded Node read parses
+                # the journal tail; doing this row-by-row in bash took minutes on Windows.
+                q_after_iso="$q_checked_iso"
+                [ -n "$q_drop_iso" ] && { [ -z "$q_after_iso" ] || [[ "$q_drop_iso" > "$q_after_iso" ]]; } && q_after_iso="$q_drop_iso"
+                if [ -n "$q_after_iso" ] && [ -f "$ROUTING/statusline-pool-success.js" ]; then
+                    q_pool_live="$(node "$ROUTING/statusline-pool-success.js" \
+                        "$ROUTING/token-usage.jsonl" "$pool_pfx" "$q_after_iso" 2>/dev/null)"
+                    [ "$q_pool_live" = "1" ] && pool_dry=0
+                fi
+            fi
         fi
         # Куда уедет при пустом пуле. «⛔ пул пуст» без адреса бесполезно: владелец
         # 16.09 видел пометку и всё равно не понимал, на чём работает. Берём ту же
@@ -1074,47 +1146,10 @@ fi
 
 # ---- AgentRouter: сколько аккаунтов готовы забрать +$25 --------------------
 # Считаем ВСЕГДА, а не только когда активен agentrouter: бонус лежит на всём пуле, и
-# знать про него надо, даже сидя на FreeModel. Сброс — суточная граница (по умолчанию
-# 20:30 МСК = 17:30 UTC, МСК это UTC+3 без переходов на летнее время).
-# Оценка приблизительная: аккаунт, который забрал и потом умер, занижает счёт на 1.
-# Точную цифру считает дашборд — здесь важна не арифметика, а «пора идти».
-ar_ready=0
-if [ -f "$ROUTING/agentrouter-sessions.json" ]; then
-    ar_hh=20; ar_mm=30
-    if [ -f "$ROUTING/ar-checkin.json" ]; then
-        ar_hhmm="$(grep -oE '"resetHhmmMsk"[[:space:]]*:[[:space:]]*"[0-9]{1,2}:[0-9]{2}"' "$ROUTING/ar-checkin.json" 2>/dev/null | grep -oE '[0-9]{1,2}:[0-9]{2}' | head -n1)"
-        if [ -n "$ar_hhmm" ]; then
-            ar_hh="${ar_hhmm%%:*}"; ar_mm="${ar_hhmm##*:}"
-            ar_hh=$((10#$ar_hh)); ar_mm=$((10#$ar_mm))
-        fi
-    fi
-    # Границу считаем секундами от начала UTC-суток: `date -d "…-1:30"` ломается,
-    # когда граница раньше 03:00 и час уходит в минус.
-    # Начало UTC-суток берём АРИФМЕТИКОЙ, а не `date -d`: GNU-синтаксиса на маке
-    # нет, подстановка молча давала 0 и весь блок 🎁 пропускался (поймано в
-    # аудите 2026-08-20 — на маке напоминание про +$25 не появлялось никогда).
-    ar_now="$(date -u +%s)"
-    ar_day=$(( ar_now - ar_now % 86400 ))
-    ar_b=$(( ar_day + (ar_hh - 3) * 3600 + ar_mm * 60 ))
-    [ "$ar_b" -gt "$ar_now" ] && ar_b=$(( ar_b - 86400 ))
-    # BSD: `-r <epoch>`, GNU: `-d @<epoch>` — порядок именно такой, на маке
-    # первый же вариант срабатывает и второй не зовётся.
-    ar_biso="$(date -u -r "$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u -d "@$ar_b" +%Y-%m-%dT%H:%M:%S 2>/dev/null)"
-    # Пустая граница сравнивалась бы с любой датой как «уже забрал» и гасила 🎁.
-    if [ -n "$ar_biso" ]; then
-        # checkinAt пишется toISOString() → UTC фиксированной ширины, поэтому
-        # лексикографическое сравнение строк здесь и есть хронологическое.
-        ar_got="$(grep -oE '"checkinAt"[[:space:]]*:[[:space:]]*"[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]+"' "$ROUTING/agentrouter-sessions.json" 2>/dev/null \
-            | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[^"]+' \
-            | awk -v b="$ar_biso" '$1 >= b { n++ } END { print n+0 }')"
-        ar_live="$(grep -c '"status"[[:space:]]*:[[:space:]]*"live"' "$ROUTING/agentrouter-sessions.json" 2>/dev/null | tr -cd 0-9)"
-        [ -z "$ar_live" ] && ar_live=0
-        [ -z "$ar_got" ] && ar_got=0
-        ar_ready=$(( ar_live - ar_got ))
-        [ "$ar_ready" -lt 0 ] && ar_ready=0
-    fi
-fi
-[ "$ar_ready" -gt 0 ] && printf ' %s🎁%d%s' $'\033[38;5;214m' "$ar_ready" "$RESET"
+# знать про него надо, даже сидя на FreeModel. Тот же bounded Node-проход уже считает
+# live/checkinAt вместе с активным балансом, чтобы не сканировать session JSON повторно.
+load_agentrouter_state
+[ "$ar_ready" -gt 0 ] 2>/dev/null && printf ' %s🎁%d%s' $'\033[38;5;214m' "$ar_ready" "$RESET"
 
 # ---- 💸 авторотация: выключенный тумблер обязан быть виден ------------------
 # Зачем в баре. Общий тумблер авторотации стоял `false` неизвестно сколько (замер

@@ -262,8 +262,14 @@ function readModelMap(routes) {
 const TIER_RE = [{ tier: 'opus', re: /(^|[-_.\/])?opus([-\/]|$)/i }, { tier: 'sonnet', re: /(^|[-_.\/])?sonnet([-\/]|$)/i }, { tier: 'haiku', re: /(^|[-_.\/])?haiku([-\/]|$)/i }];
 function tierTargetFor(model, routes) {
     const mm = readModelMap(routes);
+    // Клиент присылает метку окна (`claude-sonnet-5[1m]`), а карта тиров и каталог шлюза
+    // живут ГОЛЫМИ именами. Сравнивать их с суффиксом значит считать живую модель
+    // отсутствующей: 12.11 замена `claude-opus-4-8 → claude-opus-5` уезжала на провод
+    // как `claude-opus-5[1m]`, каталог её не узнавал, и запрос сабагента падал 503.
+    // Суффикс на цель переносит `upstreamModelFor` — уже после выбора.
+    const bareModel = String(model || '').replace(/\s*\[[^\]]*\]\s*$/, '');
     for (const { tier, re } of TIER_RE) {
-        if (mm[tier] && re.test(String(model || ''))) {
+        if (mm[tier] && re.test(bareModel)) {
             const target = mm[tier];
             // ── Пул наливки пуст: уходим в беспуловую модель ДО всего остального ──
             // Проверка стоит первой намеренно. Если модель уже помечена мёртвой
@@ -276,7 +282,7 @@ function tierTargetFor(model, routes) {
             // Карта — пожелание, каталог шлюза — факт. Если цели у шлюза нет, берём
             // живую замену: иначе запрос гарантированно умрёт на 503 model_not_found
             // (03.09: justwoker убрал claude-opus-4-8, и 255 запросов сабагентов легли).
-            const alt = availableTarget(tier, target, model, mm);
+            const alt = availableTarget(tier, target, bareModel, mm);
             if (alt) return { tier, target: alt, from: target, substituted: true };
             return { tier, target };
         }

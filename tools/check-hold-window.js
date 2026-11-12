@@ -50,6 +50,16 @@ function waitFor(pred, ms, what) {
   });
 }
 
+// Свободен ли порт прямо сейчас: короткая повторная проверка не нужна, сокеты от
+// прошлого прогона живут в TIME_WAIT минуты, и стартовать на них нельзя.
+function portFree(port) {
+  return new Promise((resolve) => {
+    const probe = require('net').createServer();
+    probe.once('error', () => resolve(false));
+    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(true)));
+  });
+}
+
 // Заглушка шлюза. mode: 'reset-then-ok' — первые resets запросов рвёт сокет посреди
 // ожидания (ровно то, что делает флап туннеля), дальше отдаёт нормальный SSE;
 // 'route-miss' — всегда 503 с телом New API;
@@ -68,6 +78,9 @@ function stubGateway(port, mode, resets, silenceMs) {
         return res.end('not found');
       }
       res.writeHead(200, { 'content-type': 'application/json' });
+      // `route-miss-no-catalog` — промах маршрута при пустом каталоге: только так он
+      // остаётся НАСТОЯЩИМ промахом (см. сцену 2).
+      if (mode === 'route-miss-no-catalog') return res.end(JSON.stringify({ data: [] }));
       return res.end(JSON.stringify({ data: [{ id: 'claude-opus-5' }, { id: 'claude-opus-5-thinking' }] }));
     }
     state.hits += 1;
@@ -77,7 +90,11 @@ function stubGateway(port, mode, resets, silenceMs) {
       let asked = '';
       try { asked = JSON.parse(Buffer.concat(body).toString('utf8') || '{}').model || ''; } catch { /* не json */ }
       state.seen.push(asked);
-      if (mode === 'route-miss' || (mode === 'only-opus5' && asked !== 'claude-opus-5')) {
+      // `[1m]` — метка окна той же модели, а не другая модель: имя на проводе приходит
+      // с суффиксом (upstreamModelFor переносит его на claude-цель), и стаб обязан
+      // сравнивать БЕЗ него, иначе «живая» модель считается мёртвой.
+      const askedBare = asked.replace(/\s*\[[^\]]*\]\s*$/, '');
+      if (mode === 'route-miss' || mode === 'route-miss-no-catalog' || (mode === 'only-opus5' && askedBare !== 'claude-opus-5')) {
         res.writeHead(503, { 'content-type': 'application/json' });
         return res.end(ROUTE_MISS);
       }
@@ -214,9 +231,17 @@ function ask(port, model) {
     }
 
     // ── Сцена 2: промах маршрута — отказ сразу, попытки не жжём ──────────────────
+    // 🪤 Каталог ФИКСТУРЫ не должен содержать модель: с 11.09 у keepalive есть ветка
+    // «модель есть в каталоге, но шлюз отказал — ложный model_not_found, повторю». Она
+    // намеренно сильнее правила «промах не повторяем», и общий стаб (он отдаёт
+    // claude-opus-5 в /v1/models) делал из честного промаха именно этот случай —
+    // тест падал на 2 обращениях, хотя код прав. Убираем модель из каталога, и
+    // проверяем ровно то, ради чего сцена существует: настоящий промах = один запрос.
     {
       const [P, U] = [28343, 28344];
-      const gw = stubGateway(U, 'route-miss', 0);
+      // Каталог без модели — это отдельный режим стаба, а не общий флаг: сцена 5 ниже
+      // рассчитывает на штатный каталог (`claude-opus-5` + `-thinking`).
+      const gw = stubGateway(U, 'route-miss-no-catalog', 0);
       await gw.listen();
       const kp = spawnKeepalive(P, U, { MAX_ATTEMPTS: '3', HOLD_MS: '30000' });
       open.push(gw.srv, kp.proc);
@@ -286,9 +311,14 @@ function ask(port, model) {
       await waitFor(() => /каталог 127\.0\.0\.1/.test(kp.log), 8000, 'каталог шлюза прочитан на старте');
 
       const r = await ask(P, 'claude-sonnet-5[1m]');
-      assert.strictEqual(r.status, 200, `сабагент получил ответ, а не 503 (было ${r.status})`);
+      // Диагностика сцены: без неё падение говорит только «503», а нужна причина.
+      const diag = String(kp.log).split(/\r?\n/).filter(l => /каталог|ПОДМЕНА|нет модели|быстрый отказ|замены нет|winner|-> 5/.test(l)).slice(0, 8).join(' | ');
+      assert.strictEqual(r.status, 200, `сабагент получил ответ, а не 503 (было ${r.status}) :: ${diag}`);
       assert.ok(/ПОДМЕНА: claude-opus-4-8 нет у шлюза/.test(kp.log), 'подмена видна в логе с причиной');
-      assert.deepStrictEqual(gw.state.seen, ['claude-opus-5'], `шлюз спрошен живой моделью сразу (видел ${JSON.stringify(gw.state.seen)})`);
+      // На провод уходит `[1m]` цели: `upstreamModelFor` переносит клиентский суффикс
+      // окна на claude-цель (см. комментарий у upstreamModelFor), и суффикс в имени —
+      // это вариант ТОЙ ЖЕ модели, а не промах: `POOL_MODEL_RE` его тоже нормализует.
+      assert.deepStrictEqual(gw.state.seen, ['claude-opus-5[1m]'], `шлюз спрошен живой моделью сразу (видел ${JSON.stringify(gw.state.seen)})`);
       assert.ok(r.body.includes('ХОЛД-ОК'), 'ответ доехал до клиента');
       checks += 4;
     }
@@ -311,9 +341,13 @@ function ask(port, model) {
 
       const r = await ask(P, 'claude-sonnet-5[1m]');
       assert.strictEqual(r.status, 200, `запрос вылечен на лету (было ${r.status})`);
-      assert.deepStrictEqual(gw.state.seen, ['claude-opus-4-8', 'claude-opus-5'],
+      // На провод уходит `[1m]` — суффикс окна переносится с клиентской модели на цель.
+      assert.deepStrictEqual(gw.state.seen, ['claude-opus-4-8[1m]', 'claude-opus-5[1m]'],
         `сначала мёртвая модель, потом живая (видел ${JSON.stringify(gw.state.seen)})`);
-      assert.ok(/подмена модели: claude-opus-4-8 → claude-opus-5, повторяю/.test(kp.log), 'подмена по ответу шлюза записана');
+      // Лог называет модель так, как она ушла на провод (с `[1m]`), поэтому сверяем
+      // по обоим именам, а не по точной строке без суффикса.
+      assert.ok(/подмена модели: claude-opus-4-8(\[1m\])? → claude-opus-5(\[1m\])?, повторяю/.test(kp.log),
+        'подмена по ответу шлюза записана');
       assert.ok(!/повтор\/копия/.test(kp.log), 'бюджет ретраев не тронут — подмена идёт бонусной попыткой');
       checks += 4;
     }
@@ -365,7 +399,9 @@ function ask(port, model) {
     // пустого потока в логе не появился ни разу — он взводился только по заголовкам
     // шлюза, которых ещё не было. Здесь заглушка не отвечает вовсе на первый запрос.
     {
-      const [P, U] = [28361, 28362];
+      // Порты выбраны выше занятого диапазона сцен 1-10 (28341-28360): 28361/28362 уходили
+      // в TIME_WAIT после падения прерванного прогона и блокировали тест на минуты.
+      const [P, U] = [28371, 28372];
       const gw = stubGateway(U, 'open-forever', 1);
       // Заглушка режима 'open-forever' на первом запросе даже заголовков не отдаёт:
       // подменяем ей поведение — просто держим сокет молча.
@@ -452,9 +488,19 @@ function ask(port, model) {
           }, 4200);                                  // дольше jsonHoldMs=2000, короче удержания
         });
       });
-      await new Promise(r => srv.listen(U, '127.0.0.1', r));
+      // 🪤 Порт проверяем как сцены 1-9: занят — сцена не стартует и говорит об этом
+      // прямо. Иначе упавший прогон оставляет сокеты в TIME_WAIT, следующий падает с
+      // `EADDRINUSE` на голом `listen`, и причина провала теряется в стеке node.
+      if (!(await portFree(U))) throw new Error(`сцена 11: порт ${U} занят (хвост прошлого прогона)`);
+      await new Promise((resolve, reject) => {
+        srv.once('error', (e) => reject(new Error(`сцена 11: listen ${U}: ${e.code || e.message}`)));
+        srv.listen(U, '127.0.0.1', resolve);
+      });
       const kp = spawnKeepalive(P, U, { MAX_ATTEMPTS: '1', JSON_HOLD_MS: '2000', IDLE_MS: '600', HOLD_MS: '0' });
-      open.push(srv, kp.proc);
+      // Сервер закрывается методом close(), процесс — kill(): цикл очистки вызывает
+      // `x.kill ? x.kill() : x.close()`, и голый `http.Server` (без .kill) закроется
+      // верно. Сцена 11 держит сервер до конца прогона нарочно — она последняя.
+      open.push({ close: () => { try { srv.close(); } catch {} } }, kp.proc);
       await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 11)');
 
       const r = await askJson(P);

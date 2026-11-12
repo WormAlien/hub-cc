@@ -1,0 +1,11 @@
+Bifrost sidecar notice
+
+This project can download and run MaximHQ Bifrost v2.5.0 from
+https://github.com/maximhq/bifrost.
+
+Bifrost is licensed under the Apache License, Version 2.0. The upstream
+license is available at https://github.com/maximhq/bifrost/blob/transports/v2.5.0/LICENSE.
+
+The Bifrost executable is downloaded into a local ignored cache after SHA-256
+verification. It is not tracked or committed by this repository. Source and
+license remain available from the pinned upstream tag.

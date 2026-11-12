@@ -36,8 +36,10 @@ async function main() {
     }
     // Якорь: state-файл узнаётся тем же предикатом, что и в git-пути.
     check(isStateFile('routing/ar-modelmap.json'), 'ar-modelmap.json — файл состояния');
-    check(isStateFile('routing/newprovider-modelmap.json'), 'любой *-modelmap.json — файл состояния (паттерн)');
-    check(!isStateFile('hub.js'), 'hub.js — не файл состояния (перезапишется)');
+    check(isStateFile('routing/newprovider-modelmap.json'), 'any *-modelmap.json is a state file (pattern)');
+    check(isStateFile('routing/api-gateway.json'), 'api-gateway.json is local state');
+    check(!isStateFile('routing/api-gateway.default.json'), 'tracked API Gateway seed is not local state');
+    check(!isStateFile('hub.js'), 'hub.js is not state (it is overwritten)');
 
     // ── 2. extract снимает верхнюю папку архива (strip:1) ──
     const packRoot = tmp('hu-pack-');
@@ -45,6 +47,8 @@ async function main() {
     fs.mkdirSync(path.join(topDir, 'routing'), { recursive: true });
     fs.writeFileSync(path.join(topDir, 'hub.js'), 'console.log("v2")\n');
     fs.writeFileSync(path.join(topDir, 'routing', 'ar-modelmap.json'), '{"from":"archive"}\n');
+    fs.writeFileSync(path.join(topDir, 'routing', 'api-gateway.json'), '{"from":"archive"}\n');
+    fs.writeFileSync(path.join(topDir, 'routing', 'api-gateway.default.json'), '{"seed":"archive"}\n');
     // Архив пишем ВНЕ packRoot: положив его внутрь, tar.pack начнёт паковать
     // растущий на ходу tarball и повиснет (сам себя читает).
     const tarPath = path.join(tmp('hu-tar-'), 'src.tar.gz');
@@ -60,12 +64,19 @@ async function main() {
     const target = tmp('hu-target-');
     fs.mkdirSync(path.join(target, 'routing'), { recursive: true });
     fs.writeFileSync(path.join(target, 'hub.js'), 'console.log("v1")\n');           // старый код
-    fs.writeFileSync(path.join(target, 'routing', 'ar-modelmap.json'), '{"user":"tiers"}\n'); // настройки пользователя
+    fs.writeFileSync(path.join(target, 'routing', 'ar-modelmap.json'), '{"user":"tiers"}\n'); // user settings
+    const localManifest = Buffer.from('{"owner":"local"}\r\n', 'utf8');
+    fs.writeFileSync(path.join(target, 'routing', 'api-gateway.json'), localManifest);
+    fs.writeFileSync(path.join(target, 'routing', 'api-gateway.default.json'), '{"seed":"old"}\n');
 
     const res = HU.apply(outDir, target);
     check(fs.readFileSync(path.join(target, 'hub.js'), 'utf8').includes('v2'), 'код перезаписан свежим из архива');
     check(fs.readFileSync(path.join(target, 'routing', 'ar-modelmap.json'), 'utf8').includes('user'),
-        'существующий файл состояния НЕ перезаписан (настройки пользователя целы)');
+        'existing state file is not overwritten');
+    check(fs.readFileSync(path.join(target, 'routing', 'api-gateway.json')).equals(localManifest),
+        'existing local API Gateway manifest is preserved byte-exact');
+    check(fs.readFileSync(path.join(target, 'routing', 'api-gateway.default.json'), 'utf8').includes('archive'),
+        'tracked API Gateway default seed is updated from archive');
     check(res.preserved >= 1, `сохранённых настроек посчитано (${res.preserved})`);
     check(res.copied >= 1, `наложенных файлов посчитано (${res.copied})`);
 
@@ -73,10 +84,39 @@ async function main() {
     const target2 = tmp('hu-target2-');
     const res2 = HU.apply(outDir, target2);
     check(fs.existsSync(path.join(target2, 'routing', 'ar-modelmap.json')),
-        'отсутствующий у пользователя файл состояния приезжает из архива');
+        'отсутствующий у пользователя обычный файл состояния приезжает из архива');
+    check(!fs.existsSync(path.join(target2, 'routing', 'api-gateway.json')),
+        'owner-local API Gateway manifest никогда не импортируется из update archive');
+    check(fs.readFileSync(path.join(target2, 'routing', 'api-gateway.default.json'), 'utf8').includes('archive'),
+        'tracked default seed приезжает и при отсутствии local manifest');
+
+    // ── 5. apply serializes with the same owner-manifest writer lock ──
+    const target3 = tmp('hu-target3-');
+    fs.mkdirSync(path.join(target3, 'routing'), { recursive: true });
+    fs.writeFileSync(path.join(target3, 'hub.js'), 'console.log("old")\n');
+    const liveLock = path.join(target3, 'routing', 'api-gateway.json.lock');
+    fs.writeFileSync(liveLock, String(process.pid), 'utf8');
+    let busyError = null;
+    try { HU.apply(outDir, target3); } catch (error) { busyError = error; }
+    check(busyError && busyError.code === 'api_gateway_busy',
+        'git-free apply refuses while a live manifest writer holds the shared lock');
+    check(fs.readFileSync(path.join(target3, 'hub.js'), 'utf8').includes('old'),
+        'blocked git-free update changes no code before lock acquisition');
+    fs.unlinkSync(liveLock);
+    fs.writeFileSync(path.join(target3, 'routing', 'api-gateway.json.txn'), '{"version":1}\n', 'utf8');
+    let pendingError = null;
+    try { HU.apply(outDir, target3); } catch (error) { pendingError = error; }
+    check(pendingError && pendingError.code === 'api_gateway_busy',
+        'git-free apply refuses while a picker recovery journal is pending');
+    check(fs.readFileSync(path.join(target3, 'hub.js'), 'utf8').includes('old'),
+        'pending recovery journal blocks code replacement before apply');
+    fs.unlinkSync(path.join(target3, 'routing', 'api-gateway.json.txn'));
+    const afterUnlock = HU.apply(outDir, target3);
+    check(afterUnlock.copied >= 1 && fs.readFileSync(path.join(target3, 'hub.js'), 'utf8').includes('v2'),
+        'git-free update proceeds after writer releases the lock');
 
     // уборка временных папок (свои, этой сессии — можно rm)
-    for (const d of [packRoot, outDir, target, target2]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
+    for (const d of [packRoot, outDir, target, target2, target3]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} }
 
     console.log(`\n1..${checks}`);
     if (failures) { console.error(`${failures} проверок упало`); process.exit(1); }

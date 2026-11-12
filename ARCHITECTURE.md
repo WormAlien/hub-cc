@@ -414,6 +414,54 @@ cat без файла виснет на stdin. Выяснено на чисто�
 **В режиме front-door** (см. ниже) base URL всегда `:20100`, и источник правды —
 `~/.claude/active-backend.json`; правила выше остаются фолбэком для прямого режима.
 
+### API Gateway - dual protocol, dashboard publication and client sync (09-11.11.2026)
+
+ABUSE HUB exposes one public loopback authority for three clients:
+
+- Claude Code keeps native Anthropic Messages at `http://127.0.0.1:20100`;
+- OpenCode and Hermes use OpenAI Chat Completions at `http://127.0.0.1:20100/openai/v1`;
+- canonical wire IDs are exact `provider/model`, split only at the first slash.
+
+Canonical publication state:
+
+- tracked `routing/api-gateway.default.json` is a small seed;
+- owner-local `routing/api-gateway.json` is ignored and created only on first read;
+- `routing/lib/api-gateway.js` validates providers against raw `backends.json.providers`, never aliases;
+- publication affects `/models` and pickers only. Hidden canonical IDs remain callable;
+- manifest plus Claude `modelPicker` save is one optimistic recoverable transaction with shared lock, source hashes, adjacent byte-exact backups, fsynced stages and a content-free journal;
+- git update, archive update and rescue use the same lock.
+
+OpenAI path:
+
+- `GET /openai/v1/models` is served directly from the manifest and does not depend on Bifrost;
+- `POST /openai/v1/chat/completions` delegates protocol conversion to checksum-pinned Bifrost v2.5.0 on `127.0.0.1:20135`;
+- front-door authenticates each Bifrost callback with a one-use 256-bit capability bound to the exact canonical model;
+- `x-route-final` plus `x-route-exact` suppress every tier/catalog/model/provider substitution, hedge and extra generation while same-provider key/account rotation remains allowed;
+- every public JSON/SSE object restores the immutable canonical ID; truncated streams never receive synthetic success;
+- the outer leg creates no usage row. The internal Messages leg creates the single usage row;
+- Windows cancellation is correlated through the callback registry and destroys the paid backend socket even when Bifrost does not propagate disconnects itself.
+
+Local trust and lifecycle:
+
+- Bifrost artifacts and local catalogs are hash-pinned for Windows, Linux and Darwin amd64/arm64;
+- sidecar lifecycle verifies executable path/hash, generated config, command line, version and health, uses an allowlisted environment and exact-PID cleanup;
+- local front-door, keepalive and protocol-adapter hops use role-separated HMAC tokens from a 32-byte secret under the user secrets directory. Tests always override this into temp state;
+- generic Custom keepalive/adapter topologies persist exact PID and process identity. Stop, boot sweep and manual cleanup recheck ownership immediately before exact-PID termination and fail closed on stale port reuse;
+- direct browser/localhost callers cannot forge exact privileges or spend an owner key through a converter.
+
+Dashboard and clients:
+
+- `routing/lib/api-gateway-dashboard.js` joins published manifest rows with shared candidate, passive traffic and probe evidence. Publication and health remain independent;
+- `routing/vendor/api-gateway-tab.js` and `.css` render published rows globally first, candidates, independent evidence badges, sidecar/client cards, redacted OpenCode Preview/Sync and Hermes instructions;
+- `routing/lib/api-gateway-opencode.js` updates only `provider.abuse-hub` across three injected target configs through a recoverable all-or-nothing transaction. It preserves `model`, `small_model`, agents, MCP, permissions, commands, secrets and other providers;
+- `routing/lib/api-gateway-hermes.js` detects installation without creating a root. Current Hermes uses its loopback API to upsert only endpoint `abuse-hub`, requires one currently published model, keeps `make_default:false`, and never edits offline YAML;
+- macOS uses XDG OpenCode paths and platform-specific Hermes instructions. Darwin amd64/arm64 artifacts have structural acceptance; live Mac execution was not claimed on the Windows host.
+
+Automated acceptance uses temp homes/configs, dynamic loopback ports and owned child PIDs. It includes real pinned Bifrost and real isolated OpenCode 1.19.4 text plus read-only tool-result loop. Tests do not read or mutate the real Claude/OpenCode/Hermes configs. Production activation/restart and explicit real client Sync are separate owner-controlled actions.
+
+Focused checks include `check-api-gateway-manifest.js`, `check-api-gateway-frontdoor.js`, `check-bifrost-stack.js`, `check-api-gateway-sync.js`, `check-api-gateway-candidates.js`, `check-api-gateway-dashboard.js`, `check-api-gateway-opencode.js`, `check-api-gateway-hermes.js`, `check-api-gateway-integration.js`, `check-api-gateway-ui-browser.js` and `check-api-gateway-opencode-real.js`.
+
+
 ### Front-door `:20100` — переключение провайдера без рестарта Claude Code
 
 **Проблема.** `env` из `settings.json` Claude Code читает ОДИН раз, на старте процесса.

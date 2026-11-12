@@ -37,6 +37,7 @@ const fetch = require('node-fetch');
 const tar = require('tar-fs');
 
 const { isStateFile } = require('./git-pull-safe');
+const { acquireManifestLock, releaseManifestLock } = require('../routing/lib/api-gateway');
 
 const REPO = path.resolve(__dirname, '..');
 const OWNER = 'WormAlien';
@@ -110,21 +111,40 @@ async function extract(tarPath, outDir) {
 // Наложить распакованное дерево поверх REPO. State-файлы, которые уже есть на
 // диске, НЕ трогаем — их единственный писатель дашборд. cpSync с фильтром: false
 // = пропустить (файл/папку не копировать), force:true = перезаписать код.
-function apply(srcRoot, target = REPO) {
+function applyUnlocked(srcRoot, target) {
     let copied = 0, preserved = 0;
     fs.cpSync(srcRoot, target, {
         recursive: true,
         force: true,
         filter: (src) => {
             const rel = path.relative(srcRoot, src).split(path.sep).join('/');
-            if (!rel) return true;                      // корень
+            if (!rel) return true;
             const dest = path.join(target, rel);
+            if (rel === 'routing/api-gateway.json') { preserved++; return false; }
             if (isStateFile(rel) && fs.existsSync(dest)) { preserved++; return false; }
             try { if (fs.statSync(src).isFile()) copied++; } catch {}
             return true;
         },
     });
     return { copied, preserved };
+}
+
+function apply(srcRoot, target = REPO) {
+    const lockPath = path.join(target, 'routing', 'api-gateway.json.lock');
+    let lockFd = null;
+    try {
+        fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+        lockFd = acquireManifestLock(lockPath);
+        if (fs.existsSync(path.join(target, 'routing', 'api-gateway.json.txn'))
+            || fs.existsSync(path.join(target, 'routing', 'api-gateway.json.update-txn'))) {
+            const error = new Error('API Gateway recovery is pending; run the gateway before updating code.');
+            error.code = 'api_gateway_busy';
+            throw error;
+        }
+        return applyUnlocked(srcRoot, target);
+    } finally {
+        releaseManifestLock(lockPath, lockFd);
+    }
 }
 
 // Возвращает { ok, already, from, to, copied, preserved, error }.

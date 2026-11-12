@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "repo": "maximhq/bifrost",
+  "license": "Apache-2.0",
+  "version": "v2.5.0",
+  "defaultHost": "127.0.0.1",
+  "defaultPort": 20135,
+  "catalogs": {
+    "pricing": {
+      "filename": "bifrost-pricing.json",
+      "sha256": "9269f021b3e0240ba6252d6f6b81fe167dcd1724bd84c74310a5389ce392845c"
+    },
+    "modelParameters": {
+      "filename": "bifrost-model-parameters.json",
+      "sha256": "eb0279f8848f3f6690d10dff1165fe8c2b22818cb93319f76a3341d17a911dac"
+    }
+  },
+  "artifacts": {
+    "win32-x64": {
+      "url": "https://downloads.getmaxim.ai/bifrost/v2.5.0/windows/amd64/bifrost-http.exe",
+      "filename": "bifrost-http.exe",
+      "sha256": "2736fffdeb99b3bc0f7d45aa1d84d3cda73a70800a35de99695488842731604d"
+    },
+    "linux-x64": {
+      "url": "https://downloads.getmaxim.ai/bifrost/v2.5.0/linux/amd64/bifrost-http",
+      "filename": "bifrost-http",
+      "sha256": "d7f9697ebf443f8f961c1c751e58123320ae8c749170eaf63b6455dd4f1fde2f"
+    },
+    "linux-arm64": {
+      "url": "https://downloads.getmaxim.ai/bifrost/v2.5.0/linux/arm64/bifrost-http",
+      "filename": "bifrost-http",
+      "sha256": "7d5e8717793ba7c9a87cfd63886c226c79f470932dd1281d29209ddf47d8b85f"
+    },
+    "darwin-x64": {
+      "url": "https://downloads.getmaxim.ai/bifrost/v2.5.0/darwin/amd64/bifrost-http",
+      "filename": "bifrost-http",
+      "sha256": "6dcefc70045fc866a3532b0e0f42464cc22be47e832058d0527586c6fddd69e6"
+    },
+    "darwin-arm64": {
+      "url": "https://downloads.getmaxim.ai/bifrost/v2.5.0/darwin/arm64/bifrost-http",
+      "filename": "bifrost-http",
+      "sha256": "cf79d49801475af6a8f90111b9124c60e4395bf0b57fb01fe5fb64ab994919fd"
+    }
+  }
+}

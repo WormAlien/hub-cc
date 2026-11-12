@@ -613,8 +613,8 @@ const CURSOR = G('❯', '>');
 //
 // 🪤 Сворачивать можно только ЖИВЫХ. Лежащий сервис обязан быть назван — иначе
 // «поднято 4 из 6» превращается в загадку, какие именно четыре.
-function statusBlock({ compact = false } = {}) {
-    const rows = L.status();
+async function statusBlock({ compact = false, rows = null } = {}) {
+    rows = rows || await L.statusVerified();
     const dash = rows.find(r => r.port === 8200) || { name: 'Дашборд', port: 8200, up: false, pids: [] };
     const rest = rows.filter(r => r !== dash);
     if (!compact) line();
@@ -635,16 +635,21 @@ function statusBlock({ compact = false } = {}) {
     // которых ждут, + дети, которых дашборд поднимает сам), красным — только настоящая
     // недостача, а ленивые названы отдельной серой строкой. Принцип «лежащий обязан быть
     // назван» сохранён: молчать о них нельзя, иначе «а куда делся FM-ротатор».
-    const lazyDown = rest.filter(r => !r.up && r.role === 'service' && r.expected === false);
+    const lazyDown = rest.filter(r => !r.up && r.role === 'service' && r.expected === false && !r.optional);
+    const optionalDown = rest.filter(r => !r.up && r.role === 'service' && r.optional);
     const downSvc = rest.filter(r => !r.up && r.role === 'service' && r.expected !== false);
     const need = rest.filter(r => r.up || r.respawn || (r.role === 'service' && r.expected !== false));
     const names = alive.map(r => r.name.replace(' keepalive', '')).join(' · ') || 'никого';
     const room = Math.max(20, W() - (compact ? 34 : 24));
     const tally = `  ${alive.length}/${need.length}`;
+    const optionalNote = optionalDown.length
+        ? `  ${yellow(optionalDown.map(r => `${r.name} - OpenAI sidecar недоступен`).join(' · '))}`
+        : '';
     line(`  ${dim('живы:')} ${alive.length ? green(DOT_ON) + ' ' : ''}` +
         (names.length > room ? names.slice(0, room - 1) + '…' : names) +
         (downSvc.length ? red(tally) : dim(tally)) +
-        (downSvc.length ? '  ' + red('лежат: ' + downSvc.map(r => `${r.name} :${r.port}`).join(', ')) : ''));
+        (downSvc.length ? '  ' + red('лежат: ' + downSvc.map(r => `${r.name} :${r.port}`).join(', ')) : '') +
+        optionalNote);
     if (lazyDown.length) {
         line(`  ${dim('ждут выбора провайдера:')} ${grey(lazyDown.map(r => r.name).join(' · '))}`);
     }
@@ -710,6 +715,14 @@ function reporter() {
             case 'start-done':
                 cur.done(OK(), `${ev.name} ${dim(':' + ev.port)} поднят ${dim('(pid ' + ev.pid + ')')}`);
                 cur = null;
+                break;
+            case 'start-optional-failed':
+                if (cur) {
+                    cur.done(SKIP(), yellow(`${ev.name} :${ev.port} - OpenAI sidecar недоступен, native stack продолжает работу`));
+                    cur = null;
+                } else {
+                    line(`  ${SKIP()} ${yellow(`${ev.name} :${ev.port} - OpenAI sidecar недоступен, native stack продолжает работу`)}`);
+                }
                 break;
             case 'error':
                 if (cur) { cur.done(NO(), red(`${ev.name} :${ev.port} — ${ev.text}`)); cur = null; }
@@ -1009,7 +1022,7 @@ async function doCheck() {
     }
 
     // 4. Сервисы.
-    const rows = L.status();
+    const rows = await L.statusVerified();
     const svc = rows.filter(r => r.role === 'service');
     const down = svc.filter(r => !r.up);
     down.length === 0 ? good(`все сервисы подняты (${svc.length})`)
@@ -1738,7 +1751,7 @@ async function menu() {
             const { art: A, panel, withArt, compact, tip: wantTip } = layout();
             const headerRows = await intro();             // проявление по точкам
             const belowFrom = printedLines;
-            statusBlock({ compact });
+            await statusBlock({ compact });
             if (!compact) line();
             for (const [i, it] of items.entries()) line(itemLine(it, i === sel));
             line(dim('  ↑↓ выбрать · Enter запустить · цифра — сразу · q выход'));
@@ -1804,15 +1817,17 @@ async function menu() {
 // Те же операции без меню: этим путём ходят тонкие форвардеры (START.bat,
 // DASHBOARD.command, routing/restart-dashboard.*) и кнопка перезапуска в дашборде.
 // Коды выхода настоящие: 0 — получилось, 1 — нет. На них смотрит регресс.
-function printStatus() {
-    const rows = L.status();
+async function printStatus() {
+    const rows = await L.statusVerified();
     const w = Math.max(...rows.map(r => r.name.length));
     for (const r of rows) {
         const mark = r.up ? green(DOT_ON) : grey(DOT_OFF);
         const role = r.role === 'service' ? 'сервис' : (r.respawn ? 'ребёнок (сам встанет)' : 'ребёнок');
         // Конвертер невыбранного провайдера лежит штатно — подписываем, иначе строка без
         // pid читается как «упало». Ту же роль у детей играет слово «ребёнок».
-        const note = r.up ? dim('pid ' + r.pids.join(',')) : (r.provider && !r.expected ? dim('по выбору провайдера') : '');
+        const note = r.up
+            ? dim('pid ' + r.pids.join(','))
+            : (r.optional ? dim('OpenAI sidecar недоступен') : (r.provider && !r.expected ? dim('по выбору провайдера') : ''));
         line(`  ${mark} ${r.name.padEnd(w)} ${dim((':' + r.port).padEnd(7))} ${dim(role.padEnd(22))}${note}`);
     }
     // В знаменателе — только те сервисы, что ДОЛЖНЫ быть живыми сейчас: конвертеры
@@ -1821,10 +1836,12 @@ function printStatus() {
     const need = rows.filter(r => r.role === 'service' && r.expected !== false);
     const svcTotal = need.length;
     const svcUp = need.filter(r => r.up).length;
-    const lazyDown = rows.filter(r => r.role === 'service' && r.expected === false && !r.up).length;
+    const lazyDown = rows.filter(r => r.role === 'service' && r.expected === false && !r.optional && !r.up).length;
+    const optionalDown = rows.filter(r => r.role === 'service' && r.optional && !r.up).length;
     line();
     line(`  сервисов поднято: ${svcUp === svcTotal ? green(`${svcUp}/${svcTotal}`) : yellow(`${svcUp}/${svcTotal}`)}`
-        + (lazyDown ? dim(`   (+${lazyDown} по выбору провайдера)`) : ''));
+        + (lazyDown ? dim(`   (+${lazyDown} по выбору провайдера)`) : '')
+        + (optionalDown ? dim(`   (+${optionalDown} optional sidecar недоступен)`) : ''));
     if (L.IS_WIN) line(`  права: ${L.isElevated() ? 'администратор' : 'обычные'}`);
 }
 
@@ -1958,7 +1975,7 @@ async function main() {
     if (!verb) {
         // Без TTY меню рисовать некому (запуск из планировщика, из дашборда,
         // перенаправление в файл) — печатаем состояние и уходим с нулём.
-        if (!TTY) { printStatus(); return; }
+        if (!TTY) { await printStatus(); return; }
         // Переехавший экземпляр (у него есть метка) больше никуда не едет — он и есть
         // конечная точка.
         if (!markArg && await moveToWindowsTerminal()) return;
@@ -1979,7 +1996,7 @@ async function main() {
             process.exit((await doUpdate({ interactive: TTY })) ? 0 : 1);
             break;
         case 'status':
-            printStatus();
+            await printStatus();
             break;
         case 'check':
             process.exit((await doCheck()) ? 0 : 1);
@@ -2011,6 +2028,7 @@ if (require.main === module) {
 
 module.exports = {
     intro, statusBlock, menuItems, itemLine, art, artFits, layout, link, readArt,
-    balancePanel, bigNum, findWt, elevateCommands, wtHubArgs, WISPR_ART_FILE, DOLLAR_FILE,
+    balancePanel, bigNum, findWt, elevateCommands, wtHubArgs, reporter, finishStart,
+    WISPR_ART_FILE, DOLLAR_FILE,
     SAFE, safeHint, ART_FILE, DIGITS,
 };

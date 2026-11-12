@@ -41,6 +41,10 @@ async function freePort() {
 }
 (async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'a6-converter-'));
+    const localHopSecretPath = path.join(dir, 'abuse-hub-local-hop.key');
+    const localHopAuth = require(path.resolve(__dirname, '../routing/lib/local-hop-auth.js'))
+        .createLocalHopAuth({ secretFile: localHopSecretPath });
+    const adapterAuth = localHopAuth.token('keepalive-to-adapter');
     const calls = [], children = [];
     let respond = (_req, res) => {
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -60,7 +64,7 @@ async function freePort() {
         const tag = strict ? 'strict-' + providerName : 'legacy', port = await freePort();
         const keyFile = path.join(dir, tag + '-key.txt'), configFile = path.join(dir, tag + '.json');
         fs.writeFileSync(keyFile, 'fixture-file-key\n');
-        fs.writeFileSync(configFile, JSON.stringify({ port, upstream: 'http://127.0.0.1:' + upstream.address().port + '/v1', keyFile, modelMap: {}, providerName, ...(strict ? { strictToolsVision: true } : {}) }));
+        fs.writeFileSync(configFile, JSON.stringify({ port, upstream: 'http://127.0.0.1:' + upstream.address().port + '/v1', keyFile, modelMap: {}, providerName, localHopSecretPath, ...(strict ? { strictToolsVision: true } : {}) }));
         const child = spawn(process.execPath, [SCRIPT, configFile], { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, OPENAI_API_KEY: 'fixture-env-key', PROXY_LOG_INGEST_URL: 'disabled', REASONING_AS: strict ? 'drop' : 'thinking' } });
         children.push(child); let output = '';
         child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { output += b; });
@@ -74,7 +78,7 @@ async function freePort() {
         throw new Error('converter did not start: ' + output);
     }
     async function ask(instance, body, endpoint = '/v1/messages', headers = {}) {
-        const r = await fetch(instance.base + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-client-key', ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
+        const r = await fetch(instance.base + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'fixture-client-key', [localHopAuth.headerName]: adapterAuth, ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
         return { status: r.status, text: await r.text() };
     }
     try {
@@ -90,7 +94,7 @@ async function freePort() {
                     if (missing) fs.unlinkSync(strict.keyFile); else fs.writeFileSync(strict.keyFile, ' \n');
                     const before = calls.length;
                     assert.equal((await ask(strict, baseRequest())).status, 401);
-                    const r = await fetch(strict.base + '/v1/models', { headers: { 'x-api-key': 'fixture-client-key' }, signal: AbortSignal.timeout(3000) });
+                    const r = await fetch(strict.base + '/v1/models', { headers: { 'x-api-key': 'fixture-client-key', [localHopAuth.headerName]: adapterAuth }, signal: AbortSignal.timeout(3000) });
                     assert.equal(r.status, 401); await r.text(); assert.equal(calls.length, before);
                 }
             } finally { fs.writeFileSync(strict.keyFile, 'fixture-file-key\n'); }
@@ -195,7 +199,7 @@ async function freePort() {
             const bytes = Buffer.from(JSON.stringify(baseRequest({ messages: [{ role: 'user', content: 'Ж中' }] })));
             const cut = bytes.indexOf(Buffer.from('Ж')) + 1;
             await new Promise((resolve, reject) => {
-                const req = http.request(strict.base + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json' } }, res => { res.resume(); res.on('end', resolve); });
+                const req = http.request(strict.base + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', [localHopAuth.headerName]: adapterAuth } }, res => { res.resume(); res.on('end', resolve); });
                 req.on('error', reject); req.write(bytes.subarray(0, cut)); setTimeout(() => req.end(bytes.subarray(cut)), 20);
             });
             assert.equal(calls.at(-1).body.messages[0].content, 'Ж中');
@@ -280,7 +284,7 @@ async function freePort() {
                 res.on('close', () => { clearInterval(timer); ended(); });
             };
             await new Promise((resolve, reject) => {
-                const req = http.request(strict.base + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json' } }, res => {
+                const req = http.request(strict.base + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', [localHopAuth.headerName]: adapterAuth } }, res => {
                     res.once('data', () => { res.destroy(); req.destroy(); resolve(); });
                 }); req.on('error', reject); req.end(JSON.stringify(baseRequest({ stream: true })));
             });

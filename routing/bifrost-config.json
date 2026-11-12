@@ -1,0 +1,51 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "source_of_truth": "config.json",
+  "disable_onboarding": true,
+  "client": {
+    "enable_logging": false,
+    "disable_content_logging": true,
+    "enforce_auth_on_inference": false,
+    "allowed_origins": [
+      "http://127.0.0.1:20100"
+    ],
+    "disable_db_pings_in_health": true
+  },
+  "providers": {
+    "abuse-hub": {
+      "keys": [],
+      "network_config": {
+        "base_url": "http://127.0.0.1:20100",
+        "max_retries": 0,
+        "default_request_timeout_in_seconds": 600,
+        "stream_idle_timeout_in_seconds": 120,
+        "extra_headers": {
+          "x-abuse-hub-internal": "abuse-hub-bifrost-v1"
+        }
+      },
+      "custom_provider_config": {
+        "base_provider_type": "anthropic",
+        "is_key_less": true,
+        "allowed_requests": {
+          "chat_completion": true,
+          "chat_completion_stream": true
+        }
+      }
+    }
+  },
+  "config_store": {
+    "enabled": false
+  },
+  "logs_store": {
+    "enabled": false
+  },
+  "framework": {
+    "pricing": {
+      "pricing_url": "bifrost-pricing.json",
+      "model_parameters_url": "bifrost-model-parameters.json",
+      "pricing_sync_interval": 86400,
+      "mcp_library_sync_interval": 0,
+      "live_models_sync_interval": 0
+    }
+  }
+}

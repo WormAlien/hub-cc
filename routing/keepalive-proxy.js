@@ -65,6 +65,10 @@ const IDLE_MS = Number(process.env.IDLE_MS || 5000);
 // единственный точно знает свой порт. Явный override оставлен под отдельным именем,
 // которое ничего не наследует случайно.
 const IS_SELFTEST = process.argv[2] === 'selftest';
+const LOCAL_HOP_SELFTEST_FILE = IS_SELFTEST
+  ? path.join(require('node:os').tmpdir(), `abuse-hub-local-hop-keepalive-selftest-${process.pid}.key`)
+  : '';
+if (LOCAL_HOP_SELFTEST_FILE) process.env.ABUSE_HUB_LOCAL_HOP_KEY_FILE = LOCAL_HOP_SELFTEST_FILE;
 const LOG_FILE = process.env.KEEPALIVE_LOG_FILE
   || (IS_SELFTEST ? '' : path.join(__dirname, `keepalive-${PORT}.log`));
 // Ротация: до этого лог не крутился вообще и дорос до 18 МБ. Порог и правило те же, что
@@ -428,6 +432,19 @@ function ensureTrailingUserText(body) {
 function modelInBody(buf) {
     try { return String(JSON.parse((buf || Buffer.alloc(0)).toString('utf8') || '{}').model || ''); } catch { return ''; }
 }
+
+// Exact routes bind one opaque bare model before any mapping. This guard is pure so every
+// vendor attempt can prove that no retry, account rotation, or future branch changed it.
+function assertExactAttemptModel(reqBody, exactModel) {
+    let body;
+    try { body = JSON.parse((reqBody || Buffer.alloc(0)).toString('utf8')); }
+    catch { throw new Error('exact route body is not valid JSON'); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)
+        || typeof body.model !== 'string' || !exactModel || body.model !== exactModel) {
+        throw new Error('exact route model invariant failed');
+    }
+    return true;
+}
 // ── Vision-мост ────────────────────────────────────────────────────────────────
 // Шлюзы вроде vani картинки НЕ принимают (400 на image-блок), а AgentRouter их ВИДИТ:
 // замер 12.09 (probe-vision.js) - `deepseek-v4-flash` «РЕАЛЬНО ВИДИТ и описывает скрин».
@@ -584,6 +601,74 @@ function rewriteModelJson(text, clientModel) {
     if (!MODEL_FIELD_RE.test(text)) return text;
     return text.replace(MODEL_FIELD_RE, `"model":${JSON.stringify(clientModel)}`);
 }
+function createAnthropicSseTerminalTracker(maxLineBytes = 1024 * 1024) {
+  let pending = Buffer.alloc(0);
+  let eventType = '';
+  let dataLines = [];
+  let dataBytes = 0;
+  let discardUntilLf = false;
+  let terminal = false;
+
+  const resetEvent = () => {
+    eventType = '';
+    dataLines = [];
+    dataBytes = 0;
+  };
+  const dispatch = () => {
+    let objectType = '';
+    if (dataLines.length && dataBytes <= maxLineBytes) {
+      try {
+        const value = JSON.parse(dataLines.join('\n'));
+        if (value && typeof value === 'object' && !Array.isArray(value)) objectType = value.type;
+      } catch (e) { /* non-JSON SSE data is not a terminal Anthropic object */ }
+    }
+    if (eventType === 'message_stop' || objectType === 'message_stop') terminal = true;
+    resetEvent();
+  };
+  const consumeLine = (rawLine) => {
+    let line = rawLine;
+    if (line.length && line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
+    if (line.length === 0) { dispatch(); return; }
+    if (line[0] === 0x3a) return;
+    const colon = line.indexOf(0x3a);
+    const field = (colon < 0 ? line : line.subarray(0, colon)).toString('utf8');
+    let value = colon < 0 ? Buffer.alloc(0) : line.subarray(colon + 1);
+    if (value.length && value[0] === 0x20) value = value.subarray(1);
+    if (field === 'event') {
+      eventType = value.toString('utf8');
+    } else if (field === 'data') {
+      dataBytes += value.length;
+      if (dataBytes <= maxLineBytes) dataLines.push(value.toString('utf8'));
+    }
+  };
+
+  return {
+    feed(chunk) {
+      if (terminal || !chunk || chunk.length === 0) return terminal;
+      let input = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (discardUntilLf) {
+        const lf = input.indexOf(0x0a);
+        if (lf < 0) return false;
+        input = input.subarray(lf + 1);
+        discardUntilLf = false;
+      }
+      pending = pending.length ? Buffer.concat([pending, input]) : input;
+      let lf;
+      while ((lf = pending.indexOf(0x0a)) >= 0) {
+        const line = pending.subarray(0, lf);
+        pending = pending.subarray(lf + 1);
+        if (line.length > maxLineBytes) resetEvent();
+        else consumeLine(line);
+      }
+      if (pending.length > maxLineBytes) {
+        pending = Buffer.alloc(0);
+        discardUntilLf = true;
+        resetEvent();
+      }
+      return terminal;
+    },
+  };
+}
 // 🎯 12.09, решение владельца («1m работает везде, не убеждайся»): эхо-инъекция [1m].
 // Оркестраторы (Orca-спавны, сабагенты CC) и иногда новое окно CC создают модель
 // БЕЗ суффикса — клиент верит в 200k и живёт в нём (живой случай:
@@ -599,6 +684,29 @@ function echoModelFor(clientModel) {
 }
 
 const upstream = new URL(UPSTREAM);
+const LOCAL_EXACT_ADAPTER_HEADER = 'x-abuse-hub-local-exact';
+// Adapter identity is explicit generated topology, never a paid-account side effect or
+// a broad localhost guess. The transport check is only a fail-closed boundary: even a
+// mistaken opt-in cannot send the trusted marker to a remote or non-IPv4-loopback hop.
+const LOCAL_EXACT_ADAPTER = process.env.LOCAL_EXACT_ADAPTER === '1';
+const CUSTOM_PROVIDER_ID = String(process.env.CUSTOM_PROVIDER_ID || '');
+const CUSTOM_PROVIDER_NAME = String(process.env.CUSTOM_PROVIDER_NAME || '');
+const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
+const localHopAuth = createLocalHopAuth();
+let keepaliveAdapterAuth = '';
+function trustedKeepaliveAdapterAuth() {
+  if (!keepaliveAdapterAuth) keepaliveAdapterAuth = localHopAuth.token('keepalive-to-adapter');
+  return keepaliveAdapterAuth;
+}
+function isLocalExactAdapterTransport(transport) {
+  return LOCAL_EXACT_ADAPTER && transport && transport.requester === http.request
+    && transport.hostname === '127.0.0.1';
+}
+function hasExactAdapterTransport() {
+  if (isLocalExactAdapterTransport({ requester: upRequester, hostname: upstream.hostname })) return true;
+  return GPT_PROXY_ENABLED
+    && isLocalExactAdapterTransport({ requester: gptRequester, hostname: gptProxy.hostname });
+}
 // Дописка хвоста включена только у Premier: см. ensureTrailingUserText.
 const PREMIER_TAIL = process.env.PREMIER_TAIL !== '0' && upstream.hostname === PREMIER_TAIL_HOST;
 const upRequester = upstream.protocol === 'https:' ? https.request : http.request;
@@ -707,6 +815,31 @@ const gptBase = gptProxy.pathname.replace(/\/+$/, '');
 // `let`, а не `const`, чтобы selftest мог проверить обе ветки роутинга.
 let GPT_PROXY_ENABLED = !!HAIKU_GPT_PROXY
   && (process.env.GPT_PROXY_FORCE === '1' || /(^|\.)agentrouter\.org$/i.test(upstream.hostname));
+
+function selectExactTransport(model) {
+  const primary = {
+    requester: upRequester,
+    hostname: upstream.hostname,
+    port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80),
+    base: upBase,
+    host: upstream.host,
+  };
+  // Some providers expose native Anthropic for Claude models but require their generated
+  // custom-openai adapter for GPT models (Odyssey). This is protocol selection only: the
+  // opaque model/body remain unchanged, and only an explicitly opted-in IPv4-loopback
+  // adapter may win.
+  if (isGptLike(model) && GPT_PROXY_ENABLED) {
+    const adapter = {
+      requester: gptRequester,
+      hostname: gptProxy.hostname,
+      port: gptProxy.port || (gptProxy.protocol === 'https:' ? 443 : 80),
+      base: gptBase,
+      host: gptProxy.host,
+    };
+    if (isLocalExactAdapterTransport(adapter)) return Object.freeze(adapter);
+  }
+  return Object.freeze(primary);
+}
 
 // ── Odyssey: чиним кривой SSE tool-ответа (фикс 19.09) ────────────────────────
 // odyssey в /v1/messages со stream:true отдаёт НЕВАЛИДНЫЙ Anthropic-поток: открывает
@@ -1329,7 +1462,8 @@ function publicState() {
     cfgVersion: CFG_VERSION,
     // История событий за сутки — она переживает рестарт, в отличие от stats.
     events24h: evStore.summarize(ev.snapshot(), 86400).totals,
-    upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, uptime_ms: Date.now() - startedAt,
+    upstream: UPSTREAM, port: PORT, idle_ms: IDLE_MS, localExactAdapter: hasExactAdapterTransport(),
+    uptime_ms: Date.now() - startedAt,
     // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
     // отличить «тумблер выключен» от «прокси не знает этот шлюз».
     rotate: { on: ROTATE_ON, provider: ROTATE_PROVIDER || null, maxPerRequest: MAX_ROTATIONS },
@@ -1432,10 +1566,28 @@ latLoad();
 setInterval(latSave, LAT_BUCKET_MS).unref();
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { latSave(); process.exit(0); });
 // Служебные пути: статус (health-check дашборда), состояние и патч конфига.
-function handleControl(req, res, reqPath) {
+function handleControl(req, res, reqPath, presentedRouteAuth) {
   if (req.method === 'GET' && reqPath === '/__keepalive/api/status') {
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, port: PORT, upstream: UPSTREAM, idle_ms: IDLE_MS, retries: cfg.maxAttempts, hedge_ms: cfg.hedgeMs, max_hedges: cfg.maxHedges }));
+    const detailed = localHopAuth.verify(presentedRouteAuth, 'status-inspection');
+    const body = {
+      ok: true,
+      role: 'keepalive',
+      providerId: CUSTOM_PROVIDER_ID,
+      providerName: CUSTOM_PROVIDER_NAME,
+      ...(detailed ? {
+        pid: process.pid,
+        port: PORT,
+        upstream: UPSTREAM,
+        adapterUrl: hasExactAdapterTransport() ? UPSTREAM : '',
+        localExactAdapter: hasExactAdapterTransport(),
+        idle_ms: IDLE_MS,
+        retries: cfg.maxAttempts,
+        hedge_ms: cfg.hedgeMs,
+        max_hedges: cfg.maxHedges,
+      } : {}),
+    };
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end(JSON.stringify(body));
     return;
   }
   if (req.method === 'GET' && reqPath === '/__state') {
@@ -2265,6 +2417,7 @@ const server = http.createServer((req, res) => {
   // front-door не было ни ошибки, ни ухода клиента. Считаем по ВЫХОДНОМУ потоку и
   // держим хвост: событие SSE легко разрезается границей чанка.
   let sawStop = false;
+  const exactTerminalTracker = createAnthropicSseTerminalTracker();
   let stopTail = '';
   // Какой блок содержимого открыт СЕЙЧАС: text | thinking | tool_use. Нужно ровно для
   // одного решения: можно ли вместо `event: ping` капнуть синтетическую дельту с пробелом
@@ -2276,7 +2429,10 @@ const server = http.createServer((req, res) => {
   const BLOCK_START_RE = /"content_block":\{"type":"([a-z_]+)"/g;
   const noteStop = (buf) => {
     const s = stopTail + buf.toString('latin1');
-    if (!sawStop && s.includes('message_stop')) sawStop = true;
+    if (!sawStop) {
+      if (exactMode) sawStop = exactTerminalTracker.feed(buf);
+      else if (s.includes('message_stop')) sawStop = true;
+    }
     // Состояние задаёт ПОСЛЕДНИЙ маркер в потоке: старт блока или его конец. Хвост даёт
     // перехлёст между чанками — событие SSE легко режется границей.
     let last = null;
@@ -2289,7 +2445,15 @@ const server = http.createServer((req, res) => {
     stopTail = s.slice(-256);
   };
   const noteTruncated = () => {
-    if (!contentSent || sawStop) return;
+    if (sawStop) return false;
+    if (exactMode) {
+      stats.truncated = (stats.truncated || 0) + 1;
+      ev.note('truncated');
+      log(`${req.method} ${reqPath} exact route: шлюз закрыл поток без message_stop, рву без досинтеза`);
+      if (!res.writableEnded && !res.destroyed) res.destroy(new Error('exact route truncated stream'));
+      return true;
+    }
+    if (!contentSent) return false;
     stats.truncated = (stats.truncated || 0) + 1;
     ev.note('truncated');
     // Досинтез: вписываем пометку и закрываем поток корректно, чтобы сессия CC выжила.
@@ -2323,14 +2487,49 @@ const server = http.createServer((req, res) => {
   let clientModel = '';           // модель, которую просил КЛИЕНТ (до ремапа) — см. rewriteModelJson
   let echoName = '';              // имя для ответа клиенту: clientModel + [1m]-инъекция (echoModelFor)
   let modelEchoDone = false;      // имя модели в ответе уже подменено (message_start)
+  // Trusted exact mode exists only when front-door supplied both markers. Capture the
+  // request-local model and transport once, consume the markers here, and never expose
+  // either control header to a vendor.
+  const routeFinalMarker = req.headers['x-route-final'] === '1';
+  const routeExact = req.headers['x-route-exact'] === '1';
+  const presentedRouteAuth = req.headers[localHopAuth.headerName];
+  localHopAuth.strip(req.headers);
+  let trustedRoute = false;
+  let routeAuthChecked = false;
+  const requireTrustedRoute = () => {
+    if (!routeAuthChecked) {
+      trustedRoute = localHopAuth.verify(presentedRouteAuth, 'frontdoor-to-keepalive');
+      routeAuthChecked = true;
+    }
+    return trustedRoute;
+  };
+  const exactMode = routeFinalMarker && routeExact && requireTrustedRoute();
+  const localAdapterCallerAllowed = !LOCAL_EXACT_ADAPTER || requireTrustedRoute();
+  const routeFinalTrusted = routeFinalMarker && requireTrustedRoute();
+  const routePrefixed = req.headers['x-route-prefixed'] === '1' && requireTrustedRoute();
+  delete req.headers['x-route-final'];
+  delete req.headers['x-route-exact'];
+  delete req.headers['x-route-prefixed'];
+  delete req.headers['x-route-tier'];
+  delete req.headers[LOCAL_EXACT_ADAPTER_HEADER];
+  let exactModel = '';
+  let exactBody = null;
+  let exactTransport = null;
+  let exactPreconnectRetried = false;
 
   if (req.method === 'POST' && reqPath.replace(/\?.*$/, '') === '/__drain') return startDrain(res);
+  if (!localAdapterCallerAllowed && !req.url.startsWith('/__')) {
+    const body = JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'Local route authorization required.' } });
+    res.writeHead(403, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+    return;
+  }
   inflight += 1;
   res.on('close', () => { inflight -= 1; maybeExitAfterDrain(); });
 
   // Служебные пути: статус (health-check дашборда), состояние, runtime-конфиг.
   if (req.url.startsWith('/__')) {
-    handleControl(req, res, req.url);
+    handleControl(req, res, req.url, presentedRouteAuth);
     return;
   }
 
@@ -2507,7 +2706,7 @@ const server = http.createServer((req, res) => {
   const ECHO_MAX_HOLD = 65536;   // страховка: не придерживать поток бесконечно
   let echoBuf = null;
   const patchSseChunk = (chunk) => {
-    if (!MODEL_ECHO || modelEchoDone || !echoName) return chunk;
+    if (exactMode || !MODEL_ECHO || modelEchoDone || !echoName) return chunk;
     echoBuf = echoBuf ? Buffer.concat([echoBuf, chunk]) : chunk;
     const boundary = echoBuf.indexOf('\n\n');
     if (boundary < 0) {
@@ -2583,6 +2782,7 @@ const server = http.createServer((req, res) => {
           }
           stopTimer();
           noteTruncated();
+          if (exactMode && !sawStop) return;
           if (!res.writableEnded) res.end();
         });
         stream.on('error', (err) => {
@@ -2687,7 +2887,7 @@ const server = http.createServer((req, res) => {
         let body = Buffer.concat(bufs);
         // Сжатое тело (gzip/zstd/br) — только сквозняком: toString('utf8') по бинарю
         // подменяет невалидные байты на U+FFFD и клиент получает битый архив.
-        if (MODEL_ECHO && echoName && !isCompressedBody(hdrs) && /json/i.test(String(hdrs['content-type'] || ''))) {
+        if (!exactMode && MODEL_ECHO && echoName && !isCompressedBody(hdrs) && /json/i.test(String(hdrs['content-type'] || ''))) {
           const patched = Buffer.from(rewriteModelJson(body.toString('utf8'), echoName), 'utf8');
           if (patched.length !== body.length) hdrs = Object.assign({}, hdrs, { 'content-length': String(patched.length) });
           body = patched;
@@ -2771,8 +2971,8 @@ const server = http.createServer((req, res) => {
         if (f.length) { res.write(f); noteStop(f); noteBytes(f); }
       }
       stopTimer();
-      noteTruncated();
-      res.end();
+      const truncated = noteTruncated();
+      if (!truncated) res.end();
     });
     stream.on('error', (err) => {
       if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
@@ -2884,6 +3084,7 @@ const server = http.createServer((req, res) => {
   };
   const retryEmptyStream = (why, stream) => {
     clearEmptyGuard();
+    if (exactMode) return false;
     if (contentSent || aborted || cfg.emptyStreamMs <= 0) return false;
     if (emptyRetries >= EMPTY_MAX_RETRIES) return false;
     emptyRetries += 1;
@@ -2910,6 +3111,13 @@ const server = http.createServer((req, res) => {
       if (aborted || res.writableEnded) return;
       stopTimer();
       ev.note('stall');
+      if (exactMode) {
+        const error = new Error(`exact route upstream stream stalled ${cfg.stallMs}ms mid-response`);
+        log(`${req.method} ${reqPath} exact route: поток встал на ${cfg.stallMs}мс, рву upstream/downstream без синтетического события`);
+        try { if (stream && !stream.destroyed) stream.destroy(error); } catch (e) { /* сокет уже мёртв */ }
+        if (!res.writableEnded && !res.destroyed) res.destroy(error);
+        return;
+      }
       log(`${req.method} ${reqPath} поток встал: ${cfg.stallMs}мс без байт после начала ответа — отдаю in-band overloaded_error вместо голого обрыва`);
       // 🎯 Голый обрыв подвешивал субагента навсегда: CC, уже получивший часть
       // содержимого, не ретраит ход по молчанию, агент стоит на 0 tok (29.10, три
@@ -3019,6 +3227,7 @@ const server = http.createServer((req, res) => {
   // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
   // мульти-запросы выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
+    if (exactMode) return;
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
     if (hedgesLaunched >= cfg.maxHedges) return;
@@ -3054,9 +3263,24 @@ const server = http.createServer((req, res) => {
     launched += 1;
     const attempt = launched;
     const kindLabel = kind || 'первый';
-    const body = reqBody;
-    const t = tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host };
+    const body = exactMode ? exactBody : reqBody;
+    const t = exactMode
+      ? exactTransport
+      : (tgt || { requester: upRequester, hostname: upstream.hostname, port: upstream.port || (upstream.protocol === 'https:' ? 443 : 80), base: upBase, host: upstream.host });
+    if (exactMode) {
+      try { assertExactAttemptModel(body, exactModel); }
+      catch (error) { giveUp(error.message); return; }
+    }
     const headers = Object.assign({}, req.headers, { host: t.host });
+    localHopAuth.strip(headers);
+    if (isLocalExactAdapterTransport(t)) {
+      headers[localHopAuth.headerName] = trustedKeepaliveAdapterAuth();
+    }
+    if (exactMode && isLocalExactAdapterTransport(t)) {
+      headers[LOCAL_EXACT_ADAPTER_HEADER] = '1';
+    } else {
+      delete headers[LOCAL_EXACT_ADAPTER_HEADER];
+    }
     // WAF agentrouter пускает только запросы, похожие на Claude Code: смотрит на
     // user-agent (`claude-cli/…` → 200, `curl/8.0` → 401 "unauthorized client detected",
     // проверено 2026-08-16). Живой CC эти заголовки присылает сам, поэтому подставляем
@@ -3155,6 +3379,20 @@ const server = http.createServer((req, res) => {
           const buf = Buffer.concat(chunks, size);
           const text = buf.toString('utf8').trim();
           if (!text) {
+            if (exactMode) {
+              settle(upReq);
+              stats.truncated = (stats.truncated || 0) + 1;
+              ev.note('truncated');
+              log(`${req.method} ${reqPath} exact route: пустой 200, рву без переигровки`);
+              if (!res.headersSent) {
+                const hdrs = Object.assign({}, headers);
+                delete hdrs['content-length'];
+                res.writeHead(status, hdrs);
+                res.flushHeaders();
+              }
+              if (!res.writableEnded && !res.destroyed) res.destroy(new Error('exact route empty response'));
+              return;
+            }
             attemptDone(upReq, `пустой 200 (попытка ${attempt})`, RETRY_DELAY_MS * attempt);
             return;
           }
@@ -3207,14 +3445,14 @@ const server = http.createServer((req, res) => {
           // устареть минуту назад — 03.09 justwoker снял claude-opus-4-8 на ходу),
           // пересобираем ремап и, если цель сменилась, повторяем запрос уже живой
           // моделью. Клиент видит только успешный ответ.
-          if (ROUTE_MISS_RE.test(buf.toString('utf8')) && !routeFixTried) {
+          if (!exactMode && ROUTE_MISS_RE.test(buf.toString('utf8')) && !routeFixTried) {
             routeFixTried = true;
             activeSet.delete(upReq);
             const wasModel = modelInBody(body);
             log(`${req.method} ${reqPath} ${status} «нет модели ${wasModel}» — обновляю каталог шлюза и ищу замену`);
             refreshCatalog(true, () => {
               if (finished || aborted) return;
-              const again = remapHaiku(req.method, reqPath, rawBody, String(req.headers['x-route-prefixed'] || '') === '1', undefined, String(req.headers['x-route-final'] || '') === '1');
+              const again = remapHaiku(req.method, reqPath, rawBody, routePrefixed, undefined, routeFinalTrusted);
               const nextBody = again ? again.body : rawBody;
               const nextModel = modelInBody(nextBody);
               if (nextModel && nextModel !== wasModel) {
@@ -3249,6 +3487,10 @@ const server = http.createServer((req, res) => {
               + `похоже, канала под модель нет — повтор не поможет, отдаю ошибку клиенту `
               + `(${buf.toString('utf8').slice(0, 100)})`);
           }
+          if (exactMode) {
+            forwardBuffered(buf, headers);
+            return;
+          }
           if (!fastFail && isTransientBody(status, buf)) {
             attemptDone(upReq, `${status}: ${buf.toString('utf8').slice(0, 100)}`, RETRY_DELAY_MS * attempt);
           } else {
@@ -3260,7 +3502,7 @@ const server = http.createServer((req, res) => {
             // противоположный (`must be passed back`), и вычищенная история сделает
             // только хуже. На claude-цели чистка всех блоков проверена пробой - 200.
             const curModel = modelInBody(reqBody);
-            if (!thinkStripTried && /^claude[-_]/i.test(curModel) && SIG_ERR_RE.test(buf.toString('utf8'))) {
+            if (!exactMode && !thinkStripTried && /^claude[-_]/i.test(curModel) && SIG_ERR_RE.test(buf.toString('utf8'))) {
               const healed = stripFakeThinking(reqBody, true);
               if (healed) {
                 thinkStripTried = true;
@@ -3305,7 +3547,7 @@ const server = http.createServer((req, res) => {
       // умирала на `API Error: 402` (живой случай 15.09 04:52 МСК).
       // Тело читаем ЦЕЛИКОМ на каждом 402 — иначе китайская формулировка того же смысла
       // опять была бы невидимой: тела постоянных ошибок сейчас не логируются вовсе.
-      if (status === 402) {
+      if (status === 402 && !exactMode) {
         drain(() => {
           if (finished || aborted) return;
           const buf = Buffer.concat(chunks, size);
@@ -3374,7 +3616,7 @@ const server = http.createServer((req, res) => {
           markPoolDead(wasModel);        // память процесса: следующие запросы идут мимо
           askPoolDrop(wasModel, fb);     // дашборд: карта на диске + бэкап, best-effort
           const again = remapHaiku(req.method, reqPath, rawBody,
-            String(req.headers['x-route-prefixed'] || '') === '1', fb, String(req.headers['x-route-final'] || '') === '1');
+            routePrefixed, fb, routeFinalTrusted);
           if (!again) {
             // Тело не переиграть (не-JSON) — отдаём как есть, но память о мёртвой
             // модели уже стоит, и следующий запрос уедет по карте тиров.
@@ -3426,6 +3668,21 @@ const server = http.createServer((req, res) => {
         const flushed = flushFreeSockets(t.requester);
         if (flushed) log(`${req.method} ${reqPath} ошибка на сокете из пула — сброшено свободных: ${flushed}`);
       }
+      if (exactMode) {
+        activeSet.delete(upReq);
+        const preconnect = ctrace && ctrace.reused === false && ctrace.tcpMs === null && ctrace.tlsMs === null
+          && ['ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN'].includes(err.code);
+        if (preconnect && !exactPreconnectRetried) {
+          exactPreconnectRetried = true;
+          bonusAttempts += 1;
+          stats.retries += 1;
+          log(`${req.method} ${reqPath} exact route: pre-connect ${err.code}, один безопасный повтор`);
+          setTimeout(() => { if (!aborted && !finished) makeUpstream('pre-connect retry'); }, RETRY_DELAY_MS);
+          return;
+        }
+        giveUp(err.message);
+        return;
+      }
       attemptDone(upReq, err.message, 0);
     });
     upReq.end(body);
@@ -3440,21 +3697,33 @@ const server = http.createServer((req, res) => {
   req.on('end', async () => {
     const rawBody0 = Buffer.concat(bodyChunks, bodySize);
     rawBody = rawBody0;
+    // Exact mode binds the opaque bare model before any mapping and freezes this keepalive
+    // instance's provider transport. Later retries and key rotations reuse both verbatim.
+    if (exactMode) {
+      exactModel = modelInBody(rawBody0);
+      exactBody = rawBody0;
+      exactTransport = selectExactTransport(exactModel);
+      try { assertExactAttemptModel(exactBody, exactModel); }
+      catch (error) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: error.message } }));
+        return;
+      }
+    }
     // Каталог моделей шлюза освежаем в фоне, НЕ дожидаясь: этот запрос уедет по той
     // карте, что есть. Точный момент, когда каталог нужен, — ответ model_not_found.
-    if (catalogStale()) refreshCatalog(false);
+    if (!exactMode && catalogStale()) refreshCatalog(false);
     // Модель ДО ремапа — её ждёт клиент в ответе (см. rewriteModelJson).
     try { clientModel = String(JSON.parse(rawBody0.toString('utf8') || '{}').model || ''); } catch (e) { clientModel = ''; }
     // Какую из двух карт брать, говорит front-door заголовком: разницу «запрос пришёл
     // через префикс» видно только там (к нам префикс доезжает уже срезанным).
     // Заголовка нет — обычный путь, карта активного шлюза, как было до 12.09.
-    const viaRoutes = String(req.headers['x-route-prefixed'] || '') === '1';
+    const viaRoutes = routePrefixed;
     // x-route-final: модель уже конечная (виртуальный /model multi) — тир-карту не спрашиваем.
-    const routeFinal = String(req.headers['x-route-final'] || '') === '1';
-    const remapped = remapHaiku(req.method, reqPath, rawBody0, viaRoutes, undefined, routeFinal);
+    const remapped = exactMode ? null : remapHaiku(req.method, reqPath, rawBody0, viaRoutes, undefined, routeFinalTrusted);
     reqBody = remapped ? remapped.body : rawBody;
     tgt = remapped;
-    echoName = echoModelFor(clientModel);
+    echoName = exactMode ? clientModel : echoModelFor(clientModel);
     if (echoName !== clientModel) {
       log(`${req.method} ${reqPath} model-echo: ${clientModel} → ${echoName} (окно клиента 1M)`);
     }
@@ -3470,7 +3739,7 @@ const server = http.createServer((req, res) => {
     // текстовые модели честно отвечают «не вижу», vision-модели — видят.
     try {
       const outModel = String(JSON.parse(reqBody.toString('utf8') || '{}').model || '');
-      if (outModel && !/^claude[-_]/i.test(outModel)) {
+      if (!exactMode && outModel && !/^claude[-_]/i.test(outModel)) {
         const stripped = stripClaudeOnlyFields(reqBody);
         if (stripped) { reqBody = stripped; stats.remaps += 1; }
       }
@@ -3483,7 +3752,7 @@ const server = http.createServer((req, res) => {
     // ровно противоположен тому, который мы лечим, поэтому цель надо различать.
     // Настоящий Anthropic, наоборот, подпись проверяет и на вычищенную историю не жалуется
     // (проба 21.09: чистка всех блоков на opus-цели - 200).
-    if (THINK_STRIP) {
+    if (!exactMode && THINK_STRIP) {
       let outModel2 = '';
       try { outModel2 = String(JSON.parse(reqBody.toString('utf8') || '{}').model || ''); } catch (e) { /* не-JSON */ }
       if (/^claude[-_]/i.test(outModel2)) {
@@ -3500,7 +3769,7 @@ const server = http.createServer((req, res) => {
     // «requires previous reasoning_content» на каждом агентском ходу. Замер и разбор - у
     // ensureTrailingUserText. Гейт по хосту: у соседних шлюзов тот же хвост проходит, и
     // дописывать им текст клиента нельзя.
-    if (PREMIER_TAIL && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+    if (!exactMode && PREMIER_TAIL && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
       const tail = ensureTrailingUserText(reqBody);
       if (tail) {
         log(`${req.method} ${reqPath} премьер: хвост без пользовательского текста — дописал «${PREMIER_TAIL_TEXT}»`);
@@ -3511,7 +3780,7 @@ const server = http.createServer((req, res) => {
     // Vision-мост: картинки → AgentRouter (deepseek) → текст. Только если включён тумблером
     // на вкладке шлюза (cfg.visionBridge). Текстовые запросы выходят из visionBridgeBody
     // сразу, ценой ноль. Порядок: ПОСЛЕ ремапа и срезок, ДО заголовков/форварда.
-    if (cfg.visionBridge && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+    if (!exactMode && cfg.visionBridge && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
       try {
         const vb = await visionBridgeBody(reqBody);
         if (vb) { reqBody = vb; stats.remaps += 1; }
@@ -3549,7 +3818,7 @@ const server = http.createServer((req, res) => {
     // готовый JSON (не-стрим у justwoker работает), а SSE нарисуем сами в forward().
     // 🪤 Тело правим ПОСЛЕ wantsStream: иначе прокси решил бы, что клиент потока не просил,
     // и потерял бы и пре-коммит, и удержание, и защиту от пустого потока.
-    if (UPSTREAM_NOSTREAM && streaming && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
+    if (!exactMode && UPSTREAM_NOSTREAM && streaming && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath)) {
       try {
         const j = JSON.parse(reqBody.toString('utf8') || '{}');
         if (j.stream === true) {
@@ -4146,11 +4415,11 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(cfg.catalogTtlMs, 600000, 'ручка возвращается');
   catalog.ids = null; catalog.at = 0;
   const routeSrc = holdSrc;
-  assert.ok(/if \(ROUTE_MISS_RE\.test\(buf\.toString\('utf8'\)\) && !routeFixTried\)/.test(routeSrc),
+  assert.ok(/if \(!exactMode && ROUTE_MISS_RE\.test\(buf\.toString\('utf8'\)\) && !routeFixTried\)/.test(routeSrc),
     'на «нет такой модели» пробуем подмену, и ровно один раз за запрос');
   assert.ok(/refreshCatalog\(true, \(\) => \{/.test(routeSrc),
     'каталог перед подменой обновляется принудительно (модель могли снять минуту назад)');
-  assert.ok(/if \(catalogStale\(\)\) refreshCatalog\(false\)/.test(routeSrc),
+  assert.ok(/if \(!exactMode && catalogStale\(\)\) refreshCatalog\(false\)/.test(routeSrc),
     'в обычном пути каталог освежается в фоне и запрос не блокирует');
 
   // ── Пул наливки кончился: 402 → беспуловая модель (2026-09-15) ───────────────
@@ -4312,7 +4581,7 @@ if (process.argv[2] === 'selftest') {
   // tools/check-pool-fallback.js, а здесь фиксируем то, что нельзя нарушить правкой.
   assert.ok(evStore.EVENTS.includes('pooldrop'),
     'событие зарегистрировано в закрытом списке event-store — иначе ev.note молча ничего не пишет');
-  assert.ok(/if \(status === 402\) \{/.test(holdSrc),
+  assert.ok(/if \(status === 402 && !exactMode\) \{/.test(holdSrc),
     '402 перехватывается отдельной веткой (в shouldRetryStatus его нет и быть не должно)');
   assert.ok(/let poolDropTried = false;/.test(holdSrc),
     'уход из пула — ровно один раз за запрос: фолбэк, сам давший 402, отдаёт честную ошибку');
@@ -4347,7 +4616,7 @@ if (process.argv[2] === 'selftest') {
   // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
   // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
   // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
-  assert.ok(/if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
+  assert.ok(/if \(exactMode\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
     'переигрываем пустой поток только пока клиенту не ушло содержимое');
   assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
     'у переигровки пустого потока есть потолок');
@@ -4373,7 +4642,7 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(DEFAULT_CFG.jsonHoldMs, 15000,
     'поставочные 15с — по замеру 137 не-стримовых ответов: быстрее 15с только 24 из них, '
     + 'а путь giveUp успевает отдать честный 529 до коммита');
-  assert.strictEqual(CFG_VERSION, 7, 'версия конфига поднята под фолбэк пустого пула (15.09)');
+  assert.strictEqual(CFG_VERSION, 8, 'версия конфига включает текущую схему');
   // Бюджет времени на повторы: дешёвый отказ ретраим, дорогой отдаём клиенту.
   assert.strictEqual(DEFAULT_CFG.retryBudgetMs, 90000,
     '90с — под потолок Cloudflare: первый 524 приходит позже, значит повтора не будет, '
@@ -4389,7 +4658,7 @@ if (process.argv[2] === 'selftest') {
   assert.deepStrictEqual(JSON.parse('   {"type":"message"}'), { type: 'message' },
     'JSON.parse съедает ведущие пробелы — иначе капать было бы нельзя');
   // Взвод только на POST /v1/messages без stream и не на count_tokens.
-  assert.ok(/if \(!streaming && cfg\.jsonHoldMs > 0 && jsonTimer === null/.test(holdSrc),
+  assert.ok(/if \(!streaming && !isModelValidationProbe\(req\.method, reqPath, reqBody\)\s*&& cfg\.jsonHoldMs > 0 && jsonTimer === null/.test(holdSrc),
     'JSON-удержание взводится только для не-стримового запроса');
   assert.ok(/!isCountTokens\(req\.method, reqPath\)\)[\s\S]{0,40}?jsonTimer = setTimeout\(commitJson/.test(holdSrc),
     'count_tokens под удержание не попадает — на него отвечаем локально и мгновенно');
@@ -4415,8 +4684,8 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(DEFAULT_CFG.stallMs, 180000, 'поставочные 180с');
   assert.strictEqual((holdSrc.match(/armStall\(stream\);/g) || []).length, 2,
     'страховка перевзводится на обеих SSE-ветках, то есть на каждом байте содержимого');
-  assert.ok(/armStall = \(stream\) => \{[\s\S]*?res\.destroy\(\);/.test(holdSrc),
-    'вставший поток рвётся: вызывающий увидит ошибку вместо бесконечного ожидания');
+  assert.ok(/armStall = \(stream\) => \{[\s\S]*?event: error[\s\S]*?res\.end\(\);/.test(holdSrc),
+    'вставший поток получает явный overloaded_error вместо бесконечного ожидания');
 
   // 🪤 Наш таймаут сокета в этой сцене бесполезен: после заголовков стоит finished, а
   // обработчик timeout под этим флагом выходит молча. Значит страховка обязана быть своя.
@@ -4491,10 +4760,10 @@ if (process.argv[2] === 'selftest') {
 
   // Сторож на проводку: обе точки должны стоять в коде, иначе функции живут зря.
   const thSrc = fs.readFileSync(__filename, 'utf8');
-  assert.ok(/if \(THINK_STRIP\) \{[\s\S]{0,400}?if \(\/\^claude\[-_\]\/i\.test\(outModel2\)\) \{\s*\n\s*const th = stripFakeThinking\(reqBody, false\);/.test(thSrc),
-    'упреждающая срезка не подключена к пути запроса либо потеряла гейт по цели');
-  assert.ok(/if \(!thinkStripTried && \/\^claude\[-_\]\/i\.test\(curModel\) && SIG_ERR_RE\.test\(buf\.toString\('utf8'\)\)\)/.test(thSrc),
-    'лечение на 400 не подключено к ветке постоянных ошибок либо потеряло гейт по цели');
+  assert.ok(/if \(!exactMode && THINK_STRIP\) \{[\s\S]{0,400}?if \(\/\^claude\[-_\]\/i\.test\(outModel2\)\) \{\s*\n\s*const th = stripFakeThinking\(reqBody, false\);/.test(thSrc),
+    'упреждающая срезка не подключена к пути запроса либо потеряла гейт по цели/exact');
+  assert.ok(/if \(!exactMode && !thinkStripTried && \/\^claude\[-_\]\/i\.test\(curModel\) && SIG_ERR_RE\.test\(buf\.toString\('utf8'\)\)\)/.test(thSrc),
+    'лечение на 400 не подключено к ветке постоянных ошибок либо потеряло гейт по цели/exact');
   // 🪤 Гейт по цели — не украшение. Проба сразу после первой выкатки (21.09, до правки)
   // показала: на сервере рассуждений та же чистка даёт ОТКАЗ ровно противоположного
   // смысла - `The content[].thinking in the thinking mode must be passed back to the API`.
@@ -4512,6 +4781,7 @@ if (process.argv[2] === 'selftest') {
     fs.writeFileSync(CONFIG_FILE, savedCfg); // вернули то, что было до прогона
   }
 
+  try { fs.rmSync(LOCAL_HOP_SELFTEST_FILE, { force: true }); } catch (e) { /* absent */ }
   console.log('selftest OK');
   process.exit(0);
 }

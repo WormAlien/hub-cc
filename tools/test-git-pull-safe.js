@@ -7,15 +7,33 @@ const fs = require('fs'), path = require('path'), os = require('os');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pullsafe-'));
 const origin = path.join(root, 'origin.git'), seed = path.join(root, 'seed'), work = path.join(root, 'work');
 const run = (cwd, ...a) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+const ignored = (cwd, file) => {
+  try { run(cwd, 'check-ignore', '--quiet', '--no-index', '--', file); return true; }
+  catch { return false; }
+};
 const ok = (n, c) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${n}`); if (!c) process.exitCode = 1; };
+
+function copyPullSafeRuntime(destRoot) {
+  fs.mkdirSync(path.join(destRoot, 'routing', 'lib'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'git-pull-safe.js'), path.join(destRoot, 'tools', 'git-pull-safe.js'));
+  fs.copyFileSync(path.resolve(__dirname, '..', 'routing', 'lib', 'durable-write.js'),
+    path.join(destRoot, 'routing', 'lib', 'durable-write.js'));
+  fs.copyFileSync(path.resolve(__dirname, '..', 'routing', 'lib', 'api-gateway.js'),
+    path.join(destRoot, 'routing', 'lib', 'api-gateway.js'));
+}
 
 execFileSync('git', ['init', '--bare', '-b', 'master', origin]);
 execFileSync('git', ['clone', origin, seed]);
 run(seed, 'config', 'user.email', 't@t'); run(seed, 'config', 'user.name', 't');
 fs.mkdirSync(path.join(seed, 'routing')); fs.mkdirSync(path.join(seed, 'tools'));
-fs.writeFileSync(path.join(seed, 'routing/ar-modelmap.json'), '{"opus":"repo-default"}\n');
+fs.copyFileSync(path.resolve(__dirname, '..', '.gitignore'), path.join(seed, '.gitignore'));
+fs.copyFileSync(path.resolve(__dirname, '..', '.gitattributes'), path.join(seed, '.gitattributes'));
+for (const name of ['ar', 'gorouter', 'tabi', 'xpeach']) {
+  fs.writeFileSync(path.join(seed, `routing/${name}-modelmap.json`), '{"opus":"repo-default"}\n');
+}
+fs.writeFileSync(path.join(seed, 'routing/api-gateway.default.json'), '{"seed":true}\n');
 fs.writeFileSync(path.join(seed, 'code.js'), 'v1\n');
-fs.copyFileSync(path.join(__dirname, 'git-pull-safe.js'), path.join(seed, 'tools/git-pull-safe.js'));
+copyPullSafeRuntime(seed);
 run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'init'); run(seed, 'push', 'origin', 'master');
 
 execFileSync('git', ['clone', origin, work]);
@@ -30,12 +48,12 @@ run(seed, 'add', '-A'); run(seed, 'commit', '-m', 'up'); run(seed, 'push', 'orig
 fs.writeFileSync(path.join(work, 'routing/ar-modelmap.json'), '{"opus":"USER-CHOICE"}\n');
 
 // A: CLI обновляется и сохраняет настройки
-const cli = (cwd, ...extra) => {
+function cli(cwd, ...extra) {
   try {
     const out = execFileSync(process.execPath, ['tools/git-pull-safe.js', ...extra], { cwd, encoding: 'utf8' });
     return { code: 0, out };
   } catch (e) { return { code: e.status, out: (e.stdout || '') + (e.stderr || '') }; }
-};
+}
 const a = cli(work);
 ok('A: CLI вышел 0', a.code === 0);
 ok('A: код обновился', fs.readFileSync(path.join(work, 'code.js'), 'utf8').trim() === 'v2');
@@ -66,7 +84,7 @@ ok('C: LOCAL_STATE_FILES экспортирован', mod.LOCAL_STATE_FILES.incl
 // перечислении его забыли, и обновление у второго пользователя встало насмерть
 // (21.08). Заводя нового провайдера, эту проверку уронит именно забытая карта.
 const real = require(path.resolve(__dirname, 'git-pull-safe.js'));
-const tracked = run(path.resolve(__dirname, '..'), 'ls-files', 'routing/*-modelmap.json')
+const tracked = run(seed, 'ls-files', 'routing/*-modelmap.json')
     .split('\n').map(s => s.trim()).filter(Boolean);
 ok('D: тир-карты в репо нашлись', tracked.length >= 4);
 const unprotected = tracked.filter(f => !real.isStateFile(f));
@@ -74,7 +92,16 @@ ok(`D: все ${tracked.length} тир-карт защищены${unprotected.le
    unprotected.length === 0);
 // И обратное: настоящий код файлом состояния не считается, иначе pull молча
 // откатывал бы правки в коде вместо того, чтобы о них сказать.
-ok('D: код не считается состоянием', real.isStateFile('routing/transparent-proxy.js') === false);
+ok('D: code is not state', real.isStateFile('routing/transparent-proxy.js') === false);
+ok('D: local API Gateway manifest is state', real.isStateFile('routing/api-gateway.json') === true);
+ok('D: tracked API Gateway default seed is not state', real.isStateFile('routing/api-gateway.default.json') === false);
+ok('D: local API Gateway manifest is ignored', ignored(seed, 'routing/api-gateway.json'));
+ok('D: durable-write temp artifact is ignored', ignored(seed, 'routing/api-gateway.json.tmp-1234'));
+ok('D: transaction artifacts are ignored',
+   ['routing/api-gateway.json.lock', 'routing/api-gateway.json.journal',
+    'routing/api-gateway.json.stage-fixture', 'routing/api-gateway.json.backup-fixture']
+       .every(f => ignored(seed, f)));
+ok('D: tracked default seed is not ignored', !ignored(seed, 'routing/api-gateway.default.json'));
 
 // E: --stash — правки кода НЕ блокируют обновление, а прячутся и возвращаются.
 // Это режим, который жмёт кнопка в дашборде после подтверждения. До 21.08 умный
@@ -270,7 +297,7 @@ function sandbox(name, attributes) {
   fs.writeFileSync(path.join(s, '.gitattributes'), attributes);
   fs.writeFileSync(path.join(s, 'routing/ar-modelmap.json'), '{\n  "opus": "repo-default"\n}\n');
   fs.writeFileSync(path.join(s, 'code.js'), 'v1\n');
-  fs.copyFileSync(path.join(__dirname, 'git-pull-safe.js'), path.join(s, 'tools/git-pull-safe.js'));
+  copyPullSafeRuntime(s);
   run(s, 'add', '-A'); run(s, 'commit', '-m', 'init'); run(s, 'push', 'origin', 'master');
   // Клонируем ИМЕННО с autocrlf=true — это и есть настройка живого репо на Windows,
   // без неё расхождение не возникает и тест ничего не проверяет.
@@ -312,12 +339,190 @@ ok('J: обычный git pull из консоли проходит', plainPullJ
 // K: правило eol=lf стоит на КАЖДОМ файле состояния настоящего репо. Проверяем
 // против самого git'а (`check-attr`), а не против текста .gitattributes: строчку
 // там забыть так же легко, как забыли `xpeach-modelmap.json` в перечислении.
-const repoRoot = path.resolve(__dirname, '..');
-const stateFiles = run(repoRoot, 'ls-files', 'routing/*.json')
+const localManifest = 'routing/api-gateway.json';
+const stateFiles = run(seed, 'ls-files', 'routing/*.json')
     .split('\n').map(s => s.trim()).filter(f => f && real.isStateFile(f));
-ok('K: файлы состояния в репо нашлись', stateFiles.length >= 5);
-const noLf = stateFiles.filter(f => !/eol: lf/.test(run(repoRoot, 'check-attr', 'eol', '--', f)));
-ok(`K: у всех ${stateFiles.length} стоит eol=lf${noLf.length ? ' — ДЫРКА: ' + noLf.join(', ') : ''}`,
+if (real.isStateFile(localManifest)) stateFiles.push(localManifest);
+ok('K: state files exist in the fixture repository', stateFiles.length >= 5);
+const noLf = stateFiles.filter(f => !/eol: lf/.test(run(seed, 'check-attr', 'eol', '--', f)));
+ok(`K: all ${stateFiles.length} state files use eol=lf${noLf.length ? ' - MISSING: ' + noLf.join(', ') : ''}`,
    noLf.length === 0);
+ok('K: local API Gateway manifest uses eol=lf',
+   /eol: lf/.test(run(seed, 'check-attr', 'eol', '--', 'routing/api-gateway.json')));
+
+ok('K: tracked API Gateway default seed uses eol=lf',
+   /eol: lf/.test(run(seed, 'check-attr', 'eol', '--', 'routing/api-gateway.default.json')));
+
+function ignoredManifestSandbox(name) {
+  const o = path.join(root, `${name}.git`);
+  const s = path.join(root, `${name}-seed`);
+  const w = path.join(root, `${name}-work`);
+  execFileSync('git', ['init', '--bare', '-b', 'master', o]);
+  execFileSync('git', ['clone', o, s]);
+  run(s, 'config', 'user.email', 't@t'); run(s, 'config', 'user.name', 't');
+  fs.mkdirSync(path.join(s, 'routing')); fs.mkdirSync(path.join(s, 'tools'));
+  fs.writeFileSync(path.join(s, '.gitignore'), 'routing/api-gateway.json\nrouting/api-gateway.json.*\n');
+  fs.writeFileSync(path.join(s, 'routing/api-gateway.default.json'), '{"seed":true}\n');
+  fs.writeFileSync(path.join(s, 'code.js'), 'v1\n');
+  copyPullSafeRuntime(s);
+  run(s, 'add', '-A'); run(s, 'commit', '-m', 'init'); run(s, 'push', 'origin', 'master');
+  execFileSync('git', ['clone', o, w]);
+  run(w, 'config', 'user.email', 't@t'); run(w, 'config', 'user.name', 't');
+  return { origin: o, seed: s, work: w, manifest: path.join(w, 'routing/api-gateway.json') };
+}
+
+function loadWithInjectedGitFailure(file, subcommand) {
+  const childProcess = require('child_process');
+  const original = childProcess.execFileSync;
+  childProcess.execFileSync = function injected(command, args, options) {
+    const output = original.call(this, command, args, options);
+    if (command === 'git' && Array.isArray(args) && args[0] === subcommand) {
+      const error = new Error(`injected failure after git ${subcommand}`);
+      error.status = 17;
+      error.stderr = `injected failure after git ${subcommand}`;
+      throw error;
+    }
+    return output;
+  };
+  delete require.cache[require.resolve(file)];
+  try { return require(file); }
+  finally { childProcess.execFileSync = original; }
+}
+
+function requireFresh(file) {
+  delete require.cache[require.resolve(file)];
+  return require(file);
+}
+
+console.log('\nN. ignored manifest collision during pull');
+const n = ignoredManifestSandbox('ignored-pull');
+const nBytes = Buffer.from([0x7b, 0x22, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x22, 0x3a, 0x31, 0x7d, 0x0d, 0x0a]);
+fs.writeFileSync(n.manifest, nBytes);
+fs.writeFileSync(path.join(n.seed, 'code.js'), 'v2\n');
+fs.writeFileSync(path.join(n.seed, 'routing/api-gateway.json'), '{"upstream":true}\n');
+run(n.seed, 'add', '-f', 'routing/api-gateway.json'); run(n.seed, 'add', 'code.js');
+run(n.seed, 'commit', '-m', 'upstream tracks manifest'); run(n.seed, 'push', 'origin', 'master');
+const nRes = cli(n.work);
+ok('N: pull succeeds when upstream starts tracking ignored manifest', nRes.code === 0);
+ok('N: pull updates unrelated code', fs.readFileSync(path.join(n.work, 'code.js'), 'utf8').trim() === 'v2');
+ok('N: ignored local manifest is restored byte-exact', fs.readFileSync(n.manifest).equals(nBytes));
+ok('N: manifest is reported as preserved', /api-gateway\.json/.test(nRes.out));
+ok('N: restored owner manifest is marked skip-worktree while upstream tracks the path',
+   /^S\s/.test(run(n.work, 'ls-files', '-v', 'routing/api-gateway.json')));
+fs.writeFileSync(path.join(n.seed, 'code.js'), 'v3\n');
+fs.writeFileSync(path.join(n.seed, 'routing/api-gateway.json'), '{"upstream":2}\n');
+run(n.seed, 'add', 'code.js'); run(n.seed, 'add', '-f', 'routing/api-gateway.json');
+run(n.seed, 'commit', '-m', 'second upstream update'); run(n.seed, 'push', 'origin', 'master');
+const nSecond = cli(n.work);
+ok('N: second pull also succeeds after upstream began tracking manifest', nSecond.code === 0);
+ok('N: second pull updates code', fs.readFileSync(path.join(n.work, 'code.js'), 'utf8').trim() === 'v3');
+ok('N: second pull still preserves ignored local manifest byte-exact', fs.readFileSync(n.manifest).equals(nBytes));
+
+console.log('\nO. ignored manifest is restored after failed pull');
+const o = ignoredManifestSandbox('ignored-pull-fail');
+const oBytes = Buffer.from([0x00, 0x01, 0x0d, 0x0a, 0xff]);
+fs.writeFileSync(o.manifest, oBytes);
+fs.writeFileSync(path.join(o.seed, 'routing/api-gateway.json'), '{"upstream":true}\n');
+run(o.seed, 'add', '-f', 'routing/api-gateway.json');
+run(o.seed, 'commit', '-m', 'upstream tracks manifest'); run(o.seed, 'push', 'origin', 'master');
+const oMod = loadWithInjectedGitFailure(path.join(o.work, 'tools/git-pull-safe.js'), 'pull');
+const oRes = oMod.pullSafe();
+ok('O: pull reports the injected post-pull failure', oRes.ok === false && /injected failure/.test(oRes.error || ''));
+ok('O: ignored local manifest survives failed pull byte-exact', fs.readFileSync(o.manifest).equals(oBytes));
+
+console.log('\nP. ignored manifest collision during moveTo');
+const p = ignoredManifestSandbox('ignored-move');
+const pMod = requireFresh(path.join(p.work, 'tools/git-pull-safe.js'));
+const oldSha = run(p.work, 'rev-parse', 'HEAD').trim();
+fs.writeFileSync(path.join(p.work, 'routing/api-gateway.json'), '{"tracked":"new"}\n');
+run(p.work, 'add', '-f', 'routing/api-gateway.json'); run(p.work, 'commit', '-m', 'track manifest locally');
+const pNewSha = run(p.work, 'rev-parse', 'HEAD').trim();
+const pBytes = Buffer.from([0x00, 0xff, 0x7b, 0x7d, 0x0d, 0x0a]);
+fs.writeFileSync(p.manifest, pBytes);
+const pBack = pMod.moveTo(oldSha);
+ok('P: moveTo revision without tracked manifest succeeds', pBack.ok === true);
+ok('P: moveTo restores ignored manifest byte-exact', fs.readFileSync(p.manifest).equals(pBytes));
+const pForward = pMod.moveTo(pNewSha);
+ok('P: moveTo revision tracking manifest succeeds', pForward.ok === true);
+ok('P: moveTo keeps ignored manifest byte-exact', fs.readFileSync(p.manifest).equals(pBytes));
+
+console.log('\nQ. API Gateway writer lock serializes update and manifest saves');
+const q = ignoredManifestSandbox('writer-lock');
+const qBytes = Buffer.from('{"owner":"before-update"}\r\n', 'utf8');
+fs.writeFileSync(q.manifest, qBytes);
+fs.writeFileSync(path.join(q.seed, 'code.js'), 'v2\n');
+run(q.seed, 'add', 'code.js'); run(q.seed, 'commit', '-m', 'update under lock'); run(q.seed, 'push', 'origin', 'master');
+const qLock = `${q.manifest}.lock`;
+fs.writeFileSync(qLock, String(process.pid), 'utf8');
+const qBlocked = cli(q.work);
+ok('Q: live API Gateway writer lock blocks git update', qBlocked.code !== 0 && /busy|lock|занят/i.test(qBlocked.out));
+ok('Q: blocked update leaves code unchanged', fs.readFileSync(path.join(q.work, 'code.js'), 'utf8').trim() === 'v1');
+ok('Q: blocked update leaves local manifest byte-exact', fs.readFileSync(q.manifest).equals(qBytes));
+fs.unlinkSync(qLock);
+const qMarker = path.join(q.work, '.git', 'api-gateway-lock-seen');
+const qHook = path.join(q.work, '.git', 'hooks', 'post-merge');
+fs.writeFileSync(qHook, '#!/bin/sh\nif test -f routing/api-gateway.json.lock; then printf yes > .git/api-gateway-lock-seen; else printf no > .git/api-gateway-lock-seen; fi\n');
+fs.chmodSync(qHook, 0o755);
+const qUpdated = cli(q.work);
+ok('Q: update succeeds after the live writer releases the lock', qUpdated.code === 0);
+ok('Q: updater holds the shared API Gateway lock during git pull',
+   fs.existsSync(qMarker) && fs.readFileSync(qMarker, 'utf8') === 'yes');
+ok('Q: successful update still preserves local manifest byte-exact', fs.readFileSync(q.manifest).equals(qBytes));
+
+console.log('\nR. absent local manifest is never imported from upstream');
+const rCase = ignoredManifestSandbox('absent-manifest');
+fs.writeFileSync(path.join(rCase.seed, 'code.js'), 'v2\n');
+fs.writeFileSync(path.join(rCase.seed, 'routing/api-gateway.json'), '{"upstream":"must-not-become-owner-state"}\n');
+run(rCase.seed, 'add', 'code.js'); run(rCase.seed, 'add', '-f', 'routing/api-gateway.json');
+run(rCase.seed, 'commit', '-m', 'upstream mistakenly tracks local state'); run(rCase.seed, 'push', 'origin', 'master');
+const rRes = cli(rCase.work);
+ok('R: update with newly tracked local manifest path succeeds', rRes.code === 0);
+ok('R: unrelated code still updates', fs.readFileSync(path.join(rCase.work, 'code.js'), 'utf8').trim() === 'v2');
+ok('R: upstream local manifest is removed so first run seeds from default', !fs.existsSync(rCase.manifest));
+
+console.log('\nS. update never restores an old snapshot over an unexpected concurrent edit');
+const sOwner = Buffer.from('{"owner":"seeded-after-update"}\r\n', 'utf8');
+const sExternal = '{"external":"newer-writer-wins"}\n';
+fs.writeFileSync(rCase.manifest, sOwner);
+fs.writeFileSync(path.join(rCase.seed, 'code.js'), 'v3\n');
+run(rCase.seed, 'add', 'code.js'); run(rCase.seed, 'commit', '-m', 'second update'); run(rCase.seed, 'push', 'origin', 'master');
+const sHook = path.join(rCase.work, '.git', 'hooks', 'post-merge');
+fs.writeFileSync(sHook, '#!/bin/sh\nprintf \'%s\\n\' \'{"external":"newer-writer-wins"}\' > routing/api-gateway.json\n');
+fs.chmodSync(sHook, 0o755);
+const sRes = cli(rCase.work);
+ok('S: ambiguous concurrent manifest edit makes update report failure', sRes.code !== 0 && /параллельно|восстанов/i.test(sRes.out));
+ok('S: updater never overwrites the unexpected newer bytes with its old snapshot',
+   fs.readFileSync(rCase.manifest, 'utf8') === sExternal);
+
+console.log('\nU. next update recovers a crash after git pull but before owner-state restore');
+const u = ignoredManifestSandbox('crash-after-pull');
+const uOwner = Buffer.from('{"owner":"survives-process-crash"}\r\n', 'utf8');
+fs.writeFileSync(u.manifest, uOwner);
+fs.writeFileSync(path.join(u.seed, 'code.js'), 'v2\n');
+fs.writeFileSync(path.join(u.seed, 'routing/api-gateway.json'), '{"upstream":"temporary"}\n');
+run(u.seed, 'add', 'code.js'); run(u.seed, 'add', '-f', 'routing/api-gateway.json');
+run(u.seed, 'commit', '-m', 'update before injected crash'); run(u.seed, 'push', 'origin', 'master');
+const uScript = `
+  const fs = require('node:fs');
+  const cp = require('node:child_process');
+  const path = require('node:path');
+  const work = ${JSON.stringify(u.work)};
+  const manifest = path.join(work, 'routing/api-gateway.json');
+  const lib = require(path.join(work, 'routing/lib/api-gateway.js'));
+  lib.acquireManifestLock(manifest + '.lock');
+  lib.beginManifestUpdateOverlayLocked({ manifestPath: manifest });
+  fs.unlinkSync(manifest);
+  cp.execFileSync('git', ['pull', '--ff-only', '--no-edit'], { cwd: work, stdio: 'ignore' });
+  process.exit(57);
+`;
+const uCrash = require('child_process').spawnSync(process.execPath, ['-e', uScript], { encoding: 'utf8' });
+ok('U: fixture crashed after pull at the intended boundary', uCrash.status === 57);
+ok('U: crash left upstream manifest plus durable overlay journal',
+   /temporary/.test(fs.readFileSync(u.manifest, 'utf8')) && fs.existsSync(`${u.manifest}.update-txn`));
+const uRecovered = cli(u.work);
+ok('U: next updater run recovers and succeeds', uRecovered.code === 0);
+ok('U: owner manifest is restored byte-exact after process crash', fs.readFileSync(u.manifest).equals(uOwner));
+ok('U: durable update journal and stale lock are cleared',
+   !fs.existsSync(`${u.manifest}.update-txn`) && !fs.existsSync(`${u.manifest}.lock`));
 
 fs.rmSync(root, { recursive: true, force: true });

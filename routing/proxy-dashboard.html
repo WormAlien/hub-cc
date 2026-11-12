@@ -97,6 +97,7 @@
 <!-- Вкладка «Модели» вынесена во внешнюю пару файлов: этот html и без того на 31k строк.
      Отдаёт их тот же :8200 маршрутом /vendor/*, как и остальную локальную вендор-пачку. -->
 <link rel="stylesheet" href="/vendor/models-tab.css">
+<link rel="stylesheet" href="/vendor/api-gateway-tab.css">
 <link rel="stylesheet" href="/vendor/a6api-tab.css">
 <link rel="stylesheet" href="/vendor/media-tab.css">
 <link rel="stylesheet" href="/vendor/proxies-tab.css">
@@ -694,6 +695,11 @@ function randomThemeId() {
         <span class="w-5 text-center text-[14px]">🧠</span>
         <span class="flex-1">Модели</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-models">—</span>
+      </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="api-gateway" title="Published models and client sync for the shared localhost gateway">
+        <span class="w-5 text-center text-[14px]" aria-hidden="true">⇆</span>
+        <span class="flex-1">API Gateway</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-api-gateway">-</span>
       </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="proxies" title="Свои прокси: купленные и SOCKS5 из XGATE. Липкая привязка аккаунт→прокси, ёмкость считается по паре «прокси × хост», здесь же ребаланс осиротевших и перевеса">
         <span class="w-5 text-center text-[14px]">🔌</span>
@@ -5348,6 +5354,7 @@ window.finNavCount = async () => {
       <div id="proxies-root"></div>
     </div>
     <div data-tab-content="a6api" id="tab-a6api"><div id="a6api-root"></div></div>
+    <div data-tab-content="api-gateway" id="tab-api-gateway"><div id="api-gateway-root"></div></div>
     <div data-tab-content="models">
       <div class="px-6 py-8 space-y-4">
         <header class="flex items-end justify-between gap-4 flex-wrap">
@@ -41265,7 +41272,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -48906,6 +48913,7 @@ setTimeout(() => { ladProbeRole(); }, 2500);
 <!-- Вкладка «Модели» — весь её код (window.MODELS) снаружи. Подключаем последним, после
      всех инлайновых блоков: скрипт рассчитывает, что showTab и DOM панели уже есть. -->
 <script src="/vendor/models-tab.js"></script>
+<script src="/vendor/api-gateway-tab.js"></script>
 <script src="/vendor/a6api-tab.js"></script>
 
 <!-- Вкладка «MEDIA» — тем же приёмом: весь код (window.MEDIA) во внешней паре файлов.

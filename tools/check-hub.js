@@ -15,6 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -29,6 +30,14 @@ const bad = (name, why) => { fails.push(`${name} — ${why}`); console.log(`  \x
 const t = (name, fn) => { try { const r = fn(); if (r === true || r === undefined) ok(name); else bad(name, String(r)); } catch (e) { bad(name, e.message); } };
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const has = p => fs.existsSync(path.join(ROOT, p));
+const freeLoopbackPort = () => new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+        const port = server.address().port;
+        server.close(error => error ? reject(error) : resolve(port));
+    });
+});
 
 // Самопроба кадра: тот же файл с `--frame-probe` печатает JSON и выходит. Отдельный
 // процесс нужен именно потому, что набор глифов не переключается внутри уже загруженного
@@ -59,7 +68,7 @@ async function frameProbe() {
         try {
             lay = H.layout();
             await H.intro();
-            H.statusBlock({ compact: lay.compact });
+            H.statusBlock({ compact: lay.compact, rows: L.status() });
             if (!lay.compact) buf += '\n';
             for (const it of H.menuItems()) buf += H.itemLine(it, false) + '\n';
             buf += 'подсказка\n';
@@ -83,17 +92,22 @@ t('lifecycle.js экспортирует то, на что опираются х
     return true;
 });
 
-t('у каждого сервиса существующий скрипт, дашборд стартует последним', () => {
-    // Число сервисов не фиксируем: 24.08 к четырём добавился вотчдог пулов :20134.
-    // Важен порядок — дашборд на boot спавнит детей и сметает лежалых, к его старту
-    // порты уже должны быть свободны.
+t('у каждого сервиса существующий Node-скрипт или полный external descriptor, дашборд стартует после базовых прокси', () => {
+    // Node-сервисы сохраняют строгую проверку script. Optional external executable
+    // может отсутствовать до установки, поэтому проверяется полнота descriptor.
     if (L.SERVICES.length < 4) return `сервисов ${L.SERVICES.length}, это меньше четырёх базовых`;
     for (const s of L.SERVICES) {
-        if (!has(path.join('routing', s.script))) return `нет файла routing/${s.script}`;
+        if (s.script) {
+            if (!has(path.join('routing', s.script))) return `нет файла routing/${s.script}`;
+            continue;
+        }
+        if (!s.executable) return `${s.name}: нет ни script, ни executable`;
+        if (!Array.isArray(s.args)) return `${s.name}: external descriptor без args`;
+        if (!s.optional) return `${s.name}: отсутствующий external executable обязан быть optional`;
+        if (!s.imageName || !s.logName) return `${s.name}: external descriptor без imageName/logName`;
     }
-    // Три прокси обязаны встать ДО дашборда (он занимает :8200 последним из них), а
-    // после дашборда порядок свободен: вотчдог пулов :20134 добавлен 24.08 именно
-    // после — без активного бэкенда ему нечего мерить.
+    // Три provider proxy обязаны встать до dashboard. После него допустимы watchdog
+    // и optional sidecar, которые не блокируют native stack.
     const order = L.SERVICES.map(s => s.port);
     const dash = order.indexOf(8200);
     if (dash < 0) return 'дашборда :8200 нет в списке вообще';
@@ -565,7 +579,7 @@ t('картинка сверху, кадр влезает в окно', () => {
         try {
             lay = H.layout();
             H.intro();
-            H.statusBlock({ compact: lay.compact });
+            H.statusBlock({ compact: lay.compact, rows: L.status() });
             if (!lay.compact) out += '\n';
             for (const it of H.menuItems()) out += H.itemLine(it, false) + '\n';
             out += 'подсказка\n';
@@ -1004,7 +1018,7 @@ t('дефолтный набор вкладок дашборда — как на
     // добавленные 23.10: 'seekai' (шлюз SeekAi) и 'a6api' (пульт Claude Code поверх
     // маркетплейса a6api, сразу за 'custom'). Обе настроены и живым рестартом принимались
     // отдельно - расхождение было в тесте, а не в наборе.
-    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'routes', 'settings'];
+    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });
@@ -1045,67 +1059,84 @@ console.log('\x1b[1m\n7. Права и отказ в правах\x1b[0m');
 
 // Именно этого не проверял ни один прежний скрипт, и именно здесь жили обе главные
 // ошибки: старт «успешен», хотя node умер на первой строке, и «порт освобождён»
-// сразу перед EADDRINUSE. Порт 28299 выбран вне всех рабочих диапазонов.
-const PROBE_PORT = 28299;
-const probeFile = path.join(os.tmpdir(), 'hub-check-probe.js');
+// сразу перед EADDRINUSE. Порт выдаёт ОС, процесс останавливается только по своему PID.
+const probeFile = path.join(os.tmpdir(), `hub-check-probe-${process.pid}.js`);
 
 async function mechanics() {
-    fs.writeFileSync(probeFile, `require('http').createServer((q,s)=>s.end('ok')).listen(${PROBE_PORT},'127.0.0.1');`);
-    const held = () => (L.listeners().get(PROBE_PORT) || new Set()).size;
+    const probePort = await freeLoopbackPort();
+    fs.writeFileSync(probeFile, `require('http').createServer((q,s)=>s.end('ok')).listen(${probePort},'127.0.0.1');`);
+    const held = () => (L.listeners().get(probePort) || new Set()).size;
 
-    if (held()) { bad('порт для пробы свободен', `:${PROBE_PORT} кем-то занят, проба невозможна`); return; }
+    if (held()) { bad('порт для пробы свободен', `:${probePort} кем-то занят, проба невозможна`); return; }
     ok('порт для пробы свободен');
 
-    L.startService({ port: PROBE_PORT, name: 'проба', script: probeFile });
+    const launchPid = await L.startService({ port: probePort, name: 'проба', script: probeFile });
     let up = false;
     for (let i = 0; i < 24 && !up; i++) { await L.sleep(250); up = held() > 0; }
-    if (!up) { bad('startService поднимает процесс', 'порт не занялся за 6 с'); return; }
+    if (!up) {
+        bad('startService поднимает процесс', 'порт не занялся за 6 с');
+        if (launchPid) await L.stopLaunched(launchPid);
+        return;
+    }
     ok('startService поднимает процесс');
 
-    const pids = [...L.listeners().get(PROBE_PORT)];
+    const pids = [...L.listeners().get(probePort)];
     pids.length === 1 ? ok('listeners() находит слушателя') : bad('listeners() находит слушателя', `найдено ${pids.length}: ${pids}`);
 
     // Наш ли процесс держит порт — вопрос, на котором start() раньше молча ошибался.
-    // Проверяем на двух заведомо известных: наш собственный node и System (PID 4).
+    // Чужака проверяем через инъекцию, а не попыткой послать kill системному PID.
     L.isOurs(pids[0]) ? ok(`наш процесс распознан как свой (${L.pidImage(pids[0])})`)
         : bad('наш процесс распознан как свой', `pidImage вернул «${L.pidImage(pids[0])}»`);
-    L.pidAlive(4) && !L.isOurs(4) ? ok(`System (PID 4) распознан как чужой (${L.pidImage(4) || 'имя недоступно'})`)
-        : bad('System распознан как чужой', `isOurs(4)=${L.isOurs(4)}, image=«${L.pidImage(4)}»`);
+    !L.isOursForService({ executable: 'C:\\fixture\\foreign.exe' }, pids[0])
+        ? ok('тот же PID с чужим descriptor распознан как чужой')
+        : bad('чужой descriptor распознан как чужой', 'isOursForService вернул true');
 
-    const r = await L.killPort(PROBE_PORT);
-    r.freed && !held() ? ok('killPort освобождает порт и дожидается этого по факту') : bad('killPort освобождает порт', JSON.stringify(r));
+    const listenerPid = pids[0];
+    const stopped = await L.stopLaunched(listenerPid);
+    stopped.freed && !held() ? ok('stopLaunched освобождает owned PID и дожидается этого по факту')
+        : bad('stopLaunched освобождает owned PID', JSON.stringify(stopped));
 
-    const again = await L.killPort(PROBE_PORT);
-    again.freed && again.was.length === 0 ? ok('killPort по пустому порту не ошибка') : bad('killPort по пустому порту', JSON.stringify(again));
+    const again = await L.stopLaunched(listenerPid);
+    again.freed ? ok('stopLaunched по уже вышедшему PID не ошибка') : bad('stopLaunched по вышедшему PID', JSON.stringify(again));
 
     try { fs.unlinkSync(probeFile); } catch { /* уже нет */ }
 }
 
-// ── Отказ в правах отвечает СРАЗУ ────────────────────────────────────────────
-// Раньше отказ всё равно уходил в 8-секундный таймаут на каждый порт: на плане из
-// 14 портов это до двух минут «он что-то долго думает» вместо мгновенного ответа.
-// Проверяем на настоящем отказе, а не на подделке: порт, который слушает процесс
-// System (PID 4). Его нельзя убить даже администратором, так что попытка безопасна
-// и всегда даёт ровно тот отказ, который нас интересует.
+// ── Чужой держатель отвечает СРАЗУ и никогда не получает kill ────────────────
+// Проверяем injectable stopServices: это тот же core, который зовёт production wrapper,
+// но с фиктивной картой слушателей и без системного PID/порта.
 async function denialIsInstant() {
-    if (!L.IS_WIN) { console.log('  \x1b[33m·\x1b[0m проверка отказа — только для Windows, пропущено'); return; }
-
-    let port = 0;
-    for (const [p, pids] of L.listeners()) if (pids.has(4)) { port = p; break; }
-    if (!port) { console.log('  \x1b[33m·\x1b[0m не нашёл порта у System (PID 4) — отказ проверить нечем'); return; }
-
+    const port = await freeLoopbackPort();
+    const foreignPid = 424242;
+    let killed = false;
     const t0 = Date.now();
-    const r = await L.killPort(port);
+    const result = await L.stopServices([{
+        port,
+        name: 'foreign fixture',
+        executable: path.join(os.tmpdir(), 'foreign-fixture.exe'),
+        args: [],
+        optional: true,
+    }], {
+        phase: 'stop',
+        children: [],
+        listeners: () => new Map([[port, new Set([foreignPid])]]),
+        verifyProcessOwnership: async () => false,
+        killPort: async () => { killed = true; return { port, was: [foreignPid], freed: true }; },
+        drainAll: async () => ({ asked: 0, inflight: 0, freed: 0 }),
+        pidImage: () => 'foreign.exe',
+        pidExecutable: () => path.join(os.tmpdir(), 'foreign-fixture.exe'),
+    });
     const ms = Date.now() - t0;
+    const row = result.results[0] || {};
 
-    r.denied ? ok(`отказ в правах распознан (:${port}, PID 4 = System)`)
-        : bad('отказ в правах распознан', `killPort вернул denied=${r.denied} — значит отказ мы не видим`);
-    r.freed === false ? ok('порт System честно помечен как неосвобождённый')
-        : bad('порт System помечен как неосвобождённый', 'freed=true при живом System — врём в отчёте');
+    row.foreign === true ? ok(`чужой holder распознан (fixture PID ${foreignPid})`)
+        : bad('чужой holder распознан', JSON.stringify(row));
+    row.freed === false && row.holding && row.holding.includes(foreignPid)
+        ? ok('чужой holder честно помечен как неосвобождённый')
+        : bad('чужой holder помечен как неосвобождённый', JSON.stringify(row));
+    !killed ? ok('чужой holder не получил kill') : bad('чужой holder не получил kill', 'killPort был вызван');
     ms < 2000 ? ok(`ответ пришёл за ${ms} мс, а не через таймаут`)
-        : bad('ответ приходит сразу', `ждали ${ms} мс — таймаут 8 с на порт вернулся, на 14 портах это две минуты`);
-    r.fast === true ? ok('пометка fast стоит — хаб знает, что ждать было нечего')
-        : bad('пометка fast', 'её нет, отчёт не отличит отказ от честного таймаута');
+        : bad('ответ приходит сразу', `ждали ${ms} мс`);
 }
 
 t('порядок «погасить → поднять» существует в одном месте', () => {
@@ -1149,7 +1180,7 @@ t('«Проверка» и «Отчёт для отправки» — разны
 
 t('на рестарте отказ прекращает работу, а не гасит остаток стека', () => {
     const src = read('routing/lifecycle.js');
-    if (!/r\.denied && phase === 'restart'/.test(src)) return 'нет раннего выхода — уронит больше и всё равно не соберёт';
+    if (!/result\.denied && phase === 'restart'/.test(src)) return 'нет раннего выхода — уронит больше и всё равно не соберёт';
     if (!/type: 'abort'/.test(src)) return 'выход есть, но наверх о нём не сообщают';
     return true;
 });
@@ -1173,9 +1204,9 @@ t('права считаются один раз и не требуются дл
 async function windowsSpawnProps() {
     if (!L.IS_WIN) { console.log('  \x1b[33m·\x1b[0m свойства запуска — только для Windows, пропущено'); return; }
 
-    const PORT = 28297;
-    const mark = path.join(os.tmpdir(), 'check-hub-console.txt');
-    const srv = path.join(os.tmpdir(), 'check-hub-props.js');
+    const PORT = await freeLoopbackPort();
+    const mark = path.join(os.tmpdir(), `check-hub-console-${process.pid}.txt`);
+    const srv = path.join(os.tmpdir(), `check-hub-props-${process.pid}.js`);
     // Ребёнок сам отвечает, есть ли у него консоль: `mode con` без консоли не работает.
     // Опрашивать окна снаружи нельзя — прошлая попытка делать это через PowerShell с
     // Add-Type в цикле САМА породила спам окон, который искала.
@@ -1188,11 +1219,11 @@ fs.writeFileSync(${JSON.stringify(mark)}, /Lines|CON|строк/i.test(String(r.
 `);
     try { fs.unlinkSync(mark); } catch { /* нет */ }
 
-    if ((L.listeners().get(PORT) || new Set()).size) { bad('порт 28297 свободен', 'занят'); return; }
+    if ((L.listeners().get(PORT) || new Set()).size) { bad(`порт ${PORT} свободен`, 'занят'); return; }
 
     // Запускаем через процесс-посредник, который СРАЗУ выходит: иначе «переживает
     // родителя» не проверить — родителем был бы сам регресс.
-    const launcher = path.join(os.tmpdir(), 'check-hub-launcher.js');
+    const launcher = path.join(os.tmpdir(), `check-hub-launcher-${process.pid}.js`);
     fs.writeFileSync(launcher, `
 const L = require(${JSON.stringify(path.join(ROOT, 'routing', 'lifecycle.js').replace(/\\/g, '/'))});
 L.startService({ port: ${PORT}, name: 'проба', script: ${JSON.stringify(srv.replace(/\\/g, '/'))} });
@@ -1220,7 +1251,9 @@ process.exit(0);
         ? bad('detached и windowsHide не стоят вместе', 'MSDN запрещает эту пару, detached побеждает — консоли не будет')
         : ok('detached и windowsHide не стоят вместе на одном spawn');
 
-    await L.killPort(PORT);
+    const listenerPids = [...(L.listeners().get(PORT) || new Set())];
+    const listenerPid = listenerPids[0];
+    if (listenerPid) await L.stopLaunched(listenerPid);
     for (const f of [srv, launcher, mark]) { try { fs.unlinkSync(f); } catch { /* нет */ } }
 }
 

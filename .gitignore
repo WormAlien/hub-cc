@@ -419,6 +419,16 @@ routing/*.bak
 routing/pool-alert.json
 routing/pool-watchdog.log
 
+# API Gateway publication manifest is owner-local state. Keep the tracked
+# api-gateway.default.json seed; ignore the live file and adjacent transaction artifacts.
+routing/api-gateway.json
+routing/api-gateway.json.*
+
+# Pinned Bifrost is installed locally after checksum verification. The binary
+# cache and generated file-only app directory must never enter git.
+routing/bifrost-cache/
+routing/runtime/bifrost/
+
 # точки возврата rescue.js (локальные копии состояния, содержат ключи)
 routing/.rescue/
 

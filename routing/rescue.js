@@ -34,6 +34,12 @@ const os = require('os');
 const net = require('net');
 const http = require('http');
 const path = require('path');
+const {
+    acquireManifestLock,
+    releaseManifestLock,
+    recoverManifestAndPickerLocked,
+    recoverManifestUpdateOverlayLocked,
+} = require('./lib/api-gateway');
 
 const ROUTING = __dirname;
 const CLAUDE = path.join(os.homedir(), '.claude');
@@ -46,7 +52,7 @@ const GOOD = 'GOOD';                       // метка эталона — от
 // git-pull-safe.js — см. Debug Reference § забытая тир-карта).
 const SETS = [
     { base: ROUTING, glob: /^[A-Za-z0-9_-]+-modelmap\.json$/ },
-    { base: ROUTING, names: ['frontdoor.json', 'custom-providers.json', 'fm-openai-config.json'] },
+    { base: ROUTING, names: ['frontdoor.json', 'custom-providers.json', 'fm-openai-config.json', 'api-gateway.json'] },
     { base: CLAUDE, names: ['settings.json', 'active-backend.json'] },
     { base: CLAUDE, glob: /^[A-Za-z0-9_-]+-active-(key\.txt|model\.txt|tiers\.json)$/ },
 ];
@@ -127,7 +133,23 @@ function statusOk(port, urlPath, timeout = 2500) {
 }
 
 // ── save / list / restore ─────────────────────────────────────────────────────
-function cmdSave(label) {
+function withApiGatewayLock(action) {
+    const lockPath = path.join(ROUTING, 'api-gateway.json.lock');
+    let lockFd = null;
+    try {
+        lockFd = acquireManifestLock(lockPath);
+        recoverManifestUpdateOverlayLocked({ manifestPath: path.join(ROUTING, 'api-gateway.json') });
+        recoverManifestAndPickerLocked({
+            manifestPath: path.join(ROUTING, 'api-gateway.json'),
+            settingsPath: path.join(CLAUDE, 'settings.json'),
+        });
+        return action();
+    } finally {
+        releaseManifestLock(lockPath, lockFd);
+    }
+}
+
+function cmdSaveUnlocked(label) {
     const stamp = label || new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const dest = path.join(SNAP_DIR, stamp);
     const files = stateFiles();
@@ -150,6 +172,10 @@ function cmdSave(label) {
     return stamp;
 }
 
+function cmdSave(label) {
+    return withApiGatewayLock(() => cmdSaveUnlocked(label));
+}
+
 function cmdList() {
     let names = [];
     try { names = fs.readdirSync(SNAP_DIR).filter((n) => fs.existsSync(path.join(SNAP_DIR, n, 'META.json'))); } catch {}
@@ -161,7 +187,7 @@ function cmdList() {
     }
 }
 
-function cmdRestore(which) {
+function cmdRestoreUnlocked(which) {
     let label = which;
     if (label === 'good') label = GOOD;
     if (label === 'last') {
@@ -176,7 +202,7 @@ function cmdRestore(which) {
     // Стоит копейку, а спасает от необратимости, ради которой скрипт и написан.
     say('');
     info('сначала сохраняю текущее состояние…');
-    cmdSave('before-restore-' + new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19));
+    cmdSaveUnlocked('before-restore-' + new Date().toISOString().replace(/[:.]/g, '-').slice(11, 19));
     say('');
 
     let n = 0;
@@ -197,6 +223,10 @@ function cmdRestore(which) {
     info('Тир-карты и active-backend.json перечитываются НА ХОДУ (по mtime) — рестарт не нужен.');
     info('Если менялся код прокси — нужен рестарт: HUB.bat → «Перезапустить».');
     info('Рестарт гасит front-door :20100, то есть живые сессии Claude Code.');
+}
+
+function cmdRestore(which) {
+    return withApiGatewayLock(() => cmdRestoreUnlocked(which));
 }
 
 function cmdGood() {
@@ -344,6 +374,8 @@ function cmdSelftest() {
     assert.ok(files.some((f) => /-modelmap\.json$/.test(f.rel)), 'тир-карты попали в набор');
     assert.ok(files.some((f) => f.rel === 'active-backend.json'), 'active-backend попал в набор');
     assert.ok(files.some((f) => f.rel === 'settings.json'), 'settings.json попал в набор');
+    assert.ok(SETS.some((set) => set.base === ROUTING && (set.names || []).includes('api-gateway.json')),
+        'api-gateway manifest включён в routing state');
     assert.ok(files.some((f) => f.code), 'код денежного пути попал в набор');
     // Пулы аккаунтов — данные, не конфиг: в снимке их быть НЕ должно.
     assert.ok(!files.some((f) => /-sessions\.json$/.test(f.rel)),
@@ -352,6 +384,12 @@ function cmdSelftest() {
     assert.strictEqual(baseOf(bucket(CLAUDE)), CLAUDE, 'claude-ведро резолвится обратно');
     assert.strictEqual(baseOf(bucket(ROUTING)), ROUTING, 'routing-ведро резолвится обратно');
     const src = fs.readFileSync(__filename, 'utf8');
+    assert.ok(/function withApiGatewayLock\(/.test(src)
+        && /recoverManifestUpdateOverlayLocked\(/.test(src)
+        && /recoverManifestAndPickerLocked\(/.test(src)
+        && /withApiGatewayLock\(\(\) => cmdSaveUnlocked/.test(src)
+        && /withApiGatewayLock\(\(\) => cmdRestoreUnlocked/.test(src),
+    'save/restore recover pending journals, then serialize manifest and Claude settings');
     assert.ok(!/spawnSync\('taskkill|\bkill\(/.test(src), 'процессы не убиваем');
     // Совет «git checkout» уничтожил бы незакоммиченные правки — доктор его не даёт.
     assert.ok(!/info\('вернуть КОД как в git: git checkout/.test(src),

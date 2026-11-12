@@ -150,22 +150,24 @@ check('pricing: битый ответ и пустота дают пустой с
 });
 
 // ── 5. Цепочка и её единственное место ───────────────────────────────────────
-check('обработчик ведёт цепочку: живой ключ → пул → панель → снимок', () => {
+check('обработчик делегирует единой цепочке resolver и не держит вторую копию', () => {
     const src = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
-    const head = src.indexOf('function handleRoutesModels(');
+    const head = src.indexOf('async function handleRoutesModels(');
     assert.ok(head > 0, 'handleRoutesModels не найдена');
-    const body = src.slice(head, src.indexOf('\nfunction handleRoutes', head));
-    assert.ok(/activeKey/.test(body), 'живой ключ не участвует');
-    assert.ok(/pickAccountKey/.test(body), 'ключа аккаунта из пула нет');
-    assert.ok(/fromPricing/.test(body), 'каталога панели нет');
-    assert.ok(/fromSnapshot/.test(body), 'снимка каталога нет');
-    // 🪤 Порядок несущий: панель обязана спрашиваться ДО снимка, иначе месячная давность
-    // снова выиграет у живого каталога.
-    assert.ok(body.indexOf('fromPricing') < body.indexOf('const fromSnapshot'),
-        'ступень панели стоит после снимка: свежее опять проиграет старому');
-    assert.ok(/routesCatalogLib\.pricingFor/.test(body), 'панель спрашивается не через модуль');
-    assert.ok(/routesCatalogLib\.textOnly/.test(body), 'фильтр медиа на пути каталога не применяется');
-    assert.ok(/\/__switch\/api\/\$\{ep\}\/sessions/.test(body), 'пул аккаунтов спрашивается не той ручкой');
+    const body = src.slice(head, src.indexOf('\nfunction handleRoutes(', head));
+    assert.ok(/apiGatewayProduction\.resolveRouteCandidates\(\[provider\]\)/.test(body),
+        'Routes не делегирует production shared resolver');
+    assert.ok(!/routesCatalogLib\.(?:pricingFor|snapshotFor|pickAccountKey|textOnly)/.test(body),
+        'в handleRoutesModels вернулась копия source chain');
+    const resolverAt = src.indexOf('async function resolveApiGatewayCandidates(');
+    assert.ok(resolverAt > 0, 'resolveApiGatewayCandidates не найден');
+    const resolver = src.slice(resolverAt, src.indexOf('\nfunction routesCandidateResponseMeta(', resolverAt));
+    assert.ok(/routesCatalogLib\.resolveModelCandidates/.test(resolver), 'shared resolver не вызывается');
+    for (const adapter of ['routesCandidateLiveModels', 'routesCandidateAccountModels',
+                           'routesCandidatePricingModels', 'routesCandidateSnapshotModels',
+                           'routesCandidateConfiguredModels']) {
+        assert.ok(src.includes(`async function ${adapter}(`), `нет adapter ${adapter}`);
+    }
 });
 
 check('клиентской копии цепочки больше нет', () => {
@@ -221,20 +223,21 @@ check('на боевом снимке шлюзы, которые молчат ж
 // Здесь он исполняется целиком, с поддельной сетью: видно, КАКУЮ ручку он спрашивает,
 // что отвечает вкладке и не ходит ли на диск/в апстрим мимо.
 const SRC_TP = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
-const extractFn = (name) => {
-    const head = SRC_TP.indexOf(`function ${name}(`);
-    assert.ok(head > 0, `${name} не найдена в transparent-proxy.js`);
-    const end = SRC_TP.indexOf('\n}\n', head);
-    assert.ok(end > head, `не найден конец ${name}`);
-    return SRC_TP.slice(head, end + 2);
-};
+const candidateStart = SRC_TP.indexOf('function routesCatalogJson(');
+const candidateEnd = SRC_TP.indexOf('\nfunction handleRoutes(', candidateStart);
+assert.ok(candidateStart > 0 && candidateEnd > candidateStart, 'production candidate block not found');
+const candidateBlock = SRC_TP.slice(candidateStart, candidateEnd);
 
 function runHandler(provider, answer, opts) {
     const o = opts || {};
     return new Promise((resolve) => {
         const asked = [];
         const http = {
-            get(url, opts2, cb) {
+            get(input, opts2, cb2) {
+                const callback = typeof opts2 === 'function' ? opts2 : cb2;
+                const url = typeof input === 'string'
+                    ? input
+                    : `http://${input.hostname || input.host}:${input.port}${input.path}`;
                 asked.push(url);
                 const rq = { on() { return rq; }, destroy() { } };
                 const body = answer(url);
@@ -251,16 +254,13 @@ function runHandler(provider, answer, opts) {
                             return r;
                         },
                     };
-                    cb(r);
+                    callback(r);
                 });
-                // `error` обработчик навешивают ПОСЛЕ возврата из get — держим список.
                 const origOn = rq.on;
                 rq.on = (ev, fn) => { if (ev === 'error') (rq._errs = rq._errs || []).push(fn); return origOn.call(rq, ev, fn); };
                 return rq;
             },
         };
-        // 🪤 Панель спрашивается тем же `fetch`, что и в бою. В песочнице он поддельный:
-        // проба сети не касается, а без подмены здесь пошёл бы настоящий запрос.
         const askedFetch = [];
         const fetchFake = async (url) => {
             askedFetch.push(url);
@@ -268,13 +268,13 @@ function runHandler(provider, answer, opts) {
             if (body === undefined) throw new Error('сеть молчит');
             return { ok: true, json: async () => body };
         };
-        // 🪤 `os` подделываем на временный каталог: с живым `homedir()` обработчик находит
-        // настоящий файл активного ключа, уходит в живую ветку и пул аккаунтов не спрашивает.
-        const osFake = { homedir: () => path.join(TMP, 'home') };
-        const res = {};
-        const factory = new Function('ROUTE_EP', 'CC_MODEL_PREFIX', 'MONEY_GW', 'LISTEN_PORT',
-            'jsonRes', 'routesCatalogLib', 'fs', 'path', 'os', 'http', 'fetch',
-            `${extractFn('handleRoutesModels')}; return handleRoutesModels;`);
+        const home = path.join(TMP, `home-${provider}-${Math.random().toString(16).slice(2)}`);
+        fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+        if (o.activeKey) {
+            const prefix = o.keyPrefix || provider;
+            fs.writeFileSync(path.join(home, '.claude', `${prefix}-active-key.txt`), o.activeKey, 'utf8');
+        }
+        const osFake = { homedir: () => home };
         const parsePairs = (block) => {
             const out = {};
             const re = /(\w+):\s*'([^']+)'/g;
@@ -286,17 +286,45 @@ function runHandler(provider, answer, opts) {
             const at = SRC_TP.indexOf(`const ${name} = {`);
             return SRC_TP.slice(at, SRC_TP.indexOf('\n};', at));
         };
-        // 🪤 Форма та же, что в бою: `MONEY_GW` — это `{ короткий_тег: { tag, host } }`,
-        // а обработчик ищет хост по `tag`. Плоская карта `tag → host` дала бы «источника
-        // нет» на живой ветке снимка, и проба упала бы на исправном коде.
         const moneyGw = {};
         for (const m of blockOf('MONEY_GW').matchAll(/(\w+):\s*\{([^}]*)\}/g)) {
             const tag = /tag:\s*'([^']+)'/.exec(m[2]);
             const host = /host:\s*'([^']+)'/.exec(m[2]);
             if (tag && host) moneyGw[m[1]] = { tag: tag[1], host: host[1] };
         }
-        const handler = factory(parsePairs(blockOf('ROUTE_EP')), parsePairs(blockOf('CC_MODEL_PREFIX')),
-            moneyGw, 8200, (r, code, obj) => { r.captured = obj; }, lib, fs, path, osFake, http, fetchFake);
+        const factory = new Function('ROUTE_EP', 'CC_MODEL_PREFIX', 'MONEY_GW', 'LISTEN_PORT',
+            'jsonRes', 'routesCatalogLib', 'fs', 'path', 'os', 'http', 'fetch', 'a6Gateway',
+            'BACKENDS_REGISTRY_FILE', 'BACKENDS', 'routeTierMap', 'routeActiveModel',
+            `let apiGatewayProduction; ${candidateBlock};
+             apiGatewayProduction = { resolveRouteCandidates: providers => resolveApiGatewayCandidates({
+               providers,
+               getLiveModels: routesCandidateLiveModels,
+               getAccountModels: routesCandidateAccountModels,
+               getPricingModels: routesCandidatePricingModels,
+               getSnapshotModels: routesCandidateSnapshotModels,
+               getConfiguredModels: routesCandidateConfiguredModels,
+             }) };
+             return handleRoutesModels;`);
+        const maps = o.configuredModels || [];
+        const handler = factory(
+            parsePairs(blockOf('ROUTE_EP')),
+            parsePairs(blockOf('CC_MODEL_PREFIX')),
+            moneyGw,
+            8200,
+            (r, code, obj) => { r.captured = obj; },
+            lib,
+            fs,
+            path,
+            osFake,
+            http,
+            fetchFake,
+            { readSelection: () => null, models: async () => [] },
+            path.join(home, '.claude', 'backends.json'),
+            {},
+            () => Object.fromEntries(maps.map((model, index) => [`tier${index}`, model])),
+            () => o.activeModel || null,
+        );
+        const res = {};
         const req = { url: `/__switch/api/routes/models?provider=${provider}`, headers: { host: '127.0.0.1:8200' } };
         handler(req, res);
         setTimeout(() => resolve({ out: res.captured, asked, askedFetch }), 200);

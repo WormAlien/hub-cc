@@ -64,13 +64,14 @@
 | **Telegram аккаунты** | Пул авторегов (`freemodel/tg_pool.json`): статус, health-чек пачкой, «свободен для» по сервисам, импорт `.session` и hex-строк. |
 | **Custom** | Свои OpenAI-совместимые провайдеры: конвертер поднимается на активацию в диапазоне `20150–20299`. |
 | **SuperGrok** | Сессии grok.com, запуск браузера и терминала под аккаунт. |
+| **API Gateway** | Один provider `ABUSE HUB` для OpenCode и Hermes: ручная публикация canonical `provider/model`, health без автоподмен, redacted Preview/Sync, статус Bifrost и клиентов. Claude Code остаётся на native Messages. |
 | **Health** | Куда реально смотрит Claude Code (включая цепочку front-door → бэкенд → порт), git-состояние репо, аптайм, сервисы по портам с кнопками «перезапустить» и «убить». |
 | **Плагины / MCP / Скиллы** | Тоггл `enabledPlugins` из `~/.claude/settings.json`, MCP-серверов из `~/.claude.json` и скиллов через `skillOverrides`, кнопка «★ рекомендованные». |
 | **Настройки** | Тема (22 штуки), обновление дашборда, front-door `:20100`, тоггл статус-бара и автокомпакта, JSON-редактор `settings.json` с бэкапами, env OmniRoute. |
 
 </div>
 
-Ровно эти 12 вкладок видны на свежей установке — остальное скрыто по умолчанию. Порядок и видимость — кнопка **⋮ Настроить вкладки** (перетаскивание + глазок), выбор хранится в `localStorage`.
+Эти основные вкладки видны на свежей установке; остальное скрыто по умолчанию. Порядок и видимость — кнопка **⋮ Настроить вкладки** (перетаскивание + глазок), выбор хранится в `localStorage`.
 
 ![Настроить вкладки: перетаскивание порядка и глазок видимости, легаси скрыто по умолчанию](docs/tabs-manager.png)
 
@@ -103,7 +104,8 @@
 
 | Порт | Сервис | Файл |
 | :--- | :--- | :--- |
-| `20100` | **front-door** — единственный адрес для Claude Code, режим по умолчанию | `routing/frontdoor-proxy.js` |
+| `20100` | **front-door** — native Anthropic для Claude Code + `/openai/v1` для OpenCode/Hermes | `routing/frontdoor-proxy.js` |
+| `20135` | **Bifrost protocol sidecar** — pinned OpenAI↔Anthropic converter, только loopback | `routing/lib/bifrost-sidecar.js` |
 | `8200` | **Dashboard** — UI `/__switch` + все `/__switch/api/*` | `routing/transparent-proxy.js` |
 | `20133` | **AgentRouter keepalive** (SSE, `claude-*`) | `routing/keepalive-proxy.js` |
 | `20132` | **AgentRouter proxy** (`gpt-*`, Anthropic→OpenAI конвертер) | `routing/agentrouter-proxy.js` |

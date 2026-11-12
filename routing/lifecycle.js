@@ -19,7 +19,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const bifrostSidecar = require('./lib/bifrost-sidecar');
+const {
+    buildCustomProcessDescriptors,
+    cleanupCustomProcess,
+} = require('./lib/custom-process-ownership');
 
 const ROUTING = __dirname;
 const ROOT = path.join(__dirname, '..');
@@ -51,7 +57,8 @@ const LOG_DIR = path.join(ROOT, 'logs', 'hub');
 const LOG_MAX = 5 * 1024 * 1024;          // больше — крутим в .1, иначе файл растёт вечно
 
 function serviceLog(svc) {
-    return path.join(LOG_DIR, path.basename(String(svc.script || 'service'), '.js') + '.log');
+    const source = svc.logName || svc.script || svc.executable || 'service';
+    return path.join(LOG_DIR, path.basename(String(source), path.extname(String(source))) + '.log');
 }
 
 // ── Порт front-door ──────────────────────────────────────────────────────────
@@ -118,6 +125,9 @@ const SERVICES = [
     // ГРОМКО сообщает (лог + pool-alert.json), сам НЕ переключает. Стоит после
     // дашборда: без активного бэкенда ему нечего мерить. Разбор — pool-watchdog.js.
     { port: 20134, name: 'Вотчдог пулов', script: 'pool-watchdog.js', ready: '/__watchdog/api/status' },
+    // Protocol sidecar для OpenAI Chat Completions. Он optional: checksum/install/start
+    // error деградирует только /openai/*, а native Claude и dashboard продолжают старт.
+    bifrostSidecar.defaultServiceDescriptor(),
 ];
 
 
@@ -200,8 +210,14 @@ function customPorts() {
         const raw = fs.readFileSync(path.join(ROUTING, 'custom-providers.json'), 'utf8');
         const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
         return (doc.providers || [])
-            .map(p => ({ port: Number(p.proxyPort), name: `конвертер ${p.name || p.id || '?'}`, respawn: false }))
-            .filter(p => p.port > 0);
+            .flatMap(provider => buildCustomProcessDescriptors(provider, { routingDir: ROUTING }))
+            .map(descriptor => ({
+                port: descriptor.port,
+                name: `${descriptor.role === 'keepalive' ? 'keepalive' : 'конвертер'} ${descriptor.providerName || descriptor.providerId || '?'}`,
+                respawn: false,
+                customProcess: descriptor,
+            }))
+            .filter(item => item.port > 0);
     } catch {
         return [];
     }
@@ -209,11 +225,11 @@ function customPorts() {
 
 // Кого гасить в каждой из двух операций. Порядок: сначала дашборд, потом его дети —
 // живой дашборд успел бы заметить пропажу ребёнка и поднять его обратно.
-function killPlan(phase) {
-    const kids = [...children(), ...customPorts()];
-    const list = [...SERVICES].reverse().map(s => ({ port: s.port, name: s.name }));
+function killPlan(phase, services = SERVICES, childItems = null) {
+    const kids = childItems || [...children(), ...customPorts()];
+    const list = [...services].reverse().map(s => ({ port: s.port, name: s.name, service: s }));
     for (const k of kids) {
-        if (phase === 'stop' || k.respawn) list.push({ port: k.port, name: k.name });
+        if (phase === 'stop' || k.respawn) list.push({ ...k, port: k.port, name: k.name, service: null });
     }
     const seen = new Set();
     return list.filter(x => (seen.has(x.port) ? false : seen.add(x.port)));
@@ -329,6 +345,170 @@ function pidImage(pid) {
     }
 }
 
+function pidExecutable(pid) {
+    try {
+        if (IS_WIN) {
+            const command = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${Number(pid)}').ExecutablePath`;
+            const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command],
+                { encoding: 'utf8', windowsHide: true });
+            return r.status === 0 ? String(r.stdout || '').trim() : '';
+        }
+        const r = spawnSync('readlink', [`/proc/${Number(pid)}/exe`], { encoding: 'utf8' });
+        if (r.status === 0) return String(r.stdout || '').trim();
+        const p = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+        const command = String(p.stdout || '').trim();
+        return command ? command.split(/\s+/)[0] : '';
+    } catch {
+        return '';
+    }
+}
+
+function pidArguments(pid) {
+    try {
+        if (IS_WIN) {
+            const command = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${Number(pid)}').CommandLine`;
+            const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command],
+                { encoding: 'utf8', windowsHide: true });
+            return r.status === 0 ? String(r.stdout || '').trim() : '';
+        }
+        const proc = `/proc/${Number(pid)}/cmdline`;
+        try {
+            return fs.readFileSync(proc).toString('utf8').split('\0').filter(Boolean);
+        } catch {
+            const r = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+            return String(r.stdout || '').trim();
+        }
+    } catch {
+        return '';
+    }
+}
+
+function normalizedPath(value) {
+    const full = path.resolve(String(value || ''));
+    return IS_WIN ? full.toLowerCase() : full;
+}
+
+function hashFile(file) {
+    const hash = crypto.createHash('sha256');
+    const fd = fs.openSync(file, 'r');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    try {
+        for (;;) {
+            const count = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (!count) break;
+            hash.update(buffer.subarray(0, count));
+        }
+    } finally {
+        fs.closeSync(fd);
+    }
+    return hash.digest('hex');
+}
+
+function isOursForService(svc, image, executablePath = '') {
+    const actual = path.basename(String(image || '')).toLowerCase();
+    if (!svc.executable) return /^node(\.exe)?$/i.test(actual);
+    const expected = path.basename(String(svc.imageName || svc.executable)).toLowerCase();
+    if (actual !== expected) return false;
+    if (!executablePath) return false;
+    return normalizedPath(executablePath) === normalizedPath((svc.identity && svc.identity.path) || svc.executable);
+}
+
+async function healthIdentity(svc, timeoutMs = 1500) {
+    const healthPath = (svc.identity && svc.identity.healthPath) || svc.ready || '/health';
+    const versionPath = (svc.identity && svc.identity.version) ? '/api/version' : null;
+    const get = pathname => new Promise(resolve => {
+        const req = http.get({ host: '127.0.0.1', port: svc.port, path: pathname, timeout: timeoutMs }, res => {
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => {
+                let json = null;
+                try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* fail closed below */ }
+                resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, json });
+            });
+        });
+        req.on('timeout', () => { req.destroy(); resolve({ ok: false, json: null }); });
+        req.on('error', () => resolve({ ok: false, json: null }));
+    });
+    const health = await get(healthPath);
+    if (!health.ok || !health.json || health.json.status !== 'ok') return { ok: false, marker: null, version: null };
+    let version = null;
+    if (versionPath) {
+        const response = await get(versionPath);
+        if (!response.ok) return { ok: false, marker: null, version: null };
+        version = typeof response.json === 'string' ? response.json : response.json && response.json.version;
+        if (String(version || '').replace(/^v/, '') !== String(svc.identity.version).replace(/^v/, '')) {
+            return { ok: false, marker: null, version };
+        }
+    }
+    // The marker is descriptor-owned and paired with exact path/hash/version checks.
+    return { ok: true, marker: svc.identity && svc.identity.marker, version };
+}
+
+async function verifyProcessOwnership(svc, pid, {
+    pidImage: imageOf = pidImage,
+    pidExecutable: executableOf = pidExecutable,
+} = {}) {
+    if (!svc || !svc.executable) return isOursForService(svc || {}, imageOf(pid), executableOf(pid));
+    const runningPath = executableOf(pid);
+    if (!isOursForService(svc, imageOf(pid), runningPath)) return false;
+    if (svc.identity && svc.identity.sha256) {
+        try {
+            if (hashFile(runningPath) !== String(svc.identity.sha256).toLowerCase()) return false;
+        } catch { return false; }
+    }
+    return true;
+}
+
+function commandTokens(value) {
+    if (Array.isArray(value)) return value.map(String);
+    const text = String(value || '');
+    const tokens = [];
+    const pattern = /"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)'|(\S+)/g;
+    let match;
+    while ((match = pattern.exec(text))) tokens.push(match[1] ?? match[2] ?? match[3]);
+    return tokens;
+}
+
+function commandOption(tokens, name) {
+    const index = tokens.findIndex(token => token === name);
+    return index >= 0 && index + 1 < tokens.length ? tokens[index + 1] : '';
+}
+
+function markerFromConfig(file, provider = 'abuse-hub') {
+    try {
+        const raw = fs.readFileSync(file, 'utf8');
+        const config = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        return config && config.providers && config.providers[provider]
+            && config.providers[provider].network_config
+            && config.providers[provider].network_config.extra_headers
+            && config.providers[provider].network_config.extra_headers['x-abuse-hub-internal'];
+    } catch {
+        return null;
+    }
+}
+
+async function verifyServiceIdentity(svc, pid, adapters = {}) {
+    if (!await verifyProcessOwnership(svc, pid, adapters)) return false;
+    if (!svc.identity) return true;
+    if (svc.identity.appDir) {
+        const args = commandTokens((adapters.pidArguments || pidArguments)(pid));
+        const appDir = commandOption(args, '-app-dir');
+        const host = commandOption(args, '-host');
+        const port = Number(commandOption(args, '-port'));
+        if (!appDir || normalizedPath(appDir) !== normalizedPath(svc.identity.appDir)
+            || host !== '127.0.0.1' || port !== Number(svc.port)) return false;
+    }
+    if (svc.identity.configPath) {
+        try {
+            if (svc.identity.configSha256
+                && hashFile(svc.identity.configPath) !== String(svc.identity.configSha256).toLowerCase()) return false;
+            if (markerFromConfig(svc.identity.configPath) !== svc.identity.marker) return false;
+        } catch { return false; }
+    }
+    const probe = await (adapters.healthIdentity || healthIdentity)(svc);
+    return !!(probe && probe.ok && probe.marker === svc.identity.marker);
+}
+
 const isOurs = pid => /^node(\.exe)?$/i.test(pidImage(pid));
 
 // Убить один PID. Возвращает 'ok' | 'denied' | 'gone'.
@@ -344,7 +524,7 @@ async function killPid(pid, hard) {
     if (!pidAlive(pid)) return 'gone';
 
     if (IS_WIN) {
-        spawnSync('taskkill', hard ? ['/F', '/PID', String(pid)] : ['/PID', String(pid)],
+        spawnSync('taskkill', hard ? ['/F', '/T', '/PID', String(pid)] : ['/PID', String(pid)],
             { windowsHide: true });
     } else {
         try {
@@ -394,6 +574,28 @@ function askDrainOnce(port) {
         req.on('error', () => resolve(null));
         req.end();
     });
+}
+
+async function stopLaunched(launch, {
+    killPid: stopPid = killPid,
+    pidAlive: isAlive = pidAlive,
+    sleep: pause = sleep,
+    timeoutMs = 8000,
+} = {}) {
+    const pid = Number(launch && typeof launch === 'object' ? launch.pid : launch);
+    if (!Number.isInteger(pid) || pid <= 0) {
+        return { pid: 0, freed: true, denied: false };
+    }
+    let outcome = await stopPid(pid, IS_WIN);
+    if (outcome === 'denied') return { pid, freed: false, denied: true };
+    const deadline = Date.now() + timeoutMs;
+    while (isAlive(pid) && Date.now() < deadline) await pause(50);
+    if (isAlive(pid)) {
+        outcome = await stopPid(pid, true);
+        if (outcome === 'denied') return { pid, freed: false, denied: true };
+        for (let i = 0; i < 20 && isAlive(pid); i++) await pause(50);
+    }
+    return { pid, freed: !isAlive(pid), denied: false };
 }
 
 // ── Front-door: не гасить, если его код не менялся (2026-09-06) ───────────────
@@ -502,10 +704,32 @@ async function killPort(port, { timeoutMs = 8000, drainMs = 0 } = {}) {
 // ищет реальный lsof, а шим `netstat` из этой же папки его бы подменил.
 function childEnv() {
     const env = { ...process.env };
+    if (!env.ABUSE_HUB_LOCAL_HOP_KEY_FILE) {
+        env.ABUSE_HUB_LOCAL_HOP_KEY_FILE = path.join(os.homedir(), '.secrets', 'abuse-hub-local-hop.key');
+    }
     if (!IS_WIN) {
         const shims = path.join(ROOT, 'mac-support', 'shims');
         if (fs.existsSync(shims)) env.PATH = shims + path.delimiter + (env.PATH || '');
         if (fs.existsSync('/usr/bin/sqlite3')) env.SQLITE3 = '/usr/bin/sqlite3';
+    }
+    return env;
+}
+
+function serviceEnv(svc, parentEnv = process.env) {
+    if (!svc || svc.envPolicy !== 'allowlist') {
+        return { ...childEnv(), ...((svc && svc.env) || {}) };
+    }
+    const keep = new Set([
+        'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC',
+        'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE',
+        'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'TZ',
+    ]);
+    const env = {};
+    for (const [key, value] of Object.entries(parentEnv || {})) {
+        if (keep.has(key.toUpperCase()) && value !== undefined) env[key] = value;
+    }
+    for (const [key, value] of Object.entries(svc.env || {})) {
+        if (value !== undefined) env[key] = String(value);
     }
     return env;
 }
@@ -601,35 +825,68 @@ function logTail(svc, lines = 25) {
 // но два сервиса не могут писать в один файл (sharing violation), а `>>` из cmd
 // дописывают конкурентно нормально. Кавычки проверены на путях с пробелами —
 // сам node лежит в `C:\Program Files\nodejs`.
-function startService(svc) {
-    const script = path.resolve(ROUTING, svc.script);
-    const log = rotateLog(svc);
-    if (IS_WIN) {
+function windowsCmdQuote(value) {
+    const raw = String(value);
+    if (!/[\s"&|<>^()%!]/.test(raw)) return raw;
+    return `"${raw.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
+}
+
+function startService(svc, {
+    platform = process.platform,
+    spawn: spawnProcess = spawn,
+    spawnSync: spawnProcessSync = spawnSync,
+    rotateLog: prepareLog = rotateLog,
+} = {}) {
+    const executable = svc.executable ? path.resolve(svc.executable) : process.execPath;
+    const args = svc.executable
+        ? (Array.isArray(svc.args) ? svc.args.map(String) : [])
+        : [path.resolve(ROUTING, svc.script), ...(Array.isArray(svc.args) ? svc.args.map(String) : [])];
+    const cwd = svc.cwd ? path.resolve(svc.cwd) : ROUTING;
+    const log = prepareLog(svc);
+    const env = serviceEnv(svc);
+    if (platform === 'win32') {
         const q = s => `'${String(s).replace(/'/g, "''")}'`;
-        const inner = `""${process.execPath}" "${script}" >> "${log}" 2>&1"`;
-        const ps = `$p = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c',${q(inner)} `
-            + `-WorkingDirectory ${q(ROUTING)} -WindowStyle Hidden -PassThru; $p.Id`;
-        const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
-            { encoding: 'utf8', windowsHide: true });
-        if (r.status !== 0) throw new Error(`Start-Process не смог поднять ${svc.script}: ${String(r.stderr || '').trim().slice(0, 200)}`);
+        const command = [executable, ...args].map(windowsCmdQuote).join(' ');
+        const inner = `"${command} >> ${windowsCmdQuote(log)} 2>&1"`;
+        const envSet = Object.entries(svc.env || {})
+            .map(([key, value]) => `$env:${key.replace(/[^A-Za-z0-9_]/g, '')} = ${q(value)}; `)
+            .join('');
+        const ps = `${envSet}$p = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c',${q(inner)} `
+            + `-WorkingDirectory ${q(cwd)} -WindowStyle Hidden -PassThru; $p.Id`;
+        const r = spawnProcessSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
+            { encoding: 'utf8', windowsHide: true, env });
+        const label = svc.script || path.basename(executable);
+        if (r.status !== 0) throw new Error(`Start-Process не смог поднять ${label}: ${String(r.stderr || '').trim().slice(0, 200)}`);
         return Number(String(r.stdout).trim()) || 0;   // pid обёртки; настоящий узнаём по порту
     }
 
     // POSIX: detached (setsid) — своя группа процессов, закрытие терминала не
     // рассылает ей SIGHUP. Консоль в этом смысле проблемой не является.
     const out = fs.openSync(log, 'a');
+    let child;
     try {
-        const child = spawn(process.execPath, [script], {
-            cwd: ROUTING,
+        child = spawnProcess(executable, args, {
+            cwd,
             detached: true,
             stdio: ['ignore', out, out],
-            env: childEnv(),
+            env,
         });
-        child.unref();
-        return child.pid;
     } finally {
         fs.closeSync(out);            // handle уже унаследован ребёнком, свой закрываем
     }
+    return new Promise((resolve, reject) => {
+        const failed = error => {
+            child.removeListener('spawn', launched);
+            reject(error);
+        };
+        const launched = () => {
+            child.removeListener('error', failed);
+            child.unref();
+            resolve(child.pid);
+        };
+        child.once('error', failed);
+        child.once('spawn', launched);
+    });
 }
 
 // Готовность дашборда — по его же ручке статуса, а не по факту «порт слушает»:
@@ -639,7 +896,7 @@ async function waitReady(port, urlPath, timeoutMs = 15000) {
     while (Date.now() < deadline) {
         const ok = await new Promise(resolve => {
             const req = http.get({ host: '127.0.0.1', port, path: urlPath, timeout: 1500 },
-                res => { res.resume(); resolve(res.statusCode > 0); });
+                res => { res.resume(); resolve(res.statusCode >= 200 && res.statusCode < 300); });
             req.on('error', () => resolve(false));
             req.on('timeout', () => { req.destroy(); resolve(false); });
         });
@@ -653,24 +910,69 @@ async function waitReady(port, urlPath, timeoutMs = 15000) {
 // Один снимок netstat/lsof на весь список. role различает, кто чей: 'service' мы
 // поднимаем сами, 'child' поднимает дашборд, и лежащий child далеко не всегда
 // поломка (keepalive неактивного провайдера лежит штатно).
+function statusRows(items, map = listeners(), activePort = activeUpstreamPort(), role = 'service') {
+    return items.map(x => {
+        const pids = [...(map.get(x.port) || [])];
+        const up = pids.length > 0;
+        return {
+            port: x.port,
+            name: x.name,
+            role,
+            up,
+            pids,
+            respawn: !!x.respawn,
+            // provider services are expected only when selected. Optional services never
+            // count as required native-stack health; their own degraded flag remains visible.
+            provider: x.provider || undefined,
+            optional: !!x.optional,
+            expected: x.optional ? false : (x.provider ? x.port === activePort : true),
+            degraded: !!x.optional && !up,
+        };
+    });
+}
+
+async function statusRowsVerified(items, map = listeners(), activePort = activeUpstreamPort(), role = 'service', {
+    verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+} = {}) {
+    const rows = statusRows(items, map, activePort, role);
+    await Promise.all(rows.map(async (row, index) => {
+        const svc = items[index];
+        if (!svc || !svc.executable || !row.pids.length) return;
+        const checks = await Promise.all(row.pids.map(pid => verifyIdentity(svc, pid)));
+        const verified = checks.length === 1 && checks[0] === true;
+        row.up = verified;
+        row.foreign = !verified;
+        row.degraded = !!svc.optional && !verified;
+    }));
+    return rows;
+}
+
+async function statusVerified({
+    services = SERVICES,
+    childItems = children(),
+    customItems = customPorts(),
+    listeners: getListeners = listeners,
+    activeUpstreamPort: getActivePort = activeUpstreamPort,
+    verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+} = {}) {
+    const map = getListeners();
+    const activePort = getActivePort();
+    return [
+        ...await statusRowsVerified(services, map, activePort, 'service', {
+            verifyServiceIdentity: verifyIdentity,
+        }),
+        ...statusRows(childItems, map, activePort, 'child'),
+        ...statusRows(customItems, map, activePort, 'child'),
+    ];
+}
+
 function status() {
     const map = listeners();
     const activePort = activeUpstreamPort();
-    const row = (x, role) => {
-        const pids = [...(map.get(x.port) || [])];
-        return {
-            port: x.port, name: x.name, role, up: pids.length > 0, pids, respawn: !!x.respawn,
-            // provider → сервис поднимается по выбору бэкенда. `expected` отвечает на
-            // вопрос «должен ли он сейчас быть живым»: без него счётчик хаба показывал бы
-            // жёлтое «2/5» на штатном состоянии и читался как недозапуск.
-            provider: x.provider || undefined,
-            expected: x.provider ? x.port === activePort : true,
-        };
-    };
     return [
-        ...SERVICES.map(s => row(s, 'service')),
-        ...children().map(c => row(c, 'child')),
-        ...customPorts().map(c => row(c, 'child')),
+        ...statusRows(SERVICES, map, activePort, 'service'),
+        ...statusRows(children(), map, activePort, 'child'),
+        ...statusRows(customPorts(), map, activePort, 'child'),
     ];
 }
 
@@ -703,102 +1005,295 @@ async function drainAll(ports, waitMs, on = () => {}) {
     return { asked: asked.length, inflight, freed };
 }
 
-async function stop({ phase = 'stop', on = () => {} } = {}) {
-    let plan = killPlan(phase);
-    // Рестарт не трогает front-door, если в процессе уже свежий код — см. выше
-    // § frontdoorCodeIsCurrent. На `stop` это НЕ распространяется: «остановил» обязано
-    // означать освобождённые порты, иначе следующий старт упрётся в EADDRINUSE.
-    if (phase === 'restart' && await frontdoorCodeIsCurrent()) {
-        const fd = frontdoorPort();
-        plan = plan.filter(i => i.port !== fd);
-        on({ type: 'note', text: `front-door :${fd} оставлен жить — код в процессе свежий, рвать живые сессии незачем` });
-    }
-    // Сначала по-хорошему и всем сразу: кто простаивает — выйдет сам за десятки
-    // миллисекунд, кто отвечает клиенту — дожмёт. Только потом расстрел отставших.
-    await drainAll(plan.map(i => i.port), DRAIN_WAIT_MS, on);
-    const results = [];
-    for (const item of plan) {
-        on({ type: 'kill-begin', ...item });
-        const r = await killPort(item.port);
-        results.push({ ...item, ...r });
-        on({ type: 'kill-done', ...item, ...r });
+async function stopServices(services, {
+    phase = 'stop',
+    on = () => {},
+    children: childItems = null,
+    listeners: getListeners = listeners,
+    pidImage: imageOf = pidImage,
+    pidExecutable: executableOf = pidExecutable,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
+    killPort: stopPort = killPort,
+    stopLaunched: stopExact = stopLaunched,
+    drainAll: drainPorts = drainAll,
+} = {}) {
+    const plan = killPlan(phase, services, childItems);
+    const runnable = [];
+    const ownedExternal = new Map();
+    const refused = [];
 
-        // Отказ в правах на рестарте прекращает работу немедленно: поднимать мы всё
-        // равно не будем (start откажется на занятом порту), а гасить остальные —
-        // значит уронить больше и всё равно не собрать. При stop продолжаем: цель
-        // «освободить что можно», и погашенный keepalive лучше живого.
-        if (r.denied && phase === 'restart') {
-            on({ type: 'abort', ...item, ...r });
+    for (const item of plan) {
+        const holders = [...(getListeners().get(item.port) || [])];
+        if (item.customProcess) {
+            runnable.push(item);
+            continue;
+        }
+        if (item.service && holders.length) {
+            const owned = await Promise.all(holders.map(pid => verifyOwnership(item.service, pid, {
+                pidImage: imageOf,
+                pidExecutable: executableOf,
+            })));
+            if (owned.some(value => !value)) {
+                refused.push({
+                    ...item,
+                    was: holders,
+                    freed: false,
+                    denied: false,
+                    holding: holders,
+                    foreign: true,
+                });
+                continue;
+            }
+            if (item.service.executable) ownedExternal.set(item, holders);
+        }
+        runnable.push(item);
+    }
+
+    await drainPorts(runnable.filter(item => !item.customProcess).map(item => item.port), DRAIN_WAIT_MS, on);
+    const results = refused.slice();
+    for (const item of runnable) {
+        on({ type: 'kill-begin', ...item });
+        let result;
+        if (item.customProcess) {
+            result = await cleanupCustomProcess(item.customProcess);
+        } else {
+            const exactPids = ownedExternal.get(item);
+            if (exactPids) {
+                const current = [...(getListeners().get(item.port) || [])];
+                const unchanged = current.length === exactPids.length
+                    && current.every(pid => exactPids.includes(pid));
+                const stillOwned = unchanged && (await Promise.all(current.map(pid => verifyOwnership(item.service, pid, {
+                    pidImage: imageOf,
+                    pidExecutable: executableOf,
+                })))).every(Boolean);
+                if (!stillOwned) {
+                    result = {
+                        port: item.port,
+                        was: current,
+                        freed: current.length === 0,
+                        denied: false,
+                        holding: current,
+                        foreign: current.length > 0,
+                    };
+                } else {
+                    const stopped = await Promise.all(exactPids.map(pid => stopExact(pid)));
+                    result = {
+                        port: item.port,
+                        was: exactPids,
+                        freed: stopped.every(row => row && row.freed !== false),
+                        denied: stopped.some(row => row && row.denied),
+                        holding: stopped.filter(row => !row || row.freed === false).map((_row, index) => exactPids[index]),
+                    };
+                }
+            } else {
+                result = await stopPort(item.port);
+            }
+        }
+        results.push({ ...item, ...result });
+        on({ type: 'kill-done', ...item, ...result });
+        if (result.denied && phase === 'restart') {
+            on({ type: 'abort', ...item, ...result });
             break;
         }
     }
-    const stuck = results.filter(r => !r.freed);
-    return { results, stuck, denied: results.some(r => r.denied), elevated: isElevated() };
+    const stuck = results.filter(result => !result.freed);
+    return { results, stuck, denied: results.some(result => result.denied), elevated: isElevated() };
+}
+
+async function stop({ phase = 'stop', on = () => {} } = {}) {
+    let childItems = [...children(), ...customPorts()];
+    // Restart keeps a current front-door alive. Stop always includes it.
+    if (phase === 'restart' && await frontdoorCodeIsCurrent()) {
+        const fd = frontdoorPort();
+        childItems = childItems.filter(item => item.port !== fd);
+        on({ type: 'note', text: `front-door :${fd} оставлен жить — код в процессе свежий, рвать живые сессии незачем` });
+    }
+    return stopServices(SERVICES, { phase, on, children: childItems });
 }
 
 // ── Запустить ────────────────────────────────────────────────────────────────
-// Идемпотентно: поднимается только то, что лежит. Это не мелочь — Claude Code
-// ходит через front-door, который спавнит дашборд, поэтому «на всякий случай
-// перезапустить» рвёт живую сессию агента. Хочешь именно рестарт — зови restart().
-async function start({ on = () => {} } = {}) {
-    for (const note of preparePlatform()) on({ type: 'note', text: note });
+// The injectable core is used by isolated dynamic-port tests. Production start()
+// supplies the real service table and process adapters.
+function publicService(svc, extra = {}) {
+    return {
+        name: svc.name,
+        port: svc.port,
+        optional: !!svc.optional,
+        ...extra,
+    };
+}
 
-    const map = listeners();
+async function startServices(services, {
+    on = () => {},
+    listeners: getListeners = listeners,
+    activeUpstreamPort: getActivePort = activeUpstreamPort,
+    startService: launchService = startService,
+    sleep: pause = sleep,
+    waitReady: awaitReady = waitReady,
+    pidImage: imageOf = pidImage,
+    pidExecutable: executableOf = pidExecutable,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
+    verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+    logTail: tailOf = logTail,
+    serviceLog: logOf = serviceLog,
+    stopService = killPort,
+    stopLaunched: stopLaunch = stopLaunched,
+    maxPortPolls = 24,
+} = {}) {
+    const map = getListeners();
     const started = [];
     const foreign = [];
-    // Конвертер провайдера поднимаем только если этот провайдер выбран последним.
-    const activePort = activeUpstreamPort();
-    for (const svc of SERVICES) {
+    const optionalFailures = [];
+    const activePort = getActivePort();
+
+    const optionalFailure = (svc, code, text) => {
+        const failure = {
+            name: svc.name,
+            port: svc.port,
+            optional: true,
+            code,
+            text,
+        };
+        optionalFailures.push(failure);
+        on({ type: 'start-optional-failed', ...failure });
+    };
+
+    for (const original of services) {
+        let svc = original;
         if (svc.provider && svc.port !== activePort) {
-            on({ type: 'start-lazy', ...svc });
+            on({ type: 'start-lazy', ...publicService(svc) });
             continue;
         }
-        const holders = [...(map.get(svc.port) || [])];
+        const holders = [...(getListeners().get(svc.port) || [])];
         if (holders.length) {
-            // Порт занят — но нами ли? Посторонняя программа на :8200 раньше читалась
-            // как «дашборд уже поднят», и человек шёл искать, почему UI не отвечает.
-            const alien = holders.filter(p => !isOurs(p));
+            if (svc.executable) {
+                const owned = await Promise.all(holders.map(pid => verifyOwnership(svc, pid, {
+                    pidImage: imageOf,
+                    pidExecutable: executableOf,
+                })));
+                if (owned.some(value => !value)) {
+                    const who = holders.filter((_pid, index) => !owned[index])
+                        .map(pid => `${imageOf(pid) || '?'} (pid ${pid})`).join(', ');
+                    if (svc.optional) optionalFailure(svc, 'port_foreign', `порт :${svc.port} занят чужим процессом: ${who}`);
+                    else {
+                        foreign.push(publicService(svc, { who }));
+                        on({ type: 'start-foreign', ...publicService(svc, { who }) });
+                    }
+                } else if (holders.length !== 1 || !await verifyIdentity(svc, holders[0], {
+                    pidImage: imageOf,
+                    pidExecutable: executableOf,
+                })) {
+                    const stopped = await Promise.all(holders.map(pid => stopLaunch(pid)));
+                    const clean = stopped.every(result => result && result.freed !== false);
+                    const text = clean
+                        ? 'процесс sidecar не прошёл проверку identity и остановлен'
+                        : 'процесс sidecar не прошёл проверку identity и не остановлен';
+                    if (svc.optional) optionalFailure(svc, 'identity_failed', text);
+                    else {
+                        on({ type: 'error', ...publicService(svc), text });
+                        return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
+                    }
+                } else {
+                    on({ type: 'start-skip', ...publicService(svc) });
+                }
+                continue;
+            }
+            const alien = holders.filter(pid => !isOursForService(svc, imageOf(pid), executableOf(pid)));
             if (alien.length) {
-                const who = alien.map(p => `${pidImage(p) || '?'} (pid ${p})`).join(', ');
-                foreign.push({ ...svc, who });
-                on({ type: 'start-foreign', ...svc, who });
+                const who = alien.map(pid => `${imageOf(pid) || '?'} (pid ${pid})`).join(', ');
+                if (svc.optional) optionalFailure(svc, 'port_foreign', `порт :${svc.port} занят чужим процессом: ${who}`);
+                else {
+                    foreign.push(publicService(svc, { who }));
+                    on({ type: 'start-foreign', ...publicService(svc, { who }) });
+                }
+            } else if (svc.optional && svc.ready && !(await awaitReady(svc.port, svc.ready))) {
+                const text = 'порт занят нашим процессом, но статус не отвечает';
+                const cleanup = await stopService(svc.port);
+                optionalFailure(svc, 'readiness_failed', cleanup && cleanup.freed === false ? `${text}; процесс не остановлен` : text);
             } else {
-                on({ type: 'start-skip', ...svc });
+                on({ type: 'start-skip', ...publicService(svc) });
             }
             continue;
         }
-        on({ type: 'start-begin', ...svc });
-        let pid = 0;
+        on({ type: 'start-begin', ...publicService(svc) });
+        let launch = 0;
         try {
-            pid = startService(svc);
-        } catch (e) {
-            on({ type: 'error', ...svc, text: e.message });
-            return { ok: false, started, failed: svc, tail: logTail(svc), log: serviceLog(svc) };
+            if (typeof svc.prepare === 'function') {
+                const prepared = await svc.prepare(svc);
+                if (prepared && typeof prepared === 'object') svc = { ...svc, ...prepared };
+            }
+            launch = await launchService(svc);
+        } catch (error) {
+            if (svc.optional) {
+                optionalFailure(svc, 'launch_failed', 'запуск sidecar не удался');
+                continue;
+            }
+            on({ type: 'error', ...svc, text: error.message });
+            return { ok: false, started, foreign, optionalFailures, failed: svc, tail: tailOf(svc), log: logOf(svc) };
         }
 
-        // Ждём, пока порт реально займётся: старт «успешен» ровно тогда, когда
-        // следующий сервис не упрётся в него, а node мог умереть на первой строке.
         let realPid = 0;
-        for (let i = 0; i < 24 && !realPid; i++) {
-            await sleep(250);
-            realPid = [...(listeners().get(svc.port) || [])][0] || 0;
+        for (let i = 0; i < maxPortPolls && !realPid; i++) {
+            await pause(250);
+            realPid = [...(getListeners().get(svc.port) || [])][0] || 0;
         }
         if (!realPid) {
-            on({ type: 'error', ...svc, text: `порт :${svc.port} не занялся` });
-            return { ok: false, started, failed: svc, tail: logTail(svc), log: serviceLog(svc) };
+            const text = `порт :${svc.port} не занялся`;
+            const cleanup = await stopLaunch(launch);
+            if (svc.optional) {
+                optionalFailure(svc, 'port_not_bound', cleanup && cleanup.freed === false ? `${text}; процесс не остановлен` : text);
+                continue;
+            }
+            on({ type: 'error', ...svc, text });
+            return { ok: false, started, foreign, optionalFailures, failed: svc, tail: tailOf(svc), log: logOf(svc) };
         }
-        // PID берём с порта, а не из spawn: на Windows startService возвращает pid
-        // cmd-обёртки, а человеку и `taskkill` нужен тот процесс, что реально слушает.
-        pid = realPid;
-        started.push({ ...svc, pid });
+        started.push(publicService(svc, { pid: realPid }));
 
-        if (svc.ready && !(await waitReady(svc.port, svc.ready))) {
-            on({ type: 'error', ...svc, text: 'порт занят, но статус не отвечает' });
-            return { ok: false, started, failed: svc, tail: logTail(svc), log: serviceLog(svc) };
+        if (svc.ready && !(await awaitReady(svc.port, svc.ready))) {
+            const text = 'порт занят, но статус не отвечает';
+            const cleanup = svc.executable ? await stopLaunch(launch) : await stopService(svc.port);
+            const startedIndex = started.findIndex(row => row.port === svc.port);
+            if (startedIndex >= 0) started.splice(startedIndex, 1);
+            if (svc.optional) {
+                optionalFailure(svc, 'readiness_failed', cleanup && cleanup.freed === false ? `${text}; процесс не остановлен` : text);
+                continue;
+            }
+            on({ type: 'error', ...svc, text });
+            return { ok: false, started, foreign, optionalFailures, failed: svc, tail: tailOf(svc), log: logOf(svc) };
         }
-        on({ type: 'start-done', ...svc, pid });
+        if (svc.executable && !await verifyIdentity(svc, realPid, {
+            pidImage: imageOf,
+            pidExecutable: executableOf,
+        })) {
+            const cleanup = await stopLaunch(launch);
+            const startedIndex = started.findIndex(row => row.port === svc.port);
+            if (startedIndex >= 0) started.splice(startedIndex, 1);
+            const text = cleanup && cleanup.freed === false
+                ? 'запущенный sidecar не прошёл проверку identity и не остановлен'
+                : 'запущенный sidecar не прошёл проверку identity и остановлен';
+            if (svc.optional) {
+                optionalFailure(svc, 'identity_failed', text);
+                continue;
+            }
+            on({ type: 'error', ...publicService(svc), text });
+            return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
+        }
+        on({ type: 'start-done', ...publicService(svc, { pid: realPid }) });
     }
-    return { ok: foreign.length === 0, started, foreign, url: 'http://localhost:8200/__switch' };
+    return {
+        ok: foreign.length === 0,
+        started,
+        foreign,
+        optionalFailures,
+        url: 'http://localhost:8200/__switch',
+    };
+}
+
+// Idempotent: only down services are started. This matters because Claude Code
+// itself uses front-door and a needless restart would cut the current session.
+async function start({ on = () => {} } = {}) {
+    for (const note of preparePlatform()) on({ type: 'note', text: note });
+    return startServices(SERVICES, { on });
 }
 
 // Порядок «сначала погасить нужное, потом поднять» держится ЗДЕСЬ, а не в хабе:
@@ -808,6 +1303,63 @@ async function restart({ on = () => {} } = {}) {
     const s = await stop({ phase: 'restart', on });
     if (s.stuck.length) return { ok: false, stage: 'stop', ...s };
     return { ...(await start({ on })), stage: 'start' };
+}
+
+async function restartService(name, {
+    services = SERVICES,
+    listeners: getListeners = listeners,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
+    stopLaunched: stopExact = stopLaunched,
+    startService: launchService = startService,
+    sleep: pause = sleep,
+    waitReady: awaitReady = waitReady,
+    verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+    writeLaunchRecord = () => {},
+    maxPortPolls = 24,
+} = {}) {
+    const original = services.find(service => service.name === name);
+    if (!original) return { ok: false, code: 'service_not_found', name: String(name || '') };
+
+    const holders = [...(getListeners().get(original.port) || [])];
+    for (const pid of holders) {
+        if (!await verifyOwnership(original, pid)) {
+            return { ok: false, code: 'foreign_holder', ...publicService(original), foreign: true };
+        }
+    }
+    for (const pid of holders) {
+        const stopped = await stopExact(pid);
+        if (!stopped || stopped.freed === false) {
+            return { ok: false, code: 'stop_failed', ...publicService(original) };
+        }
+    }
+
+    let svc = original;
+    let launch = 0;
+    try {
+        if (typeof svc.prepare === 'function') {
+            const prepared = await svc.prepare(svc);
+            if (prepared && typeof prepared === 'object') svc = { ...svc, ...prepared };
+        }
+        launch = await launchService(svc);
+    } catch {
+        return { ok: false, code: 'launch_failed', ...publicService(svc) };
+    }
+
+    let pid = 0;
+    for (let i = 0; i < maxPortPolls && !pid; i++) {
+        await pause(250);
+        pid = [...(getListeners().get(svc.port) || [])][0] || 0;
+    }
+    if (!pid) {
+        await stopExact(launch);
+        return { ok: false, code: 'port_not_bound', ...publicService(svc) };
+    }
+    if ((svc.ready && !await awaitReady(svc.port, svc.ready)) || !await verifyIdentity(svc, pid)) {
+        await stopExact(launch);
+        return { ok: false, code: 'identity_failed', ...publicService(svc) };
+    }
+    writeLaunchRecord({ name: svc.name, port: svc.port, pid });
+    return { ok: true, ...publicService(svc), pid };
 }
 
 // ── Поднять конвертер провайдера по требованию ───────────────────────────────
@@ -836,7 +1388,10 @@ async function ensureProviderService(port) {
 module.exports = {
     ROOT, ROUTING, IS_WIN, LOG_DIR, serviceLog, isElevated,
     SERVICES, children, customPorts, killPlan, frontdoorPort,
-    listeners, killPort, killPid, status, start, stop, restart,
-    preparePlatform, childEnv, waitReady, logTail, sleep, startService,
-    pidAlive, pidImage, isOurs, activeUpstreamPort, ensureProviderService,
+    listeners, killPort, killPid, stopLaunched, status, statusVerified, statusRows, statusRowsVerified,
+    start, startServices, stop, stopServices, restart, restartService,
+    preparePlatform, childEnv, serviceEnv, waitReady, logTail, sleep, startService,
+    pidAlive, pidImage, pidExecutable, pidArguments, healthIdentity, isOurs, isOursForService,
+    verifyProcessOwnership, verifyServiceIdentity,
+    activeUpstreamPort, ensureProviderService,
 };

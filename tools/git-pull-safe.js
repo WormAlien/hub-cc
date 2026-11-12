@@ -31,6 +31,13 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const durableWrite = require('../routing/lib/durable-write');
+const {
+    acquireManifestLock,
+    releaseManifestLock,
+    beginManifestUpdateOverlayLocked,
+    recoverManifestUpdateOverlayLocked,
+} = require('../routing/lib/api-gateway');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -59,6 +66,8 @@ const LOCAL_STATE_FILES = [
     // Тумблер front-door: в репо лежит enabled:false, у владельца включён — иначе
     // каждый git pull упирался бы в «локальные правки» из-за одного булева.
     'routing/frontdoor.json',
+    // API Gateway publication is owner-local state. The default seed remains code.
+    'routing/api-gateway.json',
 ];
 
 // Тир-карты заводятся вместе с провайдером, и строчку в списке забыть легко.
@@ -68,6 +77,199 @@ const STATE_PATTERNS = [/^routing\/[A-Za-z0-9_-]+-modelmap\.json$/];
 
 function isStateFile(f) {
     return LOCAL_STATE_FILES.includes(f) || STATE_PATTERNS.some(re => re.test(f));
+}
+
+// An ignored local file can be overwritten silently when an upstream revision starts
+// tracking the same path. Git does not report that path as dirty or untracked because
+// the current revision still ignores it. Snapshot these owner-local bytes before every
+// pull/reset operation and put them back regardless of the git outcome.
+const PROACTIVE_STATE_FILES = ['routing/api-gateway.json'];
+const PROACTIVE_STATE_SET = new Set(PROACTIVE_STATE_FILES);
+
+function snapshotProactiveState() {
+    const snapshot = new Map();
+    for (const rel of PROACTIVE_STATE_FILES) {
+        const abs = path.join(REPO, rel);
+        try {
+            snapshot.set(rel, { existed: true, bytes: fs.readFileSync(abs) });
+        } catch (error) {
+            if (error && error.code === 'ENOENT') {
+                snapshot.set(rel, { existed: false, bytes: null });
+                continue;
+            }
+            const wrapped = new Error(`cannot snapshot local state: ${rel}`);
+            wrapped.cause = error;
+            wrapped.localStatePath = rel;
+            throw wrapped;
+        }
+    }
+    return snapshot;
+}
+
+function isTracked(rel) {
+    try { git('ls-files', '--error-unmatch', '--', rel); return true; }
+    catch { return false; }
+}
+
+function markSkipWorktree(rel) {
+    try { git('update-index', '--skip-worktree', '--', rel); } catch { /* path is not tracked */ }
+}
+
+function prepareProactiveState(snapshot) {
+    const prepared = [];
+    const failed = [];
+    for (const [rel, before] of snapshot) {
+        const abs = path.join(REPO, rel);
+        try {
+            if (isTracked(rel)) {
+                try { git('update-index', '--no-skip-worktree', '--', rel); } catch { }
+                git('checkout', '--', rel);
+            } else if (before.existed) {
+                fs.unlinkSync(abs);
+                durableWrite.fsyncDir(path.dirname(abs));
+            }
+            prepared.push(rel);
+        } catch {
+            failed.push(rel);
+        }
+    }
+    return { prepared, failed };
+}
+
+function worktreeMatchesHead(rel) {
+    try {
+        const expected = git('rev-parse', `HEAD:${rel}`);
+        const actual = execFileSync('git', [
+            'hash-object', `--path=${rel}`, path.join(REPO, rel),
+        ], { cwd: REPO, encoding: 'utf8' }).trim();
+        return actual === expected;
+    } catch {
+        return false;
+    }
+}
+
+function restoreProactiveState(snapshot) {
+    const restored = [];
+    const failed = [];
+    for (const [rel, before] of snapshot) {
+        const abs = path.join(REPO, rel);
+        let current = null;
+        try { current = fs.readFileSync(abs); }
+        catch (error) {
+            if (!error || error.code !== 'ENOENT') { failed.push(rel); continue; }
+        }
+        if (before.existed && current && current.equals(before.bytes)) continue;
+        if (!before.existed && current === null) continue;
+
+        const currentIsGitResult = current === null || worktreeMatchesHead(rel);
+        if (!currentIsGitResult) {
+            // A manual or future writer changed the owner state while git was running.
+            // Never put the older snapshot on top of bytes we cannot attribute to git.
+            failed.push(rel);
+            continue;
+        }
+        try {
+            if (before.existed) {
+                durableWrite.writeAtomic(abs, before.bytes);
+                try {
+                    if (isTracked(rel)) markSkipWorktree(rel);
+                } catch { /* path is not tracked in this revision */ }
+                restored.push(rel);
+            } else if (current !== null) {
+                fs.unlinkSync(abs);
+                durableWrite.fsyncDir(path.dirname(abs));
+                try { git('update-index', '--skip-worktree', '--', rel); } catch { /* path may not be tracked */ }
+                restored.push(rel);
+            }
+        } catch {
+            failed.push(rel);
+        }
+    }
+    return { restored, failed };
+}
+
+function protectedOperation(operation) {
+    const manifestPath = path.join(REPO, 'routing', 'api-gateway.json');
+    const lockPath = `${manifestPath}.lock`;
+    let lockFd = null;
+    let snapshot;
+    try {
+        lockFd = acquireManifestLock(lockPath);
+        const overlayJournal = `${manifestPath}.update-txn`;
+        if (fs.existsSync(overlayJournal)) {
+            const currentIsGitResult = !fs.existsSync(manifestPath) || worktreeMatchesHead('routing/api-gateway.json');
+            recoverManifestUpdateOverlayLocked({
+                manifestPath,
+                allowCurrentReplacement: currentIsGitResult,
+            });
+        }
+        snapshot = snapshotProactiveState();
+        beginManifestUpdateOverlayLocked({ manifestPath });
+        const prepared = prepareProactiveState(snapshot);
+        if (prepared.failed.length) {
+            const restore = restoreProactiveState(snapshot);
+            if (!restore.failed.length) {
+                try { recoverManifestUpdateOverlayLocked({ manifestPath }); }
+                catch { restore.failed.push(...prepared.failed); }
+            }
+            const error = new Error(`cannot prepare local state: ${prepared.failed.join(', ')}`);
+            error.localStatePath = prepared.failed[0];
+            error.restoreFailed = restore.failed;
+            throw error;
+        }
+    } catch (error) {
+        if (lockFd !== null) releaseManifestLock(lockPath, lockFd);
+        return {
+            ok: false,
+            output: '',
+            preserved: [],
+            blocking: [],
+            stashed: [],
+            error: error && error.code === 'api_gateway_busy'
+                ? 'API Gateway state is busy: another writer holds routing/api-gateway.json.lock'
+                : error && error.localStatePath
+                    ? `локальное состояние не удалось прочитать: ${error.localStatePath}`
+                    : (error && error.message) || 'локальное состояние не удалось прочитать',
+        };
+    }
+
+    let result;
+    let thrown;
+    let restore;
+    try {
+        try { result = operation(); } catch (error) { thrown = error; }
+        restore = restoreProactiveState(snapshot);
+        if (!restore.failed.length) {
+            try { recoverManifestUpdateOverlayLocked({ manifestPath }); }
+            catch { restore.failed.push('routing/api-gateway.json'); }
+        }
+    } finally {
+        releaseManifestLock(lockPath, lockFd);
+    }
+    const prior = result && Array.isArray(result.preserved) ? result.preserved : [];
+    const preserved = [...new Set(prior.concat(restore.restored))];
+    if (restore.failed.length) {
+        return {
+            ...(result || {}),
+            ok: false,
+            output: result && result.output ? result.output : '',
+            blocking: result && Array.isArray(result.blocking) ? result.blocking : [],
+            stashed: result && Array.isArray(result.stashed) ? result.stashed : [],
+            preserved,
+            error: `локальное состояние изменилось параллельно или не восстановилось: ${restore.failed.join(', ')}`,
+        };
+    }
+    if (thrown) {
+        return {
+            ok: false,
+            output: '',
+            blocking: [],
+            stashed: [],
+            preserved,
+            error: (thrown.stderr || thrown.stdout || thrown.message || '').toString().trim(),
+        };
+    }
+    return { ...result, preserved };
 }
 
 function git(...args) {
@@ -249,6 +451,10 @@ function stashPaths(paths, label, includeUntracked) {
 // выбрасывает и незапушенные коммиты. Автоматически такое делать нельзя — остаётся
 // последним средством в CLI (update.sh), из UI не предлагается.
 function pullSafe(opts = {}) {
+    return protectedOperation(() => pullSafeInner(opts));
+}
+
+function pullSafeInner(opts = {}) {
     const stashBlocking = !!opts.stashBlocking;
     const pull = () => git('pull', '--ff-only', '--no-edit');
     const empty = { ok: false, output: '', preserved: [], blocking: [], stashed: [] };
@@ -270,7 +476,7 @@ function pullSafe(opts = {}) {
         }
         const dirty = dirtyFiles();
         const untracked = parseUntracked(msg);
-        const resettable = dirty.filter(isStateFile);
+        const resettable = dirty.filter(f => isStateFile(f) && !PROACTIVE_STATE_SET.has(f));
         // Апстрим завёл тир-карту, а у человека уже лежит своя (её создал дашборд, пока
         // файла не было в репо). Это ровно тот же случай, что грязная трекаемая карта:
         // содержимое в память → убрать с пути → pull → вписать назад.
@@ -390,6 +596,10 @@ function listCommits(n = 30) {
 // Тег локальный: наружу не уезжает, но git reflog после чистки уже не спасает,
 // а тег — да.
 function moveTo(sha, opts = {}) {
+    return protectedOperation(() => moveToInner(sha, opts));
+}
+
+function moveToInner(sha, opts = {}) {
     const empty = { ok: false, output: '', preserved: [], blocking: [], stashed: [] };
     let full = '';
     try { full = git('rev-parse', '--verify', `${String(sha).trim()}^{commit}`); }
@@ -407,7 +617,7 @@ function moveTo(sha, opts = {}) {
     // stash. Untracked reset --hard не трогает в принципе, в списке блокеров их
     // быть не может — не как у pull, где merge спотыкается и о них.
     const dirty = dirtyRealFiles();
-    const resettable = dirty.filter(isStateFile);
+    const resettable = dirty.filter(f => isStateFile(f) && !PROACTIVE_STATE_SET.has(f));
     const blocking = dirty.filter(f => !isStateFile(f));
     let stashed = [], stashRef = '';
     if (blocking.length) {

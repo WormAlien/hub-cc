@@ -56,6 +56,7 @@ const poolDropLib = require('./lib/pooldrop');
 // Источники каталога моделей для вкладки «Маршруты»: живой ключ → ключ аккаунта из пула →
 // наш снимок каталога. Разбор цепочки — в самом модуле.
 const routesCatalogLib = require('./lib/routes-catalog');
+const { createProductionApiGateway } = require('./lib/api-gateway-integration');
 
 // ---- Load routing/.env (gitignored real keys) ------------------------------
 // Tiny inline parser — no dotenv dep required.
@@ -1589,108 +1590,151 @@ function poolRestoreTiers(provider) {
 //
 // 🎯 Только текстовые модели: картинка целью тира — это упавший запрос (решение 16.09).
 // Разбор фильтра и ступеней ключа — `lib/routes-catalog.js`.
-function handleRoutesModels(req, res) {
-    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
-    const provider = String(url.searchParams.get('provider') || '');
-    if (provider === 'a6api') {
-        let selected;
-        try { selected = a6Gateway.readSelection(); }
-        catch (e) { return jsonRes(res, 409, { ok: false, error: e.message }); }
-        if (!selected) return jsonRes(res, 200, { ok: true, provider, models: [], note: 'Сначала выберите ключ во вкладке a6api' });
-        return a6Gateway.models(selected.tokenId)
-            .then(models => jsonRes(res, 200, { ok: true, provider, models, source: 'selected-key' }))
-            .catch(e => jsonRes(res, e.status || 502, { ok: false, error: e.message }));
-    }
-    const ep = ROUTE_EP[provider];
-    const keyPrefix = CC_MODEL_PREFIX[provider];
-    if (!ep || !keyPrefix) return jsonRes(res, 200, { ok: true, models: [], note: 'провайдер без каталога' });
-
-    // `source` отвечает на вопрос «откуда список»: живой каталог, ключ аккаунта или
-    // снимок с диска. Вкладке это нужно, чтобы честно пометить несвежесть, а не выдать
-    // месячной давности список за сегодняшний.
-    const done = (models, source, note, extra) =>
-        jsonRes(res, 200, Object.assign({ ok: true, provider, models, source, note }, extra || {}));
-
-    // Петля на себя же: переиспользуем handleXxModels целиком, включая его кеш и заголовки.
-    const askGateway = (key, cb) => {
-        const upstream = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`;
-        const rq = http.get(upstream, { timeout: 12000 }, (r) => {
-            const buf = [];
-            r.on('data', c => buf.push(c));
-            r.on('end', () => {
-                let j = {};
-                try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
-                const raw = Array.isArray(j.models) ? j.models.map(m => (typeof m === 'string' ? { id: m } : m)) : [];
-                cb(routesCatalogLib.textOnly(raw), j);
+function routesCatalogJson(pathname, timeoutMs = 8000) {
+    return new Promise(resolve => {
+        const request = http.get({
+            hostname: '127.0.0.1',
+            port: LISTEN_PORT,
+            path: pathname,
+            timeout: timeoutMs,
+        }, response => {
+            const chunks = [];
+            let size = 0;
+            response.on('data', chunk => {
+                size += chunk.length;
+                if (size <= 2 * 1024 * 1024) chunks.push(chunk);
+            });
+            response.on('end', () => {
+                if (size > 2 * 1024 * 1024) return resolve(null);
+                try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+                catch { resolve(null); }
             });
         });
-        rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
-        rq.on('error', () => cb([], {}));
-    };
-
-    // Хост шлюза: из реестра денежных шлюзов (`MONEY_GW`, ключ там - короткий тег,
-    // поэтому ищем по `tag`), у остальных - из таблицы модуля. Нужен и снимку, и панели.
-    const gatewayHost = () => {
-        const g = Object.values(MONEY_GW).find(x => x && x.tag === provider);
-        return (g && g.host) || routesCatalogLib.EXTRA_HOSTS[provider] || '';
-    };
-
-    // Каталог панели (`/api/pricing`) - ступень МЕЖДУ пулом и снимком. Панельная ручка
-    // жива там, где `/v1/models` молчит: у aikeysapi живой ключ получает 403, а панель
-    // отдаёт пять claude-моделей, тогда как снимок от 12.09 держит три `gpt-5.6-*`,
-    // которых на площадке уже нет. Не ответила - молча уступаем снимку.
-    const fromPricing = (next) => {
-        routesCatalogLib.pricingFor(gatewayHost(), { fetch })
-            .then((p) => {
-                if (p && p.models.length) {
-                    return done(p.models, 'pricing',
-                        `каталог панели${p.cached ? ', из кеша' : ''}`, { staleDays: 0 });
-                }
-                next();
-            })
-            .catch(() => next());
-    };
-
-    // Снимок с диска.
-    const fromSnapshot = () => {
-        const snap = routesCatalogLib.snapshotFor(gatewayHost());
-        if (!snap) {
-            return done([], 'none',
-                'каталога нет ни живьём, ни в панели, ни в снимке: в списке только значения тир-карты');
-        }
-        return done(snap.models, 'snapshot',
-            `снимок каталога от ${new Date(snap.ts || 0).toISOString().slice(0, 10)}`,
-            { staleDays: snap.staleDays });
-    };
-
-    const fallThrough = (models, j, source) => {
-        if (models.length) return done(models, source, j.note, { cached: !!j.cached });
-        return fromPricing(fromSnapshot);
-    };
-
-    // Не `isRealKey`: тот требует префикс `sk-`, а у части шлюзов ключи иного вида —
-    // отсеклись бы валидные. Пустой пропускаем, остальное отдаём апстриму: плохой ключ
-    // вернётся пустым каталогом (401 → `models: []`), а не ошибкой вкладки.
-    let activeKey = '';
-    try { activeKey = fs.readFileSync(path.join(os.homedir(), '.claude', `${keyPrefix}-active-key.txt`), 'utf8').trim(); } catch { /* ключа нет */ }
-    if (activeKey) return askGateway(activeKey, (m, j) => fallThrough(m, j, 'live'));
-
-    // Активного ключа нет — спрашиваем ключ у пула аккаунтов. Ручка та же, которой
-    // пользуется вкладка шлюза (`/<ep>/sessions`), поэтому ничего нового не появляется.
-    const pool = `http://127.0.0.1:${LISTEN_PORT}/__switch/api/${ep}/sessions`;
-    const rq = http.get(pool, { timeout: 8000 }, (r) => {
-        const buf = [];
-        r.on('data', c => buf.push(c));
-        r.on('end', () => {
-            let j = {};
-            try { j = JSON.parse(Buffer.concat(buf).toString('utf8') || '{}'); } catch { /* ignore */ }
-            const key = routesCatalogLib.pickAccountKey(j.sessions);
-            if (!key) return fromPricing(fromSnapshot);
-            askGateway(key, (m, jj) => fallThrough(m, jj, 'accounts'));
-        });
+        request.on('timeout', () => request.destroy(new Error('timeout')));
+        request.on('error', () => resolve(null));
     });
-    rq.on('timeout', () => { rq.destroy(new Error('timeout')); });
-    rq.on('error', () => fromPricing(fromSnapshot));
+}
+
+function routesGatewayHost(provider) {
+    const gateway = Object.values(MONEY_GW).find(row => row && row.tag === provider);
+    return (gateway && gateway.host) || routesCatalogLib.EXTRA_HOSTS[provider] || '';
+}
+
+async function routesCandidateModelsForKey(provider, key) {
+    const ep = ROUTE_EP[provider];
+    if (!ep || !key) return [];
+    const data = await routesCatalogJson(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`, 12000);
+    const raw = data && Array.isArray(data.models) ? data.models : [];
+    return routesCatalogLib.textOnly(raw.map(model => typeof model === 'string' ? { id: model } : model));
+}
+
+async function routesCandidateLiveModels(provider) {
+    if (provider === 'a6api') {
+        let selected;
+        try { selected = a6Gateway.readSelection(); } catch { return []; }
+        if (!selected) return [];
+        try { return routesCatalogLib.textOnly(await a6Gateway.models(selected.tokenId)); }
+        catch { return []; }
+    }
+    const prefix = CC_MODEL_PREFIX[provider];
+    if (!prefix) return [];
+    let key = '';
+    try { key = fs.readFileSync(path.join(os.homedir(), '.claude', `${prefix}-active-key.txt`), 'utf8').trim(); }
+    catch { return []; }
+    return routesCandidateModelsForKey(provider, key);
+}
+
+async function routesCandidateAccountModels(provider) {
+    if (provider === 'a6api') return [];
+    const ep = ROUTE_EP[provider];
+    if (!ep) return [];
+    const data = await routesCatalogJson(`/__switch/api/${ep}/sessions`, 8000);
+    const key = routesCatalogLib.pickAccountKey(data && data.sessions);
+    return routesCandidateModelsForKey(provider, key);
+}
+
+async function routesCandidatePricingModels(provider) {
+    const pricing = await routesCatalogLib.pricingFor(routesGatewayHost(provider), { fetch });
+    return pricing && pricing.models || [];
+}
+
+async function routesCandidateSnapshotModels(provider) {
+    const snapshot = routesCatalogLib.snapshotFor(routesGatewayHost(provider));
+    return snapshot && snapshot.models || [];
+}
+
+async function routesCandidateConfiguredModels(provider) {
+    const values = [];
+    for (const map of [routeTierMap(provider, true), routeTierMap(provider)]) {
+        for (const value of Object.values(map || {})) if (value) values.push(value);
+    }
+    const active = routeActiveModel(provider);
+    if (active) values.push(active);
+    return routesCatalogLib.textOnly(values);
+}
+
+async function resolveApiGatewayCandidates(options) {
+    const input = options || {};
+    let providers = Array.isArray(input.providers) || input.providers instanceof Set
+        ? [...input.providers]
+        : input.providers instanceof Map ? [...input.providers.keys()] : Object.keys(input.providers || {});
+    if (!providers.length) {
+        try {
+            const raw = fs.readFileSync(BACKENDS_REGISTRY_FILE, 'utf8');
+            const registry = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+            providers = Object.keys(registry.providers || {});
+        } catch { providers = Object.keys(BACKENDS); }
+    }
+    const groups = await Promise.all(providers.map(provider => routesCatalogLib.resolveModelCandidates({
+        ...input,
+        providers: [provider],
+    })));
+    return groups.flat().sort((left, right) => left.provider.localeCompare(right.provider)
+        || left.model.localeCompare(right.model));
+}
+
+function routesCandidateResponseMeta(provider, source) {
+    if (source === 'live') return { note: 'живой каталог активного ключа' };
+    if (source === 'accounts') return { note: 'каталог по ключу аккаунта из пула' };
+    if (source === 'pricing') return { note: 'каталог панели', staleDays: 0 };
+    if (source === 'snapshot') {
+        const snapshot = routesCatalogLib.snapshotFor(routesGatewayHost(provider));
+        return {
+            note: snapshot && snapshot.ts
+                ? `снимок каталога от ${new Date(snapshot.ts).toISOString().slice(0, 10)}`
+                : 'снимок каталога',
+            staleDays: snapshot && snapshot.staleDays,
+        };
+    }
+    if (source === 'configured') return { note: 'только значения текущих конфигураций' };
+    return { note: 'каталога нет ни живьём, ни в панели, ни в снимке; настроенных моделей тоже нет' };
+}
+
+async function handleRoutesModels(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const provider = String(url.searchParams.get('provider') || '');
+    if (!ROUTE_EP[provider] && provider !== 'a6api') {
+        return jsonRes(res, 200, { ok: true, provider, models: [], source: 'none', note: 'провайдер без каталога' });
+    }
+    try {
+        const rows = await apiGatewayProduction.resolveRouteCandidates([provider]);
+        const source = rows[0] && rows[0].catalogSource || 'none';
+        return jsonRes(res, 200, {
+            ok: true,
+            provider,
+            models: rows.map(row => row.model),
+            source,
+            ...routesCandidateResponseMeta(provider, source),
+        });
+    } catch {
+        return jsonRes(res, 200, {
+            ok: true,
+            provider,
+            models: [],
+            source: 'none',
+            note: 'каталог временно недоступен',
+        });
+    }
 }
 
 function handleRoutes(res) {
@@ -4809,6 +4853,16 @@ async function handleOtModels(req, res) {
 // apiKeyHelper читает ~/.claude/custom-active-key.txt на каждый запрос.
 const CUSTOM_FILE = path.join(__dirname, 'custom-providers.json');
 const CUSTOM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'custom-active-key.txt');
+const LOCAL_HOP_SECRET_FILE = process.env.ABUSE_HUB_LOCAL_HOP_KEY_FILE
+    || path.join(os.homedir(), '.secrets', 'abuse-hub-local-hop.key');
+let localHopIdentityHeaders = null;
+function customIdentityHeaders() {
+    if (!localHopIdentityHeaders) {
+        const auth = require('./lib/local-hop-auth').createLocalHopAuth({ secretFile: LOCAL_HOP_SECRET_FILE });
+        localHopIdentityHeaders = { [auth.headerName]: auth.token('status-inspection') };
+    }
+    return localHopIdentityHeaders;
+}
 const CUSTOM_ACTIVE_PROVIDER_FILE = path.join(os.homedir(), '.claude', 'custom-active-provider.json');
 const CUSTOM_MODELS_CACHE = new Map(); // baseUrl -> { data, ts }
 // Кеш моделей переживает рестарт дашборда: лежит на диске рядом с провайдерами.
@@ -4881,6 +4935,16 @@ function customProxyConfigFile(id) {
     return path.join(os.homedir(), '.claude', `custom-${id}-proxy.json`);
 }
 
+// Ports in this range are allocated in pairs for generic Custom providers: one
+// advertised keepalive port and one explicitly recorded custom-openai adapter port.
+// The pair makes exact-mode trust generated topology instead of a localhost guess.
+function customProviderPorts(provider) {
+    return {
+        keepalivePort: Number(provider && provider.proxyPort) || 0,
+        adapterPort: Number(provider && provider.adapterPort) || 0,
+    };
+}
+
 // 🪤 Keepalive шлюзов сидят на 20155–20164 — ВНУТРИ диапазона кастомов 20150–20299.
 // Бинд-проба от этого не спасает: пока keepalive неактивного шлюза не поднят, порт
 // свободен, аллокатор его отдаёт, а потом шлюз стартовать уже не может. Разбор,
@@ -4892,21 +4956,25 @@ function customReservedPorts() {
         return new Set();
     }
 }
-async function customFindFreePort() {
+async function customFindFreePort(extraUsed = []) {
     const used = customReservedPorts();
+    for (const port of extraUsed) used.add(Number(port));
     try {
-        for (const p of customLoad().providers) if (p.proxyPort) used.add(p.proxyPort);
+        for (const p of customLoad().providers) {
+            if (p.proxyPort) used.add(Number(p.proxyPort));
+            if (p.adapterPort) used.add(Number(p.adapterPort));
+        }
     } catch {}
     for (let port = CUSTOM_PROXY_PORT_MIN; port <= CUSTOM_PROXY_PORT_MAX; port++) {
         if (used.has(port)) continue;
         try {
             const net = require('net');
-            const sock = net.createServer();
-            const ok = await new Promise(resolve => {
+            const free = await new Promise(resolve => {
+                const sock = net.createServer();
                 sock.once('error', () => resolve(false));
-                sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
+                sock.listen(port, '127.0.0.1', () => sock.close(() => resolve(true)));
             });
-            if (ok) return port;
+            if (free) return port;
         } catch { return null; }
     }
     return null;
@@ -4914,71 +4982,155 @@ async function customFindFreePort() {
 async function customSpawnProxy(provider) {
     try {
         const { spawn } = require('child_process');
-        let port = provider.proxyPort;
-        // Записанный порт мог быть выдан ДО резервирования (или руками) — если он чужой,
-        // переселяем, не глядя на бинд-пробу: свободен он ровно потому, что владелец лежит.
-        if (port && customReservedPorts().has(Number(port))) {
-            logLine(`custom proxy: у «${provider.name}» записан :${port} — это порт keepalive шлюза, переселяю`);
+        let { keepalivePort: port, adapterPort } = customProviderPorts(provider);
+        // A recorded pair may predate reserved-port protection. If either endpoint is
+        // reserved, refuse to reuse it; allocation below selects an unreserved pair.
+        const reserved = customReservedPorts();
+        if (port && (reserved.has(port) || (adapterPort && reserved.has(adapterPort)))) {
+            logLine(`custom proxy: у «${provider.name}» записана зарезервированная пара :${port}/:${adapterPort}, переселяю`);
             port = null;
+            adapterPort = null;
         }
-        if (port) {
-            // порт может держать старый/осиротевший прокси после рестарта стека — проверяем
-            const free = await new Promise(resolve => {
-                const net = require('net');
-                const sock = net.createServer();
-                sock.once('error', () => resolve(false));
-                sock.listen(port, '127.0.0.1', () => { sock.close(); resolve(true); });
-            });
-            if (!free) port = null;
+        const net = require('net');
+        const free = p => new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(p, '127.0.0.1', () => sock.close(() => resolve(true)));
+        });
+        if (port && adapterPort) {
+            const keepaliveStatus = await fetch(`http://127.0.0.1:${port}/__keepalive/api/status`, {
+                signal: AbortSignal.timeout(1200),
+                headers: customIdentityHeaders(),
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+            const adapterStatus = await fetch(`http://127.0.0.1:${adapterPort}/__custom/api/status`, {
+                signal: AbortSignal.timeout(1200),
+                headers: customIdentityHeaders(),
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+            const matches = keepaliveStatus && keepaliveStatus.localExactAdapter === true
+                && keepaliveStatus.upstream === `http://127.0.0.1:${adapterPort}`
+                && adapterStatus && adapterStatus.provider === provider.name
+                && adapterStatus.upstream === provider.baseUrl;
+            if (matches) return { ok: true, already: true, port, adapterPort };
+            if (!(await free(port)) || !(await free(adapterPort))) {
+                return { ok: false, error: `записанная custom topology :${port}/:${adapterPort} занята неожиданным процессом` };
+            }
+        } else if (port) {
+            // Migrate the previous one-process topology in place only after its status
+            // proves that the recorded listener is this provider's custom-openai proxy.
+            const legacy = await fetch(`http://127.0.0.1:${port}/__custom/api/status`, {
+                signal: AbortSignal.timeout(1200),
+                headers: customIdentityHeaders(),
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+            if (legacy && legacy.provider === provider.name && legacy.upstream === provider.baseUrl) {
+                await customKillProxy(provider);
+                for (let i = 0; i < 20 && !(await free(port)); i += 1) await napMs(100);
+            }
+            if (!(await free(port))) {
+                return { ok: false, error: `записанный custom порт :${port} занят неожиданным процессом` };
+            }
+        } else if (adapterPort && !(await free(adapterPort))) {
+            return { ok: false, error: `записанный adapter порт :${adapterPort} занят неожиданным процессом` };
         }
         if (!port) port = await customFindFreePort();
-        if (!port) return { ok: false, error: 'нет свободного порта 20150–20299' };
-        const cfg = {
-            port,
-            upstream: provider.baseUrl,
-            keyFile: CUSTOM_ACTIVE_KEY_FILE,
-            modelMap: provider.modelMap || {},
-            providerName: provider.name,
-        };
+        if (!adapterPort) adapterPort = await customFindFreePort([port]);
+        if (!port || !adapterPort) return { ok: false, error: 'нет свободной пары портов 20150-20299' };
+        const runtime = require('./lib/custom-openai-topology').buildRuntimeConfig({
+            provider,
+            keepalivePort: port,
+            adapterPort,
+            claudeDir: path.join(os.homedir(), '.claude'),
+            activeKeyFile: CUSTOM_ACTIVE_KEY_FILE,
+            localHopSecretPath: LOCAL_HOP_SECRET_FILE,
+        });
+        const cfg = runtime.converter;
         const cfgFile = customProxyConfigFile(provider.id);
         fs.writeFileSync(cfgFile, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), cfgFile], {
+        const adapter = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), cfgFile], {
             detached: true,
             stdio: 'ignore',
             env: process.env,
         });
-        child.unref();
+        watchChildExit(adapter, `custom adapter ${provider.name}`, adapterPort);
+        adapter.unref();
+        let adapterReady = false;
+        for (let i = 0; i < 40; i++) {
+            const status = await fetch(`http://127.0.0.1:${adapterPort}/__custom/api/status`, {
+                signal: AbortSignal.timeout(250),
+                headers: customIdentityHeaders(),
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+            if (status && status.provider === provider.name && status.upstream === provider.baseUrl) {
+                adapterReady = true;
+                break;
+            }
+            if (adapter.exitCode !== null) break;
+            await napMs(50);
+        }
+        if (!adapterReady) {
+            try { adapter.kill(); } catch {}
+            return { ok: false, error: `custom adapter :${adapterPort} не прошёл проверку готовности` };
+        }
+        const keepalive = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true,
+            stdio: 'ignore',
+            env: { ...process.env, ...runtime.keepaliveEnv },
+        });
+        watchChildExit(keepalive, `custom keepalive ${provider.name}`, port);
+        keepalive.unref();
+        let keepaliveReady = false;
+        for (let i = 0; i < 40; i++) {
+            const status = await fetch(`http://127.0.0.1:${port}/__keepalive/api/status`, {
+                signal: AbortSignal.timeout(250),
+                headers: customIdentityHeaders(),
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+            if (status && status.localExactAdapter === true
+                && status.upstream === `http://127.0.0.1:${adapterPort}`) {
+                keepaliveReady = true;
+                break;
+            }
+            if (keepalive.exitCode !== null) break;
+            await napMs(50);
+        }
+        if (!keepaliveReady) {
+            try { keepalive.kill(); } catch {}
+            try { adapter.kill(); } catch {}
+            return { ok: false, error: `custom keepalive :${port} не прошёл проверку готовности` };
+        }
         const { data } = customFind(provider.id);
         if (data) {
             const p = data.providers.find(x => x.id === provider.id);
-            if (p) { p.proxyPort = port; p.proxyPid = child.pid; customSave(data); }
+            if (p) {
+                p.proxyPort = port;
+                p.proxyPid = keepalive.pid;
+                p.adapterPort = adapterPort;
+                p.adapterPid = adapter.pid;
+                customSave(data);
+                provider.proxyPort = port;
+                provider.proxyPid = keepalive.pid;
+                provider.adapterPort = adapterPort;
+                provider.adapterPid = adapter.pid;
+            }
         }
-        logLine(`custom proxy spawn: ${provider.name} :${port} (pid ${child.pid})`);
-        return { ok: true, port, pid: child.pid };
+        logLine(`custom proxy spawn: ${provider.name} keepalive :${port} (pid ${keepalive.pid}) -> adapter :${adapterPort} (pid ${adapter.pid})`);
+        return { ok: true, port, pid: keepalive.pid, adapterPort, adapterPid: adapter.pid };
     } catch (e) {
         logLine(`custom proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
 async function customKillProxy(provider) {
-    let pid = provider && provider.proxyPid;
-    const port = provider && provider.proxyPort;
-    if (pid) {
-        try { process.kill(pid, 'SIGKILL'); } catch {}
+    const { cleanupCustomTopology } = require('./lib/custom-process-ownership');
+    const result = await cleanupCustomTopology(provider, {
+        routingDir: __dirname,
+        configFile: customProxyConfigFile(provider.id),
+    });
+    if (result.ok && result.freed) {
+        try { fs.rmSync(customProxyConfigFile(provider.id), { force: true }); } catch {}
+        logLine(`custom proxy kill: ${provider.name}`);
+    } else {
+        const state = result.foreign ? 'foreign listener preserved' : 'stale or unverified owner preserved';
+        logLine(`custom proxy kill refused: ${provider.name} (${state})`);
     }
-    // страховка: убить всё, что слушает proxyPort (ловит pid через netstat)
-    if (port) {
-        try {
-            const { execFileSync } = require('child_process');
-            const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8' });
-            for (const line of out.split(/\r?\n/)) {
-                const m = line.match(new RegExp(`:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`));
-                if (m) { try { execFileSync('taskkill', ['/F', '/PID', m[1]]); } catch {} }
-            }
-        } catch {}
-    }
-    try { fs.rmSync(customProxyConfigFile(provider.id), { force: true }); } catch {}
-    logLine(`custom proxy kill: ${provider.name}${port ? ' :' + port : ''}`);
+    return result;
 }
 
 // Нужен ли конвертер: режим (mode) > протокол (скан) > эвристика по modelMap.
@@ -5231,31 +5383,37 @@ async function handleHealth(res) {
     ];
     const knownPorts = new Set(checks.map(c => c.port));
 
-    // Custom-конвертеры из конфига (не забыть их, даже если порт не в диапазоне).
-    //
-    // Само-починка протухшей записи. proxyPort/proxyPid пишутся при спавне и снимаются
-    // только на ЯВНЫХ путях: переключение провайдера, стоп, удаление. Если конвертер умер
-    // сам — упал, попал под KILLPORT из restart-dashboard.bat, ребут машины — запись
-    // остаётся, и Health навсегда рисует красное «упал» провайдеру, которым даже не
-    // пользуются (жил месяцами: `:20150` BluesMinds с pid из прошлой загрузки).
-    // Порт никто не слушает и провайдер не активен → это протухший конфиг, а не поломка:
-    // чистим запись и строку не рисуем. У АКТИВНОГО провайдера мёртвый конвертер —
-    // настоящая авария (в него смотрит Claude Code), там красное остаётся.
+    // Generic Custom providers have an advertised keepalive port and a separate local
+// custom-openai adapter. Both are persisted so exact-mode trust can be tied to generated
+// topology instead of a broad loopback heuristic. Legacy records may have only proxyPort.
     {
         const cdata = customLoad();
         const activeId = (customReadActiveProvider() || {}).id || null;
         let healed = false;
         for (const p of (cdata.providers || [])) {
             if (!p.proxyPort) continue;
-            if (!listening.has(p.proxyPort) && p.id !== activeId) {
-                logLine(`health: протухшая запись конвертера ${p.name} (:${p.proxyPort}, pid ${p.proxyPid || '—'}) — порт не слушают, чищу`);
+            const keepaliveListening = listening.has(p.proxyPort);
+            const adapterListening = p.adapterPort && listening.has(p.adapterPort);
+            if (!keepaliveListening && !adapterListening && p.id !== activeId) {
+                logLine(`health: протухшая запись custom topology ${p.name} (:${p.proxyPort}${p.adapterPort ? '/:' + p.adapterPort : ''}) - порты не слушают, чищу`);
                 p.proxyPort = null;
                 p.proxyPid = null;
+                p.adapterPort = null;
+                p.adapterPid = null;
                 healed = true;
                 continue;
             }
+            if (!p.adapterPort) {
+                // Legacy one-process topology. Keep it visible until activation/boot migrates
+                // it; pretending the converter is a keepalive would show a false outage.
+                knownPorts.add(p.proxyPort);
+                checks.push({ name: `Custom legacy adapter: ${p.name}`, port: p.proxyPort, path: '/__custom/api/status', custom: p });
+                continue;
+            }
+            knownPorts.add(p.adapterPort);
+            checks.push({ name: `Custom adapter: ${p.name}`, port: p.adapterPort, path: '/__custom/api/status', custom: p });
             knownPorts.add(p.proxyPort);
-            checks.push({ name: `Custom: ${p.name}`, port: p.proxyPort, path: '/__custom/api/status', custom: p });
+            checks.push({ name: `Custom: ${p.name}`, port: p.proxyPort, path: '/__keepalive/api/status', keepalive: true, custom: p });
         }
         if (healed) customSave(cdata);
     }
@@ -5407,7 +5565,7 @@ async function handleCustomProviderCreate(req, res) {
             return jsonRes(res, 400, { error: `провайдер с baseUrl ${b} уже есть (${data.providers.find(p => p.baseUrl === b).name})` });
         }
         const id = 'cp_' + Date.now();
-        data.providers.push({ id, name: n, baseUrl: b, createdAt: new Date().toISOString(), keys: [], modelMap: {}, proxyPort: null, proxyPid: null });
+        data.providers.push({ id, name: n, baseUrl: b, createdAt: new Date().toISOString(), keys: [], modelMap: {}, proxyPort: null, proxyPid: null, adapterPort: null, adapterPid: null });
         customSave(data);
         logLine(`custom provider add: ${n} (${b})`);
         jsonRes(res, 200, { ok: true, id });
@@ -5537,6 +5695,11 @@ async function handleCustomKeyDelete(req, res) {
         try { activeKey = fs.readFileSync(CUSTOM_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
         if (key === activeKey) {
             await customKillProxy(provider);
+            provider.proxyPort = null;
+            provider.proxyPid = null;
+            provider.adapterPort = null;
+            provider.adapterPid = null;
+            customSave(data);
             try { fs.rmSync(CUSTOM_ACTIVE_KEY_FILE, { force: true }); } catch {}
             try { fs.rmSync(CUSTOM_ACTIVE_PROVIDER_FILE, { force: true }); } catch {}
         }
@@ -5654,12 +5817,14 @@ async function handleCustomActivate(req, res) {
         // при переключении custom-провайдера гасим конвертер предыдущего
         const prevActive = customReadActiveProvider();
         if (prevActive && prevActive.id !== provider.id) {
-            const prev = customFind(prevActive.id).provider;
+            const { data: prevData, provider: prev } = customFind(prevActive.id);
             if (prev && prev.proxyPid) {
                 await customKillProxy(prev);
                 prev.proxyPort = null;
                 prev.proxyPid = null;
-                customSave(data);
+                prev.adapterPort = null;
+                prev.adapterPid = null;
+                customSave(prevData);
                 logLine(`custom activate: killed previous converter ${prev.name}`);
             }
         }
@@ -5733,6 +5898,8 @@ async function handleCustomModelMap(req, res) {
                     await customKillProxy(provider);
                     provider.proxyPort = null;
                     provider.proxyPid = null;
+                    provider.adapterPort = null;
+                    provider.adapterPid = null;
                     customSave(data);
                 }
                 const r = customApplyDirect(provider);
@@ -5874,6 +6041,8 @@ async function handleCustomMode(req, res) {
                 await customKillProxy(provider);
                 provider.proxyPort = null;
                 provider.proxyPid = null;
+                provider.adapterPort = null;
+                provider.adapterPid = null;
                 customSave(data);
                 const r = await customSpawnProxy(provider);
                 if (r.ok) {
@@ -5890,6 +6059,8 @@ async function handleCustomMode(req, res) {
                 await customKillProxy(provider);
                 provider.proxyPort = null;
                 provider.proxyPid = null;
+                provider.adapterPort = null;
+                provider.adapterPid = null;
                 customSave(data);
                 const r = customApplyDirect(provider);
                 warns = r.warns || [];
@@ -5926,6 +6097,8 @@ async function handleCustomDeactivate(req, res) {
                 await customKillProxy(provider);
                 provider.proxyPort = null;
                 provider.proxyPid = null;
+                provider.adapterPort = null;
+                provider.adapterPid = null;
                 customSave(d2);
             }
         }
@@ -9206,6 +9379,7 @@ async function frontdoorSpawn() {
                 ...process.env,
                 PORT: String(port),
                 LOG_FILE: path.join(__dirname, 'frontdoor-proxy.log'),
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
             },
         });
         watchChildExit(child, 'front-door', port);
@@ -9231,7 +9405,13 @@ async function arKeepaliveSpawn() {
         const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
             detached: true, stdio: 'ignore', env: {
                 ...process.env,
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
                 PORT: String(AR_KEEPALIVE_PORT),
+                // Exact GPT requests must use the already-running AgentRouter converter :20132.
+                // Without this explicit adapter identity, exact mode goes straight to
+                // agentrouter.org /v1/messages and function tools fail with reasoning_effort 400.
+                LOCAL_EXACT_ADAPTER: '1',
+                HAIKU_GPT_PROXY: AR_PROXY_URL,
                 // Литерал '10000' тут был четвёртой копией дефолта пре-коммита: смени
                 // его в keepalive-proxy.js — и спавн из дашборда всё равно навязал бы
                 // старое число. Переменную ставим ТОЛЬКО если её задали снаружи.
@@ -17606,7 +17786,9 @@ async function kvConverterSpawn() {
             upstream: KV_BASE_URL,
             keyFile: KV_ACTIVE_KEY_FILE,
             modelMap: {},
+            providerId: 'kvotum',
             providerName: 'KVOTUM',
+            localHopSecretPath: LOCAL_HOP_SECRET_FILE,
         }, null, 2), 'utf8');
         const { spawn } = require('child_process');
         const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), KV_CONVERTER_CONFIG], {
@@ -17640,6 +17822,10 @@ async function kvKeepaliveSpawn() {
                 ...process.env,
                 PORT: String(KV_KEEPALIVE_PORT),
                 UPSTREAM: KV_CONVERTER_URL,   // keepalive → конвертер :20183 → myapi.buzz
+                LOCAL_EXACT_ADAPTER: '1',
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
+                CUSTOM_PROVIDER_ID: 'kvotum',
+                CUSTOM_PROVIDER_NAME: 'KVOTUM',
                 KEY_FILE: KV_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: KV_SESSIONS_FILE,
                 MODELMAP_FILE: KV_MODELMAP_FILE,
@@ -17976,7 +18162,9 @@ async function odConverterSpawn() {
             upstream: OD_BASE_URL,
             keyFile: OD_ACTIVE_KEY_FILE,
             modelMap: {},
+            providerId: 'odyssey',
             providerName: 'Odyssey',
+            localHopSecretPath: LOCAL_HOP_SECRET_FILE,
         }, null, 2), 'utf8');
         const { spawn } = require('child_process');
         const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), OD_CONVERTER_CONFIG], {
@@ -18009,6 +18197,10 @@ async function odKeepaliveSpawn() {
                 ...process.env,
                 PORT: String(OD_KEEPALIVE_PORT),
                 UPSTREAM: OD_UPSTREAM,
+                LOCAL_EXACT_ADAPTER: '1',
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
+                CUSTOM_PROVIDER_ID: 'odyssey',
+                CUSTOM_PROVIDER_NAME: 'Odyssey',
                 KEY_FILE: OD_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: OD_SESSIONS_FILE,
                 MODELMAP_FILE: OD_MODELMAP_FILE,
@@ -34523,18 +34715,22 @@ async function bootSweepStaleChildren() {
         const killed = await stopPortSoftly(port);
         if (killed) swept.push(`${inst.name} :${port}`);
     }
-    // Конвертеры Custom-провайдеров (20150–20299) — тот же расклад, но АКТИВНЫЙ не
-    // трогаем ни в каком случае: на boot его никто не поднимает обратно, и снять его
-    // значило бы оставить Claude Code вообще без бэкенда.
+    // Generic Custom topologies have two owned processes. Keep both only for the active
+    // advertised keepalive port; inactive pairs are swept by the same exact-PID primitive
+    // used by manual cleanup and lifecycle stop.
     try {
         for (const prov of customLoad().providers) {
-            const port = Number(prov.proxyPort);
-            if (!port || port === active || keep.has(port)) continue;
-            if (await portIsFree(port)) continue;
-            const killed = await stopPortSoftly(port);
-            if (killed) swept.push(`конвертер ${prov.name || prov.id} :${port}`);
+            const { keepalivePort, adapterPort } = customProviderPorts(prov);
+            if (keepalivePort === active) {
+                if (adapterPort) keep.add(adapterPort);
+                continue;
+            }
+            const result = await customKillProxy(prov);
+            for (const row of result.results || []) {
+                if (row.ok && row.freed) swept.push(`custom ${prov.name || prov.id} :${row.port}`);
+            }
         }
-    } catch (e) { logLine(`boot sweep: конвертеры пропущены — ${e.message}`); }
+    } catch (e) { logLine(`boot sweep: конвертеры пропущены - ${e.message}`); }
     if (swept.length) logLine(`boot: снял процессы прошлого запуска (обратно поднимет активация): ${swept.join(', ')}`);
     return swept;
 }
@@ -34550,9 +34746,15 @@ async function bootRecreateActiveCustomProxy() {
     let prov = null;
     try { prov = customLoad().providers.find(p => Number(p.proxyPort) === port) || null; } catch { }
     if (!prov) return null;                                 // чужой порт (omniroute и пр.)
-    const killed = await stopPortSoftly(port);
-    for (let i = 0; i < 20 && killed; i += 1) {
-        if (await portIsFree(port)) break;
+    const cleanup = await customKillProxy(prov);
+    if (!cleanup.ok || !cleanup.freed) {
+        const label = prov.name || prov.id;
+        logLine(`boot: конвертер активного провайдера ${label} не пересоздан - recorded owner stale or foreign`);
+        return { ok: false, error: 'recorded custom topology is stale or foreign' };
+    }
+    for (let i = 0; i < 20; i += 1) {
+        const { keepalivePort, adapterPort } = customProviderPorts(prov);
+        if (await portIsFree(keepalivePort) && (!adapterPort || await portIsFree(adapterPort))) break;
         await napMs(100);
     }
     const r = await customSpawnProxy(prov);
@@ -36322,7 +36524,10 @@ async function handleFrontdoorState(res) {
         const cfg = frontdoorConfig();
         let live = null;
         try {
-            const r = await fetch(`http://127.0.0.1:${cfg.port}/__frontdoor/api/status`, { signal: AbortSignal.timeout(1200) });
+            const r = await fetch(`http://127.0.0.1:${cfg.port}/__frontdoor/api/status`, {
+                signal: AbortSignal.timeout(1200),
+                headers: customIdentityHeaders(),
+            });
             if (r.ok) live = await r.json();
         } catch { /* прокси лежит — так и покажем */ }
         let wiredToFrontdoor = false;
@@ -36523,7 +36728,55 @@ async function handleModelsProbeProgress(req, res) {
     }
 }
 
+const apiGatewayProduction = createProductionApiGateway({
+    repoRoot: process.env.API_GATEWAY_REPO_ROOT || path.join(__dirname, '..'),
+    home: os.homedir(),
+    wikiRoot: process.env.API_GATEWAY_WIKI_ROOT,
+    platform: process.platform,
+    opencodeJournalPath: process.env.API_GATEWAY_OPENCODE_JOURNAL || undefined,
+    canWrite: a6Routes.canWrite,
+    candidateOptions: {
+        providers: [],
+        getLiveModels: routesCandidateLiveModels,
+        getAccountModels: routesCandidateAccountModels,
+        getPricingModels: routesCandidatePricingModels,
+        getSnapshotModels: routesCandidateSnapshotModels,
+        getConfiguredModels: routesCandidateConfiguredModels,
+    },
+    resolveModelCandidates: resolveApiGatewayCandidates,
+    readPassive: async () => {
+        try { return require('./health-agg').aggregate().pairs || []; }
+        catch { return []; }
+    },
+    readProbes: async () => {
+        try { return require('./health-probe').readResults(); }
+        catch { return {}; }
+    },
+    sidecarStatus: async () => {
+        try {
+            const descriptor = lifecycleLib().SERVICES.find(service => service.name === 'Bifrost');
+            const row = (await lifecycleLib().statusVerified()).find(service => service.name === 'Bifrost');
+            const installed = !!(descriptor && descriptor.executable && fs.existsSync(descriptor.executable));
+            return {
+                status: row && row.up ? 'ready' : row && row.foreign ? 'foreign' : installed ? 'stopped' : 'absent',
+                version: descriptor && descriptor.identity && descriptor.identity.version || null,
+                checksum: descriptor && descriptor.identity && descriptor.identity.sha256 || null,
+                installed,
+                verified: !!(row && row.up),
+                installState: installed ? 'installed' : 'not installed',
+                health: row && row.up ? 'healthy' : 'unknown',
+                restart: { state: 'sidecar-only', detail: 'Use the hub sidecar restart action' },
+            };
+        } catch { return { status: 'unavailable', installed: false, verified: false, restart: { state: 'unavailable' } }; }
+    },
+});
+const apiGatewayRoutes = apiGatewayProduction.routes;
+const apiGatewayOpenCodeRecovery = apiGatewayProduction.openCodeRecovery;
+
 const server = http.createServer((req, res) => {
+    // Exact API Gateway state and mutation routes own their prefix before the broad
+    // dashboard route ladder. Mutations enforce loopback, same-origin JSON and 64 KiB.
+    if (apiGatewayRoutes.handle(req, res)) return;
     // ── Вкладка MEDIA: весь её HTTP живёт в модуле ────────────────────────────
     // Один вход вместо десятка предикатов в этой лестнице: вкладка новая, своих
     // реестров у неё нет. Модуль сам решает, его ли путь (всё под `/__media/api/`),
@@ -36670,7 +36923,7 @@ const server = http.createServer((req, res) => {
                 const protected = new Set([
                     LISTEN_PORT, 20126, 20130, 20131, 20132, AR_KEEPALIVE_PORT,
                     frontdoorPort(),   // убить front-door = оставить Claude Code без бэкенда
-                    ...(customLoad().providers || []).map(x => x.proxyPort).filter(Boolean),
+                    ...(customLoad().providers || []).flatMap(x => [x.proxyPort, x.adapterPort]).filter(Boolean),
                 ]);
                 if (protected.has(p))
                     return jsonRes(res, 400, { error: `:${p} — конфигурируемый сервис, не дам убить` });
@@ -38914,7 +39167,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
             // вкладкой «Свои прокси»: её `proxies-tab.js` и `.css` попали в исключение не
             // сразу, и сделанное в них было не проверить перезагрузкой. Дописывая вкладку
             // с внешними файлами - дописывай сюда её префикс.
-            const FRESH_PREFIXES = ['models-tab', 'proxies-tab', 'media-tab', 'google-tab', 'gemini-tab', 'a6api-tab'];
+            const FRESH_PREFIXES = ['models-tab', 'api-gateway-tab', 'proxies-tab', 'media-tab', 'google-tab', 'gemini-tab', 'a6api-tab'];
             const name = parts[parts.length - 1];
             const fresh = FRESH_PREFIXES.some(p => name.startsWith(p));
             res.writeHead(200, {
@@ -39120,18 +39373,21 @@ process.on('unhandledRejection', (err) => {
     console.error('[proxy] unhandledRejection:', err && (err.stack || err.message || err));
 });
 
+const skipBootChildren = process.env.SWITCHER_NO_BOOT_CHILDREN === '1';
 server.listen(LISTEN_PORT, () => {
     console.log(`ABUSE HUB on http://localhost:${LISTEN_PORT}/__switch`);
-    // Подъём очереди чек-инов с диска. Делаем ДО первого запроса: карточка на вкладке
-    // читает уже готовое состояние, а не «пусто, потом появится».
-    // 🪤 Насос отсюда НЕ зовём: восстановленная пачка ждёт кнопки (решение владельца 21.09).
-    try { arQueueRestore(); } catch (e) { logLine(`agentrouter очередь: подъём не удался (${e.message})`); }
-    // Граница журнала сбора: кольцо живёт в памяти, поэтому первым событием после подъёма
-    // идёт boot. По нему на вкладке видно, что «журнал начался заново» - это перезапуск
-    // дашборда, а не потеря подарков.
-    arNote('boot', `дашборд поднялся (pid ${process.pid}) - журнал сбора начат заново`);
+    if (!skipBootChildren) {
+        // Подъём очереди чек-инов с диска. Делаем ДО первого запроса: карточка на вкладке
+        // читает уже готовое состояние, а не «пусто, потом появится».
+        // 🪤 Насос отсюда НЕ зовём: восстановленная пачка ждёт кнопки (решение владельца 21.09).
+        try { arQueueRestore(); } catch (e) { logLine(`agentrouter очередь: подъём не удался (${e.message})`); }
+        // Граница журнала сбора: кольцо живёт в памяти, поэтому первым событием после подъёма
+        // идёт boot. По нему на вкладке видно, что «журнал начался заново» - это перезапуск
+        // дашборда, а не потеря подарков.
+        arNote('boot', `дашборд поднялся (pid ${process.pid}) - журнал сбора начат заново`);
     console.log(`  edits ${SETTINGS_FILE}`);
     console.log(`  current target: ${currentTarget()}`);
+    console.log(`  API Gateway OpenCode recovery: ${apiGatewayOpenCodeRecovery.recovered || 'none'}`);
     console.log(`  backends: ${Object.keys(BACKENDS).join(', ')}`);
 
     // Громко про нативный модуль: без собранного better-sqlite3 куки профилей не
@@ -39236,6 +39492,7 @@ server.listen(LISTEN_PORT, () => {
             if (r) console.log(r.ok ? `  active custom converter recreated on :${r.port}` : `  active custom converter error: ${r.error || '?'}`);
         }).catch(e => console.log('  keepalive boot error:', e.message));
     }
+    }
 
     // Реестр префиксов пересеваем на каждом старте: BACKENDS могли добавить/убрать
     // правкой кода, а выученные активациями записи файл сохраняет сам. Без этого
@@ -39245,10 +39502,14 @@ server.listen(LISTEN_PORT, () => {
     // Front-door (:20100) — единый вход Claude Code. Поднимаем всегда: с включённым
     // тумблером это единственный бэкенд CC, а с выключенным просто ждёт наготове,
     // чтобы включение не требовало рестарта дашборда.
-    keepaliveBring(frontdoorPort(), { force: true }).then(r => {
-        if (!r.ok) console.log('  front-door spawn error:', r.error || '?');
-        else console.log(`  front-door recreated on :${frontdoorPort()}`);
-        if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
-    }).catch(e => console.log('  front-door spawn error:', e.message));
+    if (!skipBootChildren) {
+        keepaliveBring(frontdoorPort(), { force: true }).then(r => {
+            if (!r.ok) console.log('  front-door spawn error:', r.error || '?');
+            else console.log(`  front-door recreated on :${frontdoorPort()}`);
+            if (frontdoorConfig().enabled) console.log(`  front-door: ВКЛЮЧЁН, активный бэкенд ${currentTarget()}`);
+        }).catch(e => console.log('  front-door spawn error:', e.message));
+    } else {
+        console.log('  boot children: пропущены (SWITCHER_NO_BOOT_CHILDREN=1)');
+    }
 });
 

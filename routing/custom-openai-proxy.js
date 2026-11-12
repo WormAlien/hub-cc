@@ -19,6 +19,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 
 const CONFIG_FILE = process.argv[2];
@@ -40,10 +41,16 @@ const UPSTREAM_BASE = String(config.upstream || '').replace(/\/+$/, '');
 const ACTIVE_KEY_FILE = config.keyFile || DEFAULT_KEY_FILE;
 const MODEL_MAP = config.modelMap || {};
 const PROVIDER_NAME = config.providerName || 'Custom';
+const PROVIDER_ID = config.providerId || '';
+let CONFIG_SHA256 = '';
+try { CONFIG_SHA256 = crypto.createHash('sha256').update(fs.readFileSync(CONFIG_FILE)).digest('hex'); } catch {}
 // Opt in per instance. Existing Custom/Odyssey converters retain their legacy contract.
 const STRICT_TOOLS_VISION = config.strictToolsVision === true;
 const IS_A6API = STRICT_TOOLS_VISION && PROVIDER_NAME.toLowerCase() === 'a6api';
 const A6API_ERROR_BODY_MAX = 64 * 1024;
+const LOCAL_EXACT_HEADER = 'x-abuse-hub-local-exact';
+const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
+const localHopAuth = createLocalHopAuth({ secretFile: config.localHopSecretPath });
 
 const upstream = new URL(UPSTREAM_BASE);
 
@@ -173,7 +180,7 @@ function isCompactionRequest(claudeReq) {
     return false;
 }
 
-function convertClaudeToOpenAI(claudeReq) {
+function convertClaudeToOpenAI(claudeReq, exactMode = false) {
     const messages = [];
     const sys = systemToText(claudeReq.system);
     if (sys) messages.push({ role: 'system', content: sys });
@@ -227,7 +234,7 @@ function convertClaudeToOpenAI(claudeReq) {
     }
 
     const openaiReq = {
-        model: mapModel(claudeReq.model),
+        model: exactMode ? claudeReq.model : mapModel(claudeReq.model),
         messages,
         max_tokens: Math.max(MIN_TOKENS_LIMIT, Math.min(claudeReq.max_tokens || MIN_TOKENS_LIMIT, MAX_TOKENS_LIMIT)),
         stream: !!claudeReq.stream,
@@ -347,7 +354,6 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
     });
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     sseWrite(clientRes, 'message_start', {
@@ -585,13 +591,13 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
 const stats = { requests: 0, streamed: 0, errors: 0, lastModel: '', started: new Date().toISOString() };
 
 function writeJSON(res, code, obj) {
+    const body = JSON.stringify(obj);
     res.writeHead(code, {
         'Content-Type': 'application/json; charset=utf-8',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, x-api-key, anthropic-version, Authorization',
+        'Content-Length': Buffer.byteLength(body),
+        'Cache-Control': 'no-store',
     });
-    res.end(JSON.stringify(obj));
+    res.end(body);
 }
 function a6apiSellerError(raw, model) {
     if (!IS_A6API || !raw || raw.length > A6API_ERROR_BODY_MAX) return null;
@@ -620,7 +626,8 @@ function claudeError(res, code, message, errType) {
 const { createLogger } = require('./proxy-logger.js');
 const { logLine } = createLogger('custom-oa');
 
-function handleMessages(req, res, body) {
+function handleMessages(req, res, body, trustedAdapter) {
+    if (!trustedAdapter) return claudeError(res, 403, 'Local adapter authorization required.', 'permission_error');
     let claudeReq;
     try { claudeReq = JSON.parse(body); }
     catch (e) { return claudeError(res, 400, 'invalid JSON: ' + e.message, 'invalid_request_error'); }
@@ -628,8 +635,12 @@ function handleMessages(req, res, body) {
     const apiKey = resolveKey(req);
     if (!apiKey) return claudeError(res, 401, 'Нет ключа ' + PROVIDER_NAME, 'authentication_error');
 
+    const exactMode = trustedAdapter && req.headers[LOCAL_EXACT_HEADER] === '1';
+    delete req.headers[LOCAL_EXACT_HEADER];
+    localHopAuth.strip(req.headers);
+
     let openaiReq;
-    try { openaiReq = convertClaudeToOpenAI(claudeReq); }
+    try { openaiReq = convertClaudeToOpenAI(claudeReq, exactMode); }
     catch (e) { return claudeError(res, 400, 'convert failed: ' + e.message, 'invalid_request_error'); }
 
     stats.requests++;
@@ -704,7 +715,8 @@ function handleCountTokens(res, body) {
     }
 }
 
-function handleModels(req, res) {
+function handleModels(req, res, trustedAdapter) {
+    if (!trustedAdapter) return claudeError(res, 403, 'Local adapter authorization required.', 'permission_error');
     const apiKey = resolveKey(req);
     if (STRICT_TOOLS_VISION && !apiKey) return claudeError(res, 401, 'Нет ключа ' + PROVIDER_NAME, 'authentication_error');
     upstreamRequest('/models', apiKey, null, (upRes) => {
@@ -718,21 +730,44 @@ function handleModels(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, x-api-key, anthropic-version, Authorization' });
-        return res.end();
-    }
     const url = (req.url || '').split('?')[0];
-    if (req.method === 'GET' && (url === '/health' || url === '/__custom/api/status')) {
-        return writeJSON(res, 200, { ok: true, provider: PROVIDER_NAME, upstream: UPSTREAM_BASE, port: LISTEN_PORT, modelMap: MODEL_MAP, stats, ...(!STRICT_TOOLS_VISION ? { keyFile: ACTIVE_KEY_FILE } : {}) });
+    const statusRequest = req.method === 'GET' && (url === '/health' || url === '/__custom/api/status');
+    if (statusRequest) {
+        const detailedStatus = req.headers.origin === undefined
+            && localHopAuth.consume(req.headers, 'status-inspection');
+        localHopAuth.strip(req.headers);
+        delete req.headers[LOCAL_EXACT_HEADER];
+        const publicStatus = { ok: true, role: 'adapter', providerId: PROVIDER_ID, provider: PROVIDER_NAME };
+        const detailed = detailedStatus ? {
+            providerName: PROVIDER_NAME,
+            upstream: UPSTREAM_BASE,
+            pid: process.pid,
+            port: LISTEN_PORT,
+            configSha256: CONFIG_SHA256,
+        } : {};
+        return writeJSON(res, 200, { ...publicStatus, ...detailed });
     }
-    if (req.method === 'GET' && url === '/v1/models') return handleModels(req, res);
+    if (req.headers.origin !== undefined) {
+        localHopAuth.strip(req.headers);
+        delete req.headers[LOCAL_EXACT_HEADER];
+        return claudeError(res, 403, 'Browser origins are not allowed.', 'permission_error');
+    }
+    const trustedAdapter = localHopAuth.consume(req.headers, 'keepalive-to-adapter');
+    if (req.method === 'OPTIONS') {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end('Forbidden');
+    }
+    if (req.method === 'GET' && url === '/v1/models') return handleModels(req, res, trustedAdapter);
     if (req.method === 'POST') {
+        if (!trustedAdapter) {
+            delete req.headers[LOCAL_EXACT_HEADER];
+            return claudeError(res, 403, 'Local adapter authorization required.', 'permission_error');
+        }
         let b = '';
         if (STRICT_TOOLS_VISION) req.setEncoding('utf8');
         req.on('data', c => b += c);
         req.on('end', () => {
-            if (url === '/v1/messages') return handleMessages(req, res, b);
+            if (url === '/v1/messages') return handleMessages(req, res, b, trustedAdapter);
             if (url === '/v1/messages/count_tokens') return handleCountTokens(res, b);
             claudeError(res, 404, 'unknown endpoint: ' + url, 'not_found_error');
         });
@@ -744,6 +779,6 @@ const server = http.createServer((req, res) => {
 server.listen(LISTEN_PORT, '127.0.0.1', () => {
     logLine(`[Custom OpenAI Proxy] ${PROVIDER_NAME} :${LISTEN_PORT} → ${UPSTREAM_BASE}`);
     logLine(`  mapping: opus→${MODEL_MAP.opus || '(pass-through)'}, sonnet→${MODEL_MAP.sonnet || '(pass-through)'}, haiku→${MODEL_MAP.haiku || '(pass-through)'}`);
-    logLine(`  key: client header → ${ACTIVE_KEY_FILE}`);
+    logLine(`  key: configured locally (${config.keyFile ? 'file' : 'default'})`);
     logLine(`  status: http://localhost:${LISTEN_PORT}/__custom/api/status`);
 });

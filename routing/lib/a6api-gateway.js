@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const durable = require('./durable-write');
+const { createLocalHopAuth } = require('./local-hop-auth');
 const { createClient, SECRET_DIR, ApiError, MODEL, idOf, modelOf, modelList } = require('./a6api-api');
 const { textOnly } = require('./routes-catalog');
 const ROUTING = path.join(__dirname, '..');
@@ -17,14 +18,17 @@ const digest = key => crypto.createHash('sha256').update(key).digest('hex');
 const numberOrNull = v => Number.isFinite(Number(v)) && v !== null && v !== '' ? Number(v) : null;
 const problem = (code, message, status = 409) => { throw new ApiError(code, message, status); };
 
-function buildRuntimeConfig({ secretDir = SECRET_DIR, routingDir = ROUTING, port = PORT, converterPort = CONVERTER_PORT } = {}) {
+function buildRuntimeConfig({ secretDir = SECRET_DIR, routingDir = ROUTING, port = PORT, converterPort = CONVERTER_PORT,
+    localHopSecretPath = process.env.ABUSE_HUB_LOCAL_HOP_KEY_FILE || path.join(secretDir, 'abuse-hub-local-hop.key') } = {}) {
     const keyFile = path.join(secretDir, 'a6api-active-key.txt');
     return {
-        converter: { port: converterPort, upstream: 'https://api.a6api.vip/v1', keyFile, modelMap: {}, providerName: 'a6api', strictToolsVision: true },
+        converter: { port: converterPort, upstream: 'https://api.a6api.vip/v1', keyFile, modelMap: {}, providerId: 'a6api', providerName: 'a6api', strictToolsVision: true, localHopSecretPath },
         keepaliveEnv: {
             PORT: String(port), UPSTREAM: `http://127.0.0.1:${converterPort}`, KEY_FILE: keyFile,
             SESSIONS_FILE: '', MODELMAP_FILE: path.join(routingDir, 'a6api-modelmap.json'),
             CONFIG_FILE: path.join(secretDir, 'a6api-keepalive.json'), PAID_SINGLE_KEY: '1',
+            LOCAL_EXACT_ADAPTER: '1', ABUSE_HUB_LOCAL_HOP_KEY_FILE: localHopSecretPath,
+            CUSTOM_PROVIDER_ID: 'a6api', CUSTOM_PROVIDER_NAME: 'a6api',
             HAIKU_REMAP: '1', HAIKU_TO_MODEL: '', GPT_PROXY_FORCE: '0',
             HAIKU_GPT_PROXY: `http://127.0.0.1:${converterPort}`, POOL_FALLBACK_MODEL: '',
             MAX_ATTEMPTS: '1', MAX_HEDGES: '0', HEDGE_MS: '0', CATALOG_TTL_MS: '0',
@@ -40,6 +44,14 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
     const selectionFile = path.join(secretDir, 'a6api-gateway.json');
     const keyFile = path.join(secretDir, 'a6api-active-key.txt');
     const runtime = buildRuntimeConfig({ secretDir, routingDir });
+    let identityHeaders = null;
+    function localIdentityHeaders() {
+        if (!identityHeaders) {
+            const auth = createLocalHopAuth({ secretFile: runtime.converter.localHopSecretPath });
+            identityHeaders = { [auth.headerName]: auth.token('status-inspection') };
+        }
+        return identityHeaders;
+    }
     let hub = initialHub, busy = false, preparing = null;
     function setHub(next) { hub = { ...hub, ...next }; }
     function hasSavedConfig() {
@@ -228,7 +240,7 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
         });
     }
     async function probe(port, endpoint) {
-        try { const r = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, { signal: AbortSignal.timeout(1200) }); return r.ok ? await r.json() : null; }
+        try { const r = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, { headers: localIdentityHeaders(), signal: AbortSignal.timeout(1200) }); return r.ok ? await r.json() : null; }
         catch { return null; }
     }
     function portFree(port) {

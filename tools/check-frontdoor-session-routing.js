@@ -47,7 +47,7 @@ async function request(port, model, session) {
         premier: { backend: 'premier', upstream: `http://127.0.0.1:${bPort}`, modelmap: bMap },
     }, aliases: {} }));
     const port = await new Promise((resolve, reject) => { const s = require('net').createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); s.once('error', reject); });
-    const child = spawn(process.execPath, [SCRIPT], { cwd: path.dirname(SCRIPT), env: { ...process.env, PORT: String(port), BACKENDS_FILE: registry, ACTIVE_BACKEND_FILE: path.join(dir, 'active.json'), LOG_FILE: path.join(dir, 'frontdoor.log'), SWITCH_PORT: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [SCRIPT], { cwd: path.dirname(SCRIPT), env: { ...process.env, HOME: dir, USERPROFILE: dir, ABUSE_HUB_LOCAL_HOP_KEY_FILE: path.join(dir, 'abuse-hub-local-hop.key'), PORT: String(port), BACKENDS_FILE: registry, ACTIVE_BACKEND_FILE: path.join(dir, 'active.json'), LOG_FILE: path.join(dir, 'frontdoor.log'), SWITCH_PORT: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
         let ready = false;
         for (let i = 0; i < 50; i++) { try { const r = await fetch(`http://127.0.0.1:${port}/__frontdoor/api/status`); if (r.ok) { ready = true; break; } } catch {} await sleep(30); }

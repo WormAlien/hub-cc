@@ -55,9 +55,20 @@ function waitFor(pred, ms, what) {
   });
 }
 
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close(error => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
 // Заглушка шлюза: отвечает МЕДЛЕННО, чтобы запрос гарантированно был «в полёте»,
 // когда мы попросим дренаж.
-function stubGateway(port, delayMs) {
+function stubGateway(delayMs) {
   const srv = http.createServer((req, res) => {
     if (req.url.startsWith('/v1/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -69,7 +80,13 @@ function stubGateway(port, delayMs) {
       res.end(SSE);
     }, delayMs));
   });
-  return { srv, listen: () => new Promise((r) => srv.listen(port, '127.0.0.1', r)) };
+  return {
+    srv,
+    listen: () => new Promise((resolve, reject) => {
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', () => resolve(srv.address().port));
+    }),
+  };
 }
 
 function spawnKeepalive(port, upPort) {
@@ -129,9 +146,9 @@ const post = (port, p) => new Promise((resolve) => {
     // Главное свойство: просим дренаж ПОСРЕДИ запроса и ждём, что клиент получит
     // полный ответ, а процесс выйдет сам — уже после этого.
     {
-      const [P, U] = [28371, 28372];
-      const gw = stubGateway(U, 4000);
-      await gw.listen();
+      const gw = stubGateway(4000);
+      const U = await gw.listen();
+      const P = await freePort();
       const kp = spawnKeepalive(P, U);
       open.push(gw.srv, kp.proc);
       await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive');
@@ -170,9 +187,9 @@ const post = (port, p) => new Promise((resolve) => {
     // ── Сцена 2: потолок ожидания. Один вечный запрос не должен держать рестарт ──
     // DRAIN_MAX_MS в спавне = 8с, шлюз молчит дольше — процесс обязан выйти сам.
     {
-      const [P, U] = [28373, 28374];
-      const gw = stubGateway(U, 60000);
-      await gw.listen();
+      const gw = stubGateway(60000);
+      const U = await gw.listen();
+      const P = await freePort();
       const kp = spawnKeepalive(P, U);
       open.push(gw.srv, kp.proc);
       await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 2)');
@@ -191,9 +208,9 @@ const post = (port, p) => new Promise((resolve) => {
 
     // ── Сцена 3: дренаж идемпотентен — второй запрос не ломает выход ────────────
     {
-      const [P, U] = [28375, 28376];
-      const gw = stubGateway(U, 1500);
-      await gw.listen();
+      const gw = stubGateway(1500);
+      const U = await gw.listen();
+      const P = await freePort();
       const kp = spawnKeepalive(P, U);
       open.push(gw.srv, kp.proc);
       await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 3)');
@@ -218,9 +235,9 @@ const post = (port, p) => new Promise((resolve) => {
     // человек получает «он что-то долго думает» вместо мгновенного рестарта. Владелец
     // сказал прямо: «рестартить надо по кнопке и без ожидания».
     {
-      const [P, U] = [28377, 28378];
-      const gw = stubGateway(U, 100);
-      await gw.listen();
+      const gw = stubGateway(100);
+      const U = await gw.listen();
+      const P = await freePort();
       const kp = spawnKeepalive(P, U);
       open.push(gw.srv, kp.proc);
       await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 4)');
@@ -238,8 +255,8 @@ const post = (port, p) => new Promise((resolve) => {
     // Потолок ожидания ОБЩИЙ: иначе дюжина портов × 45с = минуты вместо рестарта.
     {
       const src = fs.readFileSync(path.join(__dirname, '..', 'routing', 'lifecycle.js'), 'utf8');
-      assert.ok(/await drainAll\(plan\.map\(i => i\.port\), DRAIN_WAIT_MS, on\);/.test(src),
-        'stop() дренажит весь план одним вызовом до цикла убийств');
+      assert.ok(/await drainPorts\(runnable\.filter\(item => !item\.customProcess\)\.map\(item => item\.port\), DRAIN_WAIT_MS, on\);/.test(src),
+        'stopServices() дренажит весь runnable plan одним вызовом до цикла убийств');
       assert.ok(/Promise\.all\(ports\.map\(async port =>/.test(src),
         'просьбы уходят параллельно, а не по одной');
       assert.ok(/drainMs = 0 \} = \{\}\) \{/.test(src),

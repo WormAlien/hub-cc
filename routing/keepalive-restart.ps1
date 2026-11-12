@@ -38,7 +38,7 @@ $common = @{
 }
 $perPort = @{
   20133 = @{ UPSTREAM = 'https://agentrouter.org'; KEY_FILE = "$profileDir\.claude\ar-active-key.txt";
-             MODELMAP_FILE = (Join-Path $dir 'ar-modelmap.json');
+             MODELMAP_FILE = (Join-Path $dir 'ar-modelmap.json'); LOCAL_EXACT_ADAPTER = '1';
              HAIKU_REMAP = '1'; HAIKU_TO_MODEL = 'gpt-5.6-sol'; HAIKU_GPT_PROXY = 'http://127.0.0.1:20132' }
   20155 = @{ UPSTREAM = 'https://tabitoken.com'; KEY_FILE = "$profileDir\.claude\tabi-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'tabi-modelmap.json') }

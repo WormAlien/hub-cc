@@ -44,27 +44,63 @@ function fsyncDir(dir) {
     }
 }
 
-function writeAtomic(target, text) {
-    // Каталог цели может отсутствовать - и на свежей установке отсутствует. Пустые каталоги
-    // git не хранит, а `routing/runtime/` в него не попадает вовсе, поэтому первый же
-    // писатель (снимок очереди чек-ина, дампы отказов) получал ENOENT и молча терял запись:
-    // 23.09 у друга в логе стояло `снимок на диск не записан (ENOENT ... ar-checkin-queue
-    // .json.tmp-2520)`, то есть durable-очередь была выключена целиком. Своя папка стоит
-    // один syscall и снимает весь класс.
-    try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch (e) { /* ниже откажет честнее */ }
-    const tmp = target + TMP_SUFFIX();
+let stageSequence = 0;
+
+function stageAtomicSync(target, data, token) {
+    try { fs.mkdirSync(path.dirname(target), { recursive: true }); } catch (e) { /* open below reports the failure */ }
+    stageSequence += 1;
+    const cleanToken = token
+        ? String(token).replace(/[^a-zA-Z0-9._-]/g, '_')
+        : `${process.pid}-${stageSequence}`;
+    const tmp = `${target}.${token ? 'stage' : 'tmp'}-${cleanToken}`;
     let fd = null;
     try {
-        fd = fs.openSync(tmp, 'w');
-        fs.writeFileSync(fd, text, 'utf8');
+        fd = fs.openSync(tmp, 'wx');
+        if (Buffer.isBuffer(data)) fs.writeFileSync(fd, data);
+        else fs.writeFileSync(fd, String(data), 'utf8');
         fs.fsyncSync(fd);
-    } finally {
-        if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* уже закрыт */ } }
+    } catch (error) {
+        if (fd !== null) { try { fs.closeSync(fd); } catch (e) { /* already closed */ } }
+        try { fs.unlinkSync(tmp); } catch (e) { /* absent */ }
+        throw error;
     }
-    // rename поверх целевого — атомарная подмена. На Windows `rename` поверх
-    // существующего файла работает (Node использует MoveFileEx с REPLACE_EXISTING).
-    fs.renameSync(tmp, target);
-    fsyncDir(path.dirname(target));
+    try { fs.closeSync(fd); } catch (e) { /* already closed */ }
+    return { target, tmp };
+}
+
+function waitSync(ms) {
+    try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+    catch (e) { /* retry immediately when blocking wait is unavailable */ }
+}
+
+function commitAtomicSync(stage) {
+    const retryable = new Set(['EACCES', 'EPERM', 'EBUSY']);
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            fs.renameSync(stage.tmp, stage.target);
+            fsyncDir(path.dirname(stage.target));
+            return;
+        } catch (error) {
+            if (!retryable.has(error && error.code) || attempt >= 4) throw error;
+            waitSync(10 * (attempt + 1));
+        }
+    }
+}
+
+function discardAtomicSync(stage) {
+    if (!stage || !stage.tmp) return;
+    try { fs.unlinkSync(stage.tmp); } catch (error) {
+        if (!error || error.code !== 'ENOENT') throw error;
+    }
+}
+
+function writeAtomic(target, text) {
+    const stage = stageAtomicSync(target, text);
+    try { commitAtomicSync(stage); }
+    catch (error) {
+        try { discardAtomicSync(stage); } catch (e) { /* preserve original error */ }
+        throw error;
+    }
 }
 
 // Запись JSON тем же форматированием, что было в проекте: 2 пробела + хвостовой \n.
@@ -103,4 +139,14 @@ function assertNotZeroed(raw, label) {
     return raw;
 }
 
-module.exports = { writeJsonSync, writeTextSync, writeAtomic, fsyncDir, assertNotZeroed, zeroedError };
+module.exports = {
+    writeJsonSync,
+    writeTextSync,
+    writeAtomic,
+    stageAtomicSync,
+    commitAtomicSync,
+    discardAtomicSync,
+    fsyncDir,
+    assertNotZeroed,
+    zeroedError,
+};

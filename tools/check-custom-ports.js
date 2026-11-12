@@ -108,8 +108,11 @@ ok('custom-providers.json не держит зарезервированных �
     const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
     const reserved = cp.reservedPorts();
     const bad = (doc.providers || [])
-        .filter(p => p.proxyPort && reserved.has(Number(p.proxyPort)))
-        .map(p => `${p.name} → :${p.proxyPort}`);
+        .flatMap(p => [
+            p.proxyPort && reserved.has(Number(p.proxyPort)) ? `${p.name} keepalive → :${p.proxyPort}` : null,
+            p.adapterPort && reserved.has(Number(p.adapterPort)) ? `${p.name} adapter → :${p.adapterPort}` : null,
+        ])
+        .filter(Boolean);
     assert.deepStrictEqual(bad, [], `чужие порты в записях: ${bad.join('; ')}`);
 });
 

@@ -33,6 +33,9 @@ const os = require('os');
 const http = require('http');
 const https = require('https');
 const path = require('path');
+const crypto = require('node:crypto');
+const zlib = require('node:zlib');
+const { Transform, pipeline } = require('node:stream');
 
 const PORT = Number(process.env.PORT || 20100);
 const LOG_FILE = process.env.LOG_FILE || '';
@@ -44,6 +47,49 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const { createLogger } = require('./proxy-logger.js');
 const { logLine } = createLogger('frontdoor');
 const { createTap } = require('./usage-tap.js');
+const {
+    ApiGatewayError,
+    readPublishedManifest,
+    readManifest,
+    toOpenAiModels,
+    recognizeCallableModel,
+    restoreDelegatedOpenAiObject,
+    makeRedactedOpenAiError,
+} = require('./lib/api-gateway.js');
+const { createRequestCancellationRegistry } = require('./lib/request-cancellation.js');
+const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
+const LOCAL_HOP_SELFTEST_FILE = process.argv[2] === 'selftest'
+    ? path.join(os.tmpdir(), `abuse-hub-local-hop-frontdoor-selftest-${process.pid}.key`)
+    : '';
+if (LOCAL_HOP_SELFTEST_FILE) process.env.ABUSE_HUB_LOCAL_HOP_KEY_FILE = LOCAL_HOP_SELFTEST_FILE;
+const localHopAuth = createLocalHopAuth();
+let frontdoorRouteAuth = '';
+function trustedFrontdoorRouteAuth() {
+    if (!frontdoorRouteAuth) frontdoorRouteAuth = localHopAuth.token('frontdoor-to-keepalive');
+    return frontdoorRouteAuth;
+}
+const API_GATEWAY_DEFAULT_FILE = process.env.API_GATEWAY_DEFAULT_FILE
+    || path.join(__dirname, 'api-gateway.default.json');
+const API_GATEWAY_FILE = process.env.API_GATEWAY_FILE
+    || path.join(__dirname, 'api-gateway.json');
+const CLAUDE_SETTINGS_FILE = process.env.CLAUDE_SETTINGS_FILE
+    || path.join(CLAUDE_DIR, 'settings.json');
+const BIFROST_URL = new URL(process.env.BIFROST_URL || 'http://127.0.0.1:20135');
+if (BIFROST_URL.protocol !== 'http:' || BIFROST_URL.hostname !== '127.0.0.1'
+    || !BIFROST_URL.port || BIFROST_URL.username || BIFROST_URL.password
+    || BIFROST_URL.search || BIFROST_URL.hash) {
+    throw new Error('BIFROST_URL must be an HTTP IPv4 loopback origin');
+}
+const BIFROST_INTERNAL_MARKER = process.env.BIFROST_INTERNAL_MARKER || 'abuse-hub-bifrost-v1';
+const BIFROST_REQUEST_TOKEN_CARRIER = 'x-bf-eh-x-abuse-hub-request-token';
+const INTERNAL_REQUEST_TOKEN_HEADER = 'x-abuse-hub-request-token';
+const BIFROST_PROVIDER = 'abuse-hub';
+const OPENAI_BODY_MAX_BYTES = 16 * 1024 * 1024;
+const OPENAI_SSE_LINE_MAX_BYTES = 1 * 1024 * 1024;
+const requestCancellationRegistry = createRequestCancellationRegistry({
+    hardTtlMs: UPSTREAM_TIMEOUT_MS + 60000,
+});
+const claimedCallbackWork = new Set();
 const startedAt = Date.now();
 
 function log(msg) {
@@ -165,6 +211,52 @@ function ensureKeepalive(port) {
     });
     ensureInflight.set(port, p);
     return p;
+}
+
+function readRemoteCredentials(state) {
+    if (!state || state.local || !state.keyFile) return null;
+    const keyPath = path.isAbsolute(state.keyFile) ? state.keyFile : path.join(CLAUDE_DIR, state.keyFile);
+    let key = '';
+    try { key = fs.readFileSync(keyPath, 'utf8').trim(); } catch { key = ''; }
+    return key ? { authorization: `Bearer ${key}`, 'x-api-key': key } : null;
+}
+
+function exactBackendHeaders(state, contentLength, identity = {}) {
+    const headers = {
+        'content-type': 'application/json',
+        'content-length': String(contentLength),
+    };
+    if (state.local) {
+        headers['x-route-final'] = '1';
+        headers['x-route-exact'] = '1';
+        headers[localHopAuth.headerName] = trustedFrontdoorRouteAuth();
+    } else {
+        const credentials = readRemoteCredentials(state);
+        if (!credentials) return null;
+        Object.assign(headers, credentials);
+    }
+    for (const name of ['user-agent', 'x-request-id', 'x-session-id']) {
+        if (typeof identity[name] === 'string') headers[name] = identity[name];
+    }
+    return headers;
+}
+
+function directExactRemoteHeaders(state, inbound, contentLength) {
+    const headers = {
+        'content-type': 'application/json',
+        'content-length': String(contentLength),
+        'accept-encoding': 'identity',
+    };
+    for (const name of [
+        'accept', 'anthropic-version', 'anthropic-beta', 'anthropic-dangerous-direct-browser-access',
+        'user-agent', 'x-app',
+        'x-request-id', 'x-session-id',
+    ]) {
+        if (typeof inbound[name] === 'string') headers[name] = inbound[name];
+    }
+    const credentials = readRemoteCredentials(state);
+    if (credentials) Object.assign(headers, credentials);
+    return headers;
 }
 
 // Читаем по mtime: кеш не длиннее одного запроса по смыслу — иначе теряется
@@ -554,6 +646,417 @@ function apiError(res, code, message) {
     res.end(body);
 }
 
+function internalMarkerError(res) {
+    const body = JSON.stringify({
+        type: 'error',
+        error: { type: 'permission_error', message: 'Internal request is not permitted.' },
+    });
+    res.writeHead(403, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+}
+
+function openAiError(res, status, code, message, publicModel) {
+    const projected = publicModel
+        ? makeRedactedOpenAiError(status, code, publicModel)
+        : { error: { message, type: 'api_error', code } };
+    const body = JSON.stringify(projected);
+    if (res.headersSent) { try { res.destroy(); } catch { /* ignore */ } return; }
+    res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
+}
+
+function openAiModels(res) {
+    try {
+        const manifest = readPublishedManifest({
+            defaultManifestPath: API_GATEWAY_DEFAULT_FILE,
+            manifestPath: API_GATEWAY_FILE,
+            backendsPath: REGISTRY_FILE,
+            settingsPath: CLAUDE_SETTINGS_FILE,
+        });
+        const body = JSON.stringify({ object: 'list', data: toOpenAiModels(manifest) });
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+        res.end(body);
+    } catch (error) {
+        if (error instanceof ApiGatewayError && error.code === 'api_gateway_disabled') {
+            return openAiError(res, 503, error.code, error.message);
+        }
+        return openAiError(res, 503, 'api_gateway_unavailable', 'API Gateway state is unavailable.');
+    }
+}
+
+const FORBIDDEN_BIFROST_OVERRIDES = new Set([
+    'fallbacks', 'provider', 'key_id', 'routing', 'route', 'access_profile',
+]);
+const INTERNAL_CARRIER_ALIASES = new Set([
+    'x-abuse-hub-correlation',
+    'x-abuse-hub-request-id',
+    'x-bf-eh-x-abuse-hub-correlation',
+    'x-bf-eh-x-abuse-hub-request-id',
+]);
+
+function publicControlHeader(req) {
+    for (const name of Object.keys(req.headers)) {
+        const lower = name.toLowerCase();
+        if (lower.startsWith('x-abuse-hub-') || lower.startsWith('x-route-') || lower.startsWith('x-bf-')) {
+            return lower;
+        }
+    }
+    return '';
+}
+
+function callbackCandidate(req) {
+    if (Object.hasOwn(req.headers, 'x-abuse-hub-internal')
+        || Object.hasOwn(req.headers, INTERNAL_REQUEST_TOKEN_HEADER)) return true;
+    return Object.keys(req.headers).some(name => INTERNAL_CARRIER_ALIASES.has(name.toLowerCase()));
+}
+
+function safeIdentity(req) {
+    const limits = { 'user-agent': 512, 'x-request-id': 255, 'x-session-id': 255 };
+    const result = {};
+    for (const [name, limit] of Object.entries(limits)) {
+        const value = req.headers[name];
+        if (typeof value !== 'string' || /[\x00-\x1f\x7f]/u.test(value)) continue;
+        if (Buffer.byteLength(value, 'utf8') > limit) continue;
+        result[name] = value;
+    }
+    return result;
+}
+
+function readBoundedBody(req, { maxBytes = OPENAI_BODY_MAX_BYTES } = {}) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let bytes = 0;
+        let settled = false;
+        const fail = error => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+        };
+        req.on('data', chunk => {
+            if (settled) return;
+            bytes += chunk.length;
+            if (bytes > maxBytes) {
+                fail(Object.assign(new Error('Request body is too large.'), { status: 400, code: 'invalid_request' }));
+                req.destroy();
+                return;
+            }
+            chunks.push(chunk);
+        });
+        req.on('end', () => {
+            if (settled) return;
+            settled = true;
+            resolve(Buffer.concat(chunks));
+        });
+        req.on('error', fail);
+        req.on('aborted', () => fail(Object.assign(new Error('Request was aborted.'), { code: 'request_aborted' })));
+    });
+}
+
+function validateOpenAiIngressBody(raw) {
+    let body;
+    try { body = JSON.parse(raw.toString('utf8')); }
+    catch { throw Object.assign(new Error('Invalid JSON request body.'), { status: 400, code: 'invalid_request' }); }
+    if (!body || Array.isArray(body) || typeof body !== 'object' || Object.getPrototypeOf(body) !== Object.prototype) {
+        throw Object.assign(new Error('Invalid JSON request body.'), { status: 400, code: 'invalid_request' });
+    }
+    for (const key of FORBIDDEN_BIFROST_OVERRIDES) {
+        if (Object.hasOwn(body, key)) {
+            throw Object.assign(new Error('Caller routing overrides are not supported.'), {
+                status: 400,
+                code: 'invalid_request',
+            });
+        }
+    }
+    if (Object.hasOwn(body, 'stream') && typeof body.stream !== 'boolean') {
+        throw Object.assign(new Error('stream must be a boolean.'), { status: 400, code: 'invalid_request' });
+    }
+    for (const name of ['n', 'best_of']) {
+        if (Object.hasOwn(body, name) && (typeof body[name] !== 'number' || body[name] !== 1)) {
+            throw Object.assign(new Error(`${name} must be numeric 1.`), { status: 400, code: 'invalid_request' });
+        }
+    }
+    const recognized = recognizeCallableModel(body.model, { backendsPath: REGISTRY_FILE });
+    return {
+        publicModel: recognized.id,
+        provider: recognized.provider,
+        bareModel: recognized.model,
+        streamMode: body.stream === true,
+        sidecarBody: { ...body, model: `${BIFROST_PROVIDER}/${recognized.id}` },
+    };
+}
+
+function statusForSidecar(status) {
+    if (status === 400) return { status: 400, code: 'invalid_request' };
+    if (status === 404) return { status: 404, code: 'model_not_found' };
+    return { status: 503, code: 'upstream_unavailable' };
+}
+
+function createDelegatedOpenAiSseRestorer({ publicModel, maxLineBytes = OPENAI_SSE_LINE_MAX_BYTES }) {
+    let pending = Buffer.alloc(0);
+    let sawJsonObject = false;
+    let sawErrorObject = false;
+    let sawDone = false;
+    let failed = false;
+
+    function fail(message) {
+        failed = true;
+        throw new Error(message);
+    }
+
+    function restoreLine(line, ending) {
+        const content = line.length && line[line.length - 1] === 0x0d ? line.subarray(0, -1) : line;
+        if (!content.subarray(0, 5).equals(Buffer.from('data:'))) return Buffer.concat([line, ending]);
+        const payload = content.subarray(5).toString('utf8').trim();
+        if (!payload) return Buffer.concat([line, ending]);
+        if (payload === '[DONE]') {
+            if (sawDone || sawErrorObject) fail('Invalid delegated SSE terminal marker.');
+            sawDone = true;
+            return Buffer.concat([line, ending]);
+        }
+        if (sawDone) fail('Delegated SSE data followed [DONE].');
+        let value;
+        try { value = JSON.parse(payload); } catch { fail('Invalid delegated SSE JSON.'); }
+        if (!value || Array.isArray(value) || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+            fail('Delegated SSE data must be an object.');
+        }
+        const restored = restoreDelegatedOpenAiObject(value, publicModel);
+        sawJsonObject = true;
+        if (value.error !== null && value.error !== undefined) sawErrorObject = true;
+        return Buffer.from(`data: ${JSON.stringify(restored)}${ending.toString('binary')}`, 'utf8');
+    }
+
+    const transformer = new Transform({
+        transform(chunk, _encoding, callback) {
+            try {
+                pending = Buffer.concat([pending, Buffer.from(chunk)]);
+                let newline;
+                while ((newline = pending.indexOf(0x0a)) >= 0) {
+                    if (newline > maxLineBytes) fail('Delegated SSE line is too large.');
+                    const line = pending.subarray(0, newline);
+                    pending = pending.subarray(newline + 1);
+                    this.push(restoreLine(line, Buffer.from('\n')));
+                }
+                if (pending.length > maxLineBytes) fail('Delegated SSE line is too large.');
+                callback();
+            } catch (error) { callback(error); }
+        },
+        flush(callback) {
+            try {
+                if (pending.length) {
+                    if (pending.length > maxLineBytes) fail('Delegated SSE line is too large.');
+                    this.push(restoreLine(pending, Buffer.alloc(0)));
+                    pending = Buffer.alloc(0);
+                }
+                if (!failed && !((sawDone && !sawErrorObject) || (sawErrorObject && !sawDone))) {
+                    fail('Delegated SSE stream was truncated.');
+                }
+                callback();
+            } catch (error) { callback(error); }
+        },
+    });
+    transformer.state = () => ({ pending: pending.length, sawJsonObject, sawErrorObject, sawDone, failed });
+    return transformer;
+}
+
+function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, { rejectSuccessfulBody = false } = {}) {
+    const chunks = [];
+    let bytes = 0;
+    let ended = false;
+    let settled = false;
+    const finishOuter = () => requestCancellationRegistry.finishOuter(handle);
+    const fail = (status = 503, code = 'upstream_unavailable') => {
+        if (settled) return;
+        settled = true;
+        requestCancellationRegistry.cancel(handle, 'sidecar_response_failure');
+        finishOuter();
+        if (!upstreamResponse.destroyed) upstreamResponse.destroy();
+        if (!res.headersSent && !res.destroyed) openAiError(res, status, code, '', publicModel);
+        else if (!res.destroyed) res.destroy();
+    };
+    upstreamResponse.on('error', () => fail());
+    upstreamResponse.on('aborted', () => fail());
+    upstreamResponse.on('close', () => { if (!ended) fail(); });
+
+    const encoding = String(upstreamResponse.headers['content-encoding'] || '').toLowerCase();
+    if (encoding && encoding !== 'identity') {
+        fail();
+        return;
+    }
+    const status = upstreamResponse.statusCode || 503;
+    if (status < 200 || status >= 300) {
+        const mapped = statusForSidecar(status);
+        fail(mapped.status, mapped.code);
+        return;
+    }
+    upstreamResponse.on('data', chunk => {
+        if (settled) return;
+        bytes += chunk.length;
+        if (bytes > OPENAI_BODY_MAX_BYTES) {
+            fail();
+            return;
+        }
+        chunks.push(chunk);
+    });
+    upstreamResponse.on('end', () => {
+        ended = true;
+        if (settled || res.destroyed) return;
+        try {
+            const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const hasError = value && !Array.isArray(value) && typeof value === 'object'
+                && value.error !== null && value.error !== undefined;
+            if (hasError || rejectSuccessfulBody) {
+                fail();
+                return;
+            }
+            const projected = restoreDelegatedOpenAiObject(value, publicModel);
+            const responseBody = Buffer.from(JSON.stringify(projected), 'utf8');
+            settled = true;
+            finishOuter();
+            res.writeHead(status, {
+                'content-type': 'application/json',
+                'content-length': String(responseBody.length),
+            });
+            res.end(responseBody);
+        } catch {
+            fail();
+        }
+    });
+}
+
+function forwardOpenAi(req, res, validated) {
+    let begun;
+    try {
+        begun = requestCancellationRegistry.begin({
+            publicModel: validated.publicModel,
+            provider: validated.provider,
+            bareModel: validated.bareModel,
+            streamMode: validated.streamMode,
+            safeIdentity: safeIdentity(req),
+        });
+    } catch {
+        return openAiError(res, 503, 'api_gateway_busy', '', validated.publicModel);
+    }
+    const { token, handle } = begun;
+    const payload = Buffer.from(JSON.stringify(validated.sidecarBody), 'utf8');
+    const headers = {
+        'content-type': 'application/json',
+        'content-length': String(payload.length),
+        'accept-encoding': 'identity',
+        [BIFROST_REQUEST_TOKEN_CARRIER]: token,
+    };
+    let sidecarConnected = false;
+    let outerTerminal = false;
+    const finishOuter = () => {
+        if (outerTerminal) return;
+        outerTerminal = true;
+        requestCancellationRegistry.finishOuter(handle);
+    };
+    const failSidecar = () => {
+        if (!sidecarConnected) {
+            requestCancellationRegistry.finishInner(handle);
+        } else {
+            requestCancellationRegistry.cancel(handle, 'sidecar_failure');
+        }
+        finishOuter();
+        if (!res.headersSent && !res.destroyed) {
+            openAiError(res, 503, 'upstream_unavailable', '', validated.publicModel);
+        } else if (!res.destroyed) {
+            res.destroy();
+        }
+    };
+    const upstream = http.request({
+        host: '127.0.0.1',
+        port: Number(BIFROST_URL.port),
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers,
+        timeout: UPSTREAM_TIMEOUT_MS,
+    }, upstreamResponse => {
+        sidecarConnected = true;
+        upstreamResponse.on('end', finishOuter);
+        if (validated.streamMode) {
+            const status = upstreamResponse.statusCode || 503;
+            const contentType = String(upstreamResponse.headers['content-type'] || '').trim().toLowerCase();
+            const mediaType = contentType.split(';', 1)[0].trim();
+            if (status < 200 || status >= 300 || mediaType !== 'text/event-stream') {
+                return forwardDelegatedJson(
+                    upstreamResponse,
+                    req,
+                    res,
+                    handle,
+                    validated.publicModel,
+                    { rejectSuccessfulBody: status >= 200 && status < 300 },
+                );
+            }
+            const encoding = String(upstreamResponse.headers['content-encoding'] || '').toLowerCase();
+            if (encoding && encoding !== 'identity') {
+                requestCancellationRegistry.cancel(handle, 'protocol_failure');
+                finishOuter();
+                upstreamResponse.on('error', () => {});
+                upstreamResponse.destroy();
+                return openAiError(res, 503, 'upstream_unavailable', '', validated.publicModel);
+            }
+            res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+            const restorer = createDelegatedOpenAiSseRestorer({ publicModel: validated.publicModel });
+            pipeline(upstreamResponse, restorer, res, error => {
+                if (error) {
+                    requestCancellationRegistry.cancel(handle, 'protocol_failure');
+                    finishOuter();
+                    try { upstream.destroy(); } catch { /* already closed */ }
+                    try { upstreamResponse.destroy(); } catch { /* already closed */ }
+                    if (!res.destroyed) res.destroy();
+                }
+            });
+        } else {
+            forwardDelegatedJson(upstreamResponse, req, res, handle, validated.publicModel);
+        }
+    });
+    upstream.on('socket', socket => {
+        if (!socket.connecting) sidecarConnected = true;
+        else socket.once('connect', () => { sidecarConnected = true; });
+    });
+    let gone = false;
+    const abort = () => {
+        if (gone) return;
+        gone = true;
+        requestCancellationRegistry.cancel(handle, 'client_disconnect');
+        finishOuter();
+        try { upstream.destroy(); } catch { /* already closed */ }
+    };
+    req.on('aborted', abort);
+    req.on('close', () => { if (!req.complete) abort(); });
+    res.on('close', () => {
+        if (!res.writableFinished) abort();
+        else finishOuter();
+    });
+    upstream.on('timeout', () => upstream.destroy(new Error('Bifrost timeout')));
+    upstream.on('error', () => {
+        if (!gone) failSidecar();
+    });
+    upstream.end(payload);
+}
+
+async function openAiChat(req, res) {
+    try {
+        const manifest = readManifest({
+            manifestPath: API_GATEWAY_FILE,
+            backendsPath: REGISTRY_FILE,
+        });
+        if (manifest.enabled === false) {
+            return openAiError(res, 503, 'api_gateway_disabled', 'API Gateway is disabled.');
+        }
+        const raw = await readBoundedBody(req);
+        const validated = validateOpenAiIngressBody(raw);
+        forwardOpenAi(req, res, validated);
+    } catch (error) {
+        if (res.destroyed || error.code === 'request_aborted') return;
+        if (error instanceof ApiGatewayError) {
+            return openAiError(res, error.status, error.code, error.message);
+        }
+        return openAiError(res, error.status || 400, error.code || 'invalid_request', 'Invalid request.');
+    }
+}
+
 // Счётчики префиксного роутинга и привязка окна к провайдеру.
 // Claude Code запускает субагента с моделью `claude-opus-5`, без префикса родительского
 // шлюза. Поэтому одного modelmap недостаточно: unprefixed запрос иначе попадает на
@@ -588,11 +1091,21 @@ function sessionRouteFor(body) {
     return hit.state;
 }
 
-function statusPayload() {
+function statusPayload({ detailed = false } = {}) {
     const s = readState();
     const reg = readRegistry();
-    // Группируем по объекту состояния: алиасы указывают на ту же запись, и показать
-    // их надо как имена одного провайдера, а не как отдельные шлюзы.
+    const base = {
+        ok: true,
+        port: PORT,
+        uptime_ms: Date.now() - startedAt,
+        backend: s ? s.backend : null,
+        local: s ? s.local : null,
+        error: s ? null : 'active_backend_unavailable',
+        registry_error: reg ? null : 'registry_unavailable',
+        api_gateway_inflight: requestCancellationRegistry.size(),
+    };
+    if (!detailed) return base;
+    // Group by state object: aliases point at the same entry.
     const groups = [];
     if (reg) {
         for (const v of new Set(reg.values())) {
@@ -607,20 +1120,10 @@ function statusPayload() {
         }
     }
     return {
-        ok: true,
-        port: PORT,
-        uptime_ms: Date.now() - startedAt,
-        // backend/upstream — по-прежнему ГЛОБАЛЬНЫЙ дефолт: на них смотрят Health и
-        // кнопка статуса в дашборде, менять их смысл нельзя.
-        backend: s ? s.backend : null,
+        ...base,
         upstream: s ? s.upstream : null,
-        local: s ? s.local : null,
         injectsKey: s ? (!s.local && !!s.keyFile) : null,
         modelmap: s ? s.modelmap : null,
-        state_file: STATE_FILE,
-        error: s ? null : stateCache.error,
-        registry_file: REGISTRY_FILE,
-        registry_error: reg ? null : regCache.error,
         registry: groups,
         routed: Object.assign({}, routedCounts),
         routed_last: Object.assign({}, routedLast),
@@ -641,38 +1144,291 @@ let inflight = 0;
 const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS || 120000);
 
 function maybeExitAfterDrain() {
-    if (!draining || inflight > 0) return;
+    if (!draining || inflight > 0 || claimedCallbackWork.size > 0) return;
     log('дренаж закончен: запросов в полёте нет, выхожу');
     setTimeout(() => process.exit(0), 250)   // запас на дослив последнего ответа в сокет.unref();
 }
 
 function startDrain(res) {
-    const body = JSON.stringify({ ok: true, draining: true, inflight });
+    const drainInflight = inflight + claimedCallbackWork.size;
+    const body = JSON.stringify({ ok: true, draining: true, inflight: drainInflight });
     res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
     res.end(body);
     if (draining) return;
     draining = true;
-    log(`дренаж: закрываю слушателя, в полёте ${inflight} запрос(ов), потолок ожидания ${DRAIN_MAX_MS}мс`);
+    log(`дренаж: закрываю слушателя, в полёте ${drainInflight} запрос(ов), потолок ожидания ${DRAIN_MAX_MS}мс`);
     try { server.close(); } catch (e) { /* уже закрыт */ }
     // Потолок обязателен: один долгий ответ (наблюдались 12-минутные) иначе держал бы
     // рестарт бесконечно, и человек убил бы процесс руками — то есть вернулся к разрыву.
     setTimeout(() => {
         if (!draining) return;
-        log(`дренаж: потолок ${DRAIN_MAX_MS}мс истёк, в полёте ещё ${inflight} — выхожу`);
+        if (claimedCallbackWork.size > 0) {
+            log(`дренаж: потолок ${DRAIN_MAX_MS}мс истёк, оплачиваемых callback ещё ${claimedCallbackWork.size} - продолжаю ждать`);
+            return;
+        }
+        log(`дренаж: потолок ${DRAIN_MAX_MS}мс истёк, в полёте ещё ${inflight} - выхожу`);
         process.exit(0);
     }, DRAIN_MAX_MS).unref();
     maybeExitAfterDrain();
 }
 
+function countRawHeader(req, wanted) {
+    let count = 0;
+    for (let index = 0; index < req.rawHeaders.length; index += 2) {
+        if (String(req.rawHeaders[index]).toLowerCase() === wanted) count += 1;
+    }
+    return count;
+}
+
+function timingSafeMarker(value) {
+    if (typeof value !== 'string') return false;
+    const actual = Buffer.from(value, 'utf8');
+    const expected = Buffer.from(BIFROST_INTERNAL_MARKER, 'utf8');
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
+function callbackEnvelopeAllowed(req) {
+    if (req.method !== 'POST' || req.url !== '/v1/messages') return false;
+    if (req.socket.remoteAddress !== '127.0.0.1') return false;
+    if (countRawHeader(req, 'x-abuse-hub-internal') !== 1
+        || countRawHeader(req, INTERNAL_REQUEST_TOKEN_HEADER) !== 1) return false;
+    const marker = req.headers['x-abuse-hub-internal'];
+    const token = req.headers[INTERNAL_REQUEST_TOKEN_HEADER];
+    if (typeof marker !== 'string' || marker.includes(',') || typeof token !== 'string' || token.includes(',')) return false;
+    return timingSafeMarker(marker);
+}
+
+function callbackBodyMatches(body, handle) {
+    if (!body || Array.isArray(body) || typeof body !== 'object' || Object.getPrototypeOf(body) !== Object.prototype) return false;
+    if (body.model !== handle.publicModel) return false;
+    if (handle.streamMode ? body.stream !== true : (body.stream !== undefined && body.stream !== false)) return false;
+    try {
+        const recognized = recognizeCallableModel(body.model, { backendsPath: REGISTRY_FILE });
+        return recognized.provider === handle.provider && recognized.model === handle.bareModel;
+    } catch { return false; }
+}
+
+async function internalCallback(req, res) {
+    if (!callbackEnvelopeAllowed(req)) return internalMarkerError(res);
+    let handle;
+    try { handle = requestCancellationRegistry.claim(req.headers[INTERNAL_REQUEST_TOKEN_HEADER]); }
+    catch { return internalMarkerError(res); }
+
+    let backendReq = null;
+    let terminal = false;
+    claimedCallbackWork.add(handle);
+    const finishInner = () => {
+        if (terminal) return;
+        terminal = true;
+        requestCancellationRegistry.finishInner(handle);
+        claimedCallbackWork.delete(handle);
+        maybeExitAfterDrain();
+    };
+    const cancelError = new Error('Delegated request cancelled.');
+    const bound = requestCancellationRegistry.bindInnerAbort(handle, () => {
+        try { req.destroy(cancelError); } catch { /* already closed */ }
+        if (backendReq) { try { backendReq.destroy(cancelError); } catch { /* already closed */ } }
+    });
+    if (bound === 'already_cancelled') {
+        finishInner();
+        return;
+    }
+
+    let body;
+    try {
+        const raw = await readBoundedBody(req);
+        body = JSON.parse(raw.toString('utf8'));
+    } catch {
+        finishInner();
+        if (!res.destroyed) internalMarkerError(res);
+        return;
+    }
+    if (!callbackBodyMatches(body, handle)) {
+        requestCancellationRegistry.cancel(handle, 'protocol_failure');
+        finishInner();
+        if (!res.destroyed) internalMarkerError(res);
+        return;
+    }
+    if (requestCancellationRegistry.isCancelled(handle)) {
+        finishInner();
+        return;
+    }
+
+    const registry = readRegistry();
+    const state = registry && registry.get(handle.provider.toLowerCase());
+    if (!state || state.backend !== handle.provider) {
+        finishInner();
+        return apiError(res, 503, 'Internal provider is unavailable.');
+    }
+    const internalBody = Buffer.from(JSON.stringify({ ...body, model: handle.bareModel }), 'utf8');
+    const identity = handle.safeIdentity || {};
+    const backendIdentity = state.local && state.backend === 'agentrouter'
+        ? { ...identity, 'user-agent': undefined }
+        : identity;
+    const headers = exactBackendHeaders(state, internalBody.length, backendIdentity);
+    if (!headers) {
+        finishInner();
+        return apiError(res, 503, 'Internal provider is unavailable.');
+    }
+    const u = state.url;
+    const requester = u.protocol === 'https:' ? https.request : http.request;
+    let retried = false;
+    const failInner = () => {
+        if (!res.headersSent && !res.destroyed && !requestCancellationRegistry.isCancelled(handle)) {
+            apiError(res, 502, 'Internal upstream request failed.');
+        } else if (!res.destroyed) res.destroy();
+        finishInner();
+    };
+    res.on('close', () => {
+        if (!res.writableFinished) {
+            if (backendReq) { try { backendReq.destroy(cancelError); } catch { /* already closed */ } }
+            finishInner();
+        }
+    });
+    const send = () => {
+        if (terminal || requestCancellationRegistry.isCancelled(handle)) {
+            finishInner();
+            return;
+        }
+        const candidate = requester({
+            protocol: u.protocol,
+            hostname: connectHost(u.hostname, state.local),
+            port: u.port || (u.protocol === 'https:' ? 443 : 80),
+            method: 'POST',
+            path: joinUpstreamPath(u.pathname, '/v1/messages'),
+            headers: { ...headers, host: u.host },
+            timeout: UPSTREAM_TIMEOUT_MS,
+        }, upstreamResponse => {
+            if (requestCancellationRegistry.isCancelled(handle)) {
+                upstreamResponse.destroy(cancelError);
+                return;
+            }
+            res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+            const tap = createTap({
+                method: 'POST', url: '/v1/messages', backend: state.backend,
+                ua: identity['user-agent'], status: upstreamResponse.statusCode, headers: upstreamResponse.headers,
+            });
+            if (tap) {
+                upstreamResponse.on('data', tap.chunk);
+                upstreamResponse.on('end', tap.end);
+                upstreamResponse.on('aborted', tap.end);
+            }
+            upstreamResponse.pipe(res);
+            upstreamResponse.on('error', () => {
+                if (!res.destroyed) res.destroy();
+                finishInner();
+            });
+            upstreamResponse.on('end', finishInner);
+            upstreamResponse.on('aborted', finishInner);
+        });
+        backendReq = candidate;
+        let connected = false;
+        candidate.on('socket', socket => {
+            if (!socket.connecting) connected = true;
+            else socket.once('connect', () => { connected = true; });
+        });
+        candidate.on('timeout', () => candidate.destroy(new Error('upstream timeout')));
+        candidate.on('error', error => {
+            if (candidate !== backendReq || terminal) return;
+            const port = upstreamPortOf(state);
+            if (!retried && !connected && state.local && port && UPSTREAM_DOWN.has(error.code)
+                && !requestCancellationRegistry.isCancelled(handle)) {
+                retried = true;
+                ensureKeepalive(port).then(result => {
+                    if (terminal || requestCancellationRegistry.isCancelled(handle)) {
+                        finishInner();
+                        return;
+                    }
+                    if (result.ok) send();
+                    else failInner();
+                });
+                return;
+            }
+            failInner();
+        });
+        if (requestCancellationRegistry.isCancelled(handle)) {
+            candidate.destroy(cancelError);
+            finishInner();
+            return;
+        }
+        candidate.end(internalBody);
+    };
+    send();
+}
+
+function routeDirectCanonical(method, reqPath, body) {
+    const pathname = String(reqPath || '').replace(/\?.*$/, '');
+    if (method !== 'POST' || !['/v1/messages', '/v1/messages/count_tokens'].includes(pathname)) return null;
+    let parsed;
+    try { parsed = JSON.parse(body.toString('utf8') || '{}'); } catch { return null; }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object' || typeof parsed.model !== 'string') return null;
+    let recognized;
+    try { recognized = recognizeCallableModel(parsed.model, { backendsPath: REGISTRY_FILE }); }
+    catch { return null; }
+    const registry = readRegistry();
+    const state = registry && registry.get(recognized.provider.toLowerCase());
+    if (!state || state.backend !== recognized.provider) {
+        return { exactError: true, provider: recognized.provider };
+    }
+    const internal = {
+        state,
+        prefix: recognized.provider,
+        from: recognized.id,
+        to: recognized.model,
+        tier: null,
+        final: true,
+        exact: true,
+        body: Buffer.from(JSON.stringify({ ...parsed, model: recognized.model }), 'utf8'),
+    };
+    rememberSessionRoute(parsed, state);
+    return internal;
+}
+
+function stripUntrustedControlHeaders(req) {
+    for (const name of Object.keys(req.headers)) {
+        const lower = name.toLowerCase();
+        if (lower.startsWith('x-bf-') || lower.startsWith('x-abuse-hub-')
+            || ['x-route-final', 'x-route-exact', 'x-route-prefixed', 'x-route-tier'].includes(lower)) {
+            delete req.headers[name];
+        }
+    }
+}
+
 function handle(req, res) {
     const reqPath = req.url || '/';
-    if (req.method === 'POST' && reqPath.replace(/\?.*$/, '') === '/__drain') return startDrain(res);
+    const pathname = reqPath.replace(/\?.*$/, '');
+    const presentedStatusAuth = pathname === '/__frontdoor/api/status'
+        && countRawHeader(req, localHopAuth.headerName) === 1
+        ? req.headers[localHopAuth.headerName]
+        : null;
+    const openAiPath = pathname === '/openai' || pathname.startsWith('/openai/');
+    if (openAiPath && publicControlHeader(req)) {
+        return openAiError(res, 400, 'invalid_request', 'Internal routing headers are not accepted.');
+    }
+    if (callbackCandidate(req)) return internalCallback(req, res);
+    stripUntrustedControlHeaders(req);
+    if (req.method === 'POST' && pathname === '/__drain') return startDrain(res);
     inflight += 1;
     res.on('close', () => { inflight -= 1; maybeExitAfterDrain(); });
-    if (req.method === 'GET' && reqPath.replace(/\?.*$/, '') === '/__frontdoor/api/status') {
-        const body = JSON.stringify(statusPayload());
-        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+    if (req.method === 'GET' && pathname === '/__frontdoor/api/status') {
+        const statusAuth = presentedStatusAuth;
+        localHopAuth.strip(req.headers);
+        const body = JSON.stringify(statusPayload({
+            detailed: req.headers.origin === undefined && localHopAuth.verify(statusAuth, 'status-inspection'),
+        }));
+        res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' });
         return res.end(body);
+    }
+    if (req.method === 'GET' && pathname === '/openai/v1/models') return openAiModels(res);
+    if (req.method === 'POST' && reqPath === '/openai/v1/chat/completions') {
+        const contentType = String(req.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+        if (contentType !== 'application/json') {
+            return openAiError(res, 400, 'invalid_request', 'Content-Type must be application/json.');
+        }
+        return openAiChat(req, res);
+    }
+    if (pathname === '/openai' || pathname.startsWith('/openai/')) {
+        return openAiError(res, 404, 'unsupported_route', 'Unsupported OpenAI route.');
     }
 
     const chunks = [];
@@ -681,8 +1437,12 @@ function handle(req, res) {
     req.on('end', () => {
         let state = readState();
         let body = Buffer.concat(chunks);
-        const routed = routeByModel(req.method, body, readRegistry());
+        const routed = routeDirectCanonical(req.method, reqPath, body)
+            || routeByModel(req.method, body, readRegistry());
         if (routed) {
+            if (routed.exactError) {
+                return apiError(res, 503, `front-door: provider ${routed.provider} is unavailable.`);
+            }
             // /model multi: тир не настроен / провайдер не в реестре — честная ошибка,
             // называющая блок multi и тир, без ухода на активный шлюз (чужой баланс).
             if (routed.multiError) {
@@ -729,10 +1489,196 @@ function handle(req, res) {
     });
 }
 
+function restoreCanonicalNativeObject(value, publicModel) {
+    if (!value || Array.isArray(value) || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+        throw new Error('Canonical native response must be an object.');
+    }
+    const restored = { ...value };
+    if (Object.hasOwn(restored, 'model')) restored.model = publicModel;
+    return restored;
+}
+
+function createCanonicalNativeSseRestorer(publicModel) {
+    let pending = Buffer.alloc(0);
+    let eventType = '';
+    let dataLines = [];
+    let sawMessageStop = false;
+    let sawDataObject = false;
+
+    function resetEvent() {
+        eventType = '';
+        dataLines = [];
+    }
+
+    function restoreObject(value) {
+        if (!value || Array.isArray(value) || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
+            throw new Error('Canonical native SSE data must be an object.');
+        }
+        const restored = { ...value };
+        if (Object.hasOwn(restored, 'model')) restored.model = publicModel;
+        if (restored.message && !Array.isArray(restored.message) && typeof restored.message === 'object') {
+            restored.message = { ...restored.message, model: publicModel };
+        }
+        return restored;
+    }
+
+    function dispatch() {
+        if (!eventType && dataLines.length === 0) return Buffer.alloc(0);
+        const payload = dataLines.join('\n');
+        if (!payload) {
+            const raw = eventType ? `event: ${eventType}\n\n` : '\n';
+            resetEvent();
+            return Buffer.from(raw, 'utf8');
+        }
+        if (payload === '[DONE]') throw new Error('Anthropic canonical SSE must not use [DONE].');
+        const value = JSON.parse(payload);
+        const restored = restoreObject(value);
+        sawDataObject = true;
+        const objectType = typeof value.type === 'string' ? value.type : '';
+        if (eventType === 'message_stop' || objectType === 'message_stop') {
+            if (sawMessageStop || (eventType && eventType !== 'message_stop') || objectType !== 'message_stop') {
+                throw new Error('Invalid canonical native message_stop event.');
+            }
+            sawMessageStop = true;
+        } else if (sawMessageStop) {
+            throw new Error('Canonical native SSE data followed message_stop.');
+        }
+        const eventLine = eventType ? `event: ${eventType}\n` : '';
+        const result = Buffer.from(`${eventLine}data: ${JSON.stringify(restored)}\n\n`, 'utf8');
+        resetEvent();
+        return result;
+    }
+
+    function consumeLine(rawLine) {
+        let line = rawLine;
+        if (line.length && line[line.length - 1] === 0x0d) line = line.subarray(0, -1);
+        if (line.length === 0) return dispatch();
+        if (line[0] === 0x3a) return Buffer.concat([line, Buffer.from('\n')]);
+        const colon = line.indexOf(0x3a);
+        const field = (colon < 0 ? line : line.subarray(0, colon)).toString('utf8');
+        let value = colon < 0 ? Buffer.alloc(0) : line.subarray(colon + 1);
+        if (value.length && value[0] === 0x20) value = value.subarray(1);
+        if (field === 'event') eventType = value.toString('utf8');
+        else if (field === 'data') dataLines.push(value.toString('utf8'));
+        else return Buffer.concat([line, Buffer.from('\n')]);
+        return Buffer.alloc(0);
+    }
+
+    return new Transform({
+        transform(chunk, _encoding, callback) {
+            try {
+                pending = Buffer.concat([pending, Buffer.from(chunk)]);
+                let newline;
+                while ((newline = pending.indexOf(0x0a)) >= 0) {
+                    if (newline > OPENAI_SSE_LINE_MAX_BYTES) throw new Error('Canonical native SSE line is too large.');
+                    const line = pending.subarray(0, newline);
+                    pending = pending.subarray(newline + 1);
+                    const output = consumeLine(line);
+                    if (output.length) this.push(output);
+                }
+                if (pending.length > OPENAI_SSE_LINE_MAX_BYTES) throw new Error('Canonical native SSE line is too large.');
+                callback();
+            } catch (error) { callback(error); }
+        },
+        flush(callback) {
+            try {
+                if (pending.length) {
+                    const output = consumeLine(pending);
+                    if (output.length) this.push(output);
+                }
+                pending = Buffer.alloc(0);
+                const final = dispatch();
+                if (final.length) this.push(final);
+                if (!sawMessageStop) {
+                    throw new Error(sawDataObject
+                        ? 'Canonical native SSE stream ended without message_stop.'
+                        : 'Canonical native SSE stream ended without data or message_stop.');
+                }
+                callback();
+            } catch (error) { callback(error); }
+        },
+    });
+}
+
+function canonicalNativeDecoder(encoding) {
+    if (!encoding || encoding === 'identity') return null;
+    if (encoding === 'gzip' || encoding === 'x-gzip') return zlib.createGunzip();
+    if (encoding === 'deflate') return zlib.createInflate();
+    if (encoding === 'br' && typeof zlib.createBrotliDecompress === 'function') return zlib.createBrotliDecompress();
+    if (encoding === 'zstd' && typeof zlib.createZstdDecompress === 'function') return zlib.createZstdDecompress();
+    return false;
+}
+
+function forwardCanonicalNativeResponse(upRes, res, publicModel) {
+    const encoding = String(upRes.headers['content-encoding'] || '').trim().toLowerCase();
+    const decoder = canonicalNativeDecoder(encoding);
+    if (decoder === false) {
+        upRes.on('error', () => {});
+        upRes.destroy();
+        apiError(res, 502, 'front-door: canonical native upstream returned an unsupported encoded response.');
+        return;
+    }
+    const contentType = String(upRes.headers['content-type'] || '').toLowerCase();
+    if (/text\/event-stream/.test(contentType)) {
+        const headers = { ...upRes.headers };
+        delete headers['content-length'];
+        delete headers['content-encoding'];
+        res.writeHead(upRes.statusCode || 502, headers);
+        const restorer = createCanonicalNativeSseRestorer(publicModel);
+        const streams = decoder ? [upRes, decoder, restorer, res] : [upRes, restorer, res];
+        pipeline(...streams, error => {
+            if (error && !res.destroyed) res.destroy();
+        });
+        return;
+    }
+    const source = decoder || upRes;
+    const chunks = [];
+    let bytes = 0;
+    let failed = false;
+    const fail = () => {
+        if (failed) return;
+        failed = true;
+        if (!upRes.destroyed) upRes.destroy();
+        if (decoder && !decoder.destroyed) decoder.destroy();
+        if (!res.headersSent && !res.destroyed) apiError(res, 502, 'front-door: invalid canonical native response.');
+        else if (!res.destroyed) res.destroy();
+    };
+    upRes.on('error', fail);
+    upRes.on('aborted', fail);
+    if (decoder) {
+        decoder.on('error', fail);
+        upRes.pipe(decoder);
+    }
+    source.on('data', chunk => {
+        if (failed) return;
+        bytes += chunk.length;
+        if (bytes > OPENAI_BODY_MAX_BYTES) return fail();
+        chunks.push(chunk);
+    });
+    source.on('end', () => {
+        if (failed || res.destroyed) return;
+        try {
+            const restored = restoreCanonicalNativeObject(
+                JSON.parse(Buffer.concat(chunks).toString('utf8')),
+                publicModel,
+            );
+            const body = Buffer.from(JSON.stringify(restored), 'utf8');
+            const headers = { ...upRes.headers, 'content-length': String(body.length) };
+            delete headers['transfer-encoding'];
+            delete headers['content-encoding'];
+            res.writeHead(upRes.statusCode || 502, headers);
+            res.end(body);
+        } catch { fail(); }
+    });
+}
+
 function forward(req, res, state, reqBody, reqPath, routed, retried) {
     const u = state.url;
     const requester = u.protocol === 'https:' ? https.request : http.request;
-    const headers = Object.assign({}, req.headers, { host: u.host });
+    let headers = routed && routed.exact && !state.local
+        ? directExactRemoteHeaders(state, req.headers, reqBody.length)
+        : Object.assign({}, req.headers);
+    headers.host = u.host;
     let body = reqBody;
 
     // Тело уже переписано разбором префикса — длина обязана совпасть. Раньше эта строка
@@ -747,45 +1693,63 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
     // 🪤 Маппить здесь самим нельзя: keepalive применит свою карту ещё раз поверх нашей,
     // и получится двойная подмена (модель → цель → цель цели).
     if (routed) {
-        headers['x-route-prefixed'] = '1';
-        if (routed.tier) headers['x-route-tier'] = routed.tier;
+        if (!routed.exact) {
+            headers['x-route-prefixed'] = '1';
+            if (routed.tier) headers['x-route-tier'] = routed.tier;
+        }
         // /model multi: модель уже конечная — keepalive НЕ должен ремапить её по тир-карте
         // резолвленного шлюза (иначе кросс-шлюзовой выбор владельца потеряется).
         if (routed.final) headers['x-route-final'] = '1';
+        if (routed.exact) headers['x-route-exact'] = '1';
+        if (routed.exact && state.local) {
+            headers[localHopAuth.headerName] = trustedFrontdoorRouteAuth();
+        }
     } else {
         // Клиент мог прислать заголовок сам — снимаем оба, иначе чужой запрос притворится
         // финальным/префиксным и уведёт keepalive не туда.
         delete headers['x-route-final'];
+        delete headers['x-route-exact'];
+        localHopAuth.strip(headers);
         // Клиент мог прислать заголовок сам — снимаем, иначе чужой запрос притворится
         // префиксным и уведёт keepalive на не ту карту.
         delete headers['x-route-prefixed'];
         delete headers['x-route-tier'];
     }
 
-    if (!state.local) {
+    if (state.local) {
+        headers[localHopAuth.headerName] = trustedFrontdoorRouteAuth();
+    } else {
         // Ключ читаем на КАЖДЫЙ запрос: на этом стоит смена аккаунта без рестарта CC
         // и авто-ротация FreeModel. Мирроринг keepalive-proxy.js:771-774.
-        let key = '';
-        if (state.keyFile) {
-            const kp = path.isAbsolute(state.keyFile) ? state.keyFile : path.join(CLAUDE_DIR, state.keyFile);
-            try { key = fs.readFileSync(kp, 'utf8').trim(); } catch { key = ''; }
-            if (!key) {
-                log(`${req.method} ${reqPath} → 503: пустой ${state.keyFile} (${state.backend})`);
-                return apiError(res, 503, `front-door: у ${state.backend} нет активного ключа (${state.keyFile}). Активируй аккаунт в дашборде.`);
-            }
-            headers.authorization = `Bearer ${key}`;
-            headers['x-api-key'] = key;
+        const credentials = readRemoteCredentials(state);
+        if (state.keyFile && !credentials) {
+            log(`${req.method} ${reqPath} → 503: пустой ${state.keyFile} (${state.backend})`);
+            return apiError(res, 503, `front-door: у ${state.backend} нет активного ключа (${state.keyFile}). Активируй аккаунт в дашборде.`);
         }
-        const mm = readModelMap(state.modelmap);
-        const remap = remapForRemote(req.method, reqPath, body, mm, state.backend === 'cun');
-        if (remap) {
-            body = remap.body;
-            headers['content-length'] = String(Buffer.byteLength(body));
-            log(`${req.method} ${reqPath} ${state.backend}: ${remap.from} → ${remap.to}`);
-        } else if (!mm && req.method === 'POST' && /claude-/i.test(modelOf(body))) {
-            // Шлюз без карты тиров: claude-модель уедет как есть. Первый признак
-            // будущего 404 «no such model» — пусть это будет видно в логе, а не в догадках.
-            log(`${req.method} ${reqPath} ${state.backend}: claude-* уходит на шлюз без ${state.modelmap || 'карты моделей'}`);
+        if (credentials) Object.assign(headers, credentials);
+        if (!routed || !routed.exact) {
+            const mm = readModelMap(state.modelmap);
+            const remap = remapForRemote(req.method, reqPath, body, mm, state.backend === 'cun');
+            if (remap) {
+                body = remap.body;
+                headers['content-length'] = String(Buffer.byteLength(body));
+                log(`${req.method} ${reqPath} ${state.backend}: ${remap.from} → ${remap.to}`);
+            } else if (!mm && req.method === 'POST' && /claude-/i.test(modelOf(body))) {
+                // Шлюз без карты тиров: claude-модель уедет как есть. Первый признак
+                // будущего 404 «no such model» — пусть это будет видно в логе, а не в догадках.
+                log(`${req.method} ${reqPath} ${state.backend}: claude-* уходит на шлюз без ${state.modelmap || 'карты моделей'}`);
+            }
+        }
+        if (routed && routed.exact) {
+            delete headers['x-route-final'];
+            delete headers['x-route-exact'];
+            delete headers['x-route-prefixed'];
+            delete headers['x-route-tier'];
+            localHopAuth.strip(headers);
+            for (const name of Object.keys(headers)) {
+                const lower = name.toLowerCase();
+                if (lower.startsWith('x-abuse-hub-') || lower.startsWith('x-bf-')) delete headers[name];
+            }
         }
     }
 
@@ -798,9 +1762,6 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
         headers,
         timeout: UPSTREAM_TIMEOUT_MS,
     }, (upRes) => {
-        // Тело не трогаем вообще: SSE, gzip/zstd, MODEL_ECHO — не наша забота,
-        // ретраев нет, значит и буферизовать нечего. Просто труба.
-        res.writeHead(upRes.statusCode || 502, upRes.headers);
         // Счётчик токенов висит РЯДОМ с трубой: слушатель `data` получает те же
         // чанки, что и `pipe`, ответ клиенту от этого не задерживается и не меняется.
         // Через front-door идут все харнессы, поэтому это единственное место, где
@@ -814,6 +1775,12 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
             upRes.on('end', tap.end);
             upRes.on('aborted', tap.end);       // клиент ушёл — считаем то, что успело прийти
         }
+        if (routed && routed.exact) {
+            return forwardCanonicalNativeResponse(upRes, res, routed.from);
+        }
+        // Тело не трогаем вообще: SSE, gzip/zstd, MODEL_ECHO — не наша забота,
+        // ретраев нет, значит и буферизовать нечего. Просто труба.
+        res.writeHead(upRes.statusCode || 502, upRes.headers);
         upRes.pipe(res);
         // Тот же принцип, что в apiError: недописанный ответ обязан выглядеть
         // недописанным. `res.end()` здесь закрывал бы поток штатно, и клиент считал бы
@@ -821,6 +1788,11 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
         upRes.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
     });
 
+    let upstreamConnected = false;
+    upReq.on('socket', socket => {
+        if (!socket.connecting) upstreamConnected = true;
+        else socket.once('connect', () => { upstreamConnected = true; });
+    });
     upReq.on('timeout', () => {
         log(`${req.method} ${reqPath} ${state.backend}: таймаут ${UPSTREAM_TIMEOUT_MS}мс`);
         upReq.destroy(new Error('upstream timeout'));
@@ -835,7 +1807,8 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
         // Для глобального бэкенда так НЕ делаем: там порт мог погасить владелец руками, а
         // за подъём отвечает bootSpawnActiveBackend() — авто-подъём был бы дракой с ним.
         const port = upstreamPortOf(state);
-        if (routed && state.local && !retried && port && UPSTREAM_DOWN.has(e.code) && !res.headersSent) {
+        if (routed && state.local && !retried && !upstreamConnected && e.code !== 'ECONNRESET' && port
+            && UPSTREAM_DOWN.has(e.code) && !res.headersSent) {
             log(`${req.method} ${reqPath} ${state.backend}: ${e.code} — поднимаю keepalive :${port} по требованию`);
             ensureKeepalive(port).then((r) => {
                 if (res.destroyed || res.writableEnded) return;      // клиент уже ушёл
@@ -999,13 +1972,23 @@ if (process.argv[2] === 'selftest') {
     assert.ok(UPSTREAM_DOWN.has('EACCES') && UPSTREAM_DOWN.has('ECONNREFUSED'),
         'оба кода мёртвого локального апстрима дают подсказку');
 
-    // 4. Локальный апстрим: тело и ключ не трогаем (это делает keepalive).
-    //    Проверяем самим кодом forward() — что ветка инжекта под !state.local.
+    // 4. Локальный апстрим: callback helper выдаёт route-control, но не ключ;
+    //    удалённый helper выдаёт серверный ключ, но не route-control.
+    const localHeaders = exactBackendHeaders(
+        parseStateDoc({ backend: 'local', upstream: 'http://127.0.0.1:1' }),
+        2,
+    );
+    assert.strictEqual(localHeaders.authorization, undefined, 'локальный exact helper не инжектит ключ');
+    assert.strictEqual(localHeaders['x-route-final'], '1', 'локальный exact helper ставит trusted final');
+    assert.strictEqual(localHeaders['x-route-exact'], '1', 'локальный exact helper ставит trusted exact');
+    const remoteNoKey = exactBackendHeaders(
+        parseStateDoc({ backend: 'remote', upstream: 'https://example.invalid', keyFile: 'missing-selftest-key' }),
+        2,
+    );
+    assert.strictEqual(remoteNoKey, null, 'удалённый exact helper fail-closed без серверного ключа');
+    // Ровно один вызов обычного апстрима на запрос: ретраи и хеджи живут в keepalive,
+    // дубль отсюда - второй платный запрос к шлюзу.
     const src = fs.readFileSync(__filename, 'utf8');
-    assert.ok(/if \(!state\.local\) \{[\s\S]*?headers\.authorization/.test(src),
-        'инжект ключа только в ветке !state.local');
-    // Ровно один вызов апстрима на запрос: ретраи и хеджи живут в keepalive, дубль
-    // отсюда — второй платный запрос к шлюзу.
     assert.strictEqual((src.match(/^\s*const upReq = requester\(\{/gm) || []).length, 1,
         'апстрим дёргается ровно из одного места (нет ретраев/хеджей)');
     assert.ok(/server\.listen\(PORT, '127\.0\.0\.1'/.test(src), 'слушаем только 127.0.0.1 (инжектим ключи)');
@@ -1016,8 +1999,8 @@ if (process.argv[2] === 'selftest') {
     // значило бы запретить тестировать.
     const srcProd = src.slice(0, src.indexOf("if (process.argv[2] === 'selftest')"))
         .replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
-    assert.ok(!/2013[0-9]|2015[0-9]|2016[0-9]/.test(srcProd),
-        'в коде front-door нет портов провайдеров (реестр приходит файлом)');
+    assert.ok(!/2013(?:[0-4]|[6-9])|2015[0-9]|2016[0-9]/.test(srcProd),
+        'в коде front-door нет портов провайдеров (20135 - pinned Bifrost sidecar)');
     assert.ok(/BACKENDS_FILE|backends\.json/.test(src), 'реестр провайдеров читается из файла');
     // Длину тела после переписывания префиксом обязаны пересчитать и для ЛОКАЛЬНЫХ
     // апстримов: раньше тело у них не трогалось вовсе, и content-length брался клиентский.
@@ -1072,6 +2055,7 @@ if (process.argv[2] === 'selftest') {
     assert.equal(JSON.parse(childA.body).model, readModelMap('a6api-routes-modelmap.json').opus, 'агент A получает тир-карту a6api');
     assert.equal(JSON.parse(childB.body).model, readModelMap('premier-routes-modelmap.json').opus, 'агент B получает тир-карту Premier');
 
+    try { fs.rmSync(LOCAL_HOP_SELFTEST_FILE, { force: true }); } catch { /* absent */ }
     console.log('selftest OK');
     process.exit(0);
 }

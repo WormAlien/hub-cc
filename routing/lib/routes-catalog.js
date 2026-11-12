@@ -167,5 +167,63 @@ async function pricingFor(host, opts) {
     finally { clearTimeout(timer); }
 }
 
+// Resolve each canonical provider through the same ordered catalog chain. Source failures are
+// local to that provider and behave like an empty source, so discovery remains best-effort.
+async function resolveModelCandidates({
+    providers,
+    getLiveModels,
+    getAccountModels,
+    getPricingModels,
+    getSnapshotModels,
+    getConfiguredModels,
+}) {
+    const providerList = providers instanceof Map
+        ? [...providers.keys()]
+        : Array.isArray(providers) || providers instanceof Set
+            ? [...providers]
+            : Object.keys(providers || {});
+    const orderedProviders = [...new Set(providerList.filter(provider => typeof provider === 'string'))]
+        .sort(compareText);
+    const sources = [
+        ['live', getLiveModels],
+        ['accounts', getAccountModels],
+        ['pricing', getPricingModels],
+        ['snapshot', getSnapshotModels],
+        ['configured', getConfiguredModels],
+    ];
+    const rows = [];
+    const seen = new Set();
+
+    for (const canonicalProvider of orderedProviders) {
+        for (const [catalogSource, getModels] of sources) {
+            let models = [];
+            try {
+                models = textOnly(await getModels(canonicalProvider));
+            } catch { /* one failed source must not stop discovery */ }
+            if (!models.length) continue;
+
+            for (const modelId of models) {
+                const id = `${canonicalProvider}/${modelId}`;
+                if (seen.has(id)) continue;
+                const slash = id.indexOf('/');
+                seen.add(id);
+                rows.push({
+                    id,
+                    provider: id.slice(0, slash),
+                    model: id.slice(slash + 1),
+                    catalogSource,
+                });
+            }
+            break;
+        }
+    }
+
+    return rows.sort((a, b) => compareText(a.provider, b.provider) || compareText(a.model, b.model));
+}
+
+function compareText(a, b) {
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
 module.exports = { EXTRA_HOSTS, CACHE_FILE, isTextModel, textOnly, pickAccountKey, readSnapshot, snapshotFor,
-    PRICING_TTL_MS, pricingModels, pricingFor };
+    PRICING_TTL_MS, pricingModels, pricingFor, resolveModelCandidates };

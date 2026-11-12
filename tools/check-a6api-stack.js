@@ -54,6 +54,8 @@ async function reservePort() {
                 if (req.url.startsWith('/wrong/')) { wrongActive.push(body); res.writeHead(418, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'wrong active fixture' })); return; }
                 if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ object: 'list', data: [] })); return; }
                 assert.equal(req.url, '/v1/chat/completions');
+                assert.equal(req.headers['x-abuse-hub-local-exact'], undefined, 'local exact marker reached vendor');
+                assert.equal(req.headers['x-route-exact'], undefined, 'route exact marker reached vendor');
                 generations.push({ body, headers: req.headers });
                 if (mode === 'transient') { await wait(40); res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'api_error', message: 'temporarily overloaded, please retry' } })); return; }
                 if (body.stream) {
@@ -76,7 +78,9 @@ async function reservePort() {
         const text = await r.text(); return { status: r.status, text, headers: r.headers };
     }
     async function start(name, script, args, extraEnv, endpoint) {
+        const localHopSecretPath = file('abuse-hub-local-hop.key');
         const baseEnv = { ...process.env, HOME: dir, USERPROFILE: dir, NODE_OPTIONS: '',
+            ABUSE_HUB_LOCAL_HOP_KEY_FILE: localHopSecretPath,
             PROXY_LOG_INGEST_URL: 'http://127.0.0.1:' + mock.address().port + '/logs',
             TOKEN_USAGE_FILE: file(name + '-usage.jsonl'), OPENAI_API_KEY: 'fixture-unused-environment',
             REASONING_AS: 'thinking', LOG_FILE: file(name + '.log'),
@@ -108,7 +112,7 @@ async function reservePort() {
         await writeJson('keepalive.json', { v: 8, maxAttempts: 7, maxHedges: 3, hedgeMs: 1000, holdMs: 10000, emptyStreamMs: 30000, catalogTtlMs: 60000, poolFallbackModel: 'forbidden-fallback', poolDeadMs: 60000, visionBridge: true, preCommitMs: 0, jsonHoldMs: 0, stallMs: 0, retryBudgetMs: 10000, upstreamTimeoutMs: 20000 });
         const keepalive = await start('keepalive', 'keepalive-proxy.js', [], {
             PORT: String(keepalivePort), UPSTREAM: converter, KEY_FILE: file('active-key.txt'), MODELMAP_FILE: file('a6api-modelmap.json'), SESSIONS_FILE: '',
-            PAID_SINGLE_KEY: '1', HAIKU_REMAP: '1', GPT_PROXY_FORCE: '0', HAIKU_GPT_PROXY: converter, UPSTREAM_NOSTREAM: '0', EMPTY_TEXT_FIX: '0',
+            PAID_SINGLE_KEY: '1', LOCAL_EXACT_ADAPTER: '1', HAIKU_REMAP: '1', GPT_PROXY_FORCE: '0', HAIKU_GPT_PROXY: converter, UPSTREAM_NOSTREAM: '0', EMPTY_TEXT_FIX: '0',
             ROTATE_PROVIDER: 'a6api', AUTOROTATE: '1', MODEL_ECHO: '1', MODEL_ECHO_INJECT: '1', THINK_STRIP: '1',
             CONFIG_FILE: file('keepalive.json'), KEEPALIVE_LOG_FILE: file('keepalive.log'), LATENCY_FILE: file('latency.json'), EVENTS_FILE: file('events.json'), FAILDUMP_DIR: file('faildump'),
             COUNT_TOKENS_FALLBACK: '1', RETRY_FAST_FAIL_MS: '1', RETRY_DELAY_MS: '10', CONN_TRACE: '0', VISION_BRIDGE: '0',
@@ -145,13 +149,14 @@ async function reservePort() {
             const model = 'claude-' + tier + '-5[1m]', r = await jsonRequest(frontdoor, '/v1/messages', requestBody(model));
             assert.equal(r.status, 200); assert.equal(generations.at(-1).body.model, providerMap[tier]); assert.equal(JSON.parse(r.text).model, model);
         });
-        for (const tier of ['opus', 'sonnet', 'haiku']) await test('prefixed claude-' + tier + ' uses routes map', async () => {
+        for (const tier of ['opus', 'sonnet', 'haiku']) await test('canonical a6api/claude-' + tier + ' bypasses legacy routes map', async () => {
             const model = 'claude-' + tier + '-5[1m]', r = await jsonRequest(frontdoor, '/v1/messages', requestBody('a6api/' + model));
-            assert.equal(r.status, 200); assert.equal(generations.at(-1).body.model, routesMap[tier]); assert.equal(JSON.parse(r.text).model, model);
+            assert.equal(r.status, 200); assert.equal(generations.at(-1).body.model, model);
+            assert.equal(JSON.parse(r.text).model, 'a6api/' + model);
         });
-        await test('explicit a6api/native model is not remapped to routes.default', async () => {
-            const model = 'deepseek/Explicit-Exact[1m]', r = await jsonRequest(frontdoor, '/v1/messages', requestBody('a6api/' + model));
-            assert.equal(r.status, 200); assert.equal(generations.at(-1).body.model, 'deepseek/Explicit-Exact'); assert.equal(JSON.parse(r.text).model, model);
+        await test('explicit canonical exact model reaches the final vendor byte-for-byte', async () => {
+            const model = 'deepseek/Nested/Case-Sensitive-ID[1m]', r = await jsonRequest(frontdoor, '/v1/messages', requestBody('a6api/' + model));
+            assert.equal(r.status, 200); assert.equal(generations.at(-1).body.model, model); assert.equal(JSON.parse(r.text).model, 'a6api/' + model);
         });
         await test('two-turn tools preserve reasoning and native user/tool-result images through all hops', async () => {
             mode = 'tools';
@@ -160,9 +165,9 @@ async function reservePort() {
                 const model = 'deepseek-stack-vision[1m]';
                 const body = requestBody('a6api/' + model, { stream: true, thinking: { type: 'enabled', budget_tokens: 1024 }, tools: [{ name: 'read_image', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }], messages: [{ role: 'user', content: [{ type: 'text', text: 'Inspect this and call read_image' }, image] }] });
                 const first = await jsonRequest(frontdoor, '/v1/messages', body), events = eventsOf(first.text), content = contentOf(events);
-                assert.equal(first.status, 200); assert.equal(events.find(e => e.type === 'message_start').message.model, model);
+                assert.equal(first.status, 200); assert.equal(events.find(e => e.type === 'message_start').message.model, 'a6api/' + model);
                 assert.ok(events.some(e => e.type === 'message_stop'));
-                assert.equal(generations.at(-1).body.model, 'deepseek-stack-vision'); assert.deepEqual(generations.at(-1).body.thinking, { type: 'enabled' });
+                assert.equal(generations.at(-1).body.model, model); assert.deepEqual(generations.at(-1).body.thinking, { type: 'enabled' });
                 assert.ok(generations.at(-1).body.messages[0].content.some(p => p.type === 'image_url' && p.image_url.url.endsWith(image.source.data)));
                 const tool = content.find(b => b.type === 'tool_use'); assert.equal(tool.id, 'call_stack_image'); assert.deepEqual(tool.input, { path: 'fixture.png' });
                 const next = { ...body, messages: [...body.messages, { role: 'assistant', content }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: tool.id, content: [{ type: 'text', text: 'captured fixture' }, image] }] }] };
@@ -173,7 +178,7 @@ async function reservePort() {
                 const imageMessage = sent.messages[sent.messages.indexOf(result) + 1]; assert.equal(imageMessage.role, 'user');
                 assert.ok(imageMessage.content.some(p => p.type === 'image_url' && p.image_url.url.endsWith(image.source.data)));
                 assert.ok(imageMessage.content.some(p => p.type === 'text' && p.text.includes(tool.id)));
-                assert.equal(secondEvents.find(e => e.type === 'message_start').message.model, model);
+                assert.equal(secondEvents.find(e => e.type === 'message_start').message.model, 'a6api/' + model);
                 assert.deepEqual(secondEvents.find(e => e.type === 'message_delta').usage, { input_tokens: 31, output_tokens: 8 }); assert.ok(secondEvents.some(e => e.type === 'message_stop'));
             } finally { mode = 'normal'; }
         });

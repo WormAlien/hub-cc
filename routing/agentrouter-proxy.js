@@ -754,6 +754,40 @@ function toolToResponses(t) {
     };
 }
 
+const RESPONSES_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+const BIFROST_REASONING_RATIOS = [
+    ['minimal', 0.025],
+    ['low', 0.15],
+    ['medium', 0.425],
+    ['high', 0.80],
+    ['xhigh', 0.92],
+    ['max', 1.0],
+];
+
+// Hermes sends OpenAI `reasoning_effort`; pinned Bifrost converts an opaque custom
+// Anthropic model to either output_config.effort or thinking.budget_tokens. AgentRouter's
+// final GPT hop is Responses, so restore the same effort instead of silently dropping it.
+function reasoningEffortForResponses(claudeReq) {
+    const explicit = String(claudeReq && claudeReq.output_config && claudeReq.output_config.effort || '').toLowerCase();
+    if (RESPONSES_REASONING_EFFORTS.has(explicit)) return explicit;
+
+    const thinking = claudeReq && claudeReq.thinking;
+    if (!thinking || typeof thinking !== 'object') return '';
+    if (thinking.type === 'disabled') return 'none';
+
+    const budget = Number(thinking.budget_tokens);
+    const maxTokens = Number(claudeReq.max_tokens);
+    if (!Number.isFinite(budget) || budget <= 0 || !Number.isFinite(maxTokens) || maxTokens <= 0) return '';
+    const minimum = 1024;
+    if (maxTokens <= minimum) return 'high';
+    const ratio = (Math.min(maxTokens, Math.max(minimum, budget)) - minimum) / (maxTokens - minimum);
+    let best = BIFROST_REASONING_RATIOS[0];
+    for (const candidate of BIFROST_REASONING_RATIOS.slice(1)) {
+        if (Math.abs(candidate[1] - ratio) < Math.abs(best[1] - ratio)) best = candidate;
+    }
+    return best[0];
+}
+
 function convertClaudeToResponses(claudeReq) {
     const input = [];
     const sys = cyrEncode(systemToText(claudeReq.system));
@@ -822,6 +856,8 @@ function convertClaudeToResponses(claudeReq) {
     if (sys) req.instructions = sys;
     if (claudeReq.temperature !== undefined) req.temperature = claudeReq.temperature;
     if (claudeReq.top_p !== undefined) req.top_p = claudeReq.top_p;
+    const reasoningEffort = reasoningEffortForResponses(claudeReq);
+    if (reasoningEffort) req.reasoning = { effort: reasoningEffort };
 
     if (claudeReq.tools && claudeReq.tools.length) {
         req.tools = claudeReq.tools.filter(t => t && t.name).map(toolToResponses);
@@ -1356,7 +1392,8 @@ function handleMessages(req, res, body) {
 
         stats.requests++;
         stats.lastModel = `${claudeReq.model} → responses`;
-        logLine(`/v1/messages ${claudeReq.model} → /v1/responses stream=${!!claudeReq.stream} items=${respReq.input.length} tools=${(respReq.tools || []).length}`);
+        const effort = respReq.reasoning && respReq.reasoning.effort;
+        logLine(`/v1/messages ${claudeReq.model} → /v1/responses stream=${!!claudeReq.stream} items=${respReq.input.length} tools=${(respReq.tools || []).length}${effort ? ` effort=${effort}` : ''}`);
 
         const san = wafSanitize(JSON.stringify(respReq));
         if (san.hits) {
@@ -1930,6 +1967,36 @@ if (process.argv[2] === 'selftest') {
     // значение, и живая сессия падала с «'none' does not support … Supported values are:
     // 'low', 'medium', 'high', 'xhigh'». Теперь поле не выставляется нигде.
     assert.strictEqual(rq.reasoning_effort, undefined, 'на Responses reasoning_effort не ставится');
+    for (const [effort, budget] of [
+        ['minimal', 1100],
+        ['low', 1484],
+        ['medium', 2329],
+        ['high', 3481],
+        ['xhigh', 3850],
+        ['max', 4095],
+    ]) {
+        const converted = convertClaudeToResponses({
+            model: 'gpt-5.6-sol', max_tokens: 4096,
+            messages: [{ role: 'user', content: 'hi' }],
+            thinking: { type: 'enabled', budget_tokens: budget },
+        });
+        assert.deepStrictEqual(converted.reasoning, { effort },
+            `Bifrost budget for Hermes ${effort} is restored as Responses reasoning.effort`);
+    }
+    const explicitEffort = convertClaudeToResponses({
+        model: 'gpt-5.6-sol', max_tokens: 4096,
+        messages: [{ role: 'user', content: 'hi' }],
+        output_config: { effort: 'xhigh' },
+    });
+    assert.deepStrictEqual(explicitEffort.reasoning, { effort: 'xhigh' },
+        'native output_config.effort survives the Responses conversion exactly');
+    const disabledEffort = convertClaudeToResponses({
+        model: 'gpt-5.6-sol', max_tokens: 4096,
+        messages: [{ role: 'user', content: 'hi' }],
+        thinking: { type: 'disabled' },
+    });
+    assert.deepStrictEqual(disabledEffort.reasoning, { effort: 'none' },
+        'Hermes reasoning none remains explicitly disabled on Responses');
     const chatAstra = convertClaudeToOpenAI({ model: 'gpt-6-astra', messages: [{ role: 'user', content: 'hi' }], tools: [{ name: 't', input_schema: { type: 'object' } }] });
     assert.strictEqual(chatAstra.reasoning_effort, undefined, 'костыль удалён: chat-путь тоже НЕ ставит reasoning_effort');
     // Chat-путь проверяем на модели, которая на нём и осталась: sol-линейка с 23.10

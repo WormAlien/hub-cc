@@ -47,6 +47,12 @@ let scenarios = 0, layouts = 0;
                 if (allowed && p.startsWith(path.join(routing, 'vendor') + path.sep) && fs.existsSync(p)) return route.fulfill({
                     contentType: name.endsWith('.js') ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : 'font/woff2', body: fs.readFileSync(p) });
             }
+            // Манифест API Gateway: из него вкладка берёт признак 1M для строки `/model`.
+            // Это чтение локального состояния дашборда, не проба провайдера.
+            if (u.pathname === '/__switch/api/api-gateway' && request.method() === 'GET') {
+                return route.fulfill({ contentType: 'application/json; charset=utf-8',
+                    body: JSON.stringify({ ok: true, models: [{ id: 'a6api/' + model, published: true, contextTokens: 1000000 }] }) });
+            }
             if (u.pathname.startsWith('/__switch/api/a6api/')) {
                 const name = u.pathname.split('/').pop();
                 const call = { name, method: request.method(), body: request.postDataJSON(), tokenId: Number(u.searchParams.get('tokenId')) };

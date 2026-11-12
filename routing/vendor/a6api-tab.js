@@ -124,9 +124,36 @@
   // понимает front-door и подменяет по тир-карте.
   // 🪤 Форму `a6api/<тир>` (слэш + имя тира) НЕ предлагаем: keepalive возвращает её
   // эхом как `<тир>[1m]`, [CC] такого имени не знает и рвёт поток - живой отказ 26.10.
+  // 🪤 Окно клиента задаётся СУФФИКСОМ выбранного имени: без `[1m]` Claude Code верит
+  // в 200k. Список 1M-моделей берём из опубликованного манифеста API Gateway
+  // (`contextTokens >= 1M`) и кешируем; пока он не пришёл, строка собирается как раньше.
+  // Модель, которой в манифесте нет, суффикса не получает - её окно нам неизвестно.
+  let oneMIds = new Set();
+  let oneMSeq = 0;
+  async function refreshOneM() {
+    // 🪤 Ответы могут прийти вразнобой (bootstrap-запрос и запрос из load): применяем
+    // только последний. Иначе поздний пустой ответ затирал уже полученный список, и
+    // строка `/model` снова оставалась без `[1m]`.
+    const seq = ++oneMSeq;
+    let next = new Set();
+    try {
+      const r = await fetch('/__switch/api/api-gateway', { headers: { accept: 'application/json' } });
+      const d = await r.json();
+      next = new Set((d && d.models || [])
+        .filter(m => m && m.published && Number(m.contextTokens) >= 1000000)
+        .map(m => String(m.id)));
+    } catch { /* список остаётся прежним */ }
+    if (seq !== oneMSeq) return;
+    oneMIds = next;
+    if (S.modelsReady) renderModels();
+  }
+
   function commandFor(slot, model) {
     if (!model) return '';
-    return slot === 'default' ? '/model a6api/' + model : '/model a6api[' + slot + ']';
+    if (slot !== 'default') return '/model a6api[' + slot + ']';
+    // Канонический id в манифесте - `a6api/<модель>`; на вкладке селект хранит голое имя.
+    const suffixed = oneMIds.has('a6api/' + model) ? model + '[1m]' : model;
+    return '/model a6api/' + suffixed;
   }
   // 🪤 Команда нужна НЕ под каждым селектором: четыре строки подряд съедали высоту
   // панели (замер 26.10: вкладка выходила за потолок 850 px при ширине 1365 на 11 px).
@@ -291,6 +318,9 @@
     }
     S.loading = true; S.modelLoading = false; S.modelsReady = false;
     const sequence = ++S.sequence; error(''); render();
+    // Манифест спрашиваем и здесь: bootstrap-вызов мог прийти до готовности сервера
+    // (или упасть), а строка `/model` обязана нести `[1m]` к моменту отрисовки команд.
+    refreshOneM();
     try {
       const d = await api('state');
       if (sequence !== S.sequence) return;
@@ -369,6 +399,9 @@
     }
   }
   window.A6API = { load };
+  // Манифест 1M-моделей читаем один раз на загрузку вкладки: строка `/model` должна
+  // нести `[1m]` уже при первом отображении, иначе владелец скопирует 200k-вариант.
+  refreshOneM();
   const boot = () => { if (document.querySelector('[data-tab-content="a6api"].active')) load(); };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

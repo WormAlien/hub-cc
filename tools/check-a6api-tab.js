@@ -133,7 +133,9 @@ function fixture() {
     await test('initial and refreshed reads never write or probe the provider', async () => {
         const f = fixture(); await f.tab.load(); await f.tab.load();
         assert.equal(f.writes().length, 0);
-        assert.ok(f.calls.every(c => ['state', 'models'].includes(c.name)));
+        // `api-gateway` — чтение локального манифеста API Gateway: из него берётся
+        // признак 1M для строки `/model`. Это не проба провайдера и не запись.
+        assert.ok(f.calls.every(c => ['state', 'models', 'api-gateway'].includes(c.name)));
         assert.equal(f.el('a6-token').value, '9');
         assert.equal(f.el('a6-model-default').value, model);
     });
@@ -397,6 +399,32 @@ function fixture() {
     await test('model command follows the draft selection', async () => {
         const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate);
         assert.match(f.el('a6-cmd-default').innerHTML, new RegExp('/model a6api/' + alternate));
+    });
+    // 🪤 12.11: строка под селектором не несла `[1m]`, и владелец, скопировав её,
+    // получал окно 200k вместо 1M. Источник истины - манифест API Gateway: модель
+    // с contextTokens >= 1M обязана получить суффикс, 200k-модель - нет.
+    await test('model command carries [1m] only for models published as 1M', async () => {
+        const f = fixture();
+        f.handlers['api-gateway'] = () => ({
+            ok: true,
+            models: [
+                { id: 'a6api/' + model, published: true, contextTokens: 1000000 },
+                { id: 'a6api/' + alternate, published: true, contextTokens: 200000 },
+            ],
+        });
+        await f.tab.load();
+        // Манифест приходит отдельным запросом и перерисовывает строку: ждём его,
+        // а не фиксированную задержку — иначе тест ловит кадр до ответа.
+        const cmdHtml = () => f.el('a6-cmd-default').innerHTML;
+        for (let i = 0; i < 50 && !cmdHtml().includes(model + '[1m]'); i += 1) {
+            await new Promise(r => setTimeout(r, 10));
+        }
+        assert.ok(cmdHtml().includes(model + '[1m]'),
+            '1M-модель копируется с [1m]; got: ' + cmdHtml().slice(0, 200)
+            + ' calls: ' + f.calls.map(c => c.url).join(','));
+        await f.select('a6-model-default', alternate);
+        const html = f.el('a6-cmd-default').innerHTML;
+        assert.ok(!html.includes(alternate + '[1m]'), '200k-модель суффикса не получает');
     });
     await test('empty permitted catalog blocks key preparation without writes', async () => {
         const f = fixture(); f.catalogs.set(10, []); await f.tab.load(); await f.select('a6-token', '10');

@@ -688,7 +688,17 @@ const LOCAL_EXACT_ADAPTER_HEADER = 'x-abuse-hub-local-exact';
 // Adapter identity is explicit generated topology, never a paid-account side effect or
 // a broad localhost guess. The transport check is only a fail-closed boundary: even a
 // mistaken opt-in cannot send the trusted marker to a remote or non-IPv4-loopback hop.
-const LOCAL_EXACT_ADAPTER = process.env.LOCAL_EXACT_ADAPTER === '1';
+// 🪤 Adapter включается по ОДНОМУ признаку апстрима, а не только по env. Дважды
+// (09.11 и 12.11) живой `:20133` поднимался без `LOCAL_EXACT_ADAPTER=1`, потому что
+// его спавнил другой владелец (boot lifecycle вместо дашборда), и точные GPT-запросы
+// уходили прямо в agentrouter.org `/v1/messages`. Там связка «function tools +
+// reasoning» отвергается: `Function tools with reasoning_effort are not supported …
+// use /v1/responses`. Конвертер `:20132` — локальный и агентроутеровский по
+// определению, поэтому для этого апстрима режим включаем сами. Граница безопасности
+// не меняется: `isLocalExactAdapterTransport` всё равно требует http + 127.0.0.1.
+const AGENTROUTER_UPSTREAM = /(^|\.)agentrouter\.org$/i.test(upstream.hostname);
+const LOCAL_EXACT_ADAPTER = process.env.LOCAL_EXACT_ADAPTER === '1'
+    || (AGENTROUTER_UPSTREAM && process.env.LOCAL_EXACT_ADAPTER !== '0');
 const CUSTOM_PROVIDER_ID = String(process.env.CUSTOM_PROVIDER_ID || '');
 const CUSTOM_PROVIDER_NAME = String(process.env.CUSTOM_PROVIDER_NAME || '');
 const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
@@ -698,9 +708,15 @@ function trustedKeepaliveAdapterAuth() {
   if (!keepaliveAdapterAuth) keepaliveAdapterAuth = localHopAuth.token('keepalive-to-adapter');
   return keepaliveAdapterAuth;
 }
+// 🪤 `localhost` — тоже петля. Раньше требовалось ровно `127.0.0.1`, а адрес конвертера
+// приходит из `AR_PROXY_URL` как `http://localhost:20132`. Из-за строкового сравнения
+// точный режим молча выключался (`localExactAdapter: false` в /__state), GPT-запросы с
+// tools уходили прямо в agentrouter.org и падали 400 «use /v1/responses» — 12.11 на этом
+// сгорел весь Hermes. Граница та же: http + петля + явный флаг + локальный hop-токен.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '[::1]']);
 function isLocalExactAdapterTransport(transport) {
   return LOCAL_EXACT_ADAPTER && transport && transport.requester === http.request
-    && transport.hostname === '127.0.0.1';
+    && LOOPBACK_HOSTNAMES.has(String(transport.hostname || '').toLowerCase());
 }
 function hasExactAdapterTransport() {
   if (isLocalExactAdapterTransport({ requester: upRequester, hostname: upstream.hostname })) return true;

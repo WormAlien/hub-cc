@@ -339,6 +339,13 @@ if (src) {
                 ok.push(`команды моделей сохраняют [1m] на всех ${keepGws.length} шлюзах с keepalive`);
             }
         }
+        // Кнопка 📋 вкладки a6api копировала голый ID: манифест объявляет 1M, а вставленный
+        // `/model` давал 200k (жалоба 12.11). Проверяем, что копия спрашивает манифест и
+        // ставит суффикс сама, а не полагается на список имён.
+        if (!/async function manifestOneMModelIds\(\)/.test(dashboard)
+            || !/manifestOneMModelIds\(\)/.test(dashboard.replace(/async function manifestOneMModelIds/,''))) {
+            fails.push('proxy-dashboard.html: copyModelCmd не сверяется с манифестом — a6api/deepseek-* скопируется без [1m] = окно 200k');
+        }
         if (!chip || !/cunNormalizeCcModel\(id\)/.test(chip[0])) {
             fails.push('cunModelChip(): бейдж не нормализует GPT 5.6 в …[1m] перед выбором и копированием');
         }

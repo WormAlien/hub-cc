@@ -13450,10 +13450,30 @@ function gwCmdBadge(gw) {
     </span>`;
 }
 
+// Модели API Gateway с окном 1M по МАНИФЕСТУ. Список нужен кнопке 📋: правило
+// withCtxSuffix знает только claude/glm/три gpt-5.6, а опубликованный
+// `a6api/deepseek-v4.1-flash-1017` (1M в манифесте) копировался голым — вставленный
+// `/model` давал 200k (живая жалоба 12.11). Ошибка сети = пустой список: копия уйдёт
+// по прежнему правилу, а не сломается.
+let manifestOneMIdsCache = null;
+async function manifestOneMModelIds() {
+  if (manifestOneMIdsCache) return manifestOneMIdsCache;
+  try {
+    const r = await fetch('/__switch/api/api-gateway', { headers: { accept: 'application/json' } });
+    const d = await r.json();
+    manifestOneMIdsCache = new Set((d && d.models || [])
+      .filter(m => m && m.published && Number(m.contextTokens) >= 1000000)
+      .map(m => String(m.id)));
+  } catch { manifestOneMIdsCache = new Set(); }
+  return manifestOneMIdsCache;
+}
+
 async function copyModelCmd(id, gw) {
   // Копируем ВСЕГДА с суффиксом: юзер вставляет `/model claude-opus-5` без него и
   // молча получает 200k вместо 1M (реальная жалоба, 2026-08-17).
-  const cmd = '/model ' + withCtxSuffix(id, gw);
+  const oneM = await manifestOneMModelIds();
+  const base = String(id || '').trim().replace(/\s*\[[^\]]*\]\s*$/, '');
+  const cmd = '/model ' + (oneM.has(base) ? `${base}[1m]` : withCtxSuffix(id, gw));
   try {
     await navigator.clipboard.writeText(cmd);
     toast('📋 ' + cmd, 'success', 2500);
@@ -16181,6 +16201,11 @@ async function loadArModels(force) {
   $('ar-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
 }
 
+function arModelCommand(id) {
+  const model = 'agentrouter/' + String(id || '').replace(/^\/+/, '');
+  return '/model ' + withCtxSuffix(model, 'agentrouter');
+}
+
 async function renderArModels(models) {
   if (models) state.arModels = models;
   const list = state.arModels || [];
@@ -16200,11 +16225,15 @@ async function renderArModels(models) {
     const badge = openaiOnly
       ? ` <span class="text-[9px] text-amber/80" title="только OpenAI-эндпоинт — идёт через конвертер :20132">openai</span>`
       : '';
+    // 📋 копирует `/model agentrouter/<id>[1m]`, как у a6api по префиксу, но
+    // сохраняет окно 1M через общий withCtxSuffix. Клик по чипу по-прежнему применяет модель.
+    const cmd = arModelCommand(id);
+    const cmdJ = JSON.stringify(cmd).replace(/'/g, '&#39;');
     return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-emerald/15 border border-emerald/50 text-emerald' : 'bg-sky/10 border border-sky/30 text-sky'}"
       onclick='arSelectModel(${JSON.stringify(id)})'
-      title="клик = применить модель (settings.json + ar-active-model.txt) · применяется к НОВЫМ сессиям; открытые — до перезапуска · 📋 = копия">
+      title="клик = применить модель (settings.json + ar-active-model.txt) · применяется к НОВЫМ сессиям; открытые — до перезапуска · 📋 = /model agentrouter/&lt;id&gt;[1m]">
       ${esc(id)}${badge}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "agentrouter")' title="Копировать /model id[1m]"
+      <button onclick='event.stopPropagation();copyToClipboard(${cmdJ}, ${cmdJ})' title="Копировать ${esc(cmd)}"
         class="text-faint hover:text-ink px-1">📋</button>
     </span>`;
   }).join('');

@@ -856,6 +856,11 @@ async function waitForReady(port) {
         assert.equal(outer.path, '/v1/chat/completions');
         assert.equal(outer.body.model, `abuse-hub/${publicModel}`);
         assert.equal(outer.body.stream, true);
+        // OpenAI делает max_tokens необязательным, и клиенты (Hermes) его не шлют. Bifrost с
+        // reasoning отвергает такой запрос 400 ещё до модели, поэтому шлюз подставляет лимит
+        // опубликованной модели - иначе весь turn клиента падает на пустом месте.
+        assert.equal(outer.body.max_tokens, 32000,
+            'вывод опубликованной модели подставляется, когда клиент не прислал max_tokens');
         assert.match(String(outer.headers['x-bf-eh-x-abuse-hub-request-token'] || ''), /^[A-Za-z0-9_-]{43}$/);
         for (const name of ['authorization', 'x-api-key', 'cookie', 'proxy-authorization', 'x-route-final', 'x-route-exact', 'x-abuse-hub-internal']) {
             assert.equal(outer.headers[name], undefined, `${name} is stripped from the sidecar leg`);

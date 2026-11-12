@@ -194,11 +194,15 @@ test('state emits the canonical DTO with published rows first and deduplicated c
     assert.equal(candidate.model, 'nested/model');
     assert.equal(candidate.published, false);
     assert.equal(candidate.displayName, 'beta / nested/model');
-    assert.equal(candidate.claudeBehavesAs, null);
+    // behaveAs не оставляем пустым: пикер Claude Code без «сорта» модели строку не отрисует,
+    // поэтому сервер подставляет opus-класс и помечает его как подстановку.
+    assert.equal(candidate.claudeBehavesAs, 'claude-opus-5');
+    assert.equal(candidate.behavesAsDefaulted, true);
     assert.ok(candidate.contextTokens > 0, 'неопубликованная строка показывает типовой контекст');
     assert.ok(candidate.outputTokens > 0, 'неопубликованная строка показывает типовой вывод');
     assert.equal(candidate.publishedAt, null);
     assert.deepEqual(Object.keys(candidate).sort(), [
+        'behavesAsDefaulted',
         'catalog',
         'claudeBehavesAs',
         'contextTokens',

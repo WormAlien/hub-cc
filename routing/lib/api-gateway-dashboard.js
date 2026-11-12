@@ -13,10 +13,14 @@ const MODEL_INPUT_FIELDS = Object.freeze([
 const CATALOG_SOURCES = new Set(['live', 'accounts', 'pricing', 'snapshot', 'configured']);
 const DEFAULT_FRESH_MS = 24 * 60 * 60 * 1000;
 // Пока модель не опубликована, лимитов у неё нет: манифест хранит только опубликованные метаданные.
-// Подставляем контекст и вывод из каталога шлюза, чтобы владелец видел реальные числа, а не пустое
-// поле. Только для чтения: подстановка ничего не сохраняет, Save по-прежнему требует числа.
-const DEFAULT_CONTEXT_TOKENS = 200000;
-const DEFAULT_OUTPUT_TOKENS = 8192;
+// Подставляем типовые значения, чтобы поле не было пустым. Дефолт - окно 1M и вывод 32K: это то,
+// что владелец ставит всем своим моделям (решение 12.11: «дефолт лям везде»). Только для чтения:
+// подстановка ничего не сохраняет и ничего не требует - Save принимает уже заполненные поля.
+const DEFAULT_CONTEXT_TOKENS = 1000000;
+const DEFAULT_OUTPUT_TOKENS = 32000;
+// behaveAs без решения владельца: пикер Claude Code должен получить осмысленный «сорт» модели,
+// иначе строка не отрисуется. Opus 5 - класс, под который у нас настроены лимиты и thinking.
+const DEFAULT_CLAUDE_BEHAVES_AS = 'claude-opus-5';
 
 class ApiGatewayDashboardError extends Error {
     constructor(code, message, status = 400) {
@@ -253,7 +257,9 @@ function makeRow(id, metadata, candidate, passiveById, probesById, now, freshMs)
         displayName: published
             ? cleanText(metadata.displayName)
             : `${cleanText(split.provider)} / ${cleanText(split.model)}`,
-        claudeBehavesAs: published ? cleanText(metadata.claudeBehavesAs) : null,
+        claudeBehavesAs: published
+            ? cleanText(metadata.claudeBehavesAs || DEFAULT_CLAUDE_BEHAVES_AS)
+            : DEFAULT_CLAUDE_BEHAVES_AS,
         contextTokens: publishedContext === null ? DEFAULT_CONTEXT_TOKENS : publishedContext,
         outputTokens: publishedOutput === null ? DEFAULT_OUTPUT_TOKENS : publishedOutput,
         // Подставленные значения помечены отдельно: поле может быть заполнено, не будучи опубликованным.
@@ -261,6 +267,7 @@ function makeRow(id, metadata, candidate, passiveById, probesById, now, freshMs)
             contextTokens: publishedContext === null,
             outputTokens: publishedOutput === null,
         },
+        behavesAsDefaulted: !published || !metadata.claudeBehavesAs,
         publishedAt: published ? validIso(metadata.publishedAt) : null,
         catalog: {
             present: !!candidate,

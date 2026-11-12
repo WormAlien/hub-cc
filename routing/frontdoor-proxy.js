@@ -752,7 +752,22 @@ function readBoundedBody(req, { maxBytes = OPENAI_BODY_MAX_BYTES } = {}) {
     });
 }
 
-function validateOpenAiIngressBody(raw) {
+// OpenAI Chat Completions делает `max_tokens` необязательным, и клиенты этим пользуются: Hermes не
+// присылает его вовсе. Bifrost же при включённом reasoning отвергает запрос без потолка
+// («max_tokens must be greater than 1024 for reasoning»), и весь turn падает 400 ещё до модели.
+// Подставляем лимит опубликованной модели из манифеста - шлюз его знает, клиенту угадывать не надо.
+// Явно присланное значение не трогаем.
+const OPENAI_DEFAULT_OUTPUT_TOKENS = 32000;
+
+function withOutputCeiling(body, manifest) {
+    if (Object.hasOwn(body, 'max_tokens') || Object.hasOwn(body, 'max_completion_tokens')) return body;
+    const published = manifest && manifest.models && manifest.models[body.model];
+    const declared = published && Number(published.outputTokens);
+    const ceiling = Number.isSafeInteger(declared) && declared > 0 ? declared : OPENAI_DEFAULT_OUTPUT_TOKENS;
+    return { ...body, max_tokens: ceiling };
+}
+
+function validateOpenAiIngressBody(raw, manifest) {
     let body;
     try { body = JSON.parse(raw.toString('utf8')); }
     catch { throw Object.assign(new Error('Invalid JSON request body.'), { status: 400, code: 'invalid_request' }); }
@@ -776,6 +791,7 @@ function validateOpenAiIngressBody(raw) {
         }
     }
     const recognized = recognizeCallableModel(body.model, { backendsPath: REGISTRY_FILE });
+    body = withOutputCeiling(body, manifest);
     return {
         publicModel: recognized.id,
         provider: recognized.provider,
@@ -1046,7 +1062,7 @@ async function openAiChat(req, res) {
             return openAiError(res, 503, 'api_gateway_disabled', 'API Gateway is disabled.');
         }
         const raw = await readBoundedBody(req);
-        const validated = validateOpenAiIngressBody(raw);
+        const validated = validateOpenAiIngressBody(raw, manifest);
         forwardOpenAi(req, res, validated);
     } catch (error) {
         if (res.destroyed || error.code === 'request_aborted') return;

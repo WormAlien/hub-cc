@@ -1445,7 +1445,21 @@ function handleMessages(req, res, body) {
                         return claudeError(res, info.transient ? 429 : 502, info.message,
                             info.transient ? 'rate_limit_error' : 'api_error');
                     }
-                    writeJSON(res, 200, convertResponsesToClaude(parsed, claudeReq));
+                    const converted = convertResponsesToClaude(parsed, claudeReq);
+                    // 🪤 Пустой 200 — реальный ответ AgentRouter на не-стримовый запрос
+                    // (живой замер 12.11: `output: []`, 65 с ожидания). Клиент получает
+                    // сообщение без единого блока, показывает «no reply» и не повторяет,
+                    // потому что код 200. Отдаём повторяемую форму: это не ответ модели,
+                    // а её отсутствие.
+                    const empty = !Array.isArray(converted.content)
+                        || !converted.content.some(block => block && (
+                            (block.type === 'text' && String(block.text || '').length > 0)
+                            || block.type === 'tool_use'));
+                    if (empty) {
+                        logLine('responses (non-stream): пустой 200 без текста и tool_use — отдаю 429, клиент повторит');
+                        return claudeError(res, 429, 'upstream returned an empty response', 'rate_limit_error');
+                    }
+                    writeJSON(res, 200, converted);
                 } catch (e) {
                     claudeError(res, 502, 'bad upstream response: ' + e.message);
                 }

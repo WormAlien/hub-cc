@@ -164,8 +164,10 @@ async function main() {
             'API Gateway model route commits a revision-aware fixture save');
         check(savedManifest && savedManifest.revision === 2 && savedManifest.models['aipm/fixture-model'],
             'API Gateway save writes only the fixture manifest');
+        // Пикер несёт суффикс окна: манифест объявляет 1050000, значит клиент обязан
+        // получить 1M. Голый ID из пикера = молчаливые 200k (регресс 12.11).
         check(savedSettings && savedSettings.model === 'claude-opus-5[1m]'
-            && savedSettings.modelPicker && savedSettings.modelPicker.options[0].model === 'aipm/fixture-model',
+            && savedSettings.modelPicker && savedSettings.modelPicker.options[0].model === 'aipm/fixture-model[1m]',
             'API Gateway save preserves current model and patches the fixture picker');
         const preview = await req('GET', '/__switch/api/api-gateway/opencode/preview');
         check(preview.status === 200 && preview.json && preview.json.targets

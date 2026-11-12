@@ -2910,6 +2910,23 @@ const server = http.createServer((req, res) => {
         // Пробелы перед значением легальны, поэтому клиент разберёт это как обычный JSON.
         if (clientJSON) {
           if (status < 200 || status >= 300 || isCompressedBody(hdrs)) {
+            // Падение конвертации (400 content-blocked, отказ схемы инструмента) приходит
+            // МЕДЛЕННО: AgentRouter отвечает 400 через 16-58 с, а пре-коммит пробелов
+            // срабатывает на 15-й. Тело отказа при этом непустое и разбирается — раньше
+            // мы его выбрасывали и рвали соединение, клиент видел только «upstream failed»
+            // и причину найти было негде. Дописываем объект ошибки в тот же открытый JSON:
+            // пробелы перед значением легальны, клиент читает честный код и message.
+            let upstreamError = null;
+            try {
+              const parsed = JSON.parse(String(body || '').toString('utf8'));
+              if (parsed && parsed.error) upstreamError = parsed;
+            } catch { /* тело не JSON — ниже обрыв, как раньше */ }
+            if (upstreamError && !isCompressedBody(hdrs)) {
+              stopTimer();
+              log(`${req.method} ${reqPath} отказ ${status} дописан в открытый JSON (${jsonDrips} капель): ${String(upstreamError.error.message || upstreamError.error.type || '').slice(0, 160)}`);
+              res.end(body);
+              return;
+            }
             return jsonHoldFail(`апстрим ответил ${status}${isCompressedBody(hdrs) ? ' сжатым телом' : ''}`);
           }
           stopTimer();

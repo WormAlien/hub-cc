@@ -269,6 +269,23 @@ function sortedModelEntries(manifest) {
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
 }
 
+// Окно клиента задаётся СУФФИКСОМ в выбранной модели: `[1m]` = 1M, без него Claude Code
+// верит в 200k. Пикер — такой же путь выбора, как `/model`, и раньше он отдавал голый
+// канонический ID: выбранная из пикера `a6api/deepseek-v4.1-flash-1017` давала 200k, хотя
+// манифест объявляет 1M (регресс 12.11, заявка владельца). Суффикс управляет ТОЛЬКО окном
+// клиента — шлюз срезает его перед маршрутизацией, канонический ID в манифесте остаётся
+// прежним.
+const PICKER_1M_SUFFIX = '[1m]';
+const PICKER_1M_MIN_CONTEXT = 1000000;
+
+function pickerModelId(id, metadata) {
+    if (id.includes('[')) return id;
+    const context = Number(metadata && metadata.contextTokens);
+    return Number.isSafeInteger(context) && context >= PICKER_1M_MIN_CONTEXT
+        ? `${id}${PICKER_1M_SUFFIX}`
+        : id;
+}
+
 function buildModelPicker(manifest) {
     if (!isPlainObject(manifest) || typeof manifest.enabled !== 'boolean' || !isPlainObject(manifest.models)) {
         fail('api_gateway_manifest_invalid');
@@ -276,7 +293,7 @@ function buildModelPicker(manifest) {
     return {
         replaceBuiltInOptions: true,
         options: manifest.enabled ? sortedModelEntries(manifest).map(([id, metadata]) => ({
-            model: id,
+            model: pickerModelId(id, metadata),
             label: metadata.displayName,
             description: 'ABUSE HUB',
             behavesAs: metadata.claudeBehavesAs,

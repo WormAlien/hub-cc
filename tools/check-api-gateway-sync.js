@@ -172,12 +172,15 @@ test('picker projection is deterministic and patch changes only modelPicker', ()
         replaceBuiltInOptions: true,
         options: [
             {
-                model: 'agentrouter/gpt-5.6-sol',
+                // Манифест объявляет 1050000 контекста - пикер обязан отдать `[1m]`, иначе
+                // выбранная из него модель даёт клиенту окно 200k (регресс 12.11).
+                model: 'agentrouter/gpt-5.6-sol[1m]',
                 label: 'AgentRouter / GPT 5.6 Sol',
                 description: 'ABUSE HUB',
                 behavesAs: 'claude-opus-5',
             },
             {
+                // 200k в манифесте - суффикса быть не должно.
                 model: 'agentrouter/vendor/model',
                 label: 'AgentRouter / Vendor Model',
                 description: 'ABUSE HUB',

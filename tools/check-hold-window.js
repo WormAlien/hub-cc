@@ -431,6 +431,44 @@ function ask(port, model) {
       checks += 7;
     }
 
+    // ── Сцена 11: медленный ОТКАЗ после пре-коммита ───────────────────────────────
+    // AgentRouter отдаёт 400 (content-blocked, отказ схемы инструмента) через 16-58 с,
+    // то есть уже после того, как JSON открыт пробелами. Раньше тело отказа выбрасывалось
+    // и соединение рвалось: клиент видел «upstream failed» без причины. Теперь объект
+    // ошибки дописывается в тот же открытый JSON — клиент читает честный код и message.
+    {
+      const [P, U] = [28361, 28362];
+      const srv = http.createServer((req, res) => {
+        if (req.url.startsWith('/v1/models')) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ data: [{ id: 'claude-opus-5' }] }));
+        }
+        req.on('data', () => {});
+        req.on('end', () => {
+          setTimeout(() => {
+            const body = JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'content-blocked: инструмент отклонён схемой' } });
+            res.writeHead(400, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
+            res.end(body);
+          }, 4200);                                  // дольше jsonHoldMs=2000, короче удержания
+        });
+      });
+      await new Promise(r => srv.listen(U, '127.0.0.1', r));
+      const kp = spawnKeepalive(P, U, { MAX_ATTEMPTS: '1', JSON_HOLD_MS: '2000', IDLE_MS: '600', HOLD_MS: '0' });
+      open.push(srv, kp.proc);
+      await waitFor(() => /listening on http/.test(kp.log), 8000, 'старт keepalive (сцена 11)');
+
+      const r = await askJson(P);
+      assert.ok(/пре-коммит JSON/.test(kp.log), 'JSON-удержание сработало');
+      assert.ok(/отказ 400 дописан в открытый JSON/.test(kp.log),
+        'тело отказа должно дописываться, а не теряться в обрыве');
+      assert.ok(r.raw.trimStart().startsWith('{'), 'тело — объект ошибки после капель-пробелов');
+      const parsed = JSON.parse(r.raw);
+      assert.strictEqual(parsed.error && parsed.error.type, 'invalid_request_error',
+        'клиент видит честный тип отказа, а не обрыв');
+      assert.match(String(parsed.error.message), /content-blocked/, 'причина сохранена');
+      checks += 4;
+    }
+
     console.log(`check-hold-window OK (${checks} проверок): обрыв посреди ожидания переигран незаметно, `
       + 'промах маршрута отдан без ретраев, мёртвый путь удержан и сдан повторяемой формой, '
       + 'мёртвая модель тира подменена живой, пустой поток переигран — и по обрыву, и по времени, '

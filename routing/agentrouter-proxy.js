@@ -355,17 +355,24 @@ const IMAGE_B64_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+|(\/9j\/
 // отдаёт parts сырыми, а tool_calls[].function.arguments вообще мимо них — текст рядом
 // с картинкой прошёл бы мимо санитайзера.)
 // Фразы без JSON-специальных символов, поэтому замена в JSON-строке безопасна.
-function wafSanitize(jsonStr) {
+function wafSanitize(jsonStr, opts = {}) {
     let text = String(jsonStr);
     let hits = 0;
     for (const { re, to } of WAF_PHRASES) {
         text = text.replace(re, () => { hits++; return to; });   // один проход
     }
+    // 🪤 Замена картинок — лечение СТАРОЙ боли chat-пути (2026-08-18: 31 JPEG в теле,
+    // и классификатор резал любой base64). На `/v1/responses` картинки проходят: живая
+    // проба 12.11 с `input_image` + data-url вернула 200. Поэтому там, где модель
+    // зрячая, base64 не трогаем — иначе «посмотри скриншот» в Hermes физически не
+    // может работать: модель получает 1x1 заглушку.
     let b64 = 0;
-    text = text.replace(IMAGE_B64_RE, m => {
-        b64++;
-        return m.startsWith('data:image') ? TINY_PNG_DATAURL : '[image omitted]';
-    });
+    if (!opts.keepImages) {
+        text = text.replace(IMAGE_B64_RE, m => {
+            b64++;
+            return m.startsWith('data:image') ? TINY_PNG_DATAURL : '[image omitted]';
+        });
+    }
     return { text, hits, b64 };
 }
 
@@ -1395,7 +1402,8 @@ function handleMessages(req, res, body) {
         const effort = respReq.reasoning && respReq.reasoning.effort;
         logLine(`/v1/messages ${claudeReq.model} → /v1/responses stream=${!!claudeReq.stream} items=${respReq.input.length} tools=${(respReq.tools || []).length}${effort ? ` effort=${effort}` : ''}`);
 
-        const san = wafSanitize(JSON.stringify(respReq));
+        // Responses-путь — единственный, где картинки доезжают до модели (проба 12.11).
+        const san = wafSanitize(JSON.stringify(respReq), { keepImages: process.env.AR_KEEP_IMAGES !== '0' });
         if (san.hits) {
             stats.sanitized += san.hits;
             logLine(`waf sanitize: ${san.hits} hit(s) — нейтрализована фраза из блок-листа шлюза`);
@@ -1451,10 +1459,13 @@ function handleMessages(req, res, body) {
                     // сообщение без единого блока, показывает «no reply» и не повторяет,
                     // потому что код 200. Отдаём повторяемую форму: это не ответ модели,
                     // а её отсутствие.
-                    const empty = !Array.isArray(converted.content)
-                        || !converted.content.some(block => block && (
-                            (block.type === 'text' && String(block.text || '').length > 0)
-                            || block.type === 'tool_use'));
+                    // 🪤 `incomplete` — это обрезка по max_tokens, а не пустой ответ: клиент
+                    // должен увидеть `stop_reason: max_tokens` и не повторять запрос вслепую.
+                    const empty = parsed.status !== 'incomplete'
+                        && (!Array.isArray(converted.content)
+                            || !converted.content.some(block => block && (
+                                (block.type === 'text' && String(block.text || '').length > 0)
+                                || block.type === 'tool_use')));
                     if (empty) {
                         logLine('responses (non-stream): пустой 200 без текста и tool_use — отдаю 429, клиент повторит');
                         return claudeError(res, 429, 'upstream returned an empty response', 'rate_limit_error');

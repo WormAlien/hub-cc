@@ -914,6 +914,10 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     const status = upstreamResponse.statusCode || 503;
     if (status < 200 || status >= 300) {
         const mapped = statusForSidecar(status);
+        // Причина отказа Bifrost в лог: клиент видит обезличенное «Invalid request.», а без
+        // этой строки 12.11 невозможно было отличить провал конвертации инструментов от
+        // кривого тела запроса — полдня ушло на бисект повторами.
+        log(`sidecar ${status} ${req.method} ${req.url}: ${upstreamResponse.headers['content-type'] || '-'}`);
         fail(mapped.status, mapped.code);
         return;
     }

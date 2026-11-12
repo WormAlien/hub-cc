@@ -18,6 +18,21 @@ const START_COMMAND = 'hermes dashboard --no-open';
 const WINDOWS_INSTALL_COMMAND = 'iex (irm https://hermes-agent.nousresearch.com/install.ps1)';
 const POSIX_INSTALL_COMMAND = 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash';
 
+// Какие провайдеры смотреть: только те, чья вкладка видна в сайдбаре. Пустой список — фильтра нет
+// (так ходят пробы и старые клиенты); мусорные имена отсеиваются, иначе один кривой параметр
+// выключил бы каталог целиком.
+function visibleProvidersFromUrl(rawUrl) {
+    let values;
+    try { values = new URL(rawUrl, 'http://127.0.0.1').searchParams.getAll('provider'); }
+    catch { return null; }
+    if (!values.length) return null;
+    const names = values
+        .flatMap(value => String(value).split(','))
+        .map(value => value.trim())
+        .filter(value => /^[A-Za-z0-9_.-]{1,64}$/.test(value));
+    return names.length ? [...new Set(names)] : null;
+}
+
 function platformPath(platform) {
     return platform === 'win32' ? path.win32 : path.posix;
 }
@@ -203,7 +218,11 @@ function createApiGatewayRoutes({ service, canWrite: writeGuard = canWrite } = {
             if (req.method === 'GET') {
                 const method = gets.get(pathname);
                 if (!method || typeof service[method] !== 'function') return json(res, 404, { ok: false, code: 'not_found', error: 'API Gateway route not found.' });
-                const value = await service[method]();
+                // Список моделей собирается только по видимым вкладкам. У GET тела нет, поэтому
+                // фильтр едет параметром адреса: `?provider=a&provider=b` (или через запятую).
+                const value = pathname === PREFIX && typeof service[method] === 'function' && service.state === service[method]
+                    ? await service[method]({ providers: visibleProvidersFromUrl(req.url) })
+                    : await service[method]();
                 if (pathname === PREFIX && value && typeof value === 'object' && !Array.isArray(value)) {
                     return json(res, 200, { ...value, canWrite: !!writeGuard(req) });
                 }

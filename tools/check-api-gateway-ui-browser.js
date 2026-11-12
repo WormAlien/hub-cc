@@ -214,7 +214,7 @@ const server = http.createServer((request, response) => {
 (async () => {
   const port = await listen(server);
   const origin = `http://127.0.0.1:${port}`;
-  const fixture = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${uiStyle}${themeScript}<style>html,body{margin:0;min-height:100%;background:var(--color-bg);color:var(--color-ink);font-family:"Geist",Arial,sans-serif}nav{padding:8px}[data-tab-content]{display:none}[data-tab-content].active{display:block}</style></head><body><nav>${navMarkup}</nav>${tabMarkup}<script>window.toast=(text,kind)=>window.__toasts.push({text,kind});window.showTab=(name)=>document.querySelectorAll('[data-tab-content]').forEach(panel=>panel.classList.toggle('active',panel.dataset.tabContent===name));document.querySelector('[data-tab="api-gateway"]').addEventListener('click',()=>showTab('api-gateway'));</script>${uiScript}</body></html>`;
+  const fixture = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${uiStyle}${themeScript}<style>html,body{margin:0;min-height:100%;background:var(--color-bg);color:var(--color-ink);font-family:"Geist",Arial,sans-serif}nav{padding:8px}[data-tab-content]{display:none}[data-tab-content].active{display:block}</style></head><body><nav id="main-nav">${navMarkup}</nav>${tabMarkup}<script>window.toast=(text,kind)=>window.__toasts.push({text,kind});window.showTab=(name)=>document.querySelectorAll('[data-tab-content]').forEach(panel=>panel.classList.toggle('active',panel.dataset.tabContent===name));document.querySelector('[data-tab="api-gateway"]').addEventListener('click',()=>showTab('api-gateway'));</script>${uiScript}</body></html>`;
   const browser = await chromium.launch({ headless: true });
   let context;
   try {
@@ -247,8 +247,11 @@ const server = http.createServer((request, response) => {
       if (url.pathname === '/vendor/api-gateway-tab.css' && request.method() === 'GET') {
         return route.fulfill({ contentType: 'text/css; charset=utf-8', body: fs.readFileSync(stylePath) });
       }
+      // Вкладка спрашивает `state?provider=...`: каталог собирается только по видимым вкладкам
+      // сайдбара. Сравниваем pathname, а не весь адрес, и заодно требуем фильтр - без него
+      // экран снова начнёт тянуть все шлюзы.
       if (url.pathname === '/__switch/api/api-gateway' && request.method() === 'GET') {
-        requests.push({ method: 'GET', name: 'state' });
+        requests.push({ method: 'GET', name: 'state', providers: url.searchParams.getAll('provider') });
         return jsonResponse(route, 200, state);
       }
       if (url.pathname === '/__switch/api/api-gateway/model' && request.method() === 'POST') {
@@ -298,6 +301,9 @@ const server = http.createServer((request, response) => {
     await page.locator('[data-tab="api-gateway"]').click();
     await page.locator('.ag-model').first().waitFor();
 
+    // Каталог спрашивается только по видимым вкладкам: в фикстуре видна одна - api-gateway.
+    assert.deepEqual(requests.find(call => call.name === 'state').providers, ['api-gateway'],
+      'вкладка должна ограничить каталог видимыми провайдерами');
     assert.equal(await page.locator('#nav-count-api-gateway').innerText(), '2/5');
     assert.equal(await page.locator('.ag-model').count(), 5);
     assert.deepEqual(

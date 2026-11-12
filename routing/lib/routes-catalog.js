@@ -163,8 +163,12 @@ async function pricingFor(host, opts) {
         if (!models.length) return null;
         pricingCache.set(host, { models, ts: now });
         return { models, cached: false, ts: now };
-    } catch { return null; }
-    finally { clearTimeout(timer); }
+    } catch {
+        // Неответившая панель кешируется тоже, иначе каждый заход на вкладку ждёт полный
+        // таймаут заново, и мёртвый шлюз превращается в постоянную задержку экрана.
+        pricingCache.set(host, { models: [], ts: now });
+        return null;
+    } finally { clearTimeout(timer); }
 }
 
 // Resolve each canonical provider through the same ordered catalog chain. Source failures are
@@ -194,28 +198,32 @@ async function resolveModelCandidates({
     const rows = [];
     const seen = new Set();
 
-    for (const canonicalProvider of orderedProviders) {
+    // Провайдеры опрашиваются ПАРАЛЛЕЛЬНО, источники внутри одного провайдера - по-прежнему
+    // строго по цепочке. Замер 12.11: вкладка API Gateway шла 29.7 с, потому что висела на двух
+    // мёртвых шлюзах по 12 с таймаута, и запросы шли друг за другом. Смысл цепочки - «первый
+    // ответивший источник», а не «последовательные запросы», поэтому параллель между
+    // провайдерами её не меняет.
+    const perProvider = await Promise.all(orderedProviders.map(async (canonicalProvider) => {
         for (const [catalogSource, getModels] of sources) {
             let models = [];
             try {
                 models = textOnly(await getModels(canonicalProvider));
             } catch { /* one failed source must not stop discovery */ }
             if (!models.length) continue;
-
-            for (const modelId of models) {
-                const id = `${canonicalProvider}/${modelId}`;
-                if (seen.has(id)) continue;
-                const slash = id.indexOf('/');
-                seen.add(id);
-                rows.push({
-                    id,
-                    provider: id.slice(0, slash),
-                    model: id.slice(slash + 1),
-                    catalogSource,
-                });
-            }
-            break;
+            return models.map(modelId => ({
+                id: `${canonicalProvider}/${modelId}`,
+                provider: canonicalProvider,
+                model: modelId,
+                catalogSource,
+            }));
         }
+        return [];
+    }));
+
+    for (const row of perProvider.flat()) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        rows.push(row);
     }
 
     return rows.sort((a, b) => compareText(a.provider, b.provider) || compareText(a.model, b.model));

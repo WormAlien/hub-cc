@@ -12,6 +12,11 @@ const MODEL_INPUT_FIELDS = Object.freeze([
 ]);
 const CATALOG_SOURCES = new Set(['live', 'accounts', 'pricing', 'snapshot', 'configured']);
 const DEFAULT_FRESH_MS = 24 * 60 * 60 * 1000;
+// Пока модель не опубликована, лимитов у неё нет: манифест хранит только опубликованные метаданные.
+// Подставляем контекст и вывод из каталога шлюза, чтобы владелец видел реальные числа, а не пустое
+// поле. Только для чтения: подстановка ничего не сохраняет, Save по-прежнему требует числа.
+const DEFAULT_CONTEXT_TOKENS = 200000;
+const DEFAULT_OUTPUT_TOKENS = 8192;
 
 class ApiGatewayDashboardError extends Error {
     constructor(code, message, status = 400) {
@@ -238,6 +243,8 @@ function makeRow(id, metadata, candidate, passiveById, probesById, now, freshMs)
     const passive = passiveById[id] || { lastSuccess: null };
     const probe = probesById[id] || { ok: null, at: null, reason: null };
     const health = healthOf(passive, probe, now, freshMs);
+    const publishedContext = published && isPositiveSafeInteger(metadata.contextTokens) ? metadata.contextTokens : null;
+    const publishedOutput = published && isPositiveSafeInteger(metadata.outputTokens) ? metadata.outputTokens : null;
     return {
         id: cleanText(split.id),
         provider: cleanText(split.provider),
@@ -247,13 +254,19 @@ function makeRow(id, metadata, candidate, passiveById, probesById, now, freshMs)
             ? cleanText(metadata.displayName)
             : `${cleanText(split.provider)} / ${cleanText(split.model)}`,
         claudeBehavesAs: published ? cleanText(metadata.claudeBehavesAs) : null,
-        contextTokens: published && isPositiveSafeInteger(metadata.contextTokens) ? metadata.contextTokens : null,
-        outputTokens: published && isPositiveSafeInteger(metadata.outputTokens) ? metadata.outputTokens : null,
+        contextTokens: publishedContext === null ? DEFAULT_CONTEXT_TOKENS : publishedContext,
+        outputTokens: publishedOutput === null ? DEFAULT_OUTPUT_TOKENS : publishedOutput,
+        // Подставленные значения помечены отдельно: поле может быть заполнено, не будучи опубликованным.
+        limitsDefaulted: {
+            contextTokens: publishedContext === null,
+            outputTokens: publishedOutput === null,
+        },
         publishedAt: published ? validIso(metadata.publishedAt) : null,
         catalog: {
             present: !!candidate,
             source: candidate ? candidate.catalogSource : null,
         },
+
         passive: { lastSuccess: passive.lastSuccess || null },
         probe: {
             ok: probe.ok,
@@ -369,10 +382,19 @@ function createApiGatewayDashboardService(options = {}) {
         return clientsFromManifest(await readCurrentManifest());
     }
 
-    async function state() {
+    async function state({ providers } = {}) {
         const manifest = await readCurrentManifest();
+        // Каталог собирается только по видимым вкладкам шлюзов: скрытый провайдер не должен стоить
+        // ни сетевых запросов, ни строк в списке. Опубликованная строка остаётся всегда - прятать
+        // её значило бы бросить точный ID без ручки.
+        const visibleProviders = providers instanceof Set
+            ? [...providers]
+            : Array.isArray(providers) ? providers : null;
+        const discoveryOptions = visibleProviders === null
+            ? candidateOptions
+            : { ...candidateOptions, providers: visibleProviders };
         const [candidatesRaw, passiveRaw, probesRaw, sidecar, clients] = await Promise.all([
-            Promise.resolve().then(() => resolveCandidates(candidateOptions)).catch(() => []),
+            Promise.resolve().then(() => resolveCandidates(discoveryOptions)).catch(() => []),
             Promise.resolve().then(() => readPassive(filePaths)).catch(() => ({})),
             Promise.resolve().then(() => readProbes(filePaths)).catch(() => ({})),
             sidecarStatus(),
@@ -394,8 +416,10 @@ function createApiGatewayDashboardService(options = {}) {
                 currentNow,
                 freshMs,
             ));
+        const visibleSet = visibleProviders === null ? null : new Set(visibleProviders);
         const candidateRows = [...candidates.values()]
             .filter(row => !Object.prototype.hasOwnProperty.call(publishedModels, row.id))
+            .filter(row => visibleSet === null || visibleSet.has(row.provider))
             .sort((left, right) => compareText(left.provider, right.provider)
                 || compareText(left.model, right.model)
                 || compareText(left.id, right.id))

@@ -1590,7 +1590,11 @@ function poolRestoreTiers(provider) {
 //
 // 🎯 Только текстовые модели: картинка целью тира — это упавший запрос (решение 16.09).
 // Разбор фильтра и ступеней ключа — `lib/routes-catalog.js`.
-function routesCatalogJson(pathname, timeoutMs = 8000) {
+// 🪤 Объявления НЕ выше этой строки: песочница проверки (`check-routes-catalog.js`) вырезает
+// этот блок текстом начиная ОТСЮДА и исполняет отдельной функцией, так что всё, что стоит выше,
+// в неё не попадает. `const` с таймаутом роняла там каждый вызов с ReferenceError, и проба
+// печатала «пул аккаунтов не спрошен» вместо настоящей причины. Поэтому потолки — литералы.
+function routesCatalogJson(pathname, timeoutMs = 4000) {
     return new Promise(resolve => {
         const request = http.get({
             hostname: '127.0.0.1',
@@ -1623,7 +1627,7 @@ function routesGatewayHost(provider) {
 async function routesCandidateModelsForKey(provider, key) {
     const ep = ROUTE_EP[provider];
     if (!ep || !key) return [];
-    const data = await routesCatalogJson(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`, 12000);
+    const data = await routesCatalogJson(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`, 4000);
     const raw = data && Array.isArray(data.models) ? data.models : [];
     return routesCatalogLib.textOnly(raw.map(model => typeof model === 'string' ? { id: model } : model));
 }
@@ -1648,7 +1652,7 @@ async function routesCandidateAccountModels(provider) {
     if (provider === 'a6api') return [];
     const ep = ROUTE_EP[provider];
     if (!ep) return [];
-    const data = await routesCatalogJson(`/__switch/api/${ep}/sessions`, 8000);
+    const data = await routesCatalogJson(`/__switch/api/${ep}/sessions`, 4000);
     const key = routesCatalogLib.pickAccountKey(data && data.sessions);
     return routesCandidateModelsForKey(provider, key);
 }

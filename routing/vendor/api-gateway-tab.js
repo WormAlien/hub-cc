@@ -175,6 +175,22 @@
     });
   }
 
+  // Лимиты у неопубликованной модели никем не заданы. Сервер подставляет типовые, чтобы поле
+  // не было пустым; показываем это подписью, иначе подстановка прочтётся как реальные цифры
+  // провайдера. Save по-прежнему требует честные числа - подстановка ничего не сохраняет.
+  function limitInput(fieldName, model, disabled, title) {
+    const defaulted = Boolean(model.limitsDefaulted && model.limitsDefaulted[fieldName]);
+    return input(fieldName, model[fieldName], 'number', {
+      disabled,
+      min: 1,
+      step: 1,
+      inputmode: 'numeric',
+      class: defaulted ? 'ag-input ag-input--defaulted' : 'ag-input',
+      title: defaulted ? `${title}: typical default, not read from the provider` : title,
+      placeholder: defaulted ? 'typical default' : '',
+    });
+  }
+
   function rowMatches(model) {
     const q = S.q.trim().toLowerCase();
     const health = String(model.health?.state || 'unknown').toLowerCase();
@@ -281,8 +297,8 @@
       ]),
       field('Label', input('displayName', model.displayName, 'text', { disabled, maxlength: 160 })),
       field('behavesAs', input('claudeBehavesAs', model.claudeBehavesAs, 'text', { disabled, maxlength: 120 })),
-      field('Context', input('contextTokens', model.contextTokens, 'number', { disabled, min: 1, step: 1, inputmode: 'numeric' })),
-      field('Output', input('outputTokens', model.outputTokens, 'number', { disabled, min: 1, step: 1, inputmode: 'numeric' })),
+      field('Context', limitInput('contextTokens', model, disabled, 'Context tokens')),
+      field('Output', limitInput('outputTokens', model, disabled, 'Max output tokens')),
       element('div', { class: 'ag-model-action' }, [
         save,
         element('div', { class: 'ag-row-message', 'aria-live': 'polite' }),
@@ -508,14 +524,46 @@
     renderModelGroups();
   }
 
+  // Провайдеры, чья вкладка видна в сайдбаре. Каталог собирается только по ним: скрытый шлюз
+  // не должен ни опрашиваться сетью, ни занимать строки. Карта имён та же, что у вкладки
+  // «Маршруты»: имя в реестре не всегда равно имени вкладки (fm_openai -> freemodel).
+  const TAB_OF_PROVIDER = { fm_openai: 'freemodel', vyce_openai: 'vyceai' };
+  function visibleProviders() {
+    const hidden = typeof effectiveHiddenSet === 'function' ? effectiveHiddenSet() : new Set();
+    const navTabs = new Set([...document.querySelectorAll('#main-nav > button[data-tab]')]
+      .map(button => button.dataset.tab));
+    if (!navTabs.size) return [];
+    return [...navTabs]
+      .filter(tab => !hidden.has(tab))
+      .map(tab => Object.keys(TAB_OF_PROVIDER).find(provider => TAB_OF_PROVIDER[provider] === tab) || tab);
+  }
+
+  function stateUrl() {
+    const providers = visibleProviders();
+    if (!providers.length) return API;
+    const query = providers.map(provider => `provider=${encodeURIComponent(provider)}`).join('&');
+    return `${API}?${query}`;
+  }
+
   async function load() {
     const host = root();
     if (!host || S.loading) return;
     S.loading = true;
     const requestId = ++S.request;
-    if (!S.data) host.replaceChildren(element('div', { class: 'ag-loading', text: 'Loading API Gateway state...' }));
+    if (!S.data) {
+      host.replaceChildren(element('div', { class: 'ag-loading' }, [
+        element('span', { text: 'Loading API Gateway state...' }),
+        element('span', { class: 'ag-loadbar', 'aria-hidden': 'true' }),
+      ]));
+    } else {
+      // Повторная загрузка: старые строки остаются на месте, сверху едет тонкая полоса.
+      const shell = host.querySelector('.ag-shell') || host;
+      if (!shell.querySelector('.ag-loadbar-inline')) {
+        shell.insertBefore(element('span', { class: 'ag-loadbar ag-loadbar-inline', 'aria-hidden': 'true' }), shell.firstChild);
+      }
+    }
     try {
-      const data = await requestJson(API);
+      const data = await requestJson(stateUrl());
       if (requestId !== S.request) return;
       S.data = data;
       if (typeof S.data.canWrite !== 'boolean') S.data.canWrite = true;
@@ -526,6 +574,8 @@
         element('div', { class: 'ag-fatal', text: `API Gateway state: ${error.message}` }),
       ]));
     } finally {
+      document.querySelectorAll('#api-gateway-root .ag-loadbar-inline, #api-gateway-root .ag-loading .ag-loadbar')
+        .forEach(bar => bar.remove());
       if (requestId === S.request) S.loading = false;
     }
   }

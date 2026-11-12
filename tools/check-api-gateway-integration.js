@@ -641,3 +641,25 @@ test('transparent proxy structurally installs exact API Gateway routes before ge
     assert.ok(serverAt >= 0 && gatewayAt > serverAt && statusAt > gatewayAt, 'API Gateway route module must run before generic handlers');
     assert.match(source, /apiGatewayOpenCodeRecovery/);
 });
+
+// Фильтр видимых провайдеров едет в адресе: у GET тела нет. Без него экран показывает все
+// 29 шлюзов и спрашивает сеть у спрятанных - замер 12.11 дал 1080 строк и 29.7 с.
+test('state route passes visible providers from the query and ignores malformed names', async () => {
+    const seen = [];
+    const service = {
+        state: async (options) => { seen.push(options); return { ok: true, models: [] }; },
+    };
+    const routes = load().createApiGatewayRoutes({ service });
+    const cases = [
+        ['/__switch/api/api-gateway?provider=alpha&provider=beta', ['alpha', 'beta']],
+        ['/__switch/api/api-gateway?provider=alpha,beta', ['alpha', 'beta']],
+        ['/__switch/api/api-gateway?provider=alpha&provider=../etc', ['alpha']],
+        ['/__switch/api/api-gateway', null],
+        ['/__switch/api/api-gateway?provider=bad name&provider=a b', null],
+    ];
+    for (const [url, expected] of cases) {
+        routes.handle(request({ url }), response());
+        await settle();
+        assert.deepEqual(seen[seen.length - 1], { providers: expected }, url);
+    }
+});

@@ -195,8 +195,8 @@ test('state emits the canonical DTO with published rows first and deduplicated c
     assert.equal(candidate.published, false);
     assert.equal(candidate.displayName, 'beta / nested/model');
     assert.equal(candidate.claudeBehavesAs, null);
-    assert.equal(candidate.contextTokens, null);
-    assert.equal(candidate.outputTokens, null);
+    assert.ok(candidate.contextTokens > 0, 'неопубликованная строка показывает типовой контекст');
+    assert.ok(candidate.outputTokens > 0, 'неопубликованная строка показывает типовой вывод');
     assert.equal(candidate.publishedAt, null);
     assert.deepEqual(Object.keys(candidate).sort(), [
         'catalog',
@@ -205,6 +205,7 @@ test('state emits the canonical DTO with published rows first and deduplicated c
         'displayName',
         'health',
         'id',
+        'limitsDefaulted',
         'model',
         'outputTokens',
         'passive',
@@ -213,6 +214,12 @@ test('state emits the canonical DTO with published rows first and deduplicated c
         'published',
         'publishedAt',
     ].sort());
+    // Пустые лимиты читались как «данные не пришли». У неопубликованной строки их никто не
+    // задавал, поэтому сервер подставляет типовые значения и помечает их: подстановка не
+    // должна выглядеть как прочитанные с провайдера числа.
+    assert.deepEqual(candidate.limitsDefaulted, { contextTokens: true, outputTokens: true });
+    assert.ok(candidate.contextTokens > 0 && candidate.outputTokens > 0);
+    assert.deepEqual(published.limitsDefaulted, { contextTokens: false, outputTokens: false });
     assert.equal(state.ok, true);
 });
 
@@ -614,4 +621,44 @@ test('state reuses one manifest snapshot for client cards and emits no private d
     assert.equal(text.includes(EMAIL), false);
     assert.equal(text.includes(PRIVATE_PATH), false);
     assert.equal(text.includes(PRIVATE_SPACE_PATH), false);
+});
+
+// Вкладка не должна показывать провайдеров, чью вкладку владелец спрятал: 12.11 на экране
+// было 29 провайдеров и 1080 строк при одном опубликованном. Фильтр едет в самом запросе
+// каталога, чтобы скрытый шлюз не опрашивался сетью, а опубликованная строка остаётся даже
+// если её провайдер скрыт - иначе точный ID остаётся без ручки.
+test('state discovers only the providers passed by the caller and always keeps published rows', async () => {
+    const current = manifest({
+        'alpha/model-a': meta('Alpha / Published'),
+        'hidden/model-x': meta('Hidden / Published'),
+    });
+    const configured = { providers: ['alpha', 'beta'] };
+    const seen = [];
+    const service = load().createApiGatewayDashboardService(baseDependencies({
+        readPublishedManifest: async () => clone(current),
+        candidateOptions: configured,
+        resolveModelCandidates: async options => {
+            seen.push(options);
+            return [
+                { id: 'alpha/model-a', provider: 'alpha', model: 'model-a', catalogSource: 'live' },
+                { id: 'alpha/model-b', provider: 'alpha', model: 'model-b', catalogSource: 'live' },
+                { id: 'beta/model-c', provider: 'beta', model: 'model-c', catalogSource: 'live' },
+                { id: 'gamma/model-d', provider: 'gamma', model: 'model-d', catalogSource: 'live' },
+            ];
+        },
+    }));
+
+    const state = await service.state({ providers: ['alpha', 'beta'] });
+
+    assert.deepEqual(seen, [{ ...configured, providers: ['alpha', 'beta'] }],
+        'filtr должен уйти в каталог, иначе скрытые шлюзы опрашиваются сетью');
+    assert.deepEqual(state.models.map(row => row.id).sort(), [
+        'alpha/model-a',
+        'alpha/model-b',
+        'beta/model-c',
+        'hidden/model-x',
+    ], 'скрытый провайдер gamma не попадает, опубликованная строка hidden остаётся');
+
+    await service.state();
+    assert.deepEqual(seen[1], configured, 'без фильтра каталог спрашивается как раньше');
 });

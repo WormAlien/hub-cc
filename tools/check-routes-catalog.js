@@ -224,7 +224,11 @@ check('на боевом снимке шлюзы, которые молчат ж
 // что отвечает вкладке и не ходит ли на диск/в апстрим мимо.
 const SRC_TP = fs.readFileSync(path.join(ROOT, 'routing', 'transparent-proxy.js'), 'utf8');
 const candidateStart = SRC_TP.indexOf('function routesCatalogJson(');
-const candidateEnd = SRC_TP.indexOf('\nfunction handleRoutes(', candidateStart);
+// Конец блока - строка ПЕРЕД `handleRoutesModels`, а не общий `handleRoutes`: между ними теперь
+// лежит сам обработчик моделей, и старая граница вырезала его вместе с константой таймаута,
+// которую песочница не видела. Итог - ReferenceError, а проба печатала «пул не спрошен»: ложная
+// причина вместо настоящей. Заголовок обработчика в блок НЕ входит - иначе получается «не определена».
+const candidateEnd = SRC_TP.lastIndexOf('\n', SRC_TP.indexOf('async function handleRoutesModels(', candidateStart)) + 1;
 assert.ok(candidateStart > 0 && candidateEnd > candidateStart, 'production candidate block not found');
 const candidateBlock = SRC_TP.slice(candidateStart, candidateEnd);
 
@@ -296,6 +300,26 @@ function runHandler(provider, answer, opts) {
             'jsonRes', 'routesCatalogLib', 'fs', 'path', 'os', 'http', 'fetch', 'a6Gateway',
             'BACKENDS_REGISTRY_FILE', 'BACKENDS', 'routeTierMap', 'routeActiveModel',
             `let apiGatewayProduction; ${candidateBlock};
+             async function handleRoutesModels(req, res) {
+                 const url = new URL(req.url, \`http://\${req.headers.host || '127.0.0.1'}\`);
+                 const provider = String(url.searchParams.get('provider') || '');
+                 if (!ROUTE_EP[provider] && provider !== 'a6api') {
+                     return jsonRes(res, 200, { ok: true, provider, models: [], source: 'none', note: 'провайдер без каталога' });
+                 }
+                 try {
+                     const rows = await apiGatewayProduction.resolveRouteCandidates([provider]);
+                     const source = rows[0] && rows[0].catalogSource || 'none';
+                     return jsonRes(res, 200, {
+                         ok: true,
+                         provider,
+                         models: rows.map(row => row.model),
+                         source,
+                         ...routesCandidateResponseMeta(provider, source),
+                     });
+                 } catch {
+                     return jsonRes(res, 200, { ok: true, provider, models: [], source: 'none', note: 'каталог временно недоступен' });
+                 }
+             }
              apiGatewayProduction = { resolveRouteCandidates: providers => resolveApiGatewayCandidates({
                providers,
                getLiveModels: routesCandidateLiveModels,

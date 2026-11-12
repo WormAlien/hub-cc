@@ -130,7 +130,7 @@
 
 .ag-endpoints,
 .ag-sidecar {
-  padding: 16px;
+  padding: 13px;
 }
 
 .ag-eyebrow {
@@ -177,8 +177,8 @@
 }
 
 .ag-button {
-  min-height: 32px;
-  padding: 6px 10px;
+  min-height: 28px;
+  padding: 5px 10px;
   border: 1px solid var(--color-line-soft);
   border-radius: 7px;
   background: var(--color-elevated);
@@ -259,7 +259,7 @@
 }
 
 .ag-models-panel {
-  padding: 16px;
+  padding: 13px;
 }
 
 .ag-models-head {
@@ -295,13 +295,18 @@
 .ag-select,
 .ag-textarea {
   width: 100%;
-  min-height: 33px;
-  padding: 7px 9px;
+  min-height: 28px;
+  padding: 5px 8px;
   border: 1px solid var(--color-line-soft);
   border-radius: 7px;
   background: var(--color-elevated);
   color: var(--color-ink);
   font-size: 11px;
+}
+
+.ag-input--defaulted {
+  color: var(--color-muted);
+  font-style: italic;
 }
 
 .ag-input::placeholder,
@@ -351,7 +356,7 @@
 
 .ag-count {
   color: var(--color-muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .ag-provider-models {
@@ -365,7 +370,7 @@
   align-items: end;
   gap: 8px;
   min-width: 0;
-  padding: 11px;
+  padding: 9px;
   border: 1px solid var(--color-line-soft);
   border-radius: 9px;
   background: var(--color-elevated);
@@ -421,12 +426,12 @@
 .ag-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 19px;
+  min-height: 20px;
   padding: 2px 6px;
   border: 1px solid var(--color-line-soft);
   border-radius: 999px;
   color: var(--color-muted);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: .04em;
   line-height: 1.25;
@@ -467,7 +472,7 @@
 
 .ag-label {
   color: var(--color-muted);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: .06em;
   text-transform: uppercase;
@@ -485,7 +490,7 @@
 .ag-global-message {
   min-height: 15px;
   color: var(--color-muted);
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
@@ -520,8 +525,8 @@
 .ag-client {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 15px;
+  gap: 9px;
+  padding: 12px;
 }
 
 .ag-client-head {
@@ -584,6 +589,33 @@
   color: var(--color-muted);
   font-size: 12px;
   text-align: center;
+}
+
+/* Полоса прогресса: экран занят, но видно, что запрос жив. Без неё двухсекундная сборка
+   каталога читается как зависание. */
+.ag-loadbar {
+  position: relative;
+  flex: 1 1 120px;
+  max-width: 240px;
+  height: 3px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--color-line-soft);
+}
+
+.ag-loadbar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: var(--color-azure);
+  animation: ag-loadslide 1.1s ease-in-out infinite;
+}
+
+@keyframes ag-loadslide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
 }
 
 .ag-fatal {

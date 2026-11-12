@@ -115,13 +115,21 @@ if (src) {
     // и регексп обрывался на первой такой — «функция не найдена» при живом коде. fnBody
     // объявлена выше (на верхнем уровне блока) и берёт до `}` в нулевой колонке.
     const normFn = fnBody(/function normalizeCcModel\(m/);
+    // Окно 1M у опубликованных моделей берётся из манифеста API Gateway, поэтому хелпер
+    // `publishedOneMModels` обязан попасть в песочницу рядом с функцией. Файлы подставные:
+    // живой `routing/api-gateway.json` тест не читает, иначе результат зависел бы от диска.
+    const oneMFn = fnBody(/function publishedOneMModels\(\)/);
+    const oneMDecl = src ? src.match(/let oneMFromManifestCache = [^\n]*;\n/) : null;
     const fn = (normFn && no1mDecl) ? [null, no1mDecl[0], normFn] : null;
     if (!fn) fails.push('transparent-proxy.js: функция normalizeCcModel(m) не найдена');
     else if (!prefixTbl) fails.push('transparent-proxy.js: таблица CC_MODEL_PREFIX не найдена');
     else {
         let normalize;
         try {
-            normalize = new Function(`${prefixTbl[0]}\n${fn[1]}${fn[2]}; return normalizeCcModel;`)();
+            const oneMShim = oneMFn
+                ? `const fs = { statSync: () => ({ mtimeMs: 1 }), readFileSync: () => JSON.stringify({ models: { 'a6api/deepseek-v4.1-flash-1017': { contextTokens: 1000000 }, 'a6api/deepseek-v4-pro': { contextTokens: 200000 } } }) }; const path = { join: () => '' }; const __dirname = ''; ${oneMDecl ? oneMDecl[0] : ''}${oneMFn}\n`
+                : '';
+            normalize = new Function(`${oneMShim}${prefixTbl[0]}\n${fn[1]}${fn[2]}; return normalizeCcModel;`)();
         } catch (e) {
             fails.push(`normalizeCcModel не исполняется: ${e.message}`);
         }
@@ -131,6 +139,11 @@ if (src) {
                 ['claude-sonnet-5', 'claude-sonnet-5[1m]'],
                 ['claude-opus-5[1m]', 'claude-opus-5[1m]'],   // идемпотентность
                 ['claude-opus-4-8[200k]', 'claude-opus-4-8[200k]'],   // чужой суффикс не трогаем
+                // Опубликованный в API Gateway 1M-модель без суффикса: раньше `/model a6api/
+                // deepseek-v4.1-flash-1017` молча давал 200k (регресс 12.11, заявка владельца).
+                // Файл манифеста подставной - см. oneMShim ниже.
+                ['a6api/deepseek-v4.1-flash-1017', 'a6api/deepseek-v4.1-flash-1017[1m]'],
+                ['a6api/deepseek-v4-pro', 'a6api/deepseek-v4-pro'],   // 200k в манифесте - не трогаем
                 ['ComboWombo', 'ComboWombo'],                 // виртуальная модель шлюза
                 ['opus-4.8', 'opus-4.8'],                     // notion: не claude-*
                 ['opus[1m]', 'opus[1m]'],
@@ -208,6 +221,8 @@ if (src) {
         // потери, против которого весь этот файл.
         const ctxSuffix = dashboard.match(/function withCtxSuffix\(id(?:, gw)?\) \{[\s\S]*?\n\}/);
         if (!ctxSuffix) fails.push('proxy-dashboard.html: функция withCtxSuffix(id[, gw]) не найдена — сверка кнопок с сервером не выполнена');
+        const arModelCommandSrc = dashboard.match(/function arModelCommand\(id\) \{[\s\S]*?\n\}/);
+        if (!arModelCommandSrc) fails.push('proxy-dashboard.html: функция arModelCommand(id) не найдена - AgentRouter должен копировать provider/model с [1m]');
         const chip = dashboard.match(/function cunModelChip\(id, tone\) \{[\s\S]*?\n\}/);
         if (!uiNormalize) {
             fails.push('proxy-dashboard.html: нет cunNormalizeCcModel() для GPT 5.6 бейджей');
@@ -225,11 +240,23 @@ if (src) {
             // функция без них падает с ReferenceError.
             const srvFnSrc = fnBody(/function normalizeCcModel\(m/);
             const srvNo1m = src && src.match(/const NO_1M_GATEWAYS = [^\n]*;\n/);
+            // Хелпер манифеста нужен и здесь: normalizeCcModel читает опубликованные 1M-модели.
+            // Подставные fs/path те же, что в первой песочнице - живой файл тест не читает.
+            const srvOneMShim = oneMFn
+                ? `const fs = { statSync: () => ({ mtimeMs: 1 }), readFileSync: () => JSON.stringify({ models: { 'a6api/deepseek-v4.1-flash-1017': { contextTokens: 1000000 }, 'a6api/deepseek-v4-pro': { contextTokens: 200000 } } }) }; const path = { join: () => '' }; const __dirname = ''; ${oneMDecl ? oneMDecl[0] : ''}${oneMFn}\n`
+                : '';
             const srvNorm = (srvFnSrc && srvNo1m && prefixTbl)
-                ? new Function(`${prefixTbl[0]}\n${srvNo1m[0]}${srvFnSrc}; return normalizeCcModel;`)()
+                ? new Function(`${srvOneMShim}${prefixTbl[0]}\n${srvNo1m[0]}${srvFnSrc}; return normalizeCcModel;`)()
                 : null;
             if (ctxSuffix && srvNorm) {
                 const withCtx = new Function(`${ctxPreamble}${ctxSuffix[0]}; return withCtxSuffix;`)();
+                if (arModelCommandSrc) {
+                    const arModelCommand = new Function(`${ctxPreamble}${ctxSuffix[0]}\n${arModelCommandSrc[0]}; return arModelCommand;`)();
+                    const got = arModelCommand('gpt-5.6-sol');
+                    if (got !== '/model agentrouter/gpt-5.6-sol[1m]') {
+                        fails.push(`arModelCommand(gpt-5.6-sol) = ${got} - ожидалось /model agentrouter/gpt-5.6-sol[1m]`);
+                    }
+                }
                 // 1) БЕЗ второго аргумента клиент и сервер обязаны совпадать буквально.
                 for (const id of ['claude-opus-4-6', 'aipm/claude-opus-4-6', 'ar/claude-sonnet-5',
                     'glm-5.3', 'aipm/glm-5.3', 'gpt-5.6-sol', 'justwoker/gpt-5.6-sol',
@@ -302,11 +329,14 @@ if (src) {
         // проверку сам, а не через правку теста.
         if (uiKeepTbl) {
             const keepGws = Object.keys(new Function(`${uiKeepTbl[0]}; return KEEPALIVE_POLL_TABS;`)());
-            const missing = keepGws.filter(gw => !dashboard.includes(`copyModelCmd(\${JSON.stringify(id)}, "${gw}")`));
+            const missing = keepGws.filter(gw => {
+                if (gw === 'agentrouter') return !dashboard.includes('const cmd = arModelCommand(id);');
+                return !dashboard.includes(`copyModelCmd(\${JSON.stringify(id)}, "${gw}")`);
+            });
             if (missing.length) {
-                fails.push(`кнопка 📋 не передаёт вкладку в copyModelCmd для шлюзов с keepalive: ${missing.join(', ')} → модели вроде deepseek-* копируются без [1m], хотя keepalive вернёт их с суффиксом`);
+                fails.push(`кнопка 📋 не сохраняет [1m] на шлюзах с keepalive: ${missing.join(', ')} → модели вроде deepseek-* копируются без [1m], хотя keepalive вернёт их с суффиксом`);
             } else {
-                ok.push(`copyModelCmd: вкладка передана на всех ${keepGws.length} шлюзах с keepalive`);
+                ok.push(`команды моделей сохраняют [1m] на всех ${keepGws.length} шлюзах с keepalive`);
             }
         }
         if (!chip || !/cunNormalizeCcModel\(id\)/.test(chip[0])) {

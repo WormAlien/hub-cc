@@ -782,6 +782,19 @@ function validateOpenAiIngressBody(raw, manifest) {
             });
         }
     }
+    // Любой отказ здесь обязан назвать поле. Раньше все они отдавали голое «Invalid request.»,
+    // и 12.11 пришлось полдня искать, ПОЧЕМУ Hermes с инструментами получал 400: причина
+    // (схема инструмента не пережила конвертацию) была не видна ни в логе, ни в ответе.
+    if (Object.hasOwn(body, 'tools') && body.tools !== undefined) {
+        if (!Array.isArray(body.tools) || body.tools.some(tool => !tool || typeof tool !== 'object'
+            || Array.isArray(tool) || typeof tool.function !== 'object' || tool.function === null
+            || typeof tool.function.name !== 'string' || !tool.function.name.trim())) {
+            throw Object.assign(new Error('tools must be an array of {type:"function", function:{name, parameters}}.'), {
+                status: 400,
+                code: 'invalid_request',
+            });
+        }
+    }
     if (Object.hasOwn(body, 'stream') && typeof body.stream !== 'boolean') {
         throw Object.assign(new Error('stream must be a boolean.'), { status: 400, code: 'invalid_request' });
     }
@@ -1069,6 +1082,10 @@ async function openAiChat(req, res) {
         if (error instanceof ApiGatewayError) {
             return openAiError(res, error.status, error.code, error.message);
         }
+        // Клиенту отдаём обезличенный текст, но причину пишем в лог: 12.11 Hermes получал
+        // «Invalid request.» и искать было нечего - настоящая ошибка (неизвестная модель,
+        // ошибка разбора тела) жила только в стеке процесса.
+        log(`openai ingress 400: ${error.code || error.name || 'error'}: ${error.message}`);
         return openAiError(res, error.status || 400, error.code || 'invalid_request', 'Invalid request.');
     }
 }

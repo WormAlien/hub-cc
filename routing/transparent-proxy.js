@@ -583,6 +583,29 @@ const CC_DEFAULT_MODEL = 'claude-opus-5[1m]';
 // Константа остаётся extension point для будущего явного исключения.
 const NO_1M_GATEWAYS = new Set();
 
+// Окно 1M у модели, опубликованной в API Gateway, берём ИЗ МАНИФЕСТА, а не из списка имён
+// ниже. Список знает только claude/glm-5.3/три gpt-5.6, и `a6api/deepseek-v4.1-flash-1017`
+// (contextTokens 1M в манифесте) через `/model` падал до 200k - ровно тот симптом, что чинит
+// этот чокпоинт. Файл читаем лениво и кешируем по mtime; любая ошибка = «нет данных», тогда
+// работает прежний регексп. Суффикс управляет окном КЛИЕНТА, шлюзу он не уезжает.
+let oneMFromManifestCache = { mtime: 0, ids: new Set() };
+function publishedOneMModels() {
+    const file = path.join(__dirname, 'api-gateway.json');
+    let mtime = 0;
+    try { mtime = fs.statSync(file).mtimeMs; } catch { return oneMFromManifestCache.ids; }
+    if (mtime === oneMFromManifestCache.mtime) return oneMFromManifestCache.ids;
+    const ids = new Set();
+    try {
+        const raw = fs.readFileSync(file, 'utf8');
+        const doc = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw) || {};
+        for (const [id, meta] of Object.entries(doc.models || {})) {
+            if (meta && Number(meta.contextTokens) >= 1000000) ids.add(id);
+        }
+    } catch { /* нет манифеста - список пуст */ }
+    oneMFromManifestCache = { mtime, ids };
+    return ids;
+}
+
 // Необязательный префикс провайдера (`aipm/claude-opus-4-6`) обязан проходить: с ним
 // якорь ^ переставал матчиться, и модель, выбранная через `/model aipm/...`, молча
 // теряла [1m] — то есть окно падало до 200k ровно тем способом, который этот
@@ -614,6 +637,9 @@ function normalizeCcModel(m, activeBackend) {
     // но суффикс им вешать нельзя — это чужое имя, а не наш шлюз. Тест подставляет
     // таблицу в песочницу (tools/check-1m.js), поэтому копии здесь нет.
     if (slash < 0 && typeof CC_MODEL_PREFIX === 'object' && Object.prototype.hasOwnProperty.call(CC_MODEL_PREFIX, gw)) return `${s}[1m]`;
+    // Опубликованная в API Gateway модель с окном 1M - по манифесту, а не по имени.
+    // `s` здесь уже без суффикса, поэтому id сравнивается как есть.
+    if (slash > 0 && publishedOneMModels().has(s)) return `${s}[1m]`;
     return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/.test(s) ? `${s}[1m]` : s;
 }
 

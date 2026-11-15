@@ -409,9 +409,19 @@ function hashFile(file) {
     return hash.digest('hex');
 }
 
-function isOursForService(svc, image, executablePath = '') {
+function serviceScriptPath(svc) {
+    return svc && svc.script ? normalizedPath(path.resolve(ROUTING, svc.script)) : '';
+}
+
+function isOursForService(svc, image, executablePath = '', argumentsValue = '') {
     const actual = path.basename(String(image || '')).toLowerCase();
-    if (!svc.executable) return /^node(\.exe)?$/i.test(actual);
+    if (!svc.executable) {
+        if (!/^node(\.exe)?$/i.test(actual)) return false;
+        const expectedScript = serviceScriptPath(svc);
+        if (!expectedScript) return false;
+        const tokens = commandTokens(argumentsValue);
+        return tokens.slice(1).some(token => normalizedPath(token) === expectedScript);
+    }
     const expected = path.basename(String(svc.imageName || svc.executable)).toLowerCase();
     if (actual !== expected) return false;
     if (!executablePath) return false;
@@ -452,8 +462,11 @@ async function healthIdentity(svc, timeoutMs = 1500) {
 async function verifyProcessOwnership(svc, pid, {
     pidImage: imageOf = pidImage,
     pidExecutable: executableOf = pidExecutable,
+    pidArguments: argumentsOf = pidArguments,
 } = {}) {
-    if (!svc || !svc.executable) return isOursForService(svc || {}, imageOf(pid), executableOf(pid));
+    if (!svc || !svc.executable) {
+        return isOursForService(svc || {}, imageOf(pid), executableOf(pid), argumentsOf(pid));
+    }
     const runningPath = executableOf(pid);
     if (!isOursForService(svc, imageOf(pid), runningPath)) return false;
     if (svc.identity && svc.identity.sha256) {
@@ -938,12 +951,14 @@ function statusRows(items, map = listeners(), activePort = activeUpstreamPort(),
 
 async function statusRowsVerified(items, map = listeners(), activePort = activeUpstreamPort(), role = 'service', {
     verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
 } = {}) {
     const rows = statusRows(items, map, activePort, role);
     await Promise.all(rows.map(async (row, index) => {
         const svc = items[index];
-        if (!svc || !svc.executable || !row.pids.length) return;
-        const checks = await Promise.all(row.pids.map(pid => verifyIdentity(svc, pid)));
+        if (!svc || !row.pids.length) return;
+        const verifier = svc.executable ? verifyIdentity : verifyOwnership;
+        const checks = await Promise.all(row.pids.map(pid => verifier(svc, pid)));
         const verified = checks.length === 1 && checks[0] === true;
         row.up = verified;
         row.foreign = !verified;
@@ -959,12 +974,14 @@ async function statusVerified({
     listeners: getListeners = listeners,
     activeUpstreamPort: getActivePort = activeUpstreamPort,
     verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
 } = {}) {
     const map = getListeners();
     const activePort = getActivePort();
     return [
         ...await statusRowsVerified(services, map, activePort, 'service', {
             verifyServiceIdentity: verifyIdentity,
+            verifyProcessOwnership: verifyOwnership,
         }),
         ...statusRows(childItems, map, activePort, 'child'),
         ...statusRows(customItems, map, activePort, 'child'),
@@ -1017,6 +1034,7 @@ async function stopServices(services, {
     listeners: getListeners = listeners,
     pidImage: imageOf = pidImage,
     pidExecutable: executableOf = pidExecutable,
+    pidArguments: argumentsOf = pidArguments,
     verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
     killPort: stopPort = killPort,
     stopLaunched: stopExact = stopLaunched,
@@ -1037,6 +1055,7 @@ async function stopServices(services, {
             const owned = await Promise.all(holders.map(pid => verifyOwnership(item.service, pid, {
                 pidImage: imageOf,
                 pidExecutable: executableOf,
+                pidArguments: argumentsOf,
             })));
             if (owned.some(value => !value)) {
                 refused.push({
@@ -1049,7 +1068,7 @@ async function stopServices(services, {
                 });
                 continue;
             }
-            if (item.service.executable) ownedExternal.set(item, holders);
+            ownedExternal.set(item, holders);
         }
         runnable.push(item);
     }
@@ -1070,6 +1089,7 @@ async function stopServices(services, {
                 const stillOwned = unchanged && (await Promise.all(current.map(pid => verifyOwnership(item.service, pid, {
                     pidImage: imageOf,
                     pidExecutable: executableOf,
+                    pidArguments: argumentsOf,
                 })))).every(Boolean);
                 if (!stillOwned) {
                     result = {
@@ -1137,6 +1157,7 @@ async function startServices(services, {
     waitReady: awaitReady = waitReady,
     pidImage: imageOf = pidImage,
     pidExecutable: executableOf = pidExecutable,
+    pidArguments: argumentsOf = pidArguments,
     verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
     verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
     logTail: tailOf = logTail,
@@ -1175,6 +1196,7 @@ async function startServices(services, {
                 const owned = await Promise.all(holders.map(pid => verifyOwnership(svc, pid, {
                     pidImage: imageOf,
                     pidExecutable: executableOf,
+                    pidArguments: argumentsOf,
                 })));
                 if (owned.some(value => !value)) {
                     const who = holders.filter((_pid, index) => !owned[index])
@@ -1203,7 +1225,12 @@ async function startServices(services, {
                 }
                 continue;
             }
-            const alien = holders.filter(pid => !isOursForService(svc, imageOf(pid), executableOf(pid)));
+            const ownership = await Promise.all(holders.map(pid => verifyOwnership(svc, pid, {
+                pidImage: imageOf,
+                pidExecutable: executableOf,
+                pidArguments: argumentsOf,
+            })));
+            const alien = holders.filter((_pid, index) => !ownership[index]);
             if (alien.length) {
                 const who = alien.map(pid => `${imageOf(pid) || '?'} (pid ${pid})`).join(', ');
                 if (svc.optional) optionalFailure(svc, 'port_foreign', `порт :${svc.port} занят чужим процессом: ${who}`);

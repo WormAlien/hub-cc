@@ -3060,14 +3060,100 @@ test('lifecycle supports external args/env/log name and optional service failure
     assert.equal(foreignResult.optionalFailures.length, 1);
     assert.ok(foreignEvents.some(event => event.type === 'start-optional-failed' && event.port === 45003));
 
+    const macOwned = await lifecycle.startServices([
+        { port: 45005, name: 'mac dashboard', script: 'transparent-proxy.js', ready: '/__switch/api/status' },
+    ], {
+        listeners: () => new Map([[45005, new Set([777])]]),
+        activeUpstreamPort: () => 0,
+        pidImage: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidExecutable: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidArguments: () => ['/opt/homebrew/Cellar/node/26.3.0/bin/node', path.join(ROOT, 'routing', 'transparent-proxy.js')],
+        waitReady: async () => true,
+    });
+    assert.equal(macOwned.ok, true);
+    assert.equal(macOwned.foreign.length, 0);
+
+    const macForeign = await lifecycle.startServices([
+        { port: 45006, name: 'mac dashboard', script: 'transparent-proxy.js', ready: '/__switch/api/status' },
+    ], {
+        listeners: () => new Map([[45006, new Set([778])]]),
+        activeUpstreamPort: () => 0,
+        pidImage: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidExecutable: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidArguments: () => ['/opt/homebrew/Cellar/node/26.3.0/bin/node', '/Users/fixture/foreign.js'],
+        waitReady: async () => true,
+    });
+    assert.equal(macForeign.ok, false);
+    assert.equal(macForeign.foreign.length, 1);
+
     assert.equal(lifecycle.serviceLog({ executable: 'x', logName: 'bifrost' }).endsWith(`${path.sep}bifrost.log`), true);
-    assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node.exe'), true);
-    assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node'), true);
+    const fixtureCommand = [process.execPath, path.join(ROOT, 'routing', 'fixture.js')];
+    assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node.exe', process.execPath, fixtureCommand), true);
+    assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node', process.execPath, fixtureCommand), true);
     assert.equal(lifecycle.pidImage(process.pid), path.basename(process.execPath));
     assert.equal(lifecycle.isOurs(process.pid), true);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'bifrost-http.exe'), false);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'bifrost-http.exe', path.resolve('x')), true);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'node.exe'), false);
+});
+
+test('lifecycle stop refuses a foreign Node script and terminates only the exact owned script PID', async () => {
+    delete require.cache[require.resolve(LIFECYCLE_PATH)];
+    const lifecycle = require(LIFECYCLE_PATH);
+    const svc = { port: 45007, name: 'mac dashboard', script: 'transparent-proxy.js' };
+    const nodePath = '/opt/homebrew/Cellar/node/26.3.0/bin/node';
+    const expectedScript = path.join(ROOT, 'routing', 'transparent-proxy.js');
+    let portKilled = false;
+
+    const foreign = await lifecycle.stopServices([svc], {
+        phase: 'stop',
+        children: [],
+        listeners: () => new Map([[svc.port, new Set([779])]]),
+        pidImage: () => nodePath,
+        pidExecutable: () => nodePath,
+        pidArguments: () => [nodePath, '/Users/fixture/foreign.js'],
+        killPort: async () => { portKilled = true; return { freed: true }; },
+        drainAll: async () => ({ asked: 0, inflight: 0, freed: 0 }),
+    });
+    assert.equal(portKilled, false);
+    assert.equal(foreign.stuck.length, 1);
+    assert.equal(foreign.stuck[0].foreign, true);
+
+    const live = new Map([[svc.port, new Set([780])]]);
+    const stopped = [];
+    const owned = await lifecycle.stopServices([svc], {
+        phase: 'stop',
+        children: [],
+        listeners: () => live,
+        pidImage: () => nodePath,
+        pidExecutable: () => nodePath,
+        pidArguments: () => [nodePath, expectedScript],
+        stopLaunched: async pid => {
+            stopped.push(pid);
+            live.delete(svc.port);
+            return { pid, freed: true, denied: false };
+        },
+        killPort: async () => { portKilled = true; return { freed: true }; },
+        drainAll: async () => ({ asked: 0, inflight: 0, freed: 0 }),
+    });
+    assert.deepEqual(stopped, [780]);
+    assert.equal(owned.stuck.length, 0);
+});
+
+test('verified lifecycle status marks a foreign Node script down instead of reporting the port as healthy', async () => {
+    delete require.cache[require.resolve(LIFECYCLE_PATH)];
+    const lifecycle = require(LIFECYCLE_PATH);
+    const svc = { port: 45008, name: 'mac dashboard', script: 'transparent-proxy.js' };
+    const rows = await lifecycle.statusVerified({
+        services: [svc],
+        childItems: [],
+        customItems: [],
+        listeners: () => new Map([[svc.port, new Set([781])]]),
+        activeUpstreamPort: () => 0,
+        verifyProcessOwnership: async () => false,
+    });
+    assert.equal(rows[0].up, false);
+    assert.equal(rows[0].foreign, true);
 });
 
 test('lifecycle startServices launches an external descriptor with exact args, env, readiness, and optional status', async () => {

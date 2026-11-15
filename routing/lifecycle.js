@@ -226,7 +226,7 @@ function customPorts() {
 // Кого гасить в каждой из двух операций. Порядок: сначала дашборд, потом его дети —
 // живой дашборд успел бы заметить пропажу ребёнка и поднять его обратно.
 function killPlan(phase, services = SERVICES, childItems = null) {
-    const kids = childItems || [...children(), ...customPorts()];
+    const kids = childServiceDescriptors(childItems || [...children(), ...customPorts()]);
     const list = [...services].reverse().map(s => ({ port: s.port, name: s.name, service: s }));
     for (const k of kids) {
         if (phase === 'stop' || k.respawn) {
@@ -352,6 +352,23 @@ function pidImage(pid) {
     }
 }
 
+function macProcessIdentity(pid) {
+    if (!Number.isInteger(Number(pid)) || Number(pid) <= 0) return null;
+    // BSD ps joins argv with spaces and cannot identify an entrypoint safely.
+    // Python is already a Mac installation prerequisite; no compiler, shell,
+    // third-party module or mutable process title is needed for this kernel read.
+    try {
+        const r = spawnSync('/usr/bin/python3', ['-I', '-S', path.join(ROOT, 'tools', 'mac-process-identity.py'), String(pid)],
+            { encoding: 'utf8', timeout: 3000, maxBuffer: 16 * 1024 * 1024 });
+        if (r.status !== 0) return null;
+        const identity = JSON.parse(r.stdout);
+        if (!identity || typeof identity.executable !== 'string' || !path.isAbsolute(identity.executable)
+            || !Array.isArray(identity.argv) || !identity.argv.length
+            || identity.argv.some(arg => typeof arg !== 'string' || arg.includes('\0'))) return null;
+        return identity;
+    } catch { return null; }
+}
+
 function pidExecutable(pid) {
     try {
         if (IS_WIN) {
@@ -360,11 +377,9 @@ function pidExecutable(pid) {
                 { encoding: 'utf8', windowsHide: true });
             return r.status === 0 ? String(r.stdout || '').trim() : '';
         }
+        if (process.platform === 'darwin') return (macProcessIdentity(pid) || {}).executable || '';
         const r = spawnSync('readlink', [`/proc/${Number(pid)}/exe`], { encoding: 'utf8' });
-        if (r.status === 0) return String(r.stdout || '').trim();
-        const p = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-        const command = String(p.stdout || '').trim();
-        return command ? command.split(/\s+/)[0] : '';
+        return r.status === 0 ? String(r.stdout || '').trim() : '';
     } catch {
         return '';
     }
@@ -378,13 +393,10 @@ function pidArguments(pid) {
                 { encoding: 'utf8', windowsHide: true });
             return r.status === 0 ? String(r.stdout || '').trim() : '';
         }
-        const proc = `/proc/${Number(pid)}/cmdline`;
-        try {
-            return fs.readFileSync(proc).toString('utf8').split('\0').filter(Boolean);
-        } catch {
-            const r = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
-            return String(r.stdout || '').trim();
-        }
+        if (process.platform === 'darwin') return (macProcessIdentity(pid) || {}).argv || [];
+        const proc = fs.readFileSync(`/proc/${Number(pid)}/cmdline`).toString('utf8').split('\0');
+        if (proc[proc.length - 1] === '') proc.pop();
+        return proc;
     } catch {
         return '';
     }
@@ -422,7 +434,7 @@ function isOursForService(svc, image, executablePath = '', argumentsValue = '') 
         const expectedScript = serviceScriptPath(svc);
         if (!expectedScript) return false;
         const entryScript = nodeEntryScript(argumentsValue);
-        return !!entryScript && normalizedPath(entryScript) === expectedScript;
+        return !!entryScript && path.isAbsolute(entryScript) && normalizedPath(entryScript) === expectedScript;
     }
     const expected = path.basename(String(svc.imageName || svc.executable)).toLowerCase();
     if (actual !== expected) return false;
@@ -467,7 +479,9 @@ async function verifyProcessOwnership(svc, pid, {
     pidArguments: argumentsOf = pidArguments,
 } = {}) {
     if (!svc || !svc.executable) {
-        return isOursForService(svc || {}, imageOf(pid), executableOf(pid), argumentsOf(pid));
+        const executable = executableOf(pid);
+        if (process.platform === 'darwin' && !/^node$/i.test(path.basename(executable))) return false;
+        return isOursForService(svc || {}, imageOf(pid), executable, argumentsOf(pid));
     }
     const runningPath = executableOf(pid);
     if (!isOursForService(svc, imageOf(pid), runningPath)) return false;
@@ -490,20 +504,13 @@ function commandTokens(value) {
 }
 
 function nodeEntryScript(value) {
+    // The hub launches Node with an absolute entrypoint first, never with CLI
+    // preloads/eval/run. Fail closed on all flags instead of guessing their arity.
+    // Only Windows exposes a quoted command-line string; POSIX must supply argv.
+    if (!IS_WIN && !Array.isArray(value)) return '';
     const tokens = commandTokens(value);
     if (tokens.length < 2) return '';
-    const argsWithValue = new Set([
-        '--require', '-r', '--import', '--loader', '--experimental-loader',
-        '--conditions', '--openssl-config',
-    ]);
-    for (let index = 1; index < tokens.length; index += 1) {
-        const token = tokens[index];
-        if (token === '--') return index + 1 < tokens.length ? tokens[index + 1] : '';
-        if (argsWithValue.has(token)) { index += 1; continue; }
-        if (token.startsWith('-')) continue;
-        return token;
-    }
-    return '';
+    return tokens[1] && !tokens[1].startsWith('-') ? tokens[1] : '';
 }
 
 function commandOption(tokens, name) {
@@ -1072,7 +1079,11 @@ async function stopServices(services, {
             runnable.push(item);
             continue;
         }
-        if (item.service && holders.length) {
+        if (holders.length) {
+            if (!item.service) {
+                refused.push({ ...item, was: holders, freed: false, denied: false, holding: holders, foreign: true });
+                continue;
+            }
             const owned = await Promise.all(holders.map(pid => verifyOwnership(item.service, pid, {
                 pidImage: imageOf,
                 pidExecutable: executableOf,
@@ -1094,13 +1105,15 @@ async function stopServices(services, {
         runnable.push(item);
     }
 
-    await drainPorts(runnable.filter(item => !item.customProcess).map(item => item.port), DRAIN_WAIT_MS, on);
+    await drainPorts(runnable.filter(item => ownedExternal.has(item)).map(item => item.port), DRAIN_WAIT_MS, on);
     const results = refused.slice();
     for (const item of runnable) {
         on({ type: 'kill-begin', ...item });
         let result;
         if (item.customProcess) {
-            result = await cleanupCustomProcess(item.customProcess);
+            result = await cleanupCustomProcess(item.customProcess, {
+                pidArguments: argumentsOf, pidExecutable: executableOf,
+            });
         } else {
             const exactPids = ownedExternal.get(item);
             if (exactPids) {
@@ -1123,16 +1136,22 @@ async function stopServices(services, {
                     };
                 } else {
                     const stopped = await Promise.all(exactPids.map(pid => stopExact(pid)));
+                    const remaining = [...(getListeners().get(item.port) || [])];
                     result = {
                         port: item.port,
                         was: exactPids,
-                        freed: stopped.every(row => row && row.freed !== false),
+                        freed: remaining.length === 0 && stopped.every(row => row && row.freed !== false),
                         denied: stopped.some(row => row && row.denied),
-                        holding: stopped.filter(row => !row || row.freed === false).map((_row, index) => exactPids[index]),
+                        holding: remaining,
+                        foreign: remaining.some(pid => !exactPids.includes(pid)),
                     };
                 }
             } else {
-                result = await stopPort(item.port);
+                // No owned listener in the initial snapshot: a later arrival is
+                // not ours to terminate, regardless of its image or the port.
+                const current = [...(getListeners().get(item.port) || [])];
+                result = { port: item.port, was: [], freed: current.length === 0,
+                    denied: false, holding: current, foreign: current.length > 0 };
             }
         }
         results.push({ ...item, ...result });
@@ -1213,6 +1232,7 @@ async function startServices(services, {
         }
         const holders = [...(getListeners().get(svc.port) || [])];
         if (holders.length) {
+            let replaceUnhealthy = false;
             if (svc.executable) {
                 const owned = await Promise.all(holders.map(pid => verifyOwnership(svc, pid, {
                     pidImage: imageOf,
@@ -1259,14 +1279,29 @@ async function startServices(services, {
                     foreign.push(publicService(svc, { who }));
                     on({ type: 'start-foreign', ...publicService(svc, { who }) });
                 }
-            } else if (svc.optional && svc.ready && !(await awaitReady(svc.port, svc.ready))) {
+            } else if (svc.ready && !(await awaitReady(svc.port, svc.ready))) {
                 const text = 'порт занят нашим процессом, но статус не отвечает';
-                const cleanup = await stopService(svc.port);
-                optionalFailure(svc, 'readiness_failed', cleanup && cleanup.freed === false ? `${text}; процесс не остановлен` : text);
+                const current = [...(getListeners().get(svc.port) || [])];
+                const unchanged = current.length === holders.length && current.every(pid => holders.includes(pid));
+                const stillOwned = unchanged && (await Promise.all(current.map(pid => verifyOwnership(svc, pid, {
+                    pidImage: imageOf, pidExecutable: executableOf, pidArguments: argumentsOf,
+                })))).every(Boolean);
+                const cleanup = stillOwned ? await Promise.all(holders.map(pid => stopLaunch(pid))) : [];
+                const remaining = [...(getListeners().get(svc.port) || [])];
+                const clean = remaining.length === 0 && (current.length === 0
+                    || (stillOwned && cleanup.every(row => row && row.freed !== false)));
+                if (svc.optional) optionalFailure(svc, 'readiness_failed', clean ? text : `${text}; процесс не остановлен`);
+                else if (!clean) {
+                    on({ type: 'error', ...publicService(svc), text: `${text}; безопасно освободить порт не удалось` });
+                    return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
+                } else {
+                    replaceUnhealthy = true;
+                    on({ type: 'note', ...publicService(svc), text: 'неотвечающий свой процесс остановлен; запускаю заново' });
+                }
             } else {
                 on({ type: 'start-skip', ...publicService(svc) });
             }
-            continue;
+            if (!replaceUnhealthy) continue;
         }
         on({ type: 'start-begin', ...publicService(svc) });
         let launch = 0;
@@ -1346,6 +1381,18 @@ async function startServices(services, {
                 continue;
             }
             on({ type: 'error', ...publicService(svc), text });
+            return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
+        }
+        const finalHolders = [...(getListeners().get(svc.port) || [])];
+        const finalOwned = finalHolders.length === 1 && finalHolders[0] === realPid
+            && await verifyOwnership(svc, realPid, {
+                pidImage: imageOf, pidExecutable: executableOf, pidArguments: argumentsOf,
+            });
+        if (!finalOwned) {
+            await stopLaunch(launch);
+            started.splice(started.findIndex(row => row.port === svc.port), 1);
+            if (svc.optional) { optionalFailure(svc, 'foreign_after_launch', 'слушатель изменился во время проверки готовности'); continue; }
+            on({ type: 'error', ...publicService(svc), text: 'слушатель изменился во время проверки готовности' });
             return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
         }
         on({ type: 'start-done', ...publicService(svc, { pid: realPid }) });
@@ -1486,8 +1533,11 @@ function childServiceDescriptors(items = children()) {
         [20183, 'custom-openai-proxy.js'],
         [20192, 'custom-openai-proxy.js'],
         [20171, 'custom-openai-proxy.js'],
+        [8300, 'transparent-proxy.js'],
     ]);
-    return items.map(item => ({ ...item, script: byPort.get(item.port) || keepaliveScript }));
+    const knownPorts = new Set(children().map(item => item.port));
+    return items.map(item => item.script || item.customProcess ? item : ({ ...item,
+        script: byPort.get(item.port) || (knownPorts.has(item.port) ? keepaliveScript : undefined) }));
 }
 
 module.exports = {

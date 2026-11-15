@@ -238,7 +238,9 @@ fi
 # ── 10. Запуск ──────────────────────────────────────────────────────────────
 step "Готово ✓"
 b "Дашборд:  http://localhost:8200/__switch"
-if ask "Запустить дашборд сейчас (rotator :20126 + switcher :8200)?" Y; then
+if [ "${HUB_SKIP_START:-0}" = "1" ]; then
+  ok "зависимости готовы; перезапуск выполнит вызвавший хаб"
+elif ask "Запустить дашборд сейчас (rotator :20126 + switcher :8200)?" Y; then
   ( cd routing && start "ABUSE HUB" cmd //c restart-dashboard.bat ) 2>/dev/null \
     || ./routing/restart-dashboard.bat
   ok "дашборд поднимается — UI откроется в браузере"

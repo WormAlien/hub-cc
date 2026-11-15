@@ -3063,6 +3063,8 @@ test('lifecycle supports external args/env/log name and optional service failure
     assert.equal(lifecycle.serviceLog({ executable: 'x', logName: 'bifrost' }).endsWith(`${path.sep}bifrost.log`), true);
     assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node.exe'), true);
     assert.equal(lifecycle.isOursForService({ script: 'fixture.js' }, 'node'), true);
+    assert.equal(lifecycle.pidImage(process.pid), path.basename(process.execPath));
+    assert.equal(lifecycle.isOurs(process.pid), true);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'bifrost-http.exe'), false);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'bifrost-http.exe', path.resolve('x')), true);
     assert.equal(lifecycle.isOursForService({ executable: 'x', imageName: 'bifrost-http.exe' }, 'node.exe'), false);

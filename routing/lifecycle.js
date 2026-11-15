@@ -338,8 +338,13 @@ function pidImage(pid) {
             const m = String(r.stdout || '').match(/^"([^"]+)"/);
             return m ? m[1] : '';
         }
+        // BSD `ps` (macOS) keeps the executable path in `comm`. Homebrew Node is
+        // therefore reported as `/opt/homebrew/Cellar/node/<version>/bin/node`,
+        // while Windows reports just `node.exe`. Return one portable image name;
+        // otherwise our own detached dashboard/watchdog are called foreign after
+        // the first start and an idempotent start refuses the occupied ports.
         const r = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8' });
-        return String(r.stdout || '').trim();
+        return path.basename(String(r.stdout || '').trim());
     } catch {
         return '';
     }

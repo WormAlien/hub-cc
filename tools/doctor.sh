@@ -31,9 +31,13 @@ for d in /c /d; do
 done
 echo
 echo "--- 4. Python ---"
-py -0 2>&1 || echo "py launcher нет"
-python --version 2>&1 || echo "python в PATH нет"
-ls "$LOCALAPPDATA/Programs/Python/" 2>/dev/null || echo "в LOCALAPPDATA питонов нет"
+if [ "$(uname -s)" = "Darwin" ]; then
+  python3 --version 2>&1 || echo "python3 в PATH нет"
+else
+  py -0 2>&1 || echo "py launcher нет"
+  python --version 2>&1 || echo "python в PATH нет"
+  ls "${LOCALAPPDATA:-}/Programs/Python/" 2>/dev/null || echo "в LOCALAPPDATA питонов нет"
+fi
 echo
 echo "--- 5. tg-venv ---"
 # Путь до интерпретатора внутри venv платформозависим: Scripts/python.exe на
@@ -54,12 +58,20 @@ echo "--- 6. Лог последней сборки venv ---"
 tail -30 "${TEMP:-/tmp}/tg-venv-install.log" 2>/dev/null || echo "лога нет (сборка не запускалась?)"
 echo
 echo "--- 7. sqlite3 ---"
-for c in "$LOCALAPPDATA/Microsoft/WinGet/Links/sqlite3.exe" "$HOME/bin/sqlite3.exe"; do
-  [ -f "$c" ] && echo "ЕСТЬ: $c" || echo "нет: $c"
-done
+if [ "$(uname -s)" = "Darwin" ]; then
+  command -v sqlite3 >/dev/null 2>&1 && sqlite3 --version 2>&1 || echo "sqlite3 в PATH нет"
+else
+  for c in "${LOCALAPPDATA:-}/Microsoft/WinGet/Links/sqlite3.exe" "$HOME/bin/sqlite3.exe"; do
+    [ -f "$c" ] && echo "ЕСТЬ: $c" || echo "нет: $c"
+  done
+fi
 echo
 echo "--- 8. Дашборд: кто слушает порты ---"
-netstat -ano 2>/dev/null | grep -E "LISTENING" | grep -E ":(8200|20126|20128) " || echo "порты 8200/20126/20128 никто не слушает"
+if [ "$(uname -s)" = "Darwin" ]; then
+  lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E ':(8200|20126|20128)( |$)' || echo "порты 8200/20126/20128 никто не слушает"
+else
+  netstat -ano 2>/dev/null | grep -E "LISTENING" | grep -E ":(8200|20126|20128) " || echo "порты 8200/20126/20128 никто не слушает"
+fi
 # Front-door :20100 — вход Claude Code по умолчанию. Если он лежит, а settings.json
 # на него смотрит, CC не работает НИ с одним провайдером, и это первое, что надо видеть.
 echo

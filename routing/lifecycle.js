@@ -229,7 +229,9 @@ function killPlan(phase, services = SERVICES, childItems = null) {
     const kids = childItems || [...children(), ...customPorts()];
     const list = [...services].reverse().map(s => ({ port: s.port, name: s.name, service: s }));
     for (const k of kids) {
-        if (phase === 'stop' || k.respawn) list.push({ ...k, port: k.port, name: k.name, service: null });
+        if (phase === 'stop' || k.respawn) {
+            list.push({ ...k, port: k.port, name: k.name, service: k.script ? k : null });
+        }
     }
     const seen = new Set();
     return list.filter(x => (seen.has(x.port) ? false : seen.add(x.port)));
@@ -419,8 +421,8 @@ function isOursForService(svc, image, executablePath = '', argumentsValue = '') 
         if (!/^node(\.exe)?$/i.test(actual)) return false;
         const expectedScript = serviceScriptPath(svc);
         if (!expectedScript) return false;
-        const tokens = commandTokens(argumentsValue);
-        return tokens.slice(1).some(token => normalizedPath(token) === expectedScript);
+        const entryScript = nodeEntryScript(argumentsValue);
+        return !!entryScript && normalizedPath(entryScript) === expectedScript;
     }
     const expected = path.basename(String(svc.imageName || svc.executable)).toLowerCase();
     if (actual !== expected) return false;
@@ -485,6 +487,23 @@ function commandTokens(value) {
     let match;
     while ((match = pattern.exec(text))) tokens.push(match[1] ?? match[2] ?? match[3]);
     return tokens;
+}
+
+function nodeEntryScript(value) {
+    const tokens = commandTokens(value);
+    if (tokens.length < 2) return '';
+    const argsWithValue = new Set([
+        '--require', '-r', '--import', '--loader', '--experimental-loader',
+        '--conditions', '--openssl-config',
+    ]);
+    for (let index = 1; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === '--') return index + 1 < tokens.length ? tokens[index + 1] : '';
+        if (argsWithValue.has(token)) { index += 1; continue; }
+        if (token.startsWith('-')) continue;
+        return token;
+    }
+    return '';
 }
 
 function commandOption(tokens, name) {
@@ -983,7 +1002,9 @@ async function statusVerified({
             verifyServiceIdentity: verifyIdentity,
             verifyProcessOwnership: verifyOwnership,
         }),
-        ...statusRows(childItems, map, activePort, 'child'),
+        ...await statusRowsVerified(childServiceDescriptors(childItems), map, activePort, 'child', {
+            verifyProcessOwnership: verifyOwnership,
+        }),
         ...statusRows(customItems, map, activePort, 'child'),
     ];
 }
@@ -1126,7 +1147,7 @@ async function stopServices(services, {
 }
 
 async function stop({ phase = 'stop', on = () => {} } = {}) {
-    let childItems = [...children(), ...customPorts()];
+    let childItems = [...childServiceDescriptors(), ...customPorts()];
     // Restart keeps a current front-door alive. Stop always includes it.
     if (phase === 'restart' && await frontdoorCodeIsCurrent()) {
         const fd = frontdoorPort();
@@ -1279,11 +1300,28 @@ async function startServices(services, {
             on({ type: 'error', ...svc, text });
             return { ok: false, started, foreign, optionalFailures, failed: svc, tail: tailOf(svc), log: logOf(svc) };
         }
+        const ownsObservedPid = await verifyOwnership(svc, realPid, {
+            pidImage: imageOf,
+            pidExecutable: executableOf,
+            pidArguments: argumentsOf,
+        });
+        if (!ownsObservedPid) {
+            const cleanup = await stopLaunch(launch);
+            const text = cleanup && cleanup.freed === false
+                ? 'порт занял чужой процесс; запущенный процесс не остановлен'
+                : 'порт занял чужой процесс; запущенный процесс остановлен';
+            if (svc.optional) {
+                optionalFailure(svc, 'foreign_after_launch', text);
+                continue;
+            }
+            on({ type: 'error', ...publicService(svc), text });
+            return { ok: false, started, foreign, optionalFailures, failed: publicService(svc) };
+        }
         started.push(publicService(svc, { pid: realPid }));
 
         if (svc.ready && !(await awaitReady(svc.port, svc.ready))) {
             const text = 'порт занят, но статус не отвечает';
-            const cleanup = svc.executable ? await stopLaunch(launch) : await stopService(svc.port);
+            const cleanup = await stopLaunch(launch);
             const startedIndex = started.findIndex(row => row.port === svc.port);
             if (startedIndex >= 0) started.splice(startedIndex, 1);
             if (svc.optional) {
@@ -1403,23 +1441,58 @@ async function restartService(name, {
 // Идемпотентно: порт уже слушает — ничего не делаем. Ждём именно ЗАНЯТИЯ ПОРТА, а не
 // факта spawn: node мог умереть на первой строке, и «поднял» тогда означало бы неправду.
 // → { ok, port, pid, already?, error? }
-async function ensureProviderService(port) {
-    const svc = SERVICES.find(s => s.provider && s.port === Number(port));
+async function ensureProviderService(port, {
+    services = SERVICES,
+    listeners: getListeners = listeners,
+    verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
+    startService: launchService = startService,
+    stopLaunched: stopLaunch = stopLaunched,
+    sleep: pause = sleep,
+    maxPortPolls = 24,
+} = {}) {
+    const svc = services.find(s => s.provider && s.port === Number(port));
     if (!svc) return { ok: false, port: Number(port), error: 'это не конвертер провайдера' };
-    const live = [...(listeners().get(svc.port) || [])];
-    if (live.length) return { ok: true, port: svc.port, pid: live[0], already: true };
-    try { startService(svc); } catch (e) { return { ok: false, port: svc.port, error: e.message }; }
-    for (let i = 0; i < 24; i++) {
-        await sleep(250);
-        const pid = [...(listeners().get(svc.port) || [])][0];
-        if (pid) return { ok: true, port: svc.port, pid, name: svc.name };
+    const live = [...(getListeners().get(svc.port) || [])];
+    if (live.length) {
+        const owned = await Promise.all(live.map(pid => verifyOwnership(svc, pid)));
+        if (live.length !== 1 || !owned.every(Boolean)) {
+            return { ok: false, port: svc.port, error: `порт :${svc.port} занят чужим процессом` };
+        }
+        return { ok: true, port: svc.port, pid: live[0], already: true };
     }
+    let launch = 0;
+    try { launch = await launchService(svc); }
+    catch (e) { return { ok: false, port: svc.port, error: e.message }; }
+    for (let i = 0; i < maxPortPolls; i++) {
+        await pause(250);
+        const pid = [...(getListeners().get(svc.port) || [])][0];
+        if (!pid) continue;
+        if (!await verifyOwnership(svc, pid)) {
+            await stopLaunch(launch);
+            return { ok: false, port: svc.port, error: `порт :${svc.port} занял чужой процесс` };
+        }
+        return { ok: true, port: svc.port, pid, name: svc.name };
+    }
+    await stopLaunch(launch);
     return { ok: false, port: svc.port, error: `порт :${svc.port} не занялся`, tail: logTail(svc) };
+}
+
+function childServiceDescriptors(items = children()) {
+    const keepaliveScript = 'keepalive-proxy.js';
+    const byPort = new Map([
+        [frontdoorPort(), 'frontdoor-proxy.js'],
+        [20132, 'agentrouter-proxy.js'],
+        [20178, path.join('..', 'gemini', 'src', 'index.js')],
+        [20183, 'custom-openai-proxy.js'],
+        [20192, 'custom-openai-proxy.js'],
+        [20171, 'custom-openai-proxy.js'],
+    ]);
+    return items.map(item => ({ ...item, script: byPort.get(item.port) || keepaliveScript }));
 }
 
 module.exports = {
     ROOT, ROUTING, IS_WIN, LOG_DIR, serviceLog, isElevated,
-    SERVICES, children, customPorts, killPlan, frontdoorPort,
+    SERVICES, children, childServiceDescriptors, customPorts, killPlan, frontdoorPort,
     listeners, killPort, killPid, stopLaunched, status, statusVerified, statusRows, statusRowsVerified,
     start, startServices, stop, stopServices, restart, restartService,
     preparePlatform, childEnv, serviceEnv, waitReady, logTail, sleep, startService,

@@ -2629,6 +2629,7 @@ test('new external launch failing identity is stopped by its exact returned PID'
         startService: async () => { live.set(port, new Set([pid])); return pid; },
         sleep: async () => {},
         waitReady: async () => true,
+        verifyProcessOwnership: async () => true,
         verifyServiceIdentity: async () => false,
         stopLaunched: async stoppedPid => {
             exactStops.push(stoppedPid);
@@ -2887,6 +2888,7 @@ test('optional service with failed readiness is stopped and omitted from started
         },
         sleep: async () => {},
         waitReady: async () => false,
+        verifyProcessOwnership: async () => true,
         stopLaunched: async stoppedPid => {
             stopped.push(stoppedPid);
             live.delete(port);
@@ -3019,6 +3021,7 @@ test('lifecycle supports external args/env/log name and optional service failure
         },
         sleep: async () => {},
         waitReady: async () => true,
+        verifyProcessOwnership: async () => true,
         pidImage: () => 'node.exe',
         logTail: () => '(fixture)',
         serviceLog: svc => `${svc.logName || svc.script}.log`,
@@ -3050,6 +3053,7 @@ test('lifecycle supports external args/env/log name and optional service failure
         },
         sleep: async () => {},
         waitReady: async () => true,
+        verifyProcessOwnership: async (_svc, pid) => pid !== 444,
         pidImage: pid => pid === 444 ? 'foreign.exe' : 'node.exe',
         logTail: () => '(fixture)',
         serviceLog: () => 'fixture.log',
@@ -3085,6 +3089,23 @@ test('lifecycle supports external args/env/log name and optional service failure
     });
     assert.equal(macForeign.ok, false);
     assert.equal(macForeign.foreign.length, 1);
+
+    const macSpoofedExtraArg = await lifecycle.startServices([
+        { port: 45009, name: 'mac dashboard', script: 'transparent-proxy.js', ready: '/__switch/api/status' },
+    ], {
+        listeners: () => new Map([[45009, new Set([782])]]),
+        activeUpstreamPort: () => 0,
+        pidImage: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidExecutable: () => '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+        pidArguments: () => [
+            '/opt/homebrew/Cellar/node/26.3.0/bin/node',
+            '/Users/fixture/foreign.js',
+            path.join(ROOT, 'routing', 'transparent-proxy.js'),
+        ],
+        waitReady: async () => true,
+    });
+    assert.equal(macSpoofedExtraArg.ok, false);
+    assert.equal(macSpoofedExtraArg.foreign.length, 1);
 
     assert.equal(lifecycle.serviceLog({ executable: 'x', logName: 'bifrost' }).endsWith(`${path.sep}bifrost.log`), true);
     const fixtureCommand = [process.execPath, path.join(ROOT, 'routing', 'fixture.js')];
@@ -3154,6 +3175,90 @@ test('verified lifecycle status marks a foreign Node script down instead of repo
     });
     assert.equal(rows[0].up, false);
     assert.equal(rows[0].foreign, true);
+});
+
+test('child lifecycle status and stop refuse a foreign Node holder on a managed child port', async () => {
+    delete require.cache[require.resolve(LIFECYCLE_PATH)];
+    const lifecycle = require(LIFECYCLE_PATH);
+    const child = { port: 45010, name: 'Front Door fixture', respawn: true, script: 'frontdoor-proxy.js' };
+    const rows = await lifecycle.statusVerified({
+        services: [],
+        childItems: [child],
+        customItems: [],
+        listeners: () => new Map([[child.port, new Set([783])]]),
+        activeUpstreamPort: () => 0,
+        verifyProcessOwnership: async () => false,
+    });
+    assert.equal(rows[0].up, false);
+    assert.equal(rows[0].foreign, true);
+
+    let killed = false;
+    const stopped = await lifecycle.stopServices([], {
+        phase: 'restart',
+        children: [child],
+        listeners: () => new Map([[child.port, new Set([783])]]),
+        verifyProcessOwnership: async () => false,
+        killPort: async () => { killed = true; return { freed: true }; },
+        drainAll: async () => ({ asked: 0, inflight: 0, freed: 0 }),
+    });
+    assert.equal(killed, false);
+    assert.equal(stopped.stuck.length, 1);
+    assert.equal(stopped.stuck[0].foreign, true);
+});
+
+test('lifecycle start rejects a foreign PID that wins the port after launch and stops only its launch handle', async () => {
+    delete require.cache[require.resolve(LIFECYCLE_PATH)];
+    const lifecycle = require(LIFECYCLE_PATH);
+    const svc = { port: 45011, name: 'mac dashboard', script: 'transparent-proxy.js', ready: '/health' };
+    const live = new Map();
+    const exactStops = [];
+    let readyCalled = false;
+    const result = await lifecycle.startServices([svc], {
+        listeners: () => live,
+        activeUpstreamPort: () => 0,
+        startService: () => {
+            live.set(svc.port, new Set([784]));
+            return 700;
+        },
+        sleep: async () => {},
+        verifyProcessOwnership: async () => false,
+        waitReady: async () => { readyCalled = true; return true; },
+        stopLaunched: async pid => { exactStops.push(pid); return { pid, freed: true, denied: false }; },
+        killPort: async () => { throw new Error('foreign port holder must never be killed by port'); },
+        maxPortPolls: 1,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(readyCalled, false);
+    assert.deepEqual(exactStops, [700]);
+});
+
+test('ensureProviderService refuses foreign occupied and post-launch holders', async () => {
+    delete require.cache[require.resolve(LIFECYCLE_PATH)];
+    const lifecycle = require(LIFECYCLE_PATH);
+    const svc = { port: 45012, name: 'lazy provider', script: 'fixture.js', provider: 'fixture' };
+    let launched = false;
+    let stopped = 0;
+    const occupied = await lifecycle.ensureProviderService(svc.port, {
+        services: [svc],
+        listeners: () => new Map([[svc.port, new Set([785])]]),
+        verifyProcessOwnership: async () => false,
+        startService: async () => { launched = true; return 700; },
+    });
+    assert.equal(occupied.ok, false);
+    assert.equal(launched, false);
+
+    const live = new Map();
+    const raced = await lifecycle.ensureProviderService(svc.port, {
+        services: [svc],
+        listeners: () => live,
+        verifyProcessOwnership: async () => false,
+        startService: async () => { live.set(svc.port, new Set([786])); return 701; },
+        stopLaunched: async pid => { stopped = pid; return { pid, freed: true, denied: false }; },
+        sleep: async () => {},
+        maxPortPolls: 1,
+    });
+    assert.equal(raced.ok, false);
+    assert.equal(stopped, 701);
 });
 
 test('lifecycle startServices launches an external descriptor with exact args, env, readiness, and optional status', async () => {

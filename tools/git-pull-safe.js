@@ -107,8 +107,15 @@ function snapshotProactiveState() {
 }
 
 function isTracked(rel) {
-    try { git('ls-files', '--error-unmatch', '--', rel); return true; }
-    catch { return false; }
+    // stderr здесь ОЖИДАЕМ: у неотслеживаемого пути ls-files --error-unmatch обязан
+    // упасть, а его «pathspec … did not match any file(s) known to git» утекал в
+    // консоль обновления и читался человеком как причина отказа. Глушим stderr:
+    // ответ нам нужен из кода выхода, а не из текста.
+    try {
+        execFileSync('git', ['ls-files', '--error-unmatch', '--', rel],
+            { cwd: REPO, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'ignore'] });
+        return true;
+    } catch { return false; }
 }
 
 function markSkipWorktree(rel) {
@@ -141,7 +148,7 @@ function worktreeMatchesHead(rel) {
         const expected = git('rev-parse', `HEAD:${rel}`);
         const actual = execFileSync('git', [
             'hash-object', `--path=${rel}`, path.join(REPO, rel),
-        ], { cwd: REPO, encoding: 'utf8' }).trim();
+        ], { cwd: REPO, encoding: 'utf8', env: GIT_ENV }).trim();
         return actual === expected;
     } catch {
         return false;
@@ -272,8 +279,22 @@ function protectedOperation(operation) {
     return { ...result, preserved };
 }
 
+// 🔴 Локаль ОБЯЗАТЕЛЬНА и форсируется здесь, а не в каждом вызывающем.
+//
+// Разбор отказов ниже — регексы на английском тексте git («would be overwritten»,
+// «local changes», маркер списка untracked). У пользователя с ru_RU git печатает
+// «Ваши локальные изменения … будут перезаписаны при слиянии», регекс не срабатывал,
+// и `pullSafe` выходил ДО разбора: код 1 вместо авто-stash, настройки не сохранялись.
+// Живой случай 16.11.2026 (второй пользователь, macOS): обновление встало намертво
+// на 19 неотслеживаемых файлах, которые --stash умеет прятать, и чинилось только руками.
+//
+// LC_ALL=C делает текст git стабильным независимо от локали машины. Проверять надо
+// именно окружение дочернего процесса: на Windows подменить git шимом нельзя, поэтому
+// тест читает эту обёртку и живой вызов, а не подставной бинарь.
+const GIT_ENV = { ...process.env, LC_ALL: 'C', LANG: 'C', LANGUAGE: 'C' };
+
 function git(...args) {
-    return execFileSync('git', args, { cwd: REPO, encoding: 'utf8' }).trim();
+    return execFileSync('git', args, { cwd: REPO, encoding: 'utf8', env: GIT_ENV }).trim();
 }
 
 // ─── Незавершённая операция в репозитории ────────────────────────────────────

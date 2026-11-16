@@ -2002,8 +2002,21 @@ test('tracked template is file-only, keyless, Anthropic based, retry-free, and o
             live_models_sync_interval: 0,
         },
     });
-    assert.equal(hashBytes(fs.readFileSync(PRICING_PATH)), '9269f021b3e0240ba6252d6f6b81fe167dcd1724bd84c74310a5389ce392845c');
-    assert.equal(hashBytes(fs.readFileSync(MODEL_PARAMETERS_PATH)), 'eb0279f8848f3f6690d10dff1165fe8c2b22818cb93319f76a3341d17a911dac');
+    // Сверяем НЕ с литералами, а с пинами в bifrost-lock.json: именно это и проверяет
+    // copyPinnedCatalog перед стартом. Литералы здесь когда-то закрепили пины, посчитанные
+    // по CRLF-копии рабочего дерева Windows, — они совпадали только у владельца, а на macOS
+    // sidecar не стартовал ни у кого (живой случай 16.11.2026). Сверка с lock не даёт этому
+    // вернуться: меняются пины или файлы — тест это видит.
+    const catalogLock = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'routing', 'bifrost-lock.json'), 'utf8'));
+    assert.equal(hashBytes(fs.readFileSync(PRICING_PATH)), catalogLock.catalogs.pricing.sha256);
+    assert.equal(hashBytes(fs.readFileSync(MODEL_PARAMETERS_PATH)), catalogLock.catalogs.modelParameters.sha256);
+    // И файл на диске обязан совпадать с блобом в git, иначе пины разъедутся по платформам.
+    for (const rel of ['routing/bifrost-pricing.json', 'routing/bifrost-model-parameters.json']) {
+        const blob = require('node:child_process')
+            .execFileSync('git', ['cat-file', 'blob', `HEAD:${rel}`], { cwd: path.join(__dirname, '..') });
+        assert.equal(hashBytes(blob), hashBytes(fs.readFileSync(path.join(__dirname, '..', rel))),
+            `${rel}: рабочая копия разошлась с git (перевод строк?)`);
+    }
 });
 
 test('Apache-2.0 notice names the pinned upstream and does not claim the binary is tracked', () => {

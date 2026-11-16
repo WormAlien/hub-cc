@@ -1181,6 +1181,21 @@ async function stop({ phase = 'stop', on = () => {} } = {}) {
 // ── Запустить ────────────────────────────────────────────────────────────────
 // The injectable core is used by isolated dynamic-port tests. Production start()
 // supplies the real service table and process adapters.
+// Человекочитаемые причины отказа optional-сервиса по коду ошибки. Код — машинный
+// (он же уходит в события и в отчёт), текст — для строки «недоступен: <код> — <текст>».
+// Держим отдельной таблицей, чтобы наружу не просачивался произвольный error.message:
+// в нём бывают приватные пути и токены из argv запуска.
+const LAUNCH_FAILURE_TEXT = {
+    bifrost_catalog_invalid: 'пины каталогов Bifrost не совпадают с файлами',
+    bifrost_checksum_invalid: 'контрольная сумма артефакта Bifrost некорректна',
+    bifrost_artifact_mismatch: 'скачанный артефакт Bifrost не совпал по sha256',
+    bifrost_download_failed: 'не удалось скачать артефакт Bifrost',
+    bifrost_runtime_not_file_only: 'в каталоге запуска Bifrost посторонние файлы',
+    bifrost_marker_invalid: 'внутренний маркер Bifrost некорректен',
+    bifrost_config_invalid: 'шаблон конфига Bifrost некорректен',
+    bifrost_loopback_invalid: 'адрес Bifrost не loopback',
+};
+
 function publicService(svc, extra = {}) {
     return {
         name: svc.name,
@@ -1315,7 +1330,16 @@ async function startServices(services, {
             launch = await launchService(svc);
         } catch (error) {
             if (svc.optional) {
-                optionalFailure(svc, 'launch_failed', 'запуск sidecar не удался');
+                // Причина ОБЯЗАНА доехать, но только код: раньше здесь стоял общий
+                // 'launch_failed' / «запуск sidecar не удался», и настоящий отказ
+                // (например bifrost_catalog_invalid — пины каталогов не сошлись с
+                // файлами) снаружи выглядел как безликое «sidecar недоступен».
+                // Текст ошибки НЕ пробрасываем: в нём бывают приватные пути, а событие
+                // уходит наружу — есть тест на публичную схему.
+                const code = error && typeof error.code === 'string' && /^[a-z0-9_]{3,64}$/.test(error.code)
+                    ? error.code
+                    : 'launch_failed';
+                optionalFailure(svc, code, LAUNCH_FAILURE_TEXT[code] || 'запуск sidecar не удался');
                 continue;
             }
             on({ type: 'error', ...svc, text: error.message });

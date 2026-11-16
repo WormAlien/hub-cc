@@ -33,4 +33,13 @@ routing/api-gateway.default.json text eol=lf
 routing/api-gateway.json         text eol=lf
 routing/bifrost-lock.json        text eol=lf
 routing/bifrost-config.json      text eol=lf
+# Каталоги Bifrost проверяются по sha256 из bifrost-lock.json, и проверка идёт по
+# БАЙТАМ ФАЙЛА. Без `eol=lf` здесь действует `*.json text` + core.autocrlf=true,
+# то есть в рабочей копии на Windows файл становится CRLF, а на macOS — LF.
+# Пины были посчитаны по CRLF-копии, поэтому sidecar не стартовал ни у кого, кроме
+# владельца: copyPinnedCatalog кидал bifrost_catalog_invalid, а снаружи это выглядело
+# как безликое «OpenAI sidecar недоступен». Держим LF, чтобы файл в копии совпадал
+# с блобом в git и с пином.
+routing/bifrost-pricing.json          text eol=lf
+routing/bifrost-model-parameters.json text eol=lf
 routing/BIFROST-NOTICE.txt       text eol=lf

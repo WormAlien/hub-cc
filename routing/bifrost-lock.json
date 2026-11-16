@@ -8,11 +8,11 @@
   "catalogs": {
     "pricing": {
       "filename": "bifrost-pricing.json",
-      "sha256": "9269f021b3e0240ba6252d6f6b81fe167dcd1724bd84c74310a5389ce392845c"
+      "sha256": "abed0c3889a2bb073b1ad42efdee62da5a9db375d00ed05b4b4e1a41b1d1e195"
     },
     "modelParameters": {
       "filename": "bifrost-model-parameters.json",
-      "sha256": "eb0279f8848f3f6690d10dff1165fe8c2b22818cb93319f76a3341d17a911dac"
+      "sha256": "c4af97bb2c471e62e16c5a631c918b889167840f129c7b9f155311d9771c6a44"
     }
   },
   "artifacts": {

@@ -9,6 +9,35 @@ const { test } = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 const SOURCE = path.join(ROOT, 'routing', 'lifecycle.js');
 const L = require(SOURCE);
+test('optional launch failure carries its real error code into the event, not a generic label', async () => {
+    // Живой случай 16.11.2026: Bifrost не стартовал из-за bifrost_catalog_invalid
+    // (пины каталогов не совпадали с файлами), но optionalFailure отдавал наружу
+    // фиксированное 'launch_failed' / «запуск sidecar не удался». Снаружи — безликое
+    // «OpenAI sidecar недоступен», и человек искал сеть и порты вместо пинов.
+    const svc = { port: 45209, name: 'bifrost fixture', script: 'transparent-proxy.js', ready: '/health', optional: true };
+    const events = [];
+    const failure = Object.assign(new Error('Pinned Bifrost catalog failed identity verification'),
+        { code: 'bifrost_catalog_invalid' });
+    const result = await L.startServices([svc], {
+        listeners: () => new Map(), activeUpstreamPort: () => 0,
+        verifyProcessOwnership: async () => false,
+        waitReady: async () => false,
+        startService: async () => { throw failure; },
+        stopLaunched: async () => ({ freed: true }),
+        stopService: async () => { assert.fail('must never kill by port'); },
+        on: event => events.push(event),
+    });
+    assert.equal(result.optionalFailures.length, 1);
+    assert.equal(result.optionalFailures[0].code, 'bifrost_catalog_invalid');
+    assert.match(result.optionalFailures[0].text, /пины каталогов/);
+    const ev = events.find(e => e.type === 'start-optional-failed');
+    assert.ok(ev, 'no start-optional-failed event');
+    assert.equal(ev.code, 'bifrost_catalog_invalid');
+    assert.match(ev.text, /пины каталогов/);
+    // Причина доехала, но путь из error.message наружу НЕ попал.
+    assert.equal(JSON.stringify({ result, events }).includes('/private/'), false);
+});
+
 test('optional occupied Node readiness failure never kills a replacement foreign holder by port', async () => {
     const svc = { port: 45205, name: 'fixture', script: 'transparent-proxy.js', ready: '/health', optional: true };
     const live = new Map([[svc.port, new Set([111])]]);

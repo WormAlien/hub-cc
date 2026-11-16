@@ -717,11 +717,16 @@ function reporter() {
                 cur = null;
                 break;
             case 'start-optional-failed':
-                if (cur) {
-                    cur.done(SKIP(), yellow(`${ev.name} :${ev.port} - OpenAI sidecar недоступен, native stack продолжает работу`));
-                    cur = null;
-                } else {
-                    line(`  ${SKIP()} ${yellow(`${ev.name} :${ev.port} - OpenAI sidecar недоступен, native stack продолжает работу`)}`);
+                // Без причины снаружи остаётся безликое «недоступен», и человек идёт
+                // чинить не то. Живой случай 16.11.2026: sidecar не стартовал из-за
+                // bifrost_catalog_invalid (пины каталогов не совпадали с файлами), а
+                // сообщение об этом молчало — искали сеть и порты.
+                {
+                    const why = ev.code ? `: ${ev.code}` : '';
+                    const detail = ev.text ? ` ${dim('— ' + ev.text)}` : '';
+                    const msg = `${ev.name} :${ev.port} - OpenAI sidecar недоступен${why}, native stack продолжает работу${detail}`;
+                    if (cur) { cur.done(SKIP(), yellow(msg)); cur = null; }
+                    else line(`  ${SKIP()} ${yellow(msg)}`);
                 }
                 break;
             case 'error':

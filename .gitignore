@@ -3,6 +3,9 @@ node_modules/
 
 # Root-level probe payloads and downloaded responses are local working artefacts.
 /_tmp-*.json
+# Local API response dump and per-installation spending, not release files.
+/ag.json
+routing/github-spend.json
 
 # Логи и данные
 logs/
@@ -450,6 +453,10 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/freegg-sessions.json
+freegg/profiles/
+freegg/sessions/
+freegg/gh-sessions/
 routing/apinex-sessions.json
 routing/kvotum-sessions.json
 routing/threerouter-sessions.json

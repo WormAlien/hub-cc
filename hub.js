@@ -1556,7 +1556,8 @@ async function doPostUpdate({ interactive }) {
     const r = spawnSync(bash, [installer], {
         cwd: L.ROOT,
         stdio: 'inherit',
-        env: { ...process.env, AUTO: '1' },
+        // This process owns the single restart after dependencies are complete.
+        env: { ...process.env, AUTO: '1', HUB_SKIP_START: '1' },
     });
     if (r.status !== 0) {
         line();

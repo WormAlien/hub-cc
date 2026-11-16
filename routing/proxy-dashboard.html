@@ -780,6 +780,11 @@ function randomThemeId() {
         <span class="flex-1">KKtoken</span>
         <span class="text-[10px] font-mono text-faint" id="nav-count-kktoken">—</span>
       </button>
+      <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="freegg" title="FreeGG: GitHub по рефке, автополучение ключа, Responses API">
+        <span class="w-5 text-center text-[14px]">🐴</span>
+        <span class="flex-1">FreeGG</span>
+        <span class="text-[10px] font-mono text-faint" id="nav-count-freegg">—</span>
+      </button>
       <button class="nav-btn group w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2.5 text-muted hover:text-ink hover:bg-elevated transition" data-tab="apinex" title="New API поверх Amazon Kiro. Каталог — РОВНО четыре модели, все Opus: claude-sonnet-5 и gpt-5 отдают 403, поэтому тир-карта opus-only во всех трёх тирах">
         <span class="w-5 text-center text-[14px]">🆓</span>
         <span class="flex-1">APINEX</span>
@@ -4708,6 +4713,14 @@ window.finNavCount = async () => {
       #leagueTab .lgnum{font-family:var(--lg-mono);font-variant-numeric:tabular-nums}
       #leagueTab .lgcap{font:600 10.5px/1 var(--lg-mono);letter-spacing:.13em;
         text-transform:uppercase;color:var(--lg-faint)}
+      /* Вводный текст раньше имел max-width:72ch, поэтому на широком экране выглядел так,
+         будто справа стоит невидимая колонка. Основная фраза теперь использует ширину
+         контента, а технические строки собраны отдельно и читаются цельным блоком. */
+      #leagueTab .lgintro{width:100%;min-width:0}
+      #leagueTab #lg-lede{max-width:none;line-height:1.55}
+      #leagueTab .lgmeta{display:grid;gap:5px;margin-top:9px;width:100%;min-width:0}
+      #leagueTab .lgmeta .lgcap{line-height:1.38;letter-spacing:.09em;
+        text-transform:none;white-space:normal;overflow-wrap:anywhere}
       #leagueTab .lgseg{display:inline-flex;padding:3px;gap:2px;border-radius:999px;
         background:color-mix(in oklab,var(--lg-bg) 55%,transparent);
         border:1px solid color-mix(in oklab,var(--lg-line-soft) 80%,transparent)}
@@ -7433,6 +7446,160 @@ window.finNavCount = async () => {
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
           <a href="https://kktoken.cc/sign-up?aff=Sog2" data-ref-link="kktoken" target="_blank" class="text-emerald hover:underline">регистрация по рефке</a>
+        </div>
+      </div>
+    </div>
+
+    <div data-tab-content="freegg">
+      <div class="px-6 py-8 space-y-4">
+        <header class="flex items-end justify-between gap-4 flex-wrap">
+          <div>
+            <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
+              <span class="text-red">🐴</span> <a href="https://freegg.app/sign-up?aff=nVhs" data-ref-link="freegg" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-red">FreeGG</a>
+            </h1>
+            <p class="text-sm text-muted mt-1">GitHub из менеджера - вход по рефке и ключ автоматически в выбранную запись. Модель <code class="font-mono text-xs">gpt-6.1-sol</code>; API <code class="font-mono text-xs">/v1/responses</code>. Клик по ключу - активация через <code class="font-mono text-xs">:20184</code> и конвертер <code class="font-mono text-xs">:20185</code>.</p>
+            <p class="text-[11px] text-muted mt-1">Нет GitHub-сессии - войдите в открытом окне. CAPTCHA и проверки GitHub требуют вашего участия; 429 останавливает попытку. Размер гранта и точный баланс до входа не подтверждены.</p>
+          </div>
+        </header>
+
+        <div id="fg-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+
+        <!-- Тиры FreeGG используют живой каталог площадки; текущая цель gpt-6.1-sol. -->
+        <div id="fg-modelmap" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Маппинг тиров - модели из каталога FreeGG</h2>
+            <button onclick="loadFgModels(false)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div id="fg-modelmap-sel" class="flex gap-2 items-end flex-wrap">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Новая вкладка начинает без параллельных дублей. -->
+        <div id="fg-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20184 - дубли выключены по умолчанию</h2>
+            <button onclick="fgLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
+          </div>
+          <div class="flex gap-2 items-end flex-wrap" id="fg-keepalive-sel">
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
+              <input id="fg-keepalive-hedge" type="number" min="0" step="1" placeholder="20" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">дублей максимум · 0 = выкл</span>
+              <input id="fg-keepalive-maxhedges" type="number" min="0" max="5" step="1" placeholder="1" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-40">
+              <span class="text-[10px] text-faint leading-tight">попыток на запрос (ретраи + мульти-запрос)</span>
+              <input id="fg-keepalive-attempts" type="number" min="1" max="10" placeholder="3" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <label class="flex flex-col gap-1 w-32">
+              <span class="text-[10px] text-faint leading-tight">пре-коммит (сек) · 0 = выкл</span>
+              <input id="fg-keepalive-precommit" type="number" min="0" step="1" placeholder="10" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-sky/60 font-mono">
+            </label>
+            <div class="flex items-center gap-2">
+              <button onclick="fgApplyKeepalive()" class="text-xs px-4 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">Применить</button>
+              <button onclick="fgResetKeepalive()" title="Поставить обкатанные настройки, которые прокси поставляет из коробки" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Рекомендованные</button>
+              <span id="fg-keepalive-status" class="text-xs text-faint font-mono">—</span>
+            </div>
+          </div>
+          <div class="mt-3 flex gap-3 items-start" id="fg-lat-box">
+            <div class="flex-1 min-w-0">
+              <div id="fg-lat-chart" class="w-full"></div>
+              <div id="fg-lat-legend" class="mt-1 text-[10px] text-faint font-mono">—</div>
+            </div>
+            <div class="flex flex-col gap-1 shrink-0" id="fg-lat-windows"></div>
+          </div>
+          <div id="fg-keepalive-stats" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-mono text-faint border-t border-line-soft pt-2.5">
+            <span>запросов: <b id="fg-stat-requests" class="text-ink">—</b></span>
+            <span>ремапов: <b id="fg-stat-remaps" class="text-ink">—</b></span>
+            <span>keepalive: <b id="fg-stat-keepalives" class="text-ink">—</b></span>
+            <span>мульти-запросов: <b id="fg-stat-hedges" class="text-ink">—</b></span>
+            <span>ретраев: <b id="fg-stat-retries" class="text-ink">—</b></span>
+            <span>ошибок: <b id="fg-stat-errors" class="text-ink">—</b></span>
+            <span>ответ: <b id="fg-stat-last" class="text-ink">—</b></span>
+          </div>
+        </div>
+
+        <!-- Models list -->
+        <div id="fg-models" class="rounded-xl bg-surface border border-line-soft p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-sm font-semibold tracking-tight">Models — клик = применить (пишет в settings.json) · 📋 = копия id</h2>
+            <div class="flex items-center gap-2"><code id="fg-route-cmd" class="text-[11px] px-2 py-1 rounded bg-elevated border border-line-soft font-mono" title="Скопировать команду в окно Claude Code: модель выберет тир-карта (вкладка «Маршруты»)">/model freegg[1m]</code><button onclick='copyToClipboard("/model freegg[1m]", "команда /model freegg[1m] скопирована")' class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">Скопировать</button><button onclick="loadFgModels(true)" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button></div>
+          </div>
+          <div id="fg-models-list" class="flex flex-wrap gap-1.5">
+            <span class="text-[10px] text-faint">загрузка…</span>
+          </div>
+        </div>
+
+        <!-- Тулбар вплотную над таблицей — см. пояснение на вкладке AgentRouter. -->
+        <div class="flex gap-2 items-center flex-wrap">
+          <button onclick="loadFgSessions(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">↻ Обновить</button>
+          <button onclick="loadFgSessions(true)" class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">📡 Пинг статусов</button>
+          <button onclick="fgCheckAllBalances()" class="text-xs px-3 py-2 bg-amber/10 border border-amber/50 text-amber rounded-lg hover:bg-amber/20 font-medium">💳 Балансы всех</button>
+          <button onclick="fgMapProfiles()" title="Связать записи с браузерными профилями — без этого точный баланс недоступен. Сверяет по ключу аккаунта." class="text-xs px-3 py-2 bg-sky/10 border border-sky/50 text-sky rounded-lg hover:bg-sky/20 font-medium">🔗 Профили</button>
+          <button onclick="fgShowAdd()" class="text-xs px-3 py-2 bg-red/10 border border-red/50 text-red rounded-lg hover:bg-red/20 font-medium">➕ Добавить</button>
+          <button onclick="fgShowImport()" class="text-xs px-3 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium" title="Вставить share-код от друга">📥 Вставить аккаунт</button>
+          <!-- Фильтр и порядок — см. пояснение на вкладке AgentRouter. Пункта «🎁 подарок»
+               здесь нет: колонка чек-ина есть только у AgentRouter. -->
+          <input id="fg-filter" oninput="newapiFilterChange('fg')" placeholder="фильтр…" title="Матч по email, подписи и API-ключу" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 w-32 focus:outline-none focus:border-red/60">
+          <select id="fg-sort" onchange="newapiSortChange('fg')" title="Порядок строк в таблице · запоминается между перезагрузками · аккаунты без API-ключа всегда сверху, в любом режиме" class="text-xs bg-surface border border-line-soft rounded-lg px-3 py-2 focus:outline-none focus:border-red/60">
+            <option value="date-desc">📅 дата ↓ (новые)</option>
+            <option value="date-asc">📅 дата ↑ (старые)</option>
+            <option value="bal-desc">💰 баланс ↓ (где деньги)</option>
+            <option value="bal-asc">💰 баланс ↑ (кто на нуле)</option>
+            <option value="status">⚡ статус</option>
+            <option value="email">📧 email A→Z</option>
+          </select>
+        </div>
+
+        <!-- Add form (скрыта по умолчанию) -->
+        <div id="fg-add-form" class="hidden rounded-xl bg-surface border border-red/40 p-4">
+          <div class="flex gap-2 items-end flex-wrap">
+            <label class="flex flex-col gap-1">
+              <span class="text-[10px] text-faint">email (логин)</span>
+              <input id="fg-add-email" oninput="newapiAddGhHint('fg')" placeholder="user@mail.com" class="text-xs bg-elevated border border-line-soft rounded-lg px-3 py-2 w-56 focus:outline-none focus:border-red/60">
+            </label>
+            <label class="flex flex-col gap-1 flex-1 max-w-[420px]">
+              <span class="text-[10px] text-faint">api_key — можно пустым</span>
+              <input id="fg-add-key" placeholder="пусто = зарегаюсь по рефке и получу ключ" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-red/60">
+            </label>
+            <button onclick="fgAdd()" class="text-xs px-4 py-2 bg-red/10 border border-red/50 text-red rounded-lg hover:bg-red/20 font-medium">Сохранить</button>
+            <button onclick="newapiAddPickGithub('fg')" title="клик по нику сразу заводит запись: с готовой сессией заселит профиль, без неё создаст и откроет регистрацию по рефке, а логин, пароль и живой 2FA покажет окном у строки" class="text-xs px-3 py-2 bg-red/10 border border-red/50 text-red rounded-lg hover:bg-red/20 font-medium">🐙 из менеджера</button>
+            <button onclick="fgShowAdd(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+          <div id="fg-add-gh-hint" class="text-[11px] text-dim mt-2 min-h-[16px]"></div>
+        </div>
+
+        <!-- Import form (скрыта по умолчанию) -->
+        <div id="fg-import-form" class="hidden rounded-xl bg-surface border border-violet/40 p-4">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-semibold">📥 Вставить аккаунт от друга</h3>
+            <button onclick="fgShowImport(false)" class="text-faint hover:text-crimson text-lg leading-none">&times;</button>
+          </div>
+          <p class="text-xs text-muted mb-2">Вставь сюда share-код (base64-строка, что дал друг кнопкой 🔗 «Поделиться») — аккаунт появится с email, API-ключом и его сессией (GitHub/freegg уже залогинены).</p>
+          <textarea id="fg-import-text" rows="3" placeholder="вставь base64-код здесь…" class="text-xs font-mono bg-elevated border border-line-soft rounded-lg px-3 py-2 w-full focus:outline-none focus:border-violet/60"></textarea>
+          <div id="fg-import-preview" class="text-xs text-faint mt-1.5"></div>
+          <div class="flex gap-2 mt-3">
+            <button onclick="fgImport()" class="text-xs px-4 py-2 bg-violet/10 border border-violet/50 text-violet rounded-lg hover:bg-violet/20 font-medium">Импортировать</button>
+            <button onclick="fgShowImport(false)" class="text-xs px-3 py-2 bg-surface border border-line-soft rounded-lg hover:border-line">Отмена</button>
+          </div>
+        </div>
+
+        <div id="fg-list" class="rounded-xl bg-surface border border-line-soft overflow-x-auto">
+          <div class="p-12 text-center text-faint text-xs">загрузка…</div>
+        </div>
+
+        <div class="text-xs text-faint">
+          <span>keepalive <code class="text-ink">:20184</code> → конвертер <code class="text-ink">:20185</code> → <code class="text-ink">freegg.app/v1/responses</code></span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>ключ автоматически создаётся после GitHub-входа; ручной импорт - кнопка 🔑</span>
+          <span class="mx-2 opacity-40">·</span>
+          <span>Messages и Chat на площадке закрыты (410); используется Responses</span>
+          <span class="mx-2 opacity-40">·</span>
+          <a href="https://freegg.app/sign-up?aff=nVhs" data-ref-link="freegg" target="_blank" class="text-red hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -11745,7 +11912,7 @@ const state = {
   tokenrouterUsage: {},
   activeFm: { name: null, key: null },
   toastLog: [],
-  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, apinex: false, kvotum: false, threerouter: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
+  loaded:  { devin: false, freemodel: false, notion: false, tokenrouter: false, aerolink: false, cun: false, evomap: false, ourtoken: false, 'omniroute-pool': false, plugins: false, conduit: false, anymodel: false, svrtr: false, agentrouter: false, gorouter: false, justwoker: false, seekai: false, truesota: false, kktoken: false, freegg: false, apinex: false, kvotum: false, threerouter: false, premier: false, vani: false, dacall: false, cleanapis: false, artbloom: false, fxqidian: false, lsapi: false, budsin: false, odyssey: false, bai: false, nova: false, getunikey: false, aipm: false, hcnsec: false, aikeysapi: false, rumeng: false, tabi: false, xpeach: false, custom: false, helpcoder: false, github: false, outlook: false },
   tg: [],
   aerolink: [],
   cun: [],
@@ -11778,7 +11945,7 @@ const state = {
   skModels: [],
   skActiveModel: '',
   skModelMap: {},
-  kktoken: [], apinex: [], kvotum: [], threerouter: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
+  kktoken: [], freegg: [], apinex: [], kvotum: [], threerouter: [], premier: [], vani: [], dacall: [], cleanapis: [], artbloom: [], fxqidian: [], lsapi: [], budsin: [], nova: [], odyssey: [], bai: [],
   getunikey: [],
   aipm: [],
   kkModels: [],
@@ -11993,6 +12160,7 @@ function showTab(name) {
   if (name === 'seekai') { if (!state.loaded.seekai) { state.loaded.seekai = true; loadSkSessions(false); } skLoadKeepalive(); }
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
+  if (name === 'freegg') { if (!state.loaded.freegg) { state.loaded.freegg = true; loadFgSessions(false); } fgLoadKeepalive(); }
   if (name === 'apinex') { if (!state.loaded.apinex) { state.loaded.apinex = true; loadAxSessions(false); } axLoadKeepalive(); }
   if (name === 'kvotum') { if (!state.loaded.kvotum) { state.loaded.kvotum = true; loadKvSessions(false); } kvLoadKeepalive(); }
   if (name === 'threerouter') { if (!state.loaded.threerouter) { state.loaded.threerouter = true; loadTrSessions(false); } trLoadKeepalive(); }
@@ -12088,9 +12256,9 @@ function jumpTo(id) {
 }
 
 // ═══════════════════ SWITCHER STATUS ═════════════════════════════════
-const LABELS = { a6api: 'a6api', apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', apinex: 'APINEX', kvotum: 'KVOTUM', threerouter: 'ThreeRouter', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
+const LABELS = { a6api: 'a6api', apihelper: 'FreeModel', omniroute: 'OmniRoute', notion: 'Notion (cheap)', freemodel_rotator: 'FreeModel', fm_openai: 'FreeModel GPT', vyce_openai: 'VyceAI', aerolink: 'Aerolink', cun: 'Cun', evomap: 'Evomap', ourtoken: 'Ourtoken', conduit: 'Conduit', svrtr: 'Svrtr', helpcoder: 'HelpCoder', agentrouter: 'AgentRouter', tabi: 'Tabi Token', gorouter: 'GoRouter', justwoker: 'JustWoker', seekai: 'SeekAi', truesota: 'TrueSOTA', kktoken: 'KKtoken', freegg: 'FreeGG', apinex: 'APINEX', kvotum: 'KVOTUM', threerouter: 'ThreeRouter', premier: 'Premier', vani: 'Vani', dacall: 'dacall.AI', cleanapis: 'Clean APIs', artbloom: 'Artbloom', fxqidian: 'Fxqidian', lsapi: 'Lingshu', budsin: 'BudsAI', nova: 'Nova', odyssey: 'Odyssey', bai: 'B.AI', getunikey: 'UniKey',
       aipm: 'AIPM', hcnsec: 'HCNsec', aikeysapi: 'AIKeysAPI', rumeng: '如梦AI', xpeach: 'XPeach', custom: 'Custom', official: 'Официальный Claude', unknown: 'unknown' };
-const COLORS = { a6api: 'text-azure bg-azure', apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', apinex: 'text-orange bg-orange', kvotum: 'text-violet bg-violet', threerouter: 'text-sky bg-sky', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
+const COLORS = { a6api: 'text-azure bg-azure', apihelper: 'text-emerald bg-emerald', omniroute: 'text-azure bg-azure', notion: 'text-azure bg-azure', freemodel_rotator: 'text-emerald bg-emerald', fm_openai: 'text-amber bg-amber', vyce_openai: 'text-emerald bg-emerald', aerolink: 'text-azure bg-azure', cun: 'text-violet bg-violet', evomap: 'text-amber bg-amber', ourtoken: 'text-cyan bg-cyan', conduit: 'text-violet bg-violet', svrtr: 'text-azure bg-azure', helpcoder: 'text-azure bg-azure', agentrouter: 'text-sky bg-sky', tabi: 'text-violet bg-violet', gorouter: 'text-teal bg-teal', justwoker: 'text-amber bg-amber', seekai: 'text-cyan bg-cyan', truesota: 'text-azure bg-azure', kktoken: 'text-emerald bg-emerald', freegg: 'text-red bg-red', apinex: 'text-orange bg-orange', kvotum: 'text-violet bg-violet', threerouter: 'text-sky bg-sky', premier: 'text-amber bg-amber', vani: 'text-indigo bg-indigo', dacall: 'text-orange bg-orange', cleanapis: 'text-blue bg-blue', artbloom: 'text-pink bg-pink', fxqidian: 'text-rose bg-rose', lsapi: 'text-violet bg-violet', budsin: 'text-teal bg-teal', nova: 'text-cyan bg-cyan', odyssey: 'text-lime bg-lime', bai: 'text-amber bg-amber', getunikey: 'text-sky bg-sky',
       aipm: 'text-indigo bg-indigo', hcnsec: 'text-emerald bg-emerald', aikeysapi: 'text-teal bg-teal', rumeng: 'text-violet bg-violet', xpeach: 'text-rose bg-rose', official: 'text-amber bg-amber', unknown: 'text-faint bg-faint' };
 
 async function loadStatus() {
@@ -16703,6 +16871,7 @@ const KEEPALIVE_API = {
   jw: '/__switch/api/jw/keepalive', sk: '/__switch/api/sk/keepalive',
   ts: '/__switch/api/ts/keepalive',
   kk: '/__switch/api/kk/keepalive',
+  fg: '/__switch/api/fg/keepalive',
   ax: '/__switch/api/ax/keepalive',
   kv: '/__switch/api/kv/keepalive',
   tr: '/__switch/api/tr/keepalive',
@@ -17084,6 +17253,7 @@ const jwApplyKeepalive  = () => applyKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skLoadKeepalive   = () => loadKeepaliveCard('sk', KEEPALIVE_API.sk);
 const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
+const fgLoadKeepalive   = () => loadKeepaliveCard('fg', KEEPALIVE_API.fg);
 const axLoadKeepalive   = () => loadKeepaliveCard('ax', KEEPALIVE_API.ax);
 const kvLoadKeepalive   = () => loadKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trLoadKeepalive   = () => loadKeepaliveCard('tr', KEEPALIVE_API.tr);
@@ -17150,6 +17320,7 @@ const odLoadKeepalive   = () => loadKeepaliveCard('od', KEEPALIVE_API.od);
 const baiLoadKeepalive   = () => loadKeepaliveCard('bai', KEEPALIVE_API.bai);
 const ukLoadKeepalive   = () => loadKeepaliveCard('uk', KEEPALIVE_API.uk);
 const kkApplyKeepalive  = () => applyKeepaliveCard('kk', KEEPALIVE_API.kk);
+const fgApplyKeepalive  = () => applyKeepaliveCard('fg', KEEPALIVE_API.fg);
 const axApplyKeepalive  = () => applyKeepaliveCard('ax', KEEPALIVE_API.ax);
 const kvApplyKeepalive  = () => applyKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trApplyKeepalive  = () => applyKeepaliveCard('tr', KEEPALIVE_API.tr);
@@ -17183,6 +17354,7 @@ const xpResetKeepalive  = () => resetKeepaliveCard('xp', KEEPALIVE_API.xp);
 const jwResetKeepalive  = () => resetKeepaliveCard('jw', KEEPALIVE_API.jw);
 const skResetKeepalive  = () => resetKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkResetKeepalive  = () => resetKeepaliveCard('kk', KEEPALIVE_API.kk);
+const fgResetKeepalive  = () => resetKeepaliveCard('fg', KEEPALIVE_API.fg);
 const axResetKeepalive  = () => resetKeepaliveCard('ax', KEEPALIVE_API.ax);
 const kvResetKeepalive  = () => resetKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trResetKeepalive  = () => resetKeepaliveCard('tr', KEEPALIVE_API.tr);
@@ -17225,6 +17397,7 @@ const KEEPALIVE_POLL_TABS = {
   seekai: ['sk', '/__switch/api/sk/keepalive'],
   truesota: ['ts', '/__switch/api/ts/keepalive'],
   kktoken: ['kk', '/__switch/api/kk/keepalive'],
+  freegg: ['fg', '/__switch/api/fg/keepalive'],
   apinex: ['ax', '/__switch/api/ax/keepalive'],
   kvotum: ['kv', '/__switch/api/kv/keepalive'],
   threerouter: ['tr', '/__switch/api/tr/keepalive'],
@@ -17373,7 +17546,7 @@ function newapiSortList(list, prov, opts = {}) {
 
 // onchange селекта: перерисовываем только свою вкладку. Данные уже в state, запрос к
 // серверу не нужен — смена порядка не должна стоить обращения к шлюзу.
-const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), ax: () => renderAx(), kv: () => renderKv(), tr: () => renderTr(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
+const NEWAPI_RERENDER = { ar: () => renderAr(), go: () => renderGo(), tb: () => renderTb(), jw: () => renderJw(), sk: () => renderSk(), ts: () => renderTs(), kk: () => renderKk(), fg: () => renderFg(), ax: () => renderAx(), kv: () => renderKv(), tr: () => renderTr(), pm: () => renderPm(), vn: () => renderVn(), dc: () => renderDc(), cp: () => renderCp(), ab: () => renderAb(), fx: () => renderFx(), ls: () => renderLs(), bd: () => renderBd(), nv: () => renderNv(), od: () => renderOd(), bai: () => renderBai(), uk: () => renderUk(), hn: () => renderHn(), ak: () => renderAk(), rm: () => renderRm() };
 function newapiSortChange(prov) {
   const el = $(prov + '-sort');
   if (el) _lsSet(NEWAPI_SORT_LS(prov), el.value);
@@ -17472,7 +17645,7 @@ function newapiFooter(list, total, prov, q, keyOk = isRealKey) {
 // каждой правки UI частый, и сбрасываться на дефолт он не должен. Значение из хранилища
 // применяем только если такой пункт в селекте есть — набор пунктов у шлюзов разный
 // (🎁 только у AgentRouter), иначе селект молча остался бы пустым.
-for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'ax', 'kv', 'tr', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
+for (const p of ['ar', 'go', 'tb', 'jw', 'sk', 'ts', 'kk', 'fg', 'ax', 'kv', 'tr', 'pm', 'vn', 'dc', 'cp', 'ab', 'fx', 'hn', 'ls', 'od', 'uk', 'bai', 'nv', 'bd', 'hn']) {
   const el = $(p + '-sort'), saved = _lsGet(NEWAPI_SORT_LS(p));
   if (el && saved && [...el.options].some(o => o.value === saved)) el.value = saved;
 }
@@ -18391,7 +18564,7 @@ const ghRowPickBlock = a => ghRowBlock(a)
   || (a.hasSession && a.allSourcesBusy ? 'профиль с этой сессией открыт в браузере — закрой его, тогда заселю' : null);
 
 // Выбранный в форме ➕ Добавить GitHub — до нажатия «Сохранить» живёт только здесь.
-const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, kv: null, pm: null, cp: null, ab: null, fx: null, bd: null, nv: null };
+const ghAddPick = { ar: null, go: null, tb: null, xp: null, jw: null, sk: null, kk: null, fg: null, kv: null, pm: null, cp: null, ab: null, fx: null, bd: null, nv: null };
 
 function newapiAddGhReset(prov) {
   ghAddPick[prov] = null;
@@ -18702,6 +18875,7 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
+  fg: { label: 'FreeGG',     host: 'freegg.app',        color: 'red', reload: () => loadFgSessions(), list: () => state.freegg,  render: () => renderFg(), setKey: id => fgSetKey(id), open: id => fgOpenLk(id) },
   kv: { label: 'KVOTUM',     host: 'myapi.buzz',        color: 'violet', reload: () => loadKvSessions(), list: () => state.kvotum,  render: () => renderKv(), setKey: id => kvSetKey(id), open: id => kvOpenLk(id) },
   pm: { label: 'Premier',     host: 'eide.pro',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
   cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
@@ -20257,6 +20431,526 @@ async function kkSaveModelMap() {
     const data = await res.json();
     if (data.ok) {
       state.kkModelMap = data.modelMap || mm;
+      toast('✓ маппинг сохранён', 'success', 4000);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('modelmap: ' + e.message, 'error'); }
+}
+function fgPoolStats(sessions) {
+  let live = 0, dead = 0, total = 0;
+  let sumBalance = 0, sumGrant = 0, withBalance = 0, deadBalance = 0;
+  for (const s of (sessions || [])) {
+    total++;
+    if (s.status === 'live') live++;
+    else if (s.status === 'dead') dead++;
+    if (balanceUsable(s)) {
+      sumBalance += s.balance;
+      // Знаменатель по умолчанию $5 — тот же шаг, которым бэкенд округляет расход в
+      // резерве (FG_GRANT_STEP). Подставлять сюда $70, как у шлюзов с грантом, нельзя:
+      // авторотация приняла бы пустой аккаунт за полный.
+      sumGrant += balanceDenom(s, 5);
+      withBalance++;
+    } else if (typeof s.balance === 'number') deadBalance += s.balance;
+  }
+  const remPct = sumGrant > 0 ? Math.round((sumBalance / sumGrant) * 100) : (total ? Math.round((live / total) * 100) : 0);
+  return { live, dead, total, withBalance, sumBalance, sumGrant, deadBalance, remPct };
+}
+function renderFgGauge() {
+  moneyAutoFetch('freegg').then(() => moneyRotateToHistory('freegg')).catch(() => {});
+  const st = fgPoolStats(state.freegg);
+  renderEnergyGauge($('fg-energy'), {
+    title: 'FreeGG · запас пула',
+    pct: st.remPct,
+    sub: [
+      `<span><span class="text-ink font-semibold">${st.total}</span> ключей</span>`,
+      `<span class="text-red">${st.live} 🟢 LIVE</span>`,
+      st.dead > 0 ? `<span class="text-crimson/80">${st.dead} 🔴 DEAD</span>` : '',
+      st.sumBalance > 0 ? `<span class="text-red">$${st.sumBalance.toFixed(2)} доступно</span>` : '',
+      st.withBalance ? `<span class="text-faint">${st.withBalance} с балансом</span>` : '',
+    ].filter(Boolean).join(''),
+    note: st.withBalance && st.withBalance < st.total
+      ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
+      : 'Активация → keepalive :20184 → конвертер :20185 → freegg.app/v1/responses. До входа грант не подтверждён.',
+  });
+}
+
+async function loadFgSessions(probe) {
+  if (probe) $('fg-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
+  try {
+    const res = await fetch('/__switch/api/fg/sessions' + (probe ? '?probe=1' : ''));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.freegg = data.sessions || [];
+    if ($('nav-count-freegg')) $('nav-count-freegg').textContent = state.freegg.length;
+    await newapiEnsureGhNames(state.freegg);
+    renderFg();
+    renderFgGauge();
+    loadFgModels();
+    loadFgModelMap();
+    if (probe) toast('✓ FreeGG: статусы обновлены', 'success');
+  } catch (e) {
+    $('fg-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+  }
+}
+
+async function loadFgSessionsLight() {
+  try {
+    const res = await fetch('/__switch/api/fg/sessions');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.freegg = data.sessions || [];
+    if ($('nav-count-freegg')) $('nav-count-freegg').textContent = state.freegg.length;
+    renderFg();
+    renderFgGauge();
+    paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+  } catch (e) { /* молча — следующий тик повторит */ }
+}
+async function loadFgModels(force) {
+  const keys = state.freegg
+    .slice()
+    .sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0))
+    .map(s => s.api_key)
+    .filter(Boolean);
+  if (!keys.length) return $('fg-models-list').innerHTML = '<span class="text-[10px] text-faint">нет ключей</span>';
+  $('fg-models-list').innerHTML = '<span class="text-[10px] text-faint">загрузка…</span>';
+  let lastNote = 'нет данных';
+  for (const key of keys) {
+    try {
+      const res = await fetch('/__switch/api/fg/models?api_key=' + encodeURIComponent(key) + (force ? '&force=1' : ''));
+      const data = await res.json();
+      if (data.ok && data.models?.length) { renderFgModels(data.models); return; }
+      if (data.note) lastNote = data.note;
+    } catch (e) { lastNote = e.message; }
+  }
+  $('fg-models-list').innerHTML = `<span class="text-[10px] text-faint">${esc(lastNote)} · все ключи не вернули моделей</span>`;
+}
+
+async function renderFgModels(models) {
+  if (models) state.fgModels = models;
+  const list = state.fgModels || [];
+  let active = state.fgActiveModel || '';
+  try {
+    const r = await fetch('/__switch/api/fg/active-model');
+    const j = await r.json();
+    if (j.ok && j.model) { state.fgActiveModel = j.model; active = j.model; }
+  } catch {}
+  $('fg-models-list').innerHTML = list.map(m => {
+    const id = m.id;
+    const isActive = active && id === active;
+    // 🪤 Акцент вкладки — red, а red же во всём дашборде значит «активно».
+    // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
+    // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
+    return `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-red/15 border border-red/50 text-red' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
+      onclick='fgSelectModel(${JSON.stringify(id)})'
+      title="клик = применить модель (settings.json + freegg-active-model.txt) · 📋 = копия">
+      ${esc(id)}
+      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "freegg")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>
+    </span>`;
+  }).join('');
+  // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
+  // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
+  renderFgModelMap();
+}
+async function fgSelectModel(id) {
+  if (!id) return toast('нет model id', 'warn');
+  try {
+    toast('⏳ применяю ' + id + '…', 'info', 2000);
+    const res = await fetch('/__switch/api/fg/set-model', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: id, modelMap: state.fgModelMap || {} }),
+    });
+    const data = await res.json();
+    if (!data.ok) return toast('Модель: ' + (data.error || '?'), 'error', 5000);
+    state.fgActiveModel = data.model || id;
+    const written = data.settingsModel && data.settingsModel !== data.model
+      ? ` (в settings.json как ${data.settingsModel})` : '';
+    toast('✓ ' + (data.model || id) + written + ' записана. ПЕРЕЗАПУСТИ Claude Code — '
+      + 'живая сессия модель не меняет (или /model ' + (data.model || id) + ' внутри неё)', 'success', 9000);
+    renderFgModels(state.fgModels);
+  } catch (e) { toast('fgSelectModel: ' + e.message, 'error'); }
+}
+
+function renderFg() {
+  const { list: all, total, q } = newapiRows(state.freegg, 'fg');
+  if (!all.length) {
+    $('fg-list').innerHTML = `<div class="p-12 text-center text-faint text-xs">${q
+      ? `по фильтру «${esc(q)}» ничего — 0 из ${total}`
+      : 'пусто — нажми ➕ Добавить (ключ можно не вписывать: откроется регистрация по рефке)'}</div>`;
+    return;
+  }
+  const rows = all.map(s => {
+    const active = !!s.active;
+    const email = s.email || s.name || '';
+    const kJ = JSON.stringify(s.api_key);
+    const idJ = JSON.stringify(s.id || '');
+    const noKey = !isRealKey(s.api_key);   // заглушка вместо ключа — регистрация ещё впереди
+    const keyMask = s.api_key.length > 18 ? '…' + s.api_key.slice(-8) : s.api_key;
+    const statusCell = noKey
+      ? NO_KEY_BADGE
+      : s.status === 'live'
+      ? '<span class="text-red text-[11px] font-medium">🟢 LIVE</span>'
+      : s.status === 'dead'
+      ? '<span class="text-crimson text-[11px] font-medium">🔴 DEAD</span>'
+      : '<span class="text-faint text-[11px]">⚪ —</span>';
+    const rowClass = s.status === 'dead' ? 'bg-crimson/5' : active ? 'bg-red/5' : '';
+    const activeTag = active ? '<span class="text-red mr-1" title="активный">🌟</span>' : '';
+    const balanceCell = fgBalanceCell(s, kJ);
+    // Неактивный ключ нейтральный, а не в акценте вкладки — см. пояснение в renderFgModels.
+    const keyCell = noKey ? noKeyCell(`fgSetKey(${idJ})`) : `<button onclick='fgActivate(${kJ})' title="Сделать активным (keepalive :20184 → freegg.app)"
+          class="font-mono text-[11px] px-2 py-1 rounded border ${active ? 'bg-red/10 border-red/50 text-red' : 'bg-surface border-line-soft text-muted hover:border-line'} transition">${esc(keyMask)}</button>`;    return `<tr data-acct-id="${esc(s.id || '')}" class="hover:bg-elevated/40 transition ${rowClass}">
+      <td class="px-3 py-2.5 text-sm text-ink truncate max-w-[220px]" title="${esc(email)}">
+        ${activeTag}${esc(email)}
+      </td>
+      <td class="px-3 py-2.5">
+        ${keyCell}
+      </td>
+      <td class="px-3 py-2.5 text-center">${statusCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${balanceCell}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">${newapiGhBadge(s, 'fg')}</td>
+      <td class="px-3 py-2.5 text-center">${newapiCreatedCell(s)}</td>
+      <td class="px-3 py-2.5 text-right whitespace-nowrap space-x-1">
+        ${noKey ? '' : actBtn(`fgCopyKey(${kJ})`, 'Скопировать API-ключ', '📋', 'sky')}
+        ${actBtn(`fgShare(${idJ})`,     'Поделиться аккаунтом (base64, отдать другу)', '🔗', 'violet')}
+        ${actBtn(`fgSetKey(${idJ})`,    'Вставить/сменить API-ключ', '🔑', 'sky')}
+        ${actBtn(`fgRename(${idJ})`,    'Редактировать email и подпись', '✏️', 'sky')}
+        ${noKey ? '' : actBtn(`fgActivate(${kJ})`, 'Сделать активным', '🤝', 'amber')}
+        ${noKey ? '' : actBtn(`fgPing(${kJ})`,     'Проверить ключ',   '🩺', 'sky')}
+        ${ghCredBtn(s, 'fg', idJ)}
+        ${actBtn(`fgOpenLk(${idJ})`,    noKey ? 'Зарегистрироваться по рефке (браузер аккаунта)' : 'Открыть браузер аккаунта (баланс freegg)', '🌐', 'violet')}
+        ${actBtn(`fgDelete(${idJ})`,    'Удалить аккаунт',        '🗑', 'crimson')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  $('fg-list').innerHTML = table(
+    [
+      { label: 'Email', sort: 'email' },
+      { label: 'API Key' },
+      { label: 'Status', align: 'center', w: 'w-16', sort: 'status' },
+      { label: 'Баланс', align: 'center', w: 'w-24', sort: 'bal-desc' },
+      { label: 'GitHub', align: 'center', w: 'w-28' },
+      { label: 'Добавлен', align: 'center', w: 'w-24', sort: 'date-desc' },
+      { label: 'Actions', align: 'right' },
+    ],
+    rows,
+    newapiFooter(all, total, 'fg', q),
+    { sortProv: 'fg', accent: 'red' }
+  );
+}
+
+function fgBalanceCell(s, kJ) { return newapiBalanceCell(s, kJ, 'fg'); }
+
+function fgShowAdd(show = true) {
+  $('fg-add-form').classList.toggle('hidden', !show);
+  newapiAddGhReset('fg');
+  if (show) { $('fg-add-email').value = ''; $('fg-add-key').value = ''; $('fg-add-email').focus(); }
+}
+async function fgAdd() {
+  const email = $('fg-add-email').value.trim();
+  const api_key = $('fg-add-key').value.trim();
+  if (!email) return toast('email обязателен', 'warn');
+  try {
+    const res = await fetch('/__switch/api/fg/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, api_key, ghId: ghAddPick.fg }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(data.noKey ? '✓ добавлен без ключа — открываю регистрацию по рефке' : '✓ добавлен', 'success');
+      fgShowAdd(false);
+      loadFgSessions(false);
+      // Ключа нет → сразу гоним в браузер аккаунта на регистрацию по рефке.
+      if (data.noKey && data.id) fgOpenLk(data.id);
+    }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Add: ' + e.message, 'error'); }
+}
+
+async function fgDelete(id) {
+  if (!id) return;
+  if (!confirm('Удалить аккаунт?')) return;
+  try {
+    const res = await fetch('/__switch/api/fg/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (data.ok) { toast('удалён', 'info'); loadFgSessions(false); }
+    else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Delete: ' + e.message, 'error'); }
+}
+// Поделиться аккаунтом: снять live-сессию профиля (cookies + localStorage) на
+// бэке и отдать компактный base64-код — авто-копия + окно с кодом (см.
+// openShareCodeModal). Друг вставит его у себя кнопкой 📥.
+async function fgShare(id) {
+  const cur = state.freegg.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  toast('🔗 снимаю сессию профиля…', 'info', 3000);
+  try {
+    const res = await fetch('/__switch/api/fg/share', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    const note = data.hasSession
+      ? ` (${data.cookieCount} cookies · ${data.originCount} origins)`
+      : ' (без сессии — получателю придётся залогиниться)';
+    // Авто-копия тут ненадёжна (прошло ~7 с с клика — user gesture истёк,
+    // окно могло потерять фокус), поэтому код ВСЕГДА показываем в окне.
+    const copied = await copyToClipboard(data.share, '', { silent: true });
+    openShareCodeModal({
+      provider: 'FreeGG',
+      // Показываем, что уезжает вместе с кодом: выдача/бонус/баланс теперь в meta,
+      // получателю не нужно задавать их заново.
+      subtitle: (cur.email || cur.name || id) + ' ·' + note
+        + (typeof cur.balance === 'number' ? ` · баланс $${cur.balance.toFixed(2)} уедет с кодом` : ''),
+      code: data.share,
+      copied,
+    });
+    toast(copied
+      ? '✓ share-код скопирован. Отправь его другу — он вставит его кнопкой 📥' + note
+      : '⚠ авто-копия не сработала — скопируй код из окна (📋 или Ctrl+C)' + note,
+      copied ? 'success' : 'warn', 6000);
+  } catch (e) { toast('share: ' + e.message, 'error'); }
+}
+
+function fgShowImport(show = true) {
+  $('fg-import-form').classList.toggle('hidden', !show);
+  if (show) {
+    $('fg-import-text').value = '';
+    $('fg-import-preview').innerHTML = '';
+    $('fg-import-text').focus();
+  }
+}
+// Импорт чужого share-кода: бэк разбирает base64, кладёт аккаунт в пул и
+// сохраняет его live-сессию — при первом открытии браузера GitHub залогинен.
+async function fgImport() {
+  const share = $('fg-import-text').value.trim();
+  if (!share) return toast('вставь share-код', 'warn');
+  $('fg-import-preview').innerHTML = '<span class="text-violet">импортирую…</span>';
+  try {
+    const res = await fetch('/__switch/api/fg/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ share }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    $('fg-import-preview').innerHTML = '';
+    fgShowImport(false);
+    // Выдача/бонус/баланс приезжают в share-коде (meta) — переспрашивать нечего.
+    const bal = typeof data.balance === 'number' ? ` · баланс $${data.balance.toFixed(2)}` : '';
+    toast(`✓ импортирован ${data.email}${data.hasSession ? ' (с сессией)' : ''}${bal}`, 'success', 4000);
+    loadFgSessions(false);
+  } catch (e) {
+    $('fg-import-preview').innerHTML = `<span class="text-crimson">${esc(e.message)}</span>`;
+    toast('import: ' + e.message, 'error');
+  }
+}
+
+// Вставить/сменить API-ключ у существующего аккаунта (берётся в консоли freegg).
+async function fgSetKey(id) {
+  const cur = state.freegg.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const msg = [
+    `Вставь API-ключ для аккаунта ${cur.email || cur.name || '?'} (берётся в консоли freegg после GitHub-входа).`,
+    '',
+    `Сейчас: ***${cur.api_key.slice(-6)}`,
+    'Оставь поле пустым и нажми Отмена — ничего не менять.',
+  ].join('\n');
+  const val = prompt(msg, 'sk-');
+  if (val === null || val.trim() === '') return;
+  const newKey = val.trim();
+  if (!/^sk-/.test(newKey)) {
+    if (!confirm('Ключ не похож на sk-… Всё равно сохранить?')) return;
+  }
+  try {
+    const res = await fetch('/__switch/api/fg/key', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, api_key: newKey }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ ключ обновлён ***${newKey.slice(-6)}${data.wasActive ? ' (активный ключ тоже обновлён)' : ''}`, 'success', 4000);
+    loadFgSessions(false);
+  } catch (e) { toast('set-key: ' + e.message, 'error'); }
+}
+// Редактировать аккаунт (подпись) — email и name. В таблице показывается email (fallback на
+// name), поэтому спрашиваем оба: сначала email, потом подпись. Профиль браузера привязан к id,
+// поэтому переименование не рвёт привязку. API-ключ меняется отдельной кнопкой 🔑 (fgSetKey).
+async function fgRename(id) {
+  const cur = state.freegg.find(x => x.id === id);
+  if (!cur) return toast('аккаунт не найден', 'error');
+  const emailVal = prompt('Редактировать аккаунт 1/2.\n\nemail (показывается в таблице):', cur.email || '');
+  if (emailVal === null) return;
+  const email = emailVal.trim();
+  if (!email) return toast('email не может быть пустым', 'warn');
+  const nameVal = prompt('Редактировать аккаунт 2/2.\n\nname (подпись):', cur.name || '');
+  if (nameVal === null) return;
+  const name = nameVal.trim();
+  if (!name) return toast('name не может быть пустым', 'warn');
+  try {
+    const res = await fetch('/__switch/api/fg/rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, email, name }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(`✓ аккаунт обновлён → ${data.email} (${data.name})`, 'success', 3000);
+    loadFgSessions(false);
+  } catch (e) { toast('rename: ' + e.message, 'error'); }
+}
+
+async function fgActivate(api_key) {
+  try {
+    const res = await fetch('/__switch/api/fg/activate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast(`🌟 Активен: ${data.email} (${data.mask}) — на следующем запросе`, 'success', 5000);
+      state.current = 'freegg';
+      state.urls.freegg = 'http://localhost:20184';
+      paintStatus();
+      loadFgSessions(false);
+    } else toast('Ошибка: ' + data.error, 'error');
+  } catch (e) { toast('Activate: ' + e.message, 'error'); }
+}
+async function fgPing(api_key) {
+  try {
+    toast('🩺 проверяю один ключ…', 'info', 2000);
+    const res = await fetch('/__switch/api/fg/ping?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const idx = state.freegg.findIndex(x => x.api_key === api_key);
+    if (idx >= 0) state.freegg[idx].status = data.status;
+    renderFg();
+    renderFgGauge();
+    toast(data.status === 'live' ? '🟢 ключ живой' : '🔴 ключ мёртв', data.status === 'live' ? 'success' : 'error', 3000);
+  } catch (e) { toast('ping: ' + e.message, 'error'); }
+}
+
+async function fgCheckBalance(api_key) {
+  try {
+    toast('💰 считаю баланс…', 'info', 2000);
+    const res = await fetch('/__switch/api/fg/balance?api_key=' + encodeURIComponent(api_key));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const s = state.freegg.find(x => x.api_key === api_key);
+    if (s) {
+      s.status = data.status;
+      if (data.status === 'live') {
+        s.spent = data.spent; s.balance = data.balance;
+        s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        applySelfSeen(s, data);
+      }
+      s.balanceCheckedAt = new Date().toISOString();
+    }
+    renderFg();
+    renderFgGauge();
+    if (data.status === 'live') {
+      const lbl = balSrcLabel(data);
+      toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
+    else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);
+  } catch (e) { toast('balance: ' + e.message, 'error'); }
+}
+async function fgCheckAllBalances() {
+  $('fg-list').innerHTML = `<div class="p-12 text-center text-amber text-xs">💳 считаю балансы всех ключей…</div>`;
+  try {
+    const res = await fetch('/__switch/api/fg/sessions?balance=1');
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    state.freegg = data.sessions || [];
+    renderFg();
+    renderFgGauge();
+    balanceBatchToast(state.freegg);
+  } catch (e) {
+    $('fg-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
+    toast('балансы: ' + e.message, 'error');
+  }
+}
+
+function fgSetBalance(api_key) {
+  return newapiSetBalanceUI('fg', api_key, () => state.freegg, () => { renderFg(); renderFgGauge(); });
+}
+
+function fgMapProfiles() {
+  return newapiMapProfilesUI('fg', () => loadFgSessions(false));
+}
+
+async function fgOpenLk(id) {
+  if (!id) return;
+  try {
+    const res = await fetch('/__switch/api/fg/session/open', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
+    toast(data.already
+      ? '🌐 браузер этого аккаунта уже открыт'
+      : data.mode === 'register'
+      ? '🌐 открылась регистрация по рефке — зарегайся через GitHub, потом вставь ключ кнопкой 🔑'
+      : '🌐 браузер аккаунта открыт на балансе', 'success', 7000);
+  } catch (e) { toast('ЛК: ' + e.message, 'error'); }
+}
+
+async function fgCopyKey(api_key) {
+  try {
+    await navigator.clipboard.writeText(api_key);
+    toast(`📋 ключ ***${api_key.slice(-6)} скопирован`, 'success', 2500);
+  } catch (e) { toast('копировать: ' + e.message, 'error'); }
+}
+// Настраиваемый маппинг opus/sonnet/haiku → freegg-модели (как в Custom).
+// Каталог тут opus-only, поэтому «правильный» набор — opus → claude-opus-5,
+// sonnet и haiku → claude-opus-4-8. Пустой тир = «model not supported» без ретрая.
+async function loadFgModelMap() {
+  try {
+    const res = await fetch('/__switch/api/fg/modelmap');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '?');
+    state.fgModelMap = data.modelMap || {};
+    renderFgModelMap();
+  } catch (e) { /* модельмап может отсутствовать — не критично */ }
+}
+
+async function renderFgModelMap() {
+  const mm = state.fgModelMap || {};
+  const models = (state.fgModels || []).map(m => m.id);
+  // Сохранённые цели держим в опциях ВСЕГДА: /fg/models ходит в апстрим и приезжает
+  // позже локального modelmap, а select без своей option показывает «— как есть —»,
+  // т.е. маппинг выглядит выключённым, хотя freegg-modelmap.json на месте (и
+  // 💾 Сохранить в этот момент затирал его null'ами). Дубли режет Set.
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku].filter(v => typeof v === 'string'))];
+  const sel = (name) => {
+    const val = mm[name] || '';
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '— как есть —'}</option>`).join('');
+    return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}</span>
+      <select id="fg-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
+  };
+  $('fg-modelmap-sel').innerHTML = `<div class="flex gap-2 items-end flex-wrap">
+    ${sel('opus')}${sel('sonnet')}${sel('haiku')}
+    <button onclick='fgSaveModelMap()' class="text-xs px-3 py-2 bg-red/10 border border-red/50 text-red rounded-lg hover:bg-red/20 font-medium">💾 Сохранить</button>
+  </div>`;
+}
+
+async function fgSaveModelMap() {
+  const mm = {
+    opus: $('fg-mm-opus')?.value || '',
+    sonnet: $('fg-mm-sonnet')?.value || '',
+    haiku: $('fg-mm-haiku')?.value || '',
+  };
+  try {
+    const res = await fetch('/__switch/api/fg/modelmap', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ opus: mm.opus, sonnet: mm.sonnet, haiku: mm.haiku }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      state.fgModelMap = data.modelMap || mm;
       toast('✓ маппинг сохранён', 'success', 4000);
     } else toast('Ошибка: ' + data.error, 'error');
   } catch (e) { toast('modelmap: ' + e.message, 'error'); }
@@ -35271,6 +35965,7 @@ const GH_USE_META = {
   go: { icon: '🌐', short: 'GO', label: 'GoRouter',    badge: 'bg-violet/15 text-violet border-violet/40' },
   jw: { icon: '👷', short: 'JW', label: 'JustWoker',   badge: 'bg-amber/15  text-amber  border-amber/40' },
   kk: { icon: '🪙', short: 'KK', label: 'KKtoken',     badge: 'bg-emerald/15 text-emerald border-emerald/40' },
+  fg: { icon: '🐴', short: 'FG', label: 'FreeGG',     badge: 'bg-red/15 text-red border-red/40' },
   kv: { icon: '💎', short: 'KV', label: 'KVOTUM',     badge: 'bg-violet/15 text-violet border-violet/40' },
   pm: { icon: '🅿️', short: 'PM', label: 'Premier',     badge: 'bg-amber/15 text-amber border-amber/40' },
   cp: { icon: '🧼', short: 'CP', label: 'Clean APIs',     badge: 'bg-blue/15 text-blue border-blue/40' },
@@ -35329,7 +36024,7 @@ async function ghOpenUsed(id) {
   // Пулы нужны, чтобы предложить конкретную запись для привязки. Тянем только те,
   // которых ещё нет в памяти: вкладку шлюза могли и не открывать за сессию.
   for (const [tag, meta] of Object.entries(NEWAPI_SEED_PROV)) {
-    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', kv: 'kvotum', pm: 'premier', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
+    const key = { ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker', sk: 'seekai', ts: 'truesota', kk: 'kktoken', fg: 'freegg', kv: 'kvotum', pm: 'premier', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', bd: 'budsin', nv: 'nova' }[tag];
     if (state.loaded[key]) continue;
     try { await meta.reload(); } catch (e) { /* пул недоступен — покажем без списка записей */ }
   }
@@ -37734,6 +38429,7 @@ const MONEY_PROVIDERS = {
   // заявлено), но бэкенд в резерве округляет расход вверх до $5 (KK_GRANT_STEP), и
   // знаменатель шкалы должен совпадать с этим шагом, иначе процент запаса поедет.
   kktoken:     { id: 'kktoken',     p: 'kk', stateKey: 'kktoken',     base: 5,   sym: '$',  label: 'KKtoken',     icon: '🪙', color: 'emerald', reload: () => loadKkSessionsLight() },
+  freegg:     { id: 'freegg',     p: 'fg', stateKey: 'freegg',     base: 5,   sym: '$',  label: 'FreeGG',     icon: '🐴', color: 'red', reload: () => loadFgSessionsLight() },
   apinex:     { id: 'apinex',     p: 'ax', stateKey: 'apinex',     base: 5,   sym: '$',  label: 'APINEX',     icon: '🆓', color: 'orange', reload: () => loadAxSessionsLight() },
   kvotum:     { id: 'kvotum',     p: 'kv', stateKey: 'kvotum',     base: 5,   sym: '$',  label: 'KVOTUM',     icon: '💎', color: 'violet', reload: () => loadKvSessionsLight() },
   threerouter:     { id: 'threerouter',     p: 'tr', stateKey: 'threerouter',     base: 5,   sym: '$',  label: 'ThreeRouter',     icon: '🧭', color: 'sky', reload: () => loadTrSessionsLight() },
@@ -37947,6 +38643,19 @@ function poolMoneyStat(accounts, base) {
   return { total, live, dead, withBalance, sumBalance, sumGrant, deadBalance, unknown };
 }
 
+// Legacy-вкладки лежат внутри скрываемой секции «Чтим память», а не прямыми детьми nav.
+// effectiveHiddenSet() в этом случае содержит `memory`, но не имена вложенных вкладок.
+// Для денежной шкалы скрытая родительская секция равна скрытой вкладке.
+function moneyTabHidden(id, hiddenTabs) {
+  if (hiddenTabs.has(id)) return true;
+  const nav = document.getElementById('main-nav');
+  if (!nav) return false;
+  const button = Array.from(nav.querySelectorAll('button.nav-btn[data-tab]'))
+    .find(node => node.dataset.tab === id);
+  const section = button && button.closest('[data-extra-nav]');
+  return !!section && hiddenTabs.has(section.dataset.extraNav);
+}
+
 async function renderGlobalGauge() {
   // Правдивые провайдеры — из общей карты MONEY_PROVIDERS. Добавить нового = одна
   // запись там. fetchData возвращает массив аккаунтов вида
@@ -37963,7 +38672,7 @@ async function renderGlobalGauge() {
   for (const p of truthfulProviders) {
     // Вкладка скрыта → провайдера нет ни в сумме, ни в списке под шкалой.
     // Данные при этом даже не запрашиваем: скрытое не должно стоить трафика.
-    if (hiddenTabs.has(p.id)) { hiddenCount++; continue; }
+    if (moneyTabHidden(p.id, hiddenTabs)) { hiddenCount++; continue; }
     let acc;
     try { acc = await p.fetchData(); } catch { acc = []; }
     const st = p.stat(acc);
@@ -41301,7 +42010,7 @@ const TABS_CONFIG_KEY = 'dashboard-tabs-config-v1';
 // 10.09: `media` добавлена сразу за `custom` — она потребляет каталог моделей тех же
 // кастом-провайдеров. Заменила `video` и `image`, которых в этом списке не было НИКОГДА:
 // обе были хранилищами ключей без генерации и в сайдбаре по умолчанию не показывались.
-const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
+const DEFAULT_TABS_VISIBLE = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'freegg', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
 const EXTRA_NAV = [
   { key: 'whoami', icon: '🔍', label: 'Whoami' },
   { key: 'memory', icon: '🕯', label: 'Чтим память' },
@@ -41622,6 +42331,7 @@ function autoRefreshTick() {
       case 'seekai':        loadSkSessionsLight(); break;
       case 'truesota':      loadTsSessionsLight(); break;
       case 'kktoken':       loadKkSessionsLight(); break;
+      case 'freegg':       loadFgSessionsLight(); break;
       case 'apinex':       loadAxSessionsLight(); break;
       case 'kvotum':       loadKvSessionsLight(); break;
       case 'threerouter':       loadTrSessionsLight(); break;
@@ -41718,6 +42428,7 @@ const NAV_COUNT_JOBS = [
   { tab: 'seekai',      fn: () => loadSkSessionsLight() },
   { tab: 'truesota',    fn: () => loadTsSessionsLight() },
   { tab: 'kktoken',     fn: () => loadKkSessionsLight() },
+  { tab: 'freegg',     fn: () => loadFgSessionsLight() },
   { tab: 'apinex',     fn: () => loadAxSessionsLight() },
   { tab: 'kvotum',     fn: () => loadKvSessionsLight() },
   { tab: 'threerouter',     fn: () => loadTrSessionsLight() },
@@ -41885,7 +42596,7 @@ function navCountDrop(tab) { _navQ = _navQ.filter(j => j.tab !== tab); }
 // Нет ключей — не судим: это не «не отдаёт каталог», а «нечем спросить».
 const CATALOG_EP = {
   agentrouter: 'ar', gorouter: 'go', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
-  kktoken: 'kk', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
+  kktoken: 'kk', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap',
   hcnsec: 'hn', aikeysapi: 'ak', rumeng: 'rm', tabi: 'tb', xpeach: 'xp',
 };
 const CATALOG_BAD = new Map();   // tab -> причина (уезжает в тултип)
@@ -43737,9 +44448,9 @@ function lgComposition(p) {
     ? ' · журнал обрезан, прочих могло быть больше' : '';
   return parts.join(' · ') + tail;
 }
-// Стрик: у канонического счётчика он считается по активности Claude Code (сообщения), а у
-// прежней метрики - по промптам из history.jsonl. Это разные числа, и подменять одно
-// другим нельзя: «50» и «63» - не одна и та же величина.
+// Стрик: у канонического счётчика он считается по объединённым активным UTC-дням всех
+// харнессов, а у прежней метрики - по промптам Claude Code из history.jsonl. Это разные
+// определения, и подменять одно другим нельзя.
 const lgStreak = p => {
   const cc = lgCc(p);
   const n = cc && cc.activity ? Number(cc.activity.streakCurrent) : NaN;
@@ -44584,8 +45295,11 @@ const LG_SHELL = `
       <span class="lgcap" id="lg-stamp" style="margin-left:auto"></span>
     </div>
     <header>
-      <h1 class="text-2xl font-semibold tracking-tight">Лига ABUSE HUB</h1>
-      <p class="text-sm text-muted mt-1 max-w-[72ch]" id="lg-lede"></p>
+      <div class="lgintro">
+        <h1 class="text-2xl font-semibold tracking-tight">Лига ABUSE HUB</h1>
+        <p class="text-sm text-muted mt-1" id="lg-lede"></p>
+        <div class="lgmeta" id="lg-meta"></div>
+      </div>
     </header>
     <!-- Отметки шлюзов: что сейчас работает, решает админ в «Админке», а видят все
          участники здесь. Панель не ждёт срез рейтинга — своя ручка, своя загрузка. -->
@@ -44826,16 +45540,18 @@ function lgRender() {
        списком ниже. Окно переключается от суток по часам до всего времени.`;
   // Состав итога отдельной строкой: «59,7 млрд» без этого не проверить, а расхождение с
   // `/stats` не объяснить. Показываем только когда источников больше одного.
+  const meta = document.getElementById('lg-meta');
+  if (meta) meta.innerHTML = '';
   if (LG.metric === 'cc') {
     const cmp = lgComposition(me);
-    if (cmp) document.getElementById('lg-lede').innerHTML +=
-      `<div class="lgcap" style="margin-top:4px">состав: ${lgEsc(cmp)}</div>`;
+    if (cmp && meta) meta.innerHTML +=
+      `<div class="lgcap">состав: ${lgEsc(cmp)}</div>`;
   }
   // Причина, по которой у кого-то цифры считаны иначе (или их нет вовсе). Не вместо цифр,
   // а рядом с ними: человек пришёл смотреть расход, а не читать дисклеймер.
   const defNotice = lgDefNotice();
-  if (defNotice) document.getElementById('lg-lede').innerHTML +=
-    `<div class="lgcap" style="margin-top:4px">${lgEsc(defNotice)}</div>`;
+  if (defNotice && meta) meta.innerHTML +=
+    `<div class="lgcap">${lgEsc(defNotice)}</div>`;
   const pr = LG_M[LG.metric].pair ? LG_M[LG.metric] : null;
   const pairOn = !!pr && lgPairOn();
   document.getElementById('lg-legend').innerHTML = top.map((p, k) =>
@@ -45301,7 +46017,7 @@ async function lgChatMe() {
     // перерисовываем его сразу: следующего изменения ленты можно ждать часами.
     if (LGC.list.map(x => x.gid + ':' + x.title).join(',') !== was) {
       lgChatBar();
-      if (LGC_GID_RE.test(LGC.gid)) lgGroupLoad(LGC.gid);
+      lgGroupLoadAll();
     }
     return true;
   } catch (e) {
@@ -45349,9 +46065,22 @@ async function lgGroupLoad(gid, force) {
     // 🪤 `lgRender` только при готовом срезе: без него он стирает оболочку вкладки под
     // «срез считается…» и уносит с ней DOM чата.
     if (typeof lgChatPaint === 'function') lgChatPaint();
-    if (typeof lgRender === 'function' && LG && LG.data) lgRender();
+    if (typeof lgRender === 'function' && LG && LG.data) {
+      // Хеш рейтинга раньше не зависел от состава группы: данные лиц менялись, но lgRender
+      // выходил раньше lgRows/lgPaintMini. Поэтому даже после фоновой загрузки `/group`
+      // сайдбар оставался с инициалами до клика, который отдельно сбрасывал этот хеш.
+      LG._lastHash = '';
+      lgRender();
+    }
     return g.mem;
   } catch (e) { return g.mem; }
+}
+// Лица нужны не только активному чату: мини-рейтинг в сайдбаре виден на каждой вкладке и
+// склеивает публичные строки с составом ЛЮБОЙ общей группы по rid. Поэтому после `/me`
+// грузим составы всех живых групп параллельно; максимум тот же 16, что уже ограничивает
+// единый опрос чата. Открывать «Лигу» для появления аватарок больше не требуется.
+function lgGroupLoadAll() {
+  return Promise.all(lgChatGids().map(gid => lgGroupLoad(gid)));
 }
 // Живые группы для опроса: активная первой, мёртвые (`unknown`) не спрашиваем — приёмник
 // на них ответит тем же `unknown`, а место в странице они займут.
@@ -47185,6 +47914,10 @@ async function lgLoad(force = false) {
   if (LG.loading) return;
   // Панель шлюзов не зависит от среза: пускаем её рядом, не дожидаясь подсчёта журналов.
   lgGatewaysLoad();
+  // Мини-блок виден на всех вкладках, а лица для него приезжают через `/me` + `/group`.
+  // Раньше этот тракт стартовал только из lgRender при клике по «Лиге», поэтому фоновый
+  // срез показывал инициалы до первого открытия вкладки.
+  lgChatStart();
   if (LG.data && !force) { lgRender(); return; }
   LG.loading = true;
   try {

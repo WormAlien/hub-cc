@@ -59,9 +59,21 @@ function resolveRoot(rootArg) {
 //
 // Охват журнала честно неполный: он ротируется целыми сутками (потолок 32 МиБ), поэтому
 // «всё время» по прочим харнессам - это то, что уцелело в файле, и так это и подписано.
+// Единица та же gross-величина, что у Claude Code: uncached input + output + cache read +
+// cache write. `usage-tap` уже разложил OpenAI prompt total на взаимоисключающие корзины;
+// брать здесь только `in + out` значило бы выкинуть почти весь расход Hermes с кешированием.
 const JOURNAL_CAP_BYTES = 32 * 1024 * 1024;
 const DEFAULT_JOURNAL = path.join(__dirname, 'token-usage.jsonl');
 const OTHER_HARNESS_MAX = 8;
+const JOURNAL_ARCHIVE_RE = /^token-usage-(\d{4}-\d{2}-\d{2})\.jsonl$/;
+// Кеш отделён по fs: синтетические тесты и несколько экземпляров адаптера не должны
+// делить текст файлов только потому, что у них совпали путь, размер и mtime.
+const ARCHIVE_CACHE_BY_FS = new WeakMap();
+const archiveCacheFor = f => {
+    let cache = ARCHIVE_CACHE_BY_FS.get(f);
+    if (!cache) { cache = new Map(); ARCHIVE_CACHE_BY_FS.set(f, cache); }
+    return cache;
+};
 // Имя харнесса приходит из user-agent, то есть снаружи. Оставляем только буквы, цифры и
 // три знака, остальное выбрасываем: имя уезжает в чужой срез и рисуется в разметке.
 // 🪤 Никаких escape-последовательностей: в исходнике не должно быть ни сырых управляющих
@@ -77,15 +89,14 @@ const harnessName = v => {
 
 function readJournal(deps, journalPath, cap) {
     const f = (deps && deps.fs) || fsDefault;
+    const archiveCache = archiveCacheFor(f);
     const out = {
         byHarness: new Map(), days: Object.create(null), hours: Object.create(null),
-        lines: 0, skipped: 0, firstMs: null, lastMs: null, truncated: false, reason: null,
+        activityDays: Object.create(null), lines: 0, skipped: 0, archives: 0,
+        firstMs: null, lastMs: null, truncated: false, reason: null,
     };
-    let r;
-    try { r = readTail({ fs: f }, journalPath, cap || JOURNAL_CAP_BYTES); }
-    catch (e) { out.reason = 'no-journal'; return out; }
-    out.truncated = !!r.truncated;
-    for (const raw of r.text.split('\n')) {
+    const consume = text => {
+      for (const raw of text.split('\n')) {
         const s = raw.trim();
         if (!s) continue;
         let e;
@@ -94,19 +105,64 @@ function readJournal(deps, journalPath, cap) {
         if (!Number.isFinite(ms)) { out.skipped++; continue; }
         const h = harnessName(e.h);
         if (h === 'claude-code') continue;                         // двойного счёта не делаем
-        const tok = asNum(e.in) + asNum(e.out);
+        const tok = asNum(e.in) + asNum(e.out) + asNum(e.cr) + asNum(e.cw);
         if (!tok) continue;
         out.lines++;
         if (out.firstMs === null || ms < out.firstMs) out.firstMs = ms;
         if (out.lastMs === null || ms > out.lastMs) out.lastMs = ms;
         const dk = dayKey(ms), hk = hourKey(ms);
+        out.activityDays[dk] = 1;
         out.days[dk] = (out.days[dk] || 0) + tok;
         out.hours[hk] = (out.hours[hk] || 0) + tok;
         const rec = out.byHarness.get(h) || { h, tokens: 0, days: Object.create(null) };
         rec.tokens += tok;
         rec.days[dk] = (rec.days[dk] || 0) + tok;
         out.byHarness.set(h, rec);
+      }
+    };
+    let r;
+    try { r = readTail({ fs: f }, journalPath, cap || JOURNAL_CAP_BYTES); }
+    catch (e) { out.reason = 'no-journal'; return out; }
+    out.truncated = !!r.truncated;
+    // Ротация `usage-tap` переносит завершённые сутки в соседний archive/. Стрик не
+    // должен обрываться в момент ротации, поэтому читаем эти суточные файлы вместе с
+    // живым хвостом. Шаблон строгий: snapshot-файл рядом является копией и дал бы дубль.
+    const posixStyle = journalPath.includes('/') && !journalPath.includes('\\');
+    const pathApi = posixStyle ? path.posix : path.win32;
+    const archiveDir = pathApi.join(pathApi.dirname(journalPath), 'archive');
+    let names = [];
+    try { names = f.readdirSync(archiveDir); } catch (e) { /* архивов ещё нет */ }
+    for (const name of names.slice().sort()) {
+        if (!JOURNAL_ARCHIVE_RE.test(name)) continue;
+        try {
+            // path.join на Windows вернёт обратные слеши. Реальный fs принимает их, а
+            // синтетический тестовый fs хранит POSIX-пути - сохраняем стиль входного пути.
+            const archiveFile = pathApi.join(archiveDir, name);
+            const st = f.statSync(archiveFile);
+            const key = [st.size, st.mtimeMs, st.ino == null ? '' : st.ino].join(':');
+            const cacheKey = archiveFile + '|' + key;
+            let activeDays = archiveCache.get(cacheKey);
+            if (activeDays === undefined) {
+                const found = new Set();
+                const text = f.readFileSync(archiveFile).toString('utf8');
+                for (const raw of text.split('\n')) {
+                    if (!raw) continue;
+                    let e;
+                    try { e = JSON.parse(raw); } catch (x) { continue; }
+                    const ms = Date.parse(e && e.t);
+                    if (!Number.isFinite(ms) || harnessName(e.h) === 'claude-code') continue;
+                    if (asNum(e.in) + asNum(e.out) + asNum(e.cr) + asNum(e.cw)) found.add(dayKey(ms));
+                }
+                activeDays = [...found];
+                archiveCache.set(cacheKey, activeDays);
+            }
+            // Архивы нужны здесь только для непрерывности активности. Токены по-прежнему
+            // берутся из живого окна журнала: правка стрика не меняет остальные метрики.
+            for (const dk of activeDays) out.activityDays[dk] = 1;
+            out.archives++;
+        } catch (e) { /* файл исчез между list и read */ }
     }
+    consume(r.text);
     if (out.lastMs === null) out.reason = 'empty-journal';
     return out;
 }
@@ -277,6 +333,10 @@ function snapshotFrom(agg, meta) {
         if (r && typeof r.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.date)) activitySet.add(r.date);
     }
     for (const dk of Object.keys(agg.activeDays)) activitySet.add(dk);
+    // Любой пользовательский харнесс в журнале означает работу в эти сутки. Иначе после
+    // перехода с Claude Code на Hermes/OpenCode токены прибавляются, а стрик падает до нуля.
+    // Записи `claude-code` отсеяны в readJournal: его активность уже точнее взята из кеша.
+    for (const dk of Object.keys((meta.journal && meta.journal.activityDays) || {})) activitySet.add(dk);
     const activityDays = [...activitySet].sort();
     if (!doc && !activityDays.length) {
         return {
@@ -424,9 +484,10 @@ function snapshotFrom(agg, meta) {
         otherTokens, otherD7, otherD30, otherDays, sources,
         journal: jr ? {
             reason: jr.reason, lines: jr.lines, truncated: !!jr.truncated,
+            archives: jr.archives || 0,
             first: jr.firstMs === null ? null : dayKey(jr.firstMs),
             last: jr.lastMs === null ? null : dayKey(jr.lastMs),
-        } : { reason: 'no-journal', lines: 0, truncated: false, first: null, last: null },
+        } : { reason: 'no-journal', lines: 0, truncated: false, archives: 0, first: null, last: null },
         lifetimeBreakdown: {
             cache: doc ? lifetimeCache : null,
             tail: doc ? tailGross : null,

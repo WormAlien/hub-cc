@@ -764,6 +764,52 @@ function saveManifestAndPicker({
     }
 }
 
+// Only converter-generated codes from the authenticated exact a6api callback
+// are eligible. Provider messages, bodies and headers are never public evidence.
+const A6API_PUBLIC_ERROR_MAX_BYTES = 64 * 1024;
+const A6API_PUBLIC_ERRORS = Object.freeze({
+    subscription_route_circuit_blocked: Object.freeze({
+        status: 503,
+        type: 'api_error',
+        message: () => 'a6api: продавцы этой модели временно заблокированы после ошибок upstream. Дождитесь восстановления или добавьте резервного продавца в кабинете a6api.',
+    }),
+    smart_route_no_active_candidates: Object.freeze({
+        status: 409,
+        type: 'invalid_request_error',
+        message: model => `a6api: у модели ${model} нет доступного продавца. Выбранный продавец недоступен или удалён. Выберите другого продавца в кабинете a6api или смените модель.`,
+    }),
+});
+
+function readA6apiPublicErrorCode(raw, status, headers = {}) {
+    if (!Buffer.isBuffer(raw) || raw.length === 0 || raw.length > A6API_PUBLIC_ERROR_MAX_BYTES) return null;
+    const mediaType = String(headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+    const encoding = String(headers['content-encoding'] || '').trim().toLowerCase();
+    if (mediaType !== 'application/json' || (encoding && encoding !== 'identity')) return null;
+    try {
+        const doc = JSON.parse(raw.toString('utf8'));
+        if (!isPlainObject(doc) || !isPlainObject(doc.error)) return null;
+        const code = doc.error.code;
+        if (typeof code !== 'string' || !Object.hasOwn(A6API_PUBLIC_ERRORS, code)) return null;
+        const detail = A6API_PUBLIC_ERRORS[code];
+        return status === detail.status && doc.error.type === detail.type ? code : null;
+    } catch { return null; }
+}
+
+function makeA6apiPublicError(code, publicModel, { native = false } = {}) {
+    if (typeof code !== 'string' || !Object.hasOwn(A6API_PUBLIC_ERRORS, code)) return null;
+    let recognized;
+    try { recognized = parseCanonicalId(publicModel, new Set(['a6api'])); } catch { return null; }
+    const detail = A6API_PUBLIC_ERRORS[code];
+    return {
+        status: detail.status,
+        body: {
+            ...(native ? { type: 'error' } : {}),
+            error: { message: detail.message(recognized.model), type: detail.type, code },
+            model: publicModel,
+        },
+    };
+}
+
 function makeRedactedOpenAiError(status, code, publicModel) {
     const normalizedStatus = status === 400 ? 400 : status === 404 ? 404 : 503;
     const normalizedCode = normalizedStatus === 400
@@ -815,4 +861,7 @@ module.exports = {
     releaseManifestLock: releaseLock,
     restoreDelegatedOpenAiObject,
     makeRedactedOpenAiError,
+    A6API_PUBLIC_ERROR_MAX_BYTES,
+    readA6apiPublicErrorCode,
+    makeA6apiPublicError,
 };

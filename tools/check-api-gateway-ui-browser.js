@@ -103,7 +103,7 @@ let state = {
       published: true,
       displayName: 'AgentRouter / GPT 5.6 Sol',
       claudeBehavesAs: 'claude-opus-5',
-      contextTokens: 1050000,
+      contextTokens: 1000000,
       outputTokens: 32000,
       publishedAt: now,
       catalog: { present: false, source: 'configured' },
@@ -195,11 +195,34 @@ let state = {
   },
 };
 
+function initialState() {
+  return {
+    ok: true,
+    canWrite: state.canWrite,
+    public: state.public,
+    manifest: state.manifest,
+    models: state.models.filter((model) => model.published),
+    candidatesLoaded: false,
+  };
+}
+
+function candidatesState() {
+  return {
+    ok: true,
+    public: state.public,
+    manifest: state.manifest,
+    models: state.models,
+    candidatesLoaded: true,
+  };
+}
+
 const requests = [];
 const unexpected = [];
 const browserErrors = [];
 let liveHits = 0;
 let saveMode = 'success';
+let stateDelayMs = 0;
+let clientsDelayMs = 0;
 
 function findModel(id) {
   return state.models.find((model) => model.id === id);
@@ -214,7 +237,7 @@ const server = http.createServer((request, response) => {
 (async () => {
   const port = await listen(server);
   const origin = `http://127.0.0.1:${port}`;
-  const fixture = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${uiStyle}${themeScript}<style>html,body{margin:0;min-height:100%;background:var(--color-bg);color:var(--color-ink);font-family:"Geist",Arial,sans-serif}nav{padding:8px}[data-tab-content]{display:none}[data-tab-content].active{display:block}</style></head><body><nav id="main-nav">${navMarkup}</nav>${tabMarkup}<script>window.toast=(text,kind)=>window.__toasts.push({text,kind});window.showTab=(name)=>document.querySelectorAll('[data-tab-content]').forEach(panel=>panel.classList.toggle('active',panel.dataset.tabContent===name));document.querySelector('[data-tab="api-gateway"]').addEventListener('click',()=>showTab('api-gateway'));</script>${uiScript}</body></html>`;
+  const fixture = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">${uiStyle}${themeScript}<style>html,body{margin:0;min-height:100%;background:var(--color-bg);color:var(--color-ink);font-family:"Geist",Arial,sans-serif}nav{padding:8px}[data-tab-content]{display:none}[data-tab-content].active{display:block}</style></head><body><nav id="main-nav">${navMarkup}<button class="nav-btn" data-tab="a6api">a6api</button><button class="nav-btn" data-tab="agentrouter">agentrouter</button><button class="nav-btn" data-tab="gemini">gemini</button></nav>${tabMarkup}<script>window.toast=(text,kind)=>window.__toasts.push({text,kind});window.effectiveHiddenSet=()=>new Set((JSON.parse(localStorage.getItem('dashboard-tabs-config-v1')||'{"hidden":[]}').hidden)||[]);window.showTab=(name)=>document.querySelectorAll('[data-tab-content]').forEach(panel=>panel.classList.toggle('active',panel.dataset.tabContent===name));document.querySelector('[data-tab="api-gateway"]').addEventListener('click',()=>showTab('api-gateway'));</script>${uiScript}</body></html>`;
   const browser = await chromium.launch({ headless: true });
   let context;
   try {
@@ -247,12 +270,23 @@ const server = http.createServer((request, response) => {
       if (url.pathname === '/vendor/api-gateway-tab.css' && request.method() === 'GET') {
         return route.fulfill({ contentType: 'text/css; charset=utf-8', body: fs.readFileSync(stylePath) });
       }
-      // Вкладка спрашивает `state?provider=...`: каталог собирается только по видимым вкладкам
-      // сайдбара. Сравниваем pathname, а не весь адрес, и заодно требуем фильтр - без него
-      // экран снова начнёт тянуть все шлюзы.
       if (url.pathname === '/__switch/api/api-gateway' && request.method() === 'GET') {
         requests.push({ method: 'GET', name: 'state', providers: url.searchParams.getAll('provider') });
-        return jsonResponse(route, 200, state);
+        if (stateDelayMs) await new Promise(resolve => setTimeout(resolve, stateDelayMs));
+        return jsonResponse(route, 200, initialState());
+      }
+      if (url.pathname === '/__switch/api/api-gateway/candidates' && request.method() === 'GET') {
+        requests.push({ method: 'GET', name: 'candidates', providers: url.searchParams.getAll('provider') });
+        return jsonResponse(route, 200, candidatesState());
+      }
+      if (url.pathname === '/__switch/api/api-gateway/clients' && request.method() === 'GET') {
+        requests.push({ method: 'GET', name: 'clients' });
+        if (clientsDelayMs) await new Promise(resolve => setTimeout(resolve, clientsDelayMs));
+        return jsonResponse(route, 200, state.clients);
+      }
+      if (url.pathname === '/__switch/api/api-gateway/sidecar' && request.method() === 'GET') {
+        requests.push({ method: 'GET', name: 'sidecar' });
+        return jsonResponse(route, 200, state.sidecar);
       }
       if (url.pathname === '/__switch/api/api-gateway/model' && request.method() === 'POST') {
         const body = request.postDataJSON();
@@ -298,14 +332,65 @@ const server = http.createServer((request, response) => {
     page.on('pageerror', (error) => browserErrors.push(error.message));
     await page.goto(origin + '/', { waitUntil: 'load' });
     assert.equal(await page.locator('#api-gateway-root').isVisible(), false, 'tab should start hidden');
+    assert.equal(await page.locator('#api-gateway-root').textContent(), '',
+      'hidden API Gateway tab must not show a cold-loading placeholder on page refresh');
+    await page.evaluate(() => localStorage.setItem('dashboard-tabs-config-v1', JSON.stringify({
+      order: [],
+      hidden: [],
+      shown: [],
+    })));
+    clientsDelayMs = 150;
     await page.locator('[data-tab="api-gateway"]').click();
+    assert.equal((await page.locator('#api-gateway-root').innerText()).includes('Loading API Gateway state'), false,
+      'cold open must not show the old loading message');
     await page.locator('.ag-model').first().waitFor();
+    await page.locator('.ag-harness-setup summary').click();
+    await page.locator('.ag-harness-bar').filter({ hasText: 'ЕСТЬ ИЗМЕНЕНИЯ' }).waitFor();
+    assert.equal(await page.locator('.ag-harness-setup').evaluate(node => node.open), true,
+      'late client status render must not collapse an open setup section');
+    clientsDelayMs = 0;
+    await page.locator('.ag-harness-setup summary').click();
 
-    // Каталог спрашивается только по видимым вкладкам: в фикстуре видна одна - api-gateway.
-    assert.deepEqual(requests.find(call => call.name === 'state').providers, ['api-gateway'],
-      'вкладка должна ограничить каталог видимыми провайдерами');
-    assert.equal(await page.locator('#nav-count-api-gateway').innerText(), '2/5');
-    assert.equal(await page.locator('.ag-model').count(), 5);
+    assert.deepEqual(requests.find(call => call.name === 'state').providers, []);
+    assert.equal(requests.filter(call => call.name === 'candidates').length, 0,
+      'initial screen must not discover candidates');
+    assert.equal(await page.locator('#nav-count-api-gateway').innerText(), '2');
+    assert.equal(await page.locator('.ag-model').count(), 2);
+    const initialUi = await page.locator('#api-gateway-root').innerText();
+    assert.match(initialUi, /Один список моделей для Claude Code, OpenCode и Hermes\./);
+    assert.match(initialUi, /Клиенты/);
+    assert.match(initialUi, /Опубликованные модели/);
+    assert.match(initialUi, /Добавить модель/);
+    assert.match(initialUi, /Настройка клиентов/);
+    assert.match(initialUi, /Подключение/);
+    assert.doesNotMatch(initialUi, /manifest r\d+|One model list|Harnesses|Published models|Add model|Connection details/);
+    assert.equal(await page.locator('.ag-revision').count(), 0,
+      'internal manifest revision must not be shown in the UI');
+    await page.waitForFunction(() => document.querySelectorAll('[data-harness-setup]').length === 3);
+    const stateLoadsAfterFirstOpen = requests.filter(call => call.name === 'state').length;
+    await page.evaluate(() => showTab('other'));
+    await page.evaluate(() => showTab('api-gateway'));
+    assert.equal(await page.locator('.ag-loadbar-inline').count(), 0,
+      'reopening the tab must not start a background reload');
+    await page.waitForTimeout(30);
+    assert.equal(requests.filter(call => call.name === 'state').length, stateLoadsAfterFirstOpen,
+      'reopening the tab must use the in-memory state cache');
+
+    stateDelayMs = 150;
+    const stateLoadsBeforeRefresh = requests.filter(call => call.name === 'state').length;
+    await page.reload({ waitUntil: 'load' });
+    await page.locator('[data-tab="api-gateway"]').click();
+    assert.equal(await page.locator('.ag-model').count(), 2,
+      'page refresh must paint published models from session cache before the network responds');
+    assert.equal((await page.locator('#api-gateway-root').innerText()).includes('Loading API Gateway state'), false);
+    await page.waitForTimeout(stateDelayMs + 40);
+    stateDelayMs = 0;
+    assert.equal(requests.filter(call => call.name === 'state').length, stateLoadsBeforeRefresh + 1,
+      'page refresh must silently revalidate the session cache once');
+    await page.locator('[data-action="add-model"]').click();
+    await page.locator(`[data-model-id="${nestedCandidateId}"]`).waitFor();
+    assert.deepEqual(requests.find(call => call.name === 'candidates').providers.sort(), ['a6api', 'agentrouter', 'api-gateway', 'gemini']);
+    assert.equal(await page.locator('.ag-model').count(), 4);
     assert.deepEqual(
       await page.locator('.ag-model').evaluateAll((rows) => rows.filter((row) => row.dataset.published === 'true').map((row) => row.dataset.modelId)),
       [healthyPublishedId, publishedMissingId],
@@ -320,19 +405,63 @@ const server = http.createServer((request, response) => {
       true,
       'a hidden candidate rendered before a published model',
     );
+    await page.evaluate(() => localStorage.setItem('dashboard-tabs-config-v1', JSON.stringify({
+      order: [],
+      hidden: ['agentrouter'],
+      shown: [],
+    })));
+    await page.evaluate(() => showTab('other'));
+    await page.evaluate(() => showTab('api-gateway'));
+    assert.equal(await page.locator(`[data-model-id="${publishedMissingId}"]`).count(), 0,
+      'published models from a hidden sidebar provider must not render');
+    assert.deepEqual(
+      await page.locator('.ag-model').evaluateAll(rows => rows.map(row => row.dataset.modelId)),
+      [healthyPublishedId, sameProviderCandidateId, nestedCandidateId],
+      'only models from visible sidebar providers must remain',
+    );
+    await page.locator('[data-action="close-candidates"]').click();
+    await page.evaluate(() => localStorage.setItem('dashboard-tabs-config-v1', JSON.stringify({
+      order: [],
+      hidden: [],
+      shown: [],
+    })));
+    await page.evaluate(() => window.API_GATEWAY.refresh());
+    await page.locator(`[data-model-id="${publishedMissingId}"]`).waitFor();
     assert.equal(await page.locator(`[data-model-id="${publishedMissingId}"]`).count(), 1, 'missing published row disappeared');
-    assert.match(await page.locator(`[data-model-id="${publishedMissingId}"]`).innerText(), /UNHEALTHY/i);
-    assert.match(await page.locator(`[data-model-id="${publishedMissingId}"]`).innerText(), /CATALOG MISSING/i);
+    assert.match(await page.locator(`[data-model-id="${publishedMissingId}"]`).innerText(), /ОШИБКА/i);
     assert.equal(await page.locator('#api-gateway-root img, #api-gateway-root svg').count(), 0);
     assert.equal(await page.evaluate(() => window.__xss), undefined);
-    assert.match(await page.locator('.ag-policy').innerText(), /Hidden removes picker only; exact ID remains callable; red health never reroutes; Save updates manifest\+Claude; OpenCode needs Preview\/Sync; current model never changes\./);
-    for (const label of ['Label', 'behavesAs', 'Context', 'Output']) {
-      assert.equal(await page.locator('.ag-model .ag-label', { hasText: label }).count(), 5, `${label} editor is missing`);
-    }
-    assert.equal(await page.locator('.ag-model [data-field="published"]').count(), 5, 'publish toggles are missing');
-    const badgeText = (await page.locator(`[data-model-id="${publishedMissingId}"] .ag-badges`).innerText()).toUpperCase();
-    for (const fact of ['CATALOG MISSING', 'PASSIVE UNKNOWN', 'PROBE FAILED', 'UNHEALTHY']) assert.match(badgeText, new RegExp(fact));
+    assert.equal(await page.locator('.ag-model [data-field="claudeBehavesAs"]:visible').count(), 0,
+      'Behavior must not be permanent UI');
+    await page.locator(`[data-model-id="${publishedMissingId}"] [data-action="edit"]`).click();
+    assert.equal(await page.locator(`[data-model-id="${publishedMissingId}"] [data-field="claudeBehavesAs"]:visible`).count(), 1);
+    assert.equal(await page.locator('.ag-model [data-field="published"]').count(), 2, 'published toggles are missing');
+    const compactControls = await page.evaluate(() => {
+      const style = (selector) => getComputedStyle(document.querySelector(selector));
+      const button = style('.ag-model-action .ag-button');
+      const input = style('.ag-editor.is-open .ag-input');
+      const label = style('.ag-editor.is-open .ag-label');
+      return {
+        buttonMinHeight: button.minHeight,
+        buttonFontSize: button.fontSize,
+        buttonWeight: button.fontWeight,
+        inputMinHeight: input.minHeight,
+        inputFontSize: input.fontSize,
+        labelFontSize: label.fontSize,
+        labelTransform: label.textTransform,
+      };
+    });
+    assert.deepEqual(compactControls, {
+      buttonMinHeight: '24px',
+      buttonFontSize: '10px',
+      buttonWeight: '600',
+      inputMinHeight: '25px',
+      inputFontSize: '10px',
+      labelFontSize: '9px',
+      labelTransform: 'none',
+    });
 
+    await page.locator('.ag-advanced summary').click();
     await page.locator('[data-copy="anthropic"]').click();
     await page.locator('[data-copy="openai"]').click();
     assert.deepEqual(await page.evaluate(() => window.__copied), [
@@ -347,16 +476,15 @@ const server = http.createServer((request, response) => {
     assert.match(sidecarText, /healthy/i);
     assert.match(sidecarText, /Use the hub sidecar restart action/);
 
+    await page.locator('[data-action="add-model"]').click();
+    await page.locator(`[data-model-id="${nestedCandidateId}"]`).waitFor();
     await page.locator('#ag-search').fill('Needle');
     assert.equal(await page.locator('.ag-model:visible').count(), 1);
     assert.equal(await page.locator('.ag-provider-group:visible').count(), 1);
     await page.locator('#ag-search').fill('');
-    await page.locator('#ag-filter').selectOption('unhealthy');
-    assert.equal(await page.locator('.ag-model:visible').count(), 1);
-    assert.equal(await page.locator('.ag-model:visible').getAttribute('data-model-id'), publishedMissingId);
-    await page.locator('#ag-filter').selectOption('all');
 
     let row = page.locator(`[data-model-id="${nestedCandidateId}"]`);
+    await row.locator('[data-action="edit"]').click();
     await row.locator('[data-field="published"]').check();
     await row.locator('[data-field="displayName"]').fill('Gemini / Claude Opus');
     await row.locator('[data-field="claudeBehavesAs"]').fill('claude-opus-5');
@@ -374,7 +502,7 @@ const server = http.createServer((request, response) => {
       contextTokens: 256000,
       outputTokens: 24000,
     });
-    assert.equal(await page.locator('#nav-count-api-gateway').innerText(), '3/5');
+    assert.equal(await page.locator('#nav-count-api-gateway').innerText(), '3');
     assert.deepEqual(
       await page.locator('.ag-model').evaluateAll((rows) => rows.slice(0, 3).map((item) => item.dataset.modelId)),
       [healthyPublishedId, publishedMissingId, nestedCandidateId],
@@ -392,37 +520,47 @@ const server = http.createServer((request, response) => {
     saveMode = 'conflict';
     await row.locator('[data-field="displayName"]').fill('Conflict draft');
     await row.locator('.ag-save').click();
-    await row.locator('.ag-row-message').filter({ hasText: 'Revision conflict' }).waitFor();
+    await row.locator('.ag-row-message').filter({ hasText: 'Данные уже изменились' }).waitFor();
     assert.equal(await row.locator('[data-field="displayName"]').inputValue(), 'Conflict draft');
     saveMode = 'success';
 
-    const claude = page.locator('[data-client="claude"]');
-    assert.match(await claude.innerText(), /Claude Code/);
-    assert.match(await claude.innerText(), /Picker matches manifest/);
-    const openCode = page.locator('[data-client="opencode"]');
-    assert.match(await openCode.innerText(), /OpenCode/);
-    assert.match(await openCode.innerText(), /Preview before Sync/);
+    const harnessBar = page.locator('.ag-harness-bar');
+    assert.match(await harnessBar.innerText(), /Claude Code[\s\S]*НАСТРОЕН/i);
+    assert.match(await harnessBar.innerText(), /OpenCode[\s\S]*(СИНХРОНИЗИРОВАН|ЕСТЬ ИЗМЕНЕНИЯ)/i);
+    assert.match(await harnessBar.innerText(), /Hermes[\s\S]*(НАСТРОЕН|НЕ УСТАНОВЛЕН)/i);
+    assert.equal(await page.locator('.ag-client').count(), 0,
+      'large permanent harness cards must be removed');
+    assert.equal(await page.locator('.ag-harness-setup[open]').count(), 0,
+      'harness setup must start collapsed');
+    await page.locator('.ag-harness-setup summary').click();
+    for (const harness of ['claude', 'opencode', 'hermes']) {
+      assert.equal(await page.locator(`[data-harness-setup="${harness}"]`).count(), 1);
+    }
+    assert.match(await page.locator('[data-harness-setup="claude"]').innerText(), /Сохраните опубликованную модель/i);
+    assert.match(await page.locator('[data-harness-setup="opencode"]').innerText(), /Сначала откройте предпросмотр[\s\S]*Синхронизировать/i);
+    assert.match(await page.locator('[data-harness-setup="hermes"]').innerText(), /custom:abuse-hub/i);
+
+    const openCode = page.locator('[data-harness-setup="opencode"]');
     await openCode.locator('[data-action="preview"]').click();
     await page.locator('#ag-opencode-preview').filter({ hasText: 'Global' }).waitFor();
-    assert.match(await page.locator('#ag-opencode-preview').innerText(), /add 2.*remove 1.*change 3/i);
+    assert.match(await page.locator('#ag-opencode-preview').innerText(), /\+2.*-1.*изменено 3/i);
     assert.equal(await page.locator('#ag-opencode-preview img, #ag-opencode-preview svg').count(), 0);
-    await page.locator('[data-client="opencode"] [data-action="sync"]').click();
-    await page.locator('[data-client="opencode"] .ag-client-message').filter({ hasText: 'OpenCode targets synced' }).waitFor();
+    await openCode.locator('[data-action="sync"]').click();
+    await openCode.locator('.ag-client-message').filter({ hasText: 'OpenCode targets synced' }).waitFor();
     assert.equal(requests.filter((request) => request.name === 'opencode-sync').length, 1);
 
-    const hermes = page.locator('[data-client="hermes"]');
-    assert.match(await hermes.innerText(), /iex \(irm https:\/\/hermes-agent\.nousresearch\.com\/install\.ps1\)/);
-    assert.match(await hermes.innerText(), /hermes dashboard --no-open/);
-    assert.match(await hermes.innerText(), /Install Hermes, start its dashboard, then Sync\./);
-    assert.equal(await hermes.locator('[data-action="sync"]').isDisabled(), true);
+    const hermes = page.locator('[data-harness-setup="hermes"]');
+    assert.match(await hermes.innerText(), /custom:abuse-hub/);
+    assert.match(await hermes.innerText(), /http:\/\/127\.0\.0\.1:20100\/openai\/v1/);
+    assert.equal(await hermes.locator('[data-action="sync"]').count(), 0);
     state.clients.hermes = {
       status: 'blocked',
       installed: true,
       backendRunning: null,
       detail: 'No published API Gateway model is available for Hermes.',
     };
-    await page.evaluate(() => window.API_GATEWAY.load());
-    assert.equal(await page.locator('[data-client="hermes"] [data-action="sync"]').isDisabled(), true,
+    await page.evaluate(() => window.API_GATEWAY.refresh());
+    assert.equal(await page.locator('[data-harness-setup="hermes"] [data-action="sync"]').count(), 0,
       'blocked Hermes DTO must not expose Sync');
     state.clients.hermes = {
       status: 'running',
@@ -431,10 +569,48 @@ const server = http.createServer((request, response) => {
       detail: 'Dashboard API reachable',
       syncInstruction: 'Sync the abuse-hub endpoint without changing the current model.',
     };
-    await page.evaluate(() => window.API_GATEWAY.load());
-    await page.locator('[data-client="hermes"] [data-action="sync"]').click();
-    await page.locator('[data-client="hermes"] .ag-client-message').filter({ hasText: 'Hermes endpoint synced' }).waitFor();
-    assert.equal(requests.filter((request) => request.name === 'hermes-sync').length, 1);
+    await page.evaluate(() => window.API_GATEWAY.refresh());
+    await page.locator('.ag-harness-bar').filter({ hasText: 'НАСТРОЕН' }).waitFor();
+    assert.match(await page.locator('.ag-harness-bar').innerText(), /Hermes[\s\S]*НАСТРОЕН/i);
+    assert.equal(requests.filter((request) => request.name === 'hermes-sync').length, 0);
+
+    state.clients.hermes = {
+      status: 'running',
+      installed: true,
+      backendRunning: true,
+      apiCompatible: null,
+      configured: false,
+      synced: false,
+      reason: 'api_error',
+      error: 'Hermes dashboard API request failed.',
+    };
+    await page.evaluate(() => window.API_GATEWAY.refresh());
+    const hermesApiError = page.locator('[data-harness-setup="hermes"]');
+    await hermesApiError.filter({ hasText: 'НАСТРОЕН' }).waitFor();
+    assert.match(await hermesApiError.innerText(), /НАСТРОЕН/i);
+    assert.match(await hermesApiError.innerText(), /Настроен на ABUSE HUB/i);
+    assert.doesNotMatch(await hermesApiError.innerText(), /UNAVAILABLE|DOWN|ERROR/i);
+    assert.equal(await hermesApiError.locator('.ag-code').count(), 1,
+      'Hermes setup must keep exactly one concise configuration snippet');
+    assert.doesNotMatch(await hermesApiError.innerText(), /hermes dashboard --no-open/);
+    assert.equal(await hermesApiError.locator('[data-action="sync"]').count(), 0);
+
+    state.clients.hermes = {
+      status: 'down',
+      installed: true,
+      backendRunning: false,
+      startCommand: 'hermes dashboard --no-open',
+      yaml: 'providers:\n  abuse-hub: fixture',
+    };
+    await page.evaluate(() => window.API_GATEWAY.refresh());
+    const hermesDashboardOffline = page.locator('[data-harness-setup="hermes"]');
+    await hermesDashboardOffline.filter({ hasText: 'НАСТРОЕН' }).waitFor();
+    assert.match(await hermesDashboardOffline.innerText(), /НАСТРОЕН/i);
+    assert.match(await hermesDashboardOffline.innerText(), /Настроен на ABUSE HUB/i);
+    assert.doesNotMatch(await hermesDashboardOffline.innerText(), /UNAVAILABLE|DOWN|OFFLINE|ERROR/i);
+    assert.equal(await hermesDashboardOffline.locator('.ag-code').count(), 1);
+    assert.doesNotMatch(await hermesDashboardOffline.innerText(), /hermes dashboard --no-open/);
+    assert.equal(await hermesDashboardOffline.locator('[data-action="sync"]').count(), 0);
 
     for (const themeId of ['zen', 'daylight']) {
       await page.evaluate((id) => applyTheme(id, false), themeId);
@@ -465,14 +641,17 @@ const server = http.createServer((request, response) => {
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     state.canWrite = false;
-    await page.evaluate(() => window.API_GATEWAY.load());
+    await page.evaluate(() => window.API_GATEWAY.refresh());
     await page.locator('.ag-readonly').waitFor();
     assert.equal(await page.locator('.ag-save:not([disabled])').count(), 0);
     assert.equal(await page.locator('.ag-model [data-field]:not([disabled])').count(), 0);
-    assert.equal(await page.locator('[data-client="opencode"] [data-action="sync"]').isDisabled(), true);
-    assert.equal(await page.locator('[data-client="hermes"] [data-action="sync"]').isDisabled(), true);
+    assert.equal(await page.locator('[data-harness-setup="opencode"] [data-action="sync"]').isDisabled(), true);
+    assert.equal(await page.locator('[data-harness-setup="hermes"] [data-action="sync"]').count(), 0);
     const writesBefore = requests.filter((request) => request.method === 'POST').length;
-    await page.locator('[data-client="opencode"] [data-action="preview"]').click();
+    if (!await page.locator('.ag-harness-setup').evaluate(node => node.open)) {
+      await page.locator('.ag-harness-setup summary').click();
+    }
+    await page.locator('[data-harness-setup="opencode"] [data-action="preview"]').click();
     await page.locator('#ag-opencode-preview').filter({ hasText: 'Project' }).waitFor();
     assert.equal(requests.filter((request) => request.method === 'POST').length, writesBefore);
 

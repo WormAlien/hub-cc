@@ -55,6 +55,9 @@ const {
     recognizeCallableModel,
     restoreDelegatedOpenAiObject,
     makeRedactedOpenAiError,
+    A6API_PUBLIC_ERROR_MAX_BYTES,
+    readA6apiPublicErrorCode,
+    makeA6apiPublicError,
 } = require('./lib/api-gateway.js');
 const { createRequestCancellationRegistry } = require('./lib/request-cancellation.js');
 const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
@@ -90,6 +93,9 @@ const requestCancellationRegistry = createRequestCancellationRegistry({
     hardTtlMs: UPSTREAM_TIMEOUT_MS + 60000,
 });
 const claimedCallbackWork = new Set();
+// Weak request identity, not a client-controlled header or global last error.
+// Values are allowlisted codes only; raw callback data is never retained here.
+const callbackPublicErrorCodes = new WeakMap();
 const startedAt = Date.now();
 
 function log(msg) {
@@ -887,6 +893,73 @@ function createDelegatedOpenAiSseRestorer({ publicModel, maxLineBytes = OPENAI_S
     return transformer;
 }
 
+function writePublicDiagnosis(res, diagnosis) {
+    const body = Buffer.from(JSON.stringify(diagnosis.body), 'utf8');
+    res.writeHead(diagnosis.status, {
+        'content-type': 'application/json; charset=utf-8',
+        'content-length': String(body.length),
+        'cache-control': 'no-store',
+    });
+    res.end(body);
+}
+
+// Inspect only complete, bounded local-converter JSON before committing headers.
+// Truncated/malformed/oversized bodies produce no diagnosis; nothing from the
+// provider body or response headers is copied to either protocol boundary.
+function forwardA6apiErrorResponse(upRes, res, publicModel, { trustedLocal = false, onCode = () => {}, onFinish = () => {} } = {}) {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    const clear = () => { for (const chunk of chunks) chunk.fill(0); chunks.length = 0; };
+    const finish = code => {
+        if (settled) return;
+        settled = true;
+        clear();
+        if (!upRes.destroyed && !upRes.complete) upRes.destroy();
+        if (!res.destroyed) {
+            const diagnosis = makeA6apiPublicError(code, publicModel, { native: true });
+            if (diagnosis) {
+                onCode(code);
+                writePublicDiagnosis(res, diagnosis);
+            } else {
+                writePublicDiagnosis(res, {
+                    status: [400, 401, 403, 404, 429].includes(upRes.statusCode) ? upRes.statusCode : 503,
+                    body: { type: 'error', error: { type: 'api_error', code: 'upstream_unavailable', message: 'Upstream request failed.' }, model: publicModel },
+                });
+            }
+        }
+        onFinish();
+    };
+    upRes.on('error', () => finish(null));
+    upRes.on('aborted', () => finish(null));
+    upRes.on('close', () => { if (!upRes.complete) finish(null); });
+    res.on('close', () => {
+        if (!res.writableFinished && !settled) {
+            settled = true;
+            clear();
+            if (!upRes.destroyed) upRes.destroy();
+            onFinish();
+        }
+    });
+    if (!trustedLocal) {
+        finish(null);
+        return;
+    }
+    upRes.on('data', chunk => {
+        if (settled) return;
+        bytes += chunk.length;
+        if (bytes > A6API_PUBLIC_ERROR_MAX_BYTES) return finish(null);
+        chunks.push(Buffer.from(chunk));
+    });
+    upRes.on('end', () => {
+        if (settled) return;
+        const raw = Buffer.concat(chunks);
+        const code = readA6apiPublicErrorCode(raw, upRes.statusCode, upRes.headers);
+        raw.fill(0);
+        finish(code);
+    });
+}
+
 function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, { rejectSuccessfulBody = false } = {}) {
     const chunks = [];
     let bytes = 0;
@@ -896,15 +969,25 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     const fail = (status = 503, code = 'upstream_unavailable') => {
         if (settled) return;
         settled = true;
+        const diagnosis = handle.provider === 'a6api'
+            ? makeA6apiPublicError(callbackPublicErrorCodes.get(handle), publicModel)
+            : null;
+        callbackPublicErrorCodes.delete(handle);
         requestCancellationRegistry.cancel(handle, 'sidecar_response_failure');
         finishOuter();
         if (!upstreamResponse.destroyed) upstreamResponse.destroy();
-        if (!res.headersSent && !res.destroyed) openAiError(res, status, code, '', publicModel);
+        if (!res.headersSent && !res.destroyed && diagnosis) writePublicDiagnosis(res, diagnosis);
+        else if (!res.headersSent && !res.destroyed) openAiError(res, status, code, '', publicModel);
         else if (!res.destroyed) res.destroy();
     };
     upstreamResponse.on('error', () => fail());
     upstreamResponse.on('aborted', () => fail());
     upstreamResponse.on('close', () => { if (!ended) fail(); });
+
+    if (handle.provider === 'a6api' && callbackPublicErrorCodes.has(handle)) {
+        fail();
+        return;
+    }
 
     const encoding = String(upstreamResponse.headers['content-encoding'] || '').toLowerCase();
     if (encoding && encoding !== 'identity') {
@@ -944,6 +1027,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
             const projected = restoreDelegatedOpenAiObject(value, publicModel);
             const responseBody = Buffer.from(JSON.stringify(projected), 'utf8');
             settled = true;
+            callbackPublicErrorCodes.delete(handle);
             finishOuter();
             res.writeHead(status, {
                 'content-type': 'application/json',
@@ -1007,6 +1091,9 @@ function forwardOpenAi(req, res, validated) {
     }, upstreamResponse => {
         sidecarConnected = true;
         upstreamResponse.on('end', finishOuter);
+        if (handle.provider === 'a6api' && callbackPublicErrorCodes.has(handle)) {
+            return forwardDelegatedJson(upstreamResponse, req, res, handle, validated.publicModel);
+        }
         if (validated.streamMode) {
             const status = upstreamResponse.statusCode || 503;
             const contentType = String(upstreamResponse.headers['content-type'] || '').trim().toLowerCase();
@@ -1339,6 +1426,18 @@ async function internalCallback(req, res) {
             if (requestCancellationRegistry.isCancelled(handle)) {
                 upstreamResponse.destroy(cancelError);
                 return;
+            }
+            if (handle.provider === 'a6api'
+                && (upstreamResponse.statusCode || 502) >= 300) {
+                return forwardA6apiErrorResponse(upstreamResponse, res, handle.publicModel, {
+                    trustedLocal: state.local,
+                    onCode: code => {
+                        if (!terminal && !requestCancellationRegistry.isCancelled(handle)) {
+                            callbackPublicErrorCodes.set(handle, code);
+                        }
+                    },
+                    onFinish: finishInner,
+                });
             }
             res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
             const tap = createTap({
@@ -1799,6 +1898,10 @@ function forward(req, res, state, reqBody, reqPath, routed, retried) {
         headers,
         timeout: UPSTREAM_TIMEOUT_MS,
     }, (upRes) => {
+        if (state.backend === 'a6api' && (upRes.statusCode || 502) >= 300) {
+            const publicModel = routed && routed.exact ? routed.from : `a6api/${modelOf(body)}`;
+            return forwardA6apiErrorResponse(upRes, res, publicModel, { trustedLocal: state.local });
+        }
         // Счётчик токенов висит РЯДОМ с трубой: слушатель `data` получает те же
         // чанки, что и `pipe`, ответ клиенту от этого не задерживается и не меняется.
         // Через front-door идут все харнессы, поэтому это единственное место, где

@@ -29,8 +29,9 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { chatUsageToAnthropic } = require('./lib/usage-normalize.js');
 
-const LISTEN_PORT = 20130;
+const LISTEN_PORT = Number(process.env.LISTEN_PORT || 20130);
 const UPSTREAM_BASE = process.env.FM_OPENAI_BASE_URL || 'https://api.freemodel.dev/v1';
 const FM_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'fm-active-key.txt');
 const CONFIG_FILE = path.join(__dirname, 'fm-openai-config.json');
@@ -237,10 +238,7 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
         content,
         stop_reason: mapStopReason(choice.finish_reason),
         stop_sequence: null,
-        usage: {
-            input_tokens: (openaiResp.usage && openaiResp.usage.prompt_tokens) || 0,
-            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens) || 0,
-        },
+        usage: chatUsageToAnthropic(openaiResp.usage),
     };
 }
 
@@ -321,10 +319,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     function processChunk(chunk) {
         const choice = (chunk.choices && chunk.choices[0]) || null;
         if (chunk.usage) {
-            usage = {
-                input_tokens: chunk.usage.prompt_tokens || 0,
-                output_tokens: chunk.usage.completion_tokens || 0,
-            };
+            usage = chatUsageToAnthropic(chunk.usage, usage);
         }
         if (!choice) return;
         const delta = choice.delta || {};
@@ -378,7 +373,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         sseWrite(clientRes, 'message_delta', {
             type: 'message_delta',
             delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null },
-            usage: { output_tokens: usage.output_tokens },
+            usage,
         });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();

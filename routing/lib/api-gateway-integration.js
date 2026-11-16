@@ -203,6 +203,7 @@ function createApiGatewayRoutes({ service, canWrite: writeGuard = canWrite } = {
     if (!service || typeof service !== 'object') throw new TypeError('API Gateway service is required.');
     const gets = new Map([
         [PREFIX, 'state'],
+        [`${PREFIX}/candidates`, 'candidates'],
         [`${PREFIX}/sidecar`, 'sidecarStatus'],
         [`${PREFIX}/clients`, 'clientsStatus'],
         [`${PREFIX}/opencode/preview`, 'openCodePreview'],
@@ -218,9 +219,9 @@ function createApiGatewayRoutes({ service, canWrite: writeGuard = canWrite } = {
             if (req.method === 'GET') {
                 const method = gets.get(pathname);
                 if (!method || typeof service[method] !== 'function') return json(res, 404, { ok: false, code: 'not_found', error: 'API Gateway route not found.' });
-                // Список моделей собирается только по видимым вкладкам. У GET тела нет, поэтому
-                // фильтр едет параметром адреса: `?provider=a&provider=b` (или через запятую).
-                const value = pathname === PREFIX && typeof service[method] === 'function' && service.state === service[method]
+                // Кандидаты собираются только по выбранным видимым провайдерам. Начальный state
+                // не запускает discovery и поэтому не получает параметры provider.
+                const value = pathname === `${PREFIX}/candidates`
                     ? await service[method]({ providers: visibleProvidersFromUrl(req.url) })
                     : await service[method]();
                 if (pathname === PREFIX && value && typeof value === 'object' && !Array.isArray(value)) {

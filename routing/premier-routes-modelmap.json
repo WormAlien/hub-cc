@@ -1,6 +1,6 @@
 {
-  "default": "deepseek-v4.1-flash-1017",
-  "opus": "deepseek-v4.1-flash-1017",
-  "sonnet": "deepseek-v4.1-flash-1017",
-  "haiku": "deepseek-v4.1-flash-1017"
+  "default": "grok-4.7",
+  "opus": "gpt-6.1-terra",
+  "sonnet": "gpt-6.1-terra",
+  "haiku": "gpt-6.1-terra"
 }

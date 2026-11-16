@@ -57,6 +57,11 @@ async function reservePort() {
                 assert.equal(req.headers['x-abuse-hub-local-exact'], undefined, 'local exact marker reached vendor');
                 assert.equal(req.headers['x-route-exact'], undefined, 'route exact marker reached vendor');
                 generations.push({ body, headers: req.headers });
+                if (mode === 'circuit-blocked') {
+                    res.writeHead(503, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { code: 'subscription_route_circuit_blocked', message: 'fixture-private-provider-detail' } }));
+                    return;
+                }
                 if (mode === 'transient') { await wait(40); res.writeHead(500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: { type: 'api_error', message: 'temporarily overloaded, please retry' } })); return; }
                 if (body.stream) {
                     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -106,7 +111,7 @@ async function reservePort() {
         const routesMap = { default: 'deepseek-route-main', opus: 'deepseek-route-opus', sonnet: 'deepseek-route-sonnet', haiku: 'deepseek-route-haiku', gpt: '' };
         await writeJson('a6api-modelmap.json', providerMap); await writeJson('a6api-routes-modelmap.json', routesMap);
         fs.writeFileSync(file('active-key.txt'), 'fixture-key-one\n');
-        await writeJson('converter.json', { port: converterPort, upstream: 'http://127.0.0.1:' + mock.address().port + '/v1', keyFile: file('active-key.txt'), modelMap: {}, providerName: 'a6api-fixture', strictToolsVision: true });
+        await writeJson('converter.json', { port: converterPort, upstream: 'http://127.0.0.1:' + mock.address().port + '/v1', keyFile: file('active-key.txt'), modelMap: {}, providerName: 'a6api', strictToolsVision: true });
         const converter = await start('converter', 'custom-openai-proxy.js', [file('converter.json')], { PORT: String(converterPort) }, '/health');
         const clamp = { maxAttempts: 1, maxHedges: 0, hedgeMs: 0, holdMs: 0, emptyStreamMs: 0, catalogTtlMs: 0, poolFallbackModel: '', poolDeadMs: 0, visionBridge: false };
         await writeJson('keepalive.json', { v: 8, maxAttempts: 7, maxHedges: 3, hedgeMs: 1000, holdMs: 10000, emptyStreamMs: 30000, catalogTtlMs: 60000, poolFallbackModel: 'forbidden-fallback', poolDeadMs: 60000, visionBridge: true, preCommitMs: 0, jsonHoldMs: 0, stallMs: 0, retryBudgetMs: 10000, upstreamTimeoutMs: 20000 });
@@ -202,6 +207,19 @@ async function reservePort() {
                 const r = await jsonRequest(frontdoor, '/v1/messages', requestBody('a6api/deepseek-error', { stream }));
                 assert.ok(r.status >= 500 || r.text.includes('"type":"error"'), 'expected a surfaced upstream error');
                 assert.equal(generations.length, before + 1); assert.ok(!r.text.includes('"type":"message_stop"'));
+            } finally { mode = 'normal'; }
+        });
+        for (const stream of [false, true]) await test('a6api circuit diagnosis survives native keepalive without extra generations (stream=' + stream + ')', async () => {
+            mode = 'circuit-blocked';
+            const before = generations.length;
+            try {
+                const r = await jsonRequest(frontdoor, '/v1/messages', requestBody('a6api/deepseek-error', { stream }));
+                assert.equal(r.status, 503);
+                const body = JSON.parse(r.text);
+                assert.equal(body.error.code, 'subscription_route_circuit_blocked');
+                assert.match(body.error.message, /временно заблокированы после ошибок upstream/);
+                assert.ok(!r.text.includes('fixture-private-provider-detail'));
+                assert.equal(generations.length, before + 1);
             } finally { mode = 'normal'; }
         });
         await test('count_tokens through the frontdoor performs no upstream generation', async () => {

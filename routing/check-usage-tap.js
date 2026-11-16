@@ -83,6 +83,32 @@ ok('кеш-поля забираются, когда шлюз их отдаёт'
   assert.strictEqual(written[0].cr, 900);
   assert.strictEqual(written[0].cw, 100);
 });
+ok('OpenAI Chat nested cache usage нормализуется для любого бэкенда', () => {
+  assert.deepStrictEqual(pickUsage({
+    prompt_tokens: 1010,
+    completion_tokens: 2,
+    prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+  }, 'chat'), { in: 10, out: 2, cr: 900, cw: 100 });
+});
+ok('OpenAI Responses nested cache usage нормализуется для любого бэкенда', () => {
+  assert.deepStrictEqual(pickUsage({
+    input_tokens: 1010,
+    output_tokens: 2,
+    input_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+  }, 'responses'), { in: 10, out: 2, cr: 900, cw: 100 });
+});
+ok('плоские DeepSeek/Kimi cache aliases нормализуются', () => {
+  assert.deepStrictEqual(pickUsage({
+    prompt_tokens: 910,
+    completion_tokens: 2,
+    prompt_cache_hit_tokens: 900,
+  }, 'chat'), { in: 10, out: 2, cr: 900, cw: 0 });
+  assert.deepStrictEqual(pickUsage({
+    prompt_tokens: 910,
+    completion_tokens: 2,
+    cached_tokens: 900,
+  }, 'chat'), { in: 10, out: 2, cr: 900, cw: 0 });
+});
 ok('обрыв соединения пишет то, что успело прийти', () => {
   const written = [];
   const tap = createTap(META, r => written.push(r));
@@ -99,6 +125,22 @@ ok('обычный JSON-ответ разбирается целиком', () =>
   const { written } = run(meta, body);
   assert.strictEqual(written[0].in, 5);
   assert.strictEqual(written[0].st, 0);
+});
+ok('front-door считает OpenAI /v1/responses JSON', () => {
+  const meta = Object.assign({}, META, {
+    url: '/v1/responses',
+    headers: { 'content-type': 'application/json' },
+  });
+  const body = JSON.stringify({ model: 'gpt-5.6-sol', usage: {
+    input_tokens: 1010,
+    output_tokens: 2,
+    input_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+  } });
+  const { written } = run(meta, body);
+  assert.deepStrictEqual(
+    { in: written[0].in, out: written[0].out, cr: written[0].cr, cw: written[0].cw },
+    { in: 10, out: 2, cr: 900, cw: 100 },
+  );
 });
 ok('сжатый ответ не считается вовсе', () => {
   const meta = Object.assign({}, META, {

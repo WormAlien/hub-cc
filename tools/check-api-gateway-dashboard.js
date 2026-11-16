@@ -132,6 +132,7 @@ test('exports the injected dashboard service interface', () => {
     const service = createApiGatewayDashboardService(baseDependencies());
     for (const name of [
         'state',
+        'candidates',
         'updateModel',
         'sidecarStatus',
         'clientsStatus',
@@ -141,7 +142,43 @@ test('exports the injected dashboard service interface', () => {
     ]) assert.equal(typeof service[name], 'function', `${name} must be a method`);
 });
 
-test('state emits the canonical DTO with published rows first and deduplicated candidates after', async () => {
+test('state is fast manifest-only and candidates are loaded separately', async () => {
+    const current = manifest({
+        'alpha/model-a': meta('Alpha / Published'),
+        'hidden/model-x': meta('Hidden / Published'),
+    });
+    const calls = [];
+    const service = load().createApiGatewayDashboardService(baseDependencies({
+        readPublishedManifest: async () => clone(current),
+        resolveModelCandidates: async options => {
+            calls.push(options);
+            await new Promise(resolve => setTimeout(resolve, 40));
+            return [
+                { id: 'alpha/model-a', provider: 'alpha', model: 'model-a', catalogSource: 'live' },
+                { id: 'alpha/model-b', provider: 'alpha', model: 'model-b', catalogSource: 'live' },
+            ];
+        },
+    }));
+
+    const started = Date.now();
+    const state = await service.state();
+    assert.ok(Date.now() - started < 30, 'initial state waited for discovery');
+    assert.equal(calls.length, 0, 'initial state must not discover candidates');
+    assert.deepEqual(state.models.map(row => row.id), ['alpha/model-a', 'hidden/model-x']);
+    assert.equal(state.candidatesLoaded, false);
+
+    const candidates = await service.candidates({ providers: ['alpha'] });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].providers, ['alpha']);
+    assert.deepEqual(candidates.models.map(row => row.id), [
+        'alpha/model-a',
+        'hidden/model-x',
+        'alpha/model-b',
+    ]);
+    assert.equal(candidates.candidatesLoaded, true);
+});
+
+test('candidates emits the canonical DTO with published rows first and deduplicated candidates after', async () => {
     const current = manifest({
         'zeta/missing/model': meta('Zeta / Missing'),
         'alpha/model-a': meta('Alpha / Published'),
@@ -166,7 +203,7 @@ test('state emits the canonical DTO with published rows first and deduplicated c
         },
         candidateOptions,
     }));
-    const state = await service.state();
+    const state = await service.candidates();
 
     assert.strictEqual(resolverInput, candidateOptions);
     assert.deepEqual(state.public, publicUrls);
@@ -264,7 +301,7 @@ test('health keeps publication independent and follows probe/passive timestamp s
         readProbes: async () => probes,
         now: () => now,
     }));
-    const state = await service.state();
+    const state = await service.candidates();
 
     assert.equal(byId(state, 'p/catalog-only').health.state, 'unknown');
     assert.equal(byId(state, 'p/fresh-probe').health.state, 'healthy');
@@ -314,7 +351,7 @@ test('skipped probes are neutral health evidence', async () => {
         }),
         now: () => now,
     }));
-    const state = await service.state();
+    const state = await service.candidates();
     const withTraffic = byId(state, 'p/skipped-with-traffic');
     const skippedOnly = byId(state, 'p/skipped-only');
     assert.equal(withTraffic.probe.ok, null);
@@ -346,13 +383,13 @@ test('evidence keys split at the provider delimiter before nested model slashes'
         }),
         now: () => now,
     }));
-    const row = byId(await service.state(), id);
+    const row = byId(await service.candidates(), id);
     assert.deepEqual(row.passive, { lastSuccess: new Date(now - 30 * 60 * 1000).toISOString() });
     assert.equal(row.probe.ok, false);
     assert.equal(row.health.state, 'healthy');
 });
 
-test('state tolerates unavailable evidence and status readers without dropping published rows', async () => {
+test('separate readers tolerate failures without dropping published rows', async () => {
     const current = manifest({ 'p/retained': meta('Published and retained') });
     const service = load().createApiGatewayDashboardService(baseDependencies({
         readPublishedManifest: async () => clone(current),
@@ -370,16 +407,17 @@ test('state tolerates unavailable evidence and status readers without dropping p
             sync: async () => ({ ok: true }),
         },
     }));
-    const state = await service.state();
+    const state = await service.candidates();
     assert.equal(state.ok, true);
     assert.equal(byId(state, 'p/retained').published, true);
     assert.equal(byId(state, 'p/retained').health.state, 'unknown');
-    assert.equal(state.sidecar.status, 'unavailable');
-    assert.equal(state.clients.opencode.status, 'unavailable');
-    assert.equal(state.clients.hermes.status, 'unavailable');
+    assert.equal((await service.sidecarStatus()).status, 'unavailable');
+    const clients = await service.clientsStatus();
+    assert.equal(clients.opencode.status, 'unavailable');
+    assert.equal(clients.hermes.status, 'unavailable');
 });
 
-test('state passes paths to injected evidence and sidecar readers', async () => {
+test('candidate and sidecar readers receive injected paths', async () => {
     const p = paths('reader-paths');
     const seen = {};
     const service = load().createApiGatewayDashboardService(baseDependencies({
@@ -388,7 +426,8 @@ test('state passes paths to injected evidence and sidecar readers', async () => 
         readProbes: async received => { seen.probes = received; return {}; },
         getSidecarStatus: async received => { seen.sidecar = received; return { status: 'ready' }; },
     }));
-    await service.state();
+    await service.candidates();
+    await service.sidecarStatus();
     assert.strictEqual(seen.passive, p);
     assert.strictEqual(seen.probes, p);
     assert.strictEqual(seen.sidecar, p);
@@ -595,7 +634,7 @@ test('sidecar and client methods delegate with one manifest snapshot and return 
     }
 });
 
-test('state reuses one manifest snapshot for client cards and emits no private data', async () => {
+test('initial state and separate client status each use one safe manifest snapshot', async () => {
     const current = manifest({ 'alpha/model-a': meta('Alpha') }, { revision: 23 });
     let reads = 0;
     let statusManifest;
@@ -618,9 +657,13 @@ test('state reuses one manifest snapshot for client cards and emits no private d
     }));
     const state = await service.state();
     assert.equal(reads, 1);
+    assert.equal(Object.hasOwn(state, 'clients'), false);
+    assert.equal(Object.hasOwn(state, 'sidecar'), false);
+    const clients = await service.clientsStatus();
+    assert.equal(reads, 2);
     assert.deepEqual(statusManifest, current);
-    assert.equal(state.clients.claude.manifestRevision, 23);
-    const text = jsonText(state);
+    assert.equal(clients.claude.manifestRevision, 23);
+    const text = jsonText({ state, clients });
     assert.equal(text.includes(SECRET), false);
     assert.equal(text.includes(EMAIL), false);
     assert.equal(text.includes(PRIVATE_PATH), false);
@@ -631,7 +674,7 @@ test('state reuses one manifest snapshot for client cards and emits no private d
 // было 29 провайдеров и 1080 строк при одном опубликованном. Фильтр едет в самом запросе
 // каталога, чтобы скрытый шлюз не опрашивался сетью, а опубликованная строка остаётся даже
 // если её провайдер скрыт - иначе точный ID остаётся без ручки.
-test('state discovers only the providers passed by the caller and always keeps published rows', async () => {
+test('candidates discovers only the providers passed by the caller and always keeps published rows', async () => {
     const current = manifest({
         'alpha/model-a': meta('Alpha / Published'),
         'hidden/model-x': meta('Hidden / Published'),
@@ -652,7 +695,7 @@ test('state discovers only the providers passed by the caller and always keeps p
         },
     }));
 
-    const state = await service.state({ providers: ['alpha', 'beta'] });
+    const state = await service.candidates({ providers: ['alpha', 'beta'] });
 
     assert.deepEqual(seen, [{ ...configured, providers: ['alpha', 'beta'] }],
         'filtr должен уйти в каталог, иначе скрытые шлюзы опрашиваются сетью');
@@ -663,6 +706,6 @@ test('state discovers only the providers passed by the caller and always keeps p
         'hidden/model-x',
     ], 'скрытый провайдер gamma не попадает, опубликованная строка hidden остаётся');
 
-    await service.state();
+    await service.candidates();
     assert.deepEqual(seen[1], configured, 'без фильтра каталог спрашивается как раньше');
 });

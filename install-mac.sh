@@ -284,7 +284,9 @@ fi
 # 10. Запуск
 step "Запуск дашборда"
 b "  Дашборд: http://localhost:8200/__switch"
-if noask; then
+if [ "${HUB_SKIP_START:-0}" = "1" ]; then
+  ok "зависимости готовы; перезапуск выполнит вызвавший хаб"
+elif noask; then
   bash routing/restart-dashboard.sh
 else
   read -r -p "Запустить дашборд сейчас? [Y/n] " ans

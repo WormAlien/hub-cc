@@ -70,12 +70,12 @@ function proxyModuleBroken() {
 // 🪤 accountId — это `id` записи пула (`ar_1786714708319_0`). Не передали — ключ липкости
 // соберётся из имени профиля (оно и так производное от id), иначе из хоста. Отсутствие
 // поля у вызывающего НЕ должно превращаться в поход с домашнего IP.
-async function accountProxy({ host, profileDir = null, accountId = null, force = false } = {}) {
+async function accountProxy({ host, profileDir = null, accountId = null, force = false, usePreflight = true } = {}) {
     const broken = proxyModuleBroken();
     if (broken) return { ok: false, error: broken };
     if (!PROXY) return { ok: true, proxy: null };
     try {
-        return await PROXY.forAccount(PROXY.stickyKey({ accountId, profileDir, host }), { host, force });
+        return await PROXY.forAccount(PROXY.stickyKey({ accountId, profileDir, host }), { host, force, usePreflight });
     } catch (e) {
         // Исключение внутри пула тоже не повод течь домашним IP — но только если пул на
         // этом хосте включён. На выключенном это просто баг, и ронять из-за него баланс
@@ -243,6 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'freegg.app': 'jwt',
     'api.apinex.bond': 'jwt',
     // myapi.buzz (KVOTUM, 2026-10-30) — НЕ New API вовсе: свой движок (FastAPI + SPA).
     // Инструмент вписал `jwt` копией от kktoken - для несуществующей панели. Панель
@@ -1157,7 +1158,10 @@ const PROXY_FIRST_HOSTS = new Set(['agentrouter.org']);
 // Через адрес аккаунта. Возвращает ответ либо null, если идти надо прямым путём
 // (адреса нет, он в отстое, или туннель не поднялся вовсе).
 async function addressFirst({ host, accountId, profileDir, force, direct, viaProxy }) {
-    const px = await accountProxy({ host, accountId, profileDir, force });
+    // У proxy-first AgentRouter сам HTTP-запрос уже является проверкой адреса и имеет
+    // таймаут + один повтор. Отдельный preflight удваивал TLS-заходы; на маршруте
+    // PL -> Aliyun именно он случайно терял ServerHello до основного запроса.
+    const px = await accountProxy({ host, accountId, profileDir, force, usePreflight: false });
     if (!px.ok || !px.proxy) {
         console.log(`[чек] ${host}: адреса нет (${px.error || 'не выдан'}) — иду прямым путём`);
         return null;
@@ -1167,11 +1171,22 @@ async function addressFirst({ host, accountId, profileDir, force, direct, viaPro
         return null;
     }
     let through;
-    try {
-        through = await proxyGate(px.proxy.id, host, () => viaProxy(px.proxy));
-    } catch {
-        return null;                       // даже начать не смогли - падаем в прямой путь
+    let proxyRetry = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            through = await proxyGate(px.proxy.id, host, () => viaProxy(px.proxy));
+        } catch {
+            if (attempt === 0) { proxyRetry = true; continue; }
+            return null;                   // обе попытки не смогли начаться - падаем в direct
+        }
+        // Транспортный обрыв на липком адресе не доказывает, что сам адрес мёртв.
+        // Живой случай 09.11: маршрут PL -> Aliyun терял SYN-ACK/первый сегмент
+        // ServerHello случайно; новое TCP-соединение через тот же PL проходило. Один
+        // повтор сохраняет IP аккаунта и дешевле прямого fallback, который меняет IP.
+        if (!through.transportError || attempt === 1) break;
+        proxyRetry = true;
     }
+    if (proxyRetry) through = { ...through, proxyRetry: true };
     const out = { ...through, viaProxy: true, proxyFirst: true };
     console.log(`[чек] ${host}: ${out.ok ? 'через адрес' : 'адрес отбил'} ${px.proxy.id} (HTTP ${out.status})`);
     if (!retryableDirectFailure(out)) return out;     // смысловой ответ - он и есть ответ

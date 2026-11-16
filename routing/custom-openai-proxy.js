@@ -21,6 +21,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
+const { chatUsageToAnthropic } = require('./lib/usage-normalize.js');
 
 const CONFIG_FILE = process.argv[2];
 const DEFAULT_KEY_FILE = path.join(os.homedir(), '.claude', 'custom-active-key.txt');
@@ -309,12 +310,11 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
         content,
         stop_reason: mapStopReason(choice.finish_reason),
         stop_sequence: null,
-        usage: {
-            input_tokens: STRICT_TOOLS_VISION ? usageValue(openaiResp.usage?.prompt_tokens, estimateTokens(claudeReq))
-                : (openaiResp.usage && openaiResp.usage.prompt_tokens) || estimateTokens(claudeReq),
-            output_tokens: STRICT_TOOLS_VISION ? usageValue(openaiResp.usage?.completion_tokens, Math.max(1, Math.ceil(((msg.content || '').length + reasoning.length + (msg.tool_calls || []).reduce((n, t) => n + t.function.arguments.length, 0)) / 4)))
-                : (openaiResp.usage && openaiResp.usage.completion_tokens) || Math.max(1, Math.ceil(((msg.content || '').length + reasoning.length) / 4)),
-        },
+        usage: chatUsageToAnthropic(openaiResp.usage, {
+            input_tokens: estimateTokens(claudeReq),
+            output_tokens: Math.max(1, Math.ceil(((msg.content || '').length + reasoning.length
+                + (STRICT_TOOLS_VISION ? (msg.tool_calls || []).reduce((n, t) => n + t.function.arguments.length, 0) : 0)) / 4)),
+        }, { zeroUsesFallback: !STRICT_TOOLS_VISION }),
     };
 }
 
@@ -446,10 +446,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
             // 🪤 Ноль от шлюза НЕ затирает оценку: часть шлюзов отвечает
             // `prompt_tokens: 0` (или не отвечает вовсе), и тогда честнее отдать
             // приблизительное число, чем ноль - на нуле Claude Code рисует `⧉ ?`.
-            usage = {
-                input_tokens: STRICT_TOOLS_VISION ? usageValue(chunk.usage.prompt_tokens, usage.input_tokens) : chunk.usage.prompt_tokens || usage.input_tokens,
-                output_tokens: STRICT_TOOLS_VISION ? usageValue(chunk.usage.completion_tokens, usage.output_tokens) : chunk.usage.completion_tokens || usage.output_tokens,
-            };
+            usage = chatUsageToAnthropic(chunk.usage, usage, { zeroUsesFallback: !STRICT_TOOLS_VISION });
         }
         if (!choice) return;
         const delta = choice.delta || {};
@@ -540,7 +537,10 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         // `agentrouter-proxy.js:1052`, Responses-ветка (владелец на `gpt-6-astra[1m]`).
         // Значение настоящее: `prompt_tokens` из ответа шлюза (у OpenAI-пути он есть),
         // а если шлюз его не прислал - оценка, заложенная в `usage` при старте.
-        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: { input_tokens: usage.input_tokens, output_tokens: STRICT_TOOLS_VISION ? usageValue(usage.output_tokens, fallbackOut) : usage.output_tokens || fallbackOut } });
+        sseWrite(clientRes, 'message_delta', { type: 'message_delta', delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null }, usage: {
+            ...usage,
+            output_tokens: STRICT_TOOLS_VISION ? usageValue(usage.output_tokens, fallbackOut) : usage.output_tokens || fallbackOut,
+        } });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
     }
@@ -599,29 +599,38 @@ function writeJSON(res, code, obj) {
     });
     res.end(body);
 }
-function a6apiSellerError(raw, model) {
+function a6apiSellerError(raw, model, status) {
     if (!IS_A6API || !raw || raw.length > A6API_ERROR_BODY_MAX) return null;
     let doc;
     try { doc = JSON.parse(raw.toString('utf8')); } catch { return null; }
     const code = doc && (doc.code || doc.error && doc.error.code);
+    if (code === 'subscription_route_circuit_blocked' && status === 503) return {
+        code: 503,
+        errorCode: code,
+        type: 'api_error',
+        message: 'a6api: продавцы этой модели временно заблокированы после ошибок upstream. Дождитесь восстановления или добавьте резервного продавца в кабинете a6api.',
+    };
     if (code !== 'smart_route_no_active_candidates') return null;
     return {
         code: 409,
+        errorCode: code,
         type: 'invalid_request_error',
         message: `a6api: у модели ${model} нет доступного продавца. Выбранный продавец недоступен или удалён. Выберите другого продавца в кабинете a6api или смените модель.`,
     };
 }
-function claudeError(res, code, message, errType) {
+function claudeError(res, code, message, errType, errorCode) {
+    const error = { type: errType || 'api_error', message };
+    if (errorCode) error.code = errorCode;
     if (STRICT_TOOLS_VISION) {
         if (res.writableEnded || res.destroyed) return;
         if (res.headersSent) {
             stats.errors++;
-            sseWrite(res, 'error', { type: 'error', error: { type: errType || 'api_error', message } });
+            sseWrite(res, 'error', { type: 'error', error });
             return res.end();
         }
     }
     stats.errors++;
-    writeJSON(res, code, { type: 'error', error: { type: errType || 'api_error', message } });
+    writeJSON(res, code, { type: 'error', error });
 }
 const { createLogger } = require('./proxy-logger.js');
 const { logLine } = createLogger('custom-oa');
@@ -663,10 +672,10 @@ function handleMessages(req, res, body, trustedAdapter) {
                 strictChunks.push(c); strictSize += c.length;
             });
             upRes.on('end', () => {
-                const sellerError = !strictOverflow && a6apiSellerError(Buffer.concat(strictChunks, strictSize), openaiReq.model);
+                const sellerError = !strictOverflow && a6apiSellerError(Buffer.concat(strictChunks, strictSize), openaiReq.model, upRes.statusCode);
                 if (sellerError) {
-                    logLine(`upstream ${upRes.statusCode}: smart_route_no_active_candidates for ${openaiReq.model}`);
-                    return claudeError(res, sellerError.code, sellerError.message, sellerError.type);
+                    logLine(`upstream ${upRes.statusCode}: ${sellerError.errorCode} for ${openaiReq.model}`);
+                    return claudeError(res, sellerError.code, sellerError.message, sellerError.type, sellerError.errorCode);
                 }
                 let message = STRICT_TOOLS_VISION ? 'upstream HTTP ' + upRes.statusCode : errBody.slice(0, 500);
                 if (!STRICT_TOOLS_VISION) { try { message = JSON.parse(errBody).error?.message || message; } catch {} }

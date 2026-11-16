@@ -428,21 +428,96 @@ if (fs.existsSync(MOD)) {
         '/hub/routing/token-usage.jsonl': journal,
     });
 
-    ok('прочие харнессы берутся из журнала, а Claude Code из журнала не берётся', () => {
+    ok('прочие харнессы берутся gross из журнала, а Claude Code из журнала не берётся', () => {
         const journal = [
             jline({ h: 'claude-code', in: 1_000_000, out: 5_000 }),
-            jline({ h: 'opencode', in: 400_000, out: 2_000 }),
-            jline({ h: 'opencode', in: 100_000, out: 1_000 }),
+            jline({ h: 'opencode', in: 400_000, out: 2_000, cr: 900_000, cw: 80_000 }),
+            jline({ h: 'opencode', in: 100_000, out: 1_000, cr: 300_000, cw: 20_000 }),
             jline({ h: 'curl', in: 7, out: 0 }),
         ].join('\n') + '\n';
         const s = A.computeCcStats({ fs: journalFs(journal), root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl' });
         const fromJournal = s.sources.filter(x => x.coverage === 'journal').map(x => x.h).sort();
         assert.deepStrictEqual(fromJournal, ['curl', 'opencode'], 'в журнальный счёт попали только прочие: ' + fromJournal.join(','));
         const oc = s.sources.find(x => x.h === 'opencode');
-        assert.strictEqual(oc.tokens, 503_000, 'вход+выход двух записей');
-        assert.strictEqual(s.otherTokens, 503_007, 'сумма прочих');
+        assert.strictEqual(oc.tokens, 1_803_000, 'input + output + cache read + cache write двух записей');
+        assert.strictEqual(s.otherTokens, 1_803_007, 'gross-сумма прочих');
         assert.strictEqual(s.lifetimeCC, 1000, 'счётчик [CC] по дням, а не по журнальному claude-code');
-        assert.strictEqual(s.lifetime, 1000 + 503_007, 'итог = Claude Code + прочие');
+        assert.strictEqual(s.lifetime, 1000 + 1_803_007, 'итог = Claude Code + прочие');
+    });
+
+    ok('запись только с кешем считается расходом и активностью', () => {
+        const journal = jline({ h: 'hermes-agent', in: 0, out: 0, cr: 900, cw: 100 }) + '\n';
+        const s = A.computeCcStats({
+            fs: journalFs(journal), root: ROOT, now: NOON,
+            journalPath: '/hub/routing/token-usage.jsonl',
+        });
+        assert.strictEqual(s.otherTokens, 1000, 'кеш не потерян из токенного итога');
+        assert.strictEqual(s.sources.find(x => x.h === 'hermes-agent').tokens, 1000);
+        assert.strictEqual(s.activity.activeDays, 2,
+            'день кеш-запроса объединён с отдельным днём активности Claude Code');
+    });
+
+    ok('активность и стрик объединяют Claude Code со всеми харнессами журнала', () => {
+        const journal = [
+            jline({ h: 'hermes-agent', in: 10, t: '2026-09-15T23:30:00.000Z' }),
+            jline({ h: 'opencode', in: 20, t: '2026-09-16T00:30:00.000Z' }),
+            // Несколько ответов одного харнесса в те же сутки не создают несколько дней.
+            jline({ h: 'opencode', in: 30, t: '2026-09-16T11:30:00.000Z' }),
+        ].join('\n') + '\n';
+        const s = A.computeCcStats({
+            fs: journalFs(journal, {
+                dailyActivity: [{ date: '2026-09-14', messageCount: 5, sessionCount: 1, toolCallCount: 0 }],
+            }),
+            root: ROOT, now: NOON, journalPath: '/hub/routing/token-usage.jsonl',
+        });
+        assert.strictEqual(s.activity.activeDays, 3, '14.09 Claude Code + 15.09 Hermes + 16.09 OpenCode');
+        assert.strictEqual(s.activity.streak.current, 3, 'три последовательных дня по всем харнессам');
+        assert.strictEqual(s.activity.streak.longest, 3);
+    });
+
+    ok('архивные сутки журнала участвуют в стрике после ротации', () => {
+        const archive = jline({ h: 'hermes-agent', in: 10, t: '2026-09-15T10:00:00.000Z' }) + '\n';
+        const live = jline({ h: 'hermes-agent', in: 20, t: '2026-09-16T10:00:00.000Z' }) + '\n';
+        const f = makeFs({
+            [ROOT + '/stats-cache.json']: cacheDoc({
+                dailyActivity: [{ date: '2026-09-14', messageCount: 5, sessionCount: 1, toolCallCount: 0 }],
+            }),
+            '/hub/routing/archive/token-usage-2026-09-15.jsonl': archive,
+            '/hub/routing/token-usage.jsonl': live,
+        });
+        const s = A.computeCcStats({
+            fs: f, root: ROOT, now: NOON,
+            journalPath: '/hub/routing/token-usage.jsonl',
+        });
+        assert.strictEqual(s.activity.activeDays, 3, 'архивный день не потерян');
+        assert.strictEqual(s.activity.streak.current, 3, 'ротация не обрывает стрик');
+        assert.strictEqual(s.journal.archives, 1, 'прочитан один архив суток');
+        assert.strictEqual(s.otherTokens, 20, 'архив меняет только активность, не токенные метрики');
+    });
+
+    ok('неизменившиеся архивы журнала не перечитываются на каждом refresh', () => {
+        const archivePath = '/hub/routing/archive/token-usage-2026-09-15.jsonl';
+        const files = {
+            [ROOT + '/stats-cache.json']: cacheDoc({
+                dailyActivity: [{ date: '2026-09-14', messageCount: 5, sessionCount: 1, toolCallCount: 0 }],
+            }),
+            [archivePath]: jline({ h: 'hermes-agent', in: 10, t: '2026-09-15T10:00:00.000Z' }) + '\n',
+            '/hub/routing/token-usage.jsonl': jline({ h: 'hermes-agent', in: 20, t: '2026-09-16T10:00:00.000Z' }) + '\n',
+        };
+        const inner = makeFs(files);
+        let archiveReads = 0;
+        const counted = {
+            readFileSync: p => { if (p === archivePath) archiveReads++; return inner.readFileSync(p); },
+            statSync: p => inner.statSync(p),
+            readdirSync: p => inner.readdirSync(p),
+        };
+        const cache = A.createStatsCache({
+            fs: counted, root: ROOT, now: () => NOON,
+            journalPath: '/hub/routing/token-usage.jsonl',
+        });
+        return cache.refresh().then(() => cache.refresh()).then(() => {
+            assert.strictEqual(archiveReads, 1, 'закрытые сутки прочитаны один раз');
+        });
     });
 
     ok('итог не складывает пройденный хвост с общим счётчиком: карточка равна своей кривой', () => {

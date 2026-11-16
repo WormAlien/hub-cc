@@ -91,6 +91,25 @@ check('строка пула умеет «выдача неизвестна»', 
 check('в шапке нет отрицательных: sumBalance печатается только при > 0',
   /sumBalance > 0 \?/.test(src), true);
 
+// XPeach и TrueSOTA живут внутри скрытой секции «Чтим память», а не прямыми детьми
+// #main-nav. effectiveHiddenSet() знает, что скрыта секция `memory`, но не добавляет имена
+// вложенных вкладок. Глобальная шкала обязана сама считать такую вкладку скрытой.
+const gaugeSrc = grab('renderGlobalGauge');
+const memorySection = { dataset: { extraNav: 'memory' } };
+const xpeachButton = { dataset: { tab: 'xpeach' }, closest: () => memorySection };
+const agentrouterButton = { dataset: { tab: 'agentrouter' }, closest: () => null };
+const moneyTabHidden = new Function('document',
+  `${grab('moneyTabHidden')}\nreturn moneyTabHidden;`)(
+  { getElementById: () => ({ querySelectorAll: () => [xpeachButton, agentrouterButton] }) });
+check('скрытая секция «Чтим память» скрывает XPeach из глобальной шкалы',
+  moneyTabHidden('xpeach', new Set(['memory'])) === true);
+check('видимая секция оставляет XPeach в глобальной шкале',
+  moneyTabHidden('xpeach', new Set()) === false);
+check('прямо скрытый AgentRouter не попадает в глобальную шкалу',
+  moneyTabHidden('agentrouter', new Set(['agentrouter'])) === true);
+check('рендер вызывает общий фильтр родительской секции',
+  /moneyTabHidden\(p\.id,\s*hiddenTabs\)/.test(gaugeSrc), gaugeSrc.slice(0, 240));
+
 console.log(`\nитог: ${ok} прошло, ${bad} упало`);
 process.exit(bad ? 1 : 0);
 

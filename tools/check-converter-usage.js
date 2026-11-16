@@ -22,6 +22,7 @@ const { spawn } = require('child_process');
 const assert = require('assert');
 
 const ROOT = path.join(__dirname, '..');
+const { createLocalHopAuth } = require(path.join(ROOT, 'routing', 'lib', 'local-hop-auth.js'));
 const CONVERTER = path.join(ROOT, 'routing', 'custom-openai-proxy.js');
 const UP_PORT = 20298;
 const CV_PORT = 20297;
@@ -33,10 +34,13 @@ const check = async (name, fn) => {
 };
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'convusage-'));
+const localHopSecretPath = path.join(TMP, 'abuse-hub-local-hop.key');
+const localHopAuth = createLocalHopAuth({ secretFile: localHopSecretPath });
+const adapterAuth = localHopAuth.token('keepalive-to-adapter');
 process.on('exit', () => { try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { } });
 
 // ── Поддельный шлюз: OpenAI-совместимый SSE ─────────────────────────────────
-let upstreamMode = 'usage';                    // 'usage' | 'no-usage' | 'zero-usage'
+let upstreamMode = 'usage';                    // 'usage' | 'cache-usage' | 'no-usage' | 'zero-usage'
 const upstream = http.createServer((req, res) => {
     if (req.method === 'GET') { res.writeHead(200); res.end('{}'); return; }
     const chunks = [];
@@ -51,7 +55,10 @@ const upstream = http.createServer((req, res) => {
         if (upstreamMode !== 'no-usage') {
             const usage = upstreamMode === 'zero-usage'
                 ? { prompt_tokens: 0, completion_tokens: 0 }
-                : { prompt_tokens: 42, completion_tokens: 7 };
+                : upstreamMode === 'cache-usage'
+                    ? { prompt_tokens: 1042, completion_tokens: 7,
+                        prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 } }
+                    : { prompt_tokens: 42, completion_tokens: 7 };
             res.write(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
         }
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
@@ -68,7 +75,7 @@ function startConverter(tag) {
     fs.writeFileSync(keyFile, 'fk-test-key');
     fs.writeFileSync(configFile, JSON.stringify({
         port: CV_PORT, upstream: `http://127.0.0.1:${UP_PORT}/v1`,
-        keyFile, modelMap: {}, providerName: 'Test',
+        keyFile, modelMap: {}, providerName: 'Test', localHopSecretPath,
     }));
     return spawn(process.execPath, [CONVERTER, configFile], { stdio: 'ignore' });
 }
@@ -91,7 +98,8 @@ async function ask(mode) {
             messages: [{ role: 'user', content: 'Say: ok' }] });
         const raw = await new Promise((resolve, reject) => {
             const req = http.request({ host: '127.0.0.1', port: CV_PORT, path: '/v1/messages', method: 'POST',
-                headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) } },
+                headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body),
+                    [localHopAuth.headerName]: adapterAuth } },
                 (res) => { let b = ''; res.on('data', c => b += c); res.on('end', () => resolve(b)); });
             req.on('error', reject);
             req.end(body);
@@ -112,6 +120,16 @@ async function ask(mode) {
         const u = await ask('usage');
         assert.strictEqual(u.input_tokens, 42, `input_tokens=${u.input_tokens} - не от шлюза`);
         assert.strictEqual(u.output_tokens, 7, `output_tokens=${u.output_tokens}`);
+    });
+
+    await check('финальное событие сохраняет uncached/cache корзины шлюза', async () => {
+        const u = await ask('cache-usage');
+        assert.deepStrictEqual(u, {
+            input_tokens: 42,
+            output_tokens: 7,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 100,
+        });
     });
 
     await check('нулевой расход шлюза не затирает оценку', async () => {

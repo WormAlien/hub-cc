@@ -23,6 +23,7 @@
 'use strict';
 
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 
@@ -46,6 +47,9 @@ const HOST = 'agentrouter.org';
 // на место сразу после создания промиса, и проверки шли бы уже на чужой конфигурации.
 async function withPool({ list = null, file = null, scheme = null, hosts = HOST, enabled = null }, fn) {
     const saved = { ...process.env };
+    process.env.PROXY_POOL_SOURCE = 'auto';
+    process.env.PROXY_POOL_OWN = '';
+    process.env.PROXY_POOL_OWN_FILE = '';
     process.env.PROXY_POOL_ASSIGN = ASSIGN;
     if (list) process.env.PROXY_POOL = list.join(',');
     else delete process.env.PROXY_POOL;
@@ -269,6 +273,37 @@ await withPool({ list: ['http://203.0.113.81:8080', 'http://203.0.113.82:8080'] 
     check(prev && prev.proxy === moved.proxy.id, 'release возвращает снятую привязку');
     check(PROXY.assignmentFor('ar_acct_A') === null, 'после release привязки нет');
 });
+
+// ── 12. таймаут обязан завершить даже TLS, который завис внутри custom createConnection ──
+console.log('\n12. таймаут fetchVia закрывает зависший TLS-туннель');
+{
+    const sockets = new Set();
+    const server = net.createServer(socket => {
+        sockets.add(socket);
+        socket.once('close', () => sockets.delete(socket));
+        // CONNECT принимаем, но TLS ServerHello намеренно не присылаем.
+        socket.once('data', () => socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'));
+    });
+    await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+    });
+    const port = server.address().port;
+    const proxy = PROXY.parseProxy(`http://127.0.0.1:${port}`);
+    const started = Date.now();
+    let error = null;
+    try {
+        await PROXY.fetchVia(proxy, 'https://example.test/', { timeoutMs: 150 });
+    } catch (e) { error = e; }
+    const elapsed = Date.now() - started;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const openAfterTimeout = sockets.size;
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+    check(error && /таймаут 150 мс/.test(error.message), 'зависший TLS заканчивается явным таймаутом');
+    check(elapsed < 1000, `promise завершился вовремя (${elapsed} мс), а не остался висеть`);
+    check(openAfterTimeout === 0, `TLS-сокет тоже закрыт (открыто после таймаута: ${openAfterTimeout})`);
+}
 
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* временная песочница */ }
 

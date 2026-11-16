@@ -2031,6 +2031,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'freegg.app': 'fg',
   'api.apinex.bond': 'ax',
   'myapi.buzz': 'kv',
   'api.threerouter.com': 'tr',
@@ -2572,6 +2573,14 @@ const server = http.createServer((req, res) => {
       res.end(JSON.stringify({ input_tokens: tokens }));
     });
     req.on('error', () => { aborted = true; if (!res.writableEnded) res.destroy(); });
+    return;
+  }
+
+  if (CUSTOM_PROVIDER_ID === 'freegg' && !activeKeyNow()) {
+    const body = JSON.stringify({ type: 'error', error: { type: 'authentication_error',
+      message: 'No selected FreeGG key. Select an account key in the dashboard.' } });
+    res.writeHead(401, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+    res.end(body);
     return;
   }
 
@@ -3876,7 +3885,10 @@ const server = http.createServer((req, res) => {
     // Не-стримовый запрос за сообщением (`/compact` и всё, что просит готовый JSON):
     // пингов там быть не может, поэтому через jsonHoldMs начинаем капать пробел.
     // count_tokens сюда не попадает — на него прокси отвечает локально и мгновенно.
-    if (!streaming && !isModelValidationProbe(req.method, reqPath, reqBody)
+    // Exact API Gateway calls must keep the real HTTP status until completion.
+    // A 200 whitespace precommit makes Bifrost parse a later error envelope as
+    // an empty successful assistant message. Legacy Claude JSON hold is unchanged.
+    if (!exactMode && !streaming && !isModelValidationProbe(req.method, reqPath, reqBody)
         && cfg.jsonHoldMs > 0 && jsonTimer === null
         && req.method === 'POST' && /^\/v1\/messages(\?|$)/.test(reqPath) && !isCountTokens(req.method, reqPath)) {
       jsonTimer = setTimeout(commitJson, cfg.jsonHoldMs);

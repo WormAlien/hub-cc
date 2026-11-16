@@ -254,6 +254,15 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    freegg: {
+        label: 'FreeGG',
+        base_url: 'http://localhost:20184',
+        api_key: 'dummy',           // real key keepalive reads from freegg-active-key.txt
+        model: null,
+        clear_helper: true,
+        // Keepalive :20184 -> Responses converter :20185 -> freegg.app/v1/responses.
+        // The selected account key is injected by keepalive; client settings use dummy.
+    },
     apinex: {
         label: 'APINEX',
         base_url: 'http://localhost:20190',
@@ -681,6 +690,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    freegg: 'freegg',
     apinex: 'apinex',
     kvotum: 'kvotum',
     threerouter: 'threerouter',
@@ -974,7 +984,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 const BACKEND_ALIASES = {
     a6: 'a6api',
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', fg: 'freegg', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     gm: 'gemini',
     rm: 'rumeng',
@@ -1153,7 +1163,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
     a6api: 'a6api',
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -2282,6 +2292,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveFg = makeKeepaliveHandlers(Number(process.env.FG_KEEPALIVE_PORT || 20184));
 const keepaliveAx = makeKeepaliveHandlers(Number(process.env.AX_KEEPALIVE_PORT || 20190));
 const keepaliveKv = makeKeepaliveHandlers(Number(process.env.KV_KEEPALIVE_PORT || 20182));
 const keepaliveTr = makeKeepaliveHandlers(Number(process.env.TR_KEEPALIVE_PORT || 20181));
@@ -5378,6 +5389,8 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive FreeGG',  port: Number(process.env.FG_KEEPALIVE_PORT || 20184), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'FreeGG конвертер',  port: Number(process.env.FG_CONVERTER_PORT || 20185), path: '/health' },
         { name: 'Keepalive APINEX',  port: Number(process.env.AX_KEEPALIVE_PORT || 20190), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KVOTUM',  port: Number(process.env.KV_KEEPALIVE_PORT || 20182), path: '/__keepalive/api/status', keepalive: true },
         { name: 'KVOTUM конвертер',  port: KV_CONVERTER_PORT, path: '/health' },
@@ -7422,7 +7435,7 @@ function ghSessionLib() {
 // Нужны, чтобы не харвестить профиль с открытым браузером: Chromium его не отдаст, а на
 // закрытии ещё и перезапишет банку кук.
 function ghLkPidsByTag() {
-    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, kv: kvLkPids, pm: pmLkPids, cp: cpLkPids, ab: abLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
+    return { github: ghLkPids, ar: arLkPids, go: goLkPids, tb: tbLkPids, xp: xpLkPids, jw: jwLkPids, sk: skLkPids, ts: tsLkPids, kk: kkLkPids, fg: fgLkPids, kv: kvLkPids, pm: pmLkPids, cp: cpLkPids, ab: abLkPids, fx: fxLkPids, bd: bdLkPids, nv: nvLkPids };
 }
 
 function ghAnyPidAlive(pid) {
@@ -7534,12 +7547,12 @@ function ghSessionUsage(host) {
 // записи ghId не имеют. Разница принципиальна для UI: запись есть → регистрировать
 // нечего, надо активировать существующую; записи нет, а профиль на диске лежит →
 // вероятно занято, но владелец может знать лучше (регистрация тогда могла не пройти).
-const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), kv: () => kvLoad(), pm: () => pmLoad(), cp: () => cpLoad(), ab: () => abLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
+const GH_POOL_LOADERS = { ar: () => arLoad(), go: () => goLoad(), tb: () => tbLoad(), xp: () => xpLoad(), jw: () => jwLoad(), sk: () => skLoad(), ts: () => tsLoad(), kk: () => kkLoad(), fg: () => fgLoad(), kv: () => kvLoad(), pm: () => pmLoad(), cp: () => cpLoad(), ab: () => abLoad(), fx: () => fxLoad(), bd: () => bdLoad(), nv: () => nvLoad(), ap: () => apLoad() };
 // Файлы пулов нужны отдельно от загрузчиков: по их mtime инвалидируется кеш usage-карты,
 // и в них же дописывает ghId сверка привязок. Порядок ключей = порядок плашек на карточке.
-const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, kv: () => KV_SESSIONS_FILE, pm: () => PM_SESSIONS_FILE, cp: () => CP_SESSIONS_FILE, ab: () => AB_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
-const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), kv: arr => kvSave(arr), pm: arr => pmSave(arr), cp: arr => cpSave(arr), ab: arr => abSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
-const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', kv: 'KVOTUM', pm: 'Premier', cp: 'Clean APIs', ab: 'Artbloom', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
+const GH_POOL_FILES = { ar: () => AR_SESSIONS_FILE, go: () => GO_SESSIONS_FILE, tb: () => TB_SESSIONS_FILE, xp: () => XP_SESSIONS_FILE, jw: () => JW_SESSIONS_FILE, sk: () => SK_SESSIONS_FILE, ts: () => TS_SESSIONS_FILE, kk: () => KK_SESSIONS_FILE, fg: () => FG_SESSIONS_FILE, kv: () => KV_SESSIONS_FILE, pm: () => PM_SESSIONS_FILE, cp: () => CP_SESSIONS_FILE, ab: () => AB_SESSIONS_FILE, fx: () => FX_SESSIONS_FILE, bd: () => BD_SESSIONS_FILE, nv: () => NV_SESSIONS_FILE, ap: () => AP_SESSIONS_FILE };
+const GH_POOL_SAVERS = { ar: arr => arSave(arr), go: arr => goSave(arr), tb: arr => tbSave(arr), xp: arr => xpSave(arr), jw: arr => jwSave(arr), sk: arr => skSave(arr), ts: arr => tsSave(arr), kk: arr => kkSave(arr), fg: arr => fgSave(arr), kv: arr => kvSave(arr), pm: arr => pmSave(arr), cp: arr => cpSave(arr), ab: arr => abSave(arr), fx: arr => fxSave(arr), bd: arr => bdSave(arr), nv: arr => nvSave(arr), ap: arr => apSave(arr) };
+const GH_POOL_LABELS = { ar: 'AgentRouter', go: 'GoRouter', tb: 'Tabi Token', xp: 'XPeach', jw: 'JustWoker', sk: 'SeekAi', ts: 'TrueSOTA', kk: 'KKtoken', fg: 'FreeGG', kv: 'KVOTUM', pm: 'Premier', cp: 'Clean APIs', ab: 'Artbloom', fx: 'Fxqidian', bd: 'BudsAI', nv: 'Nova', ap: 'AIPM' };
 // Правило сверки вынесено в предикат, потому что им пользуются двое: модалка заселения
 // (одна находка по одному хосту) и плашки на вкладке GitHub (все находки по всем хостам).
 // Разъедься они — вкладка показывала бы «свободен» там, где заселение отвечает 409.
@@ -8002,6 +8015,9 @@ function handleGoAddGithub(req, res) {
 }
 function handleKkAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kktoken', host: 'kktoken.cc', prefix: 'kk_', load: kkLoad, save: kkSave, sessionsDir: KK_SESSIONS_DIR });
+}
+function handleFgAddGithub(req, res) {
+    return newapiAddGithub(req, res, { tag: 'freegg', host: 'freegg.app', prefix: 'fg_', load: fgLoad, save: fgSave, sessionsDir: FG_SESSIONS_DIR });
 }
 function handleKvAddGithub(req, res) {
     return newapiAddGithub(req, res, { tag: 'kvotum', host: 'myapi.buzz', prefix: 'kv_', load: kvLoad, save: kvSave, sessionsDir: KV_SESSIONS_DIR });
@@ -9597,6 +9613,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'freegg.app':      path.join(__dirname, '..', 'freegg', 'profiles'),
     'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
     'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),
     'api.threerouter.com':      path.join(__dirname, '..', 'threerouter', 'profiles'),
@@ -9758,7 +9775,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, fgLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -13673,6 +13690,9 @@ function handleGoMapProfiles(req, res) {
 function handleKkMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kktoken', host: 'kktoken.cc', load: kkLoad, save: kkSave });
 }
+function handleFgMapProfiles(req, res) {
+    return newapiMapProfiles(req, res, { tag: 'freegg', host: 'freegg.app', load: fgLoad, save: fgSave });
+}
 function handleKvMapProfiles(req, res) {
     return newapiMapProfiles(req, res, { tag: 'kvotum', host: 'myapi.buzz', load: kvLoad, save: kvSave });
 }
@@ -13776,6 +13796,9 @@ function handleGoSetGithub(req, res) {
 }
 function handleKkSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave });
+}
+function handleFgSetGithub(req, res) {
+    return newapiSetGithub(req, res, { tag: 'freegg', load: fgLoad, save: fgSave });
 }
 function handleKvSetGithub(req, res) {
     return newapiSetGithub(req, res, { tag: 'kvotum', load: kvLoad, save: kvSave });
@@ -16647,6 +16670,52 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const FG_SESSIONS_FILE = path.join(__dirname, 'freegg-sessions.json');
+const FG_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'freegg-active-key.txt');
+const FG_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'freegg-active-model.txt');
+const FG_BASE_URL = 'https://freegg.app/v1';
+// SSE keepalive proxy для freegg (как у tabi :20155): форвардит напрямую в
+// freegg.app, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+//
+// 🔴 ГЛАВНОЕ ОТЛИЧИЕ ОТ ЭТАЛОНА (замер 16.11.2026 живым ключом владельца): freegg
+// ОТКЛЮЧИЛ оба привычных пути и обслуживает ТОЛЬКО Responses API.
+//
+//   POST /v1/messages         → 410 {"type":"endpoint_retired","code":"endpoint_gone"}
+//   POST /v1/chat/completions → 410 то же самое
+//   POST /v1/responses        → 200, живой ответ gpt-6.1-sol
+//
+// Поэтому keepalive НЕЛЬЗЯ пускать на корень freegg.app напрямую: он шлёт
+// `/v1/messages` и получил бы 410 на каждом запросе. Апстримом keepalive служит
+// СВОЙ конвертер `freegg-proxy.js` (:20185), который переводит Anthropic → Responses:
+//
+//   Claude Code → keepalive :20184 → конвертер :20185 → freegg.app /v1/responses
+//
+// Конвертер спавнится вместе с keepalive (как у odyssey): без него поднятый keepalive
+// форвардил бы в мёртвый локальный порт, а это выглядит как «вкладка есть, а ответов нет».
+// `custom-openai-proxy.js` здесь не годится — он конвертирует в chat/completions, то есть
+// ровно в тот путь, который площадка закрыла.
+//
+// 🪤 Комментарий эталона про «каждый четвёртый POST отдаёт пустой 403» здесь НЕ
+// подтверждён: замер 16.11 — 200 на всех Responses-запросах. Ретрай 403 в
+// keepalive-proxy.js остаётся страховкой, а не замеренным фактом этой площадки.
+const FG_UPSTREAM = 'https://freegg.app';
+const FG_KEEPALIVE_PORT = Number(process.env.FG_KEEPALIVE_PORT || 20184);
+const FG_KEEPALIVE_URL = `http://localhost:${FG_KEEPALIVE_PORT}`;
+const FG_MODELMAP_FILE = path.join(__dirname, 'freegg-modelmap.json');
+// Конвертер Anthropic → Responses. Порт отдельный от keepalive: иначе они подрались бы
+// за один порт, а роль у них разная (один держит паузы, другой меняет протокол).
+const FG_CONVERTER_PORT = Number(process.env.FG_CONVERTER_PORT || 20185);
+const FG_CONVERTER_URL = `http://127.0.0.1:${FG_CONVERTER_PORT}`;
+const FG_CONVERTER_SCRIPT = path.join(__dirname, 'freegg-proxy.js');
+// Резерв «угадать грант» (см. newapiBalance). У freegg гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const FG_GRANT_STEP = 5;
+const FG_DEFAULT_GRANT = 5;
+const FG_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const AX_SESSIONS_FILE = path.join(__dirname, 'apinex-sessions.json');
 const AX_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'apinex-active-key.txt');
 const AX_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'apinex-active-model.txt');
@@ -17023,6 +17092,13 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const FG_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const AX_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -17213,6 +17289,32 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function fgLoad() {
+    try {
+        const raw = fs.readFileSync(FG_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'FreeGG');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'fg_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { fgSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -17571,6 +17673,9 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function fgSave(arr) {
+    durableWriteJson(FG_SESSIONS_FILE, arr);
+}
 function axSave(arr) {
     durableWriteJson(AX_SESSIONS_FILE, arr);
 }
@@ -17615,6 +17720,10 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function fgReadActiveModel() {
+    try { return fs.readFileSync(FG_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function axReadActiveModel() {
@@ -17675,6 +17784,10 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function fgReadActiveKey() {
+    try { return fs.readFileSync(FG_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function axReadActiveKey() {
@@ -17764,6 +17877,77 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function fgConverterSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(FG_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        // Ключ и апстрим конвертер читает сам (файл активного ключа + env-дефолт),
+        // поэтому конфиг не пишем: у него нет ничего, что вкладка выбирает на ходу.
+        const child = spawn(process.execPath, [FG_CONVERTER_SCRIPT], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                FG_LISTEN_PORT: String(FG_CONVERTER_PORT),
+                FG_UPSTREAM_BASE: `${FG_UPSTREAM}/v1`,
+                FG_KEY_FILE: FG_ACTIVE_KEY_FILE,
+            },
+        });
+        watchChildExit(child, 'конвертер FreeGG', FG_CONVERTER_PORT);
+        child.unref();
+        logLine(`freegg конвертер spawn: :${FG_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`freegg конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function fgKeepaliveSpawn() {
+    try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive: у freegg `/v1/messages` закрыт (410),
+        // поэтому апстрим keepalive — свой конвертер, а не корень площадки. Поднятый
+        // keepalive без конвертера форвардил бы в мёртвый порт.
+        await fgConverterSpawn();
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(FG_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(FG_KEEPALIVE_PORT),
+                // Апстрим — СВОЙ конвертер, не корень площадки: `/v1/messages` у freegg
+                // отдаёт 410, и прямой форвард умирал бы на каждом запросе.
+                UPSTREAM: FG_CONVERTER_URL,
+                KEY_FILE: FG_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: FG_SESSIONS_FILE,
+                MODELMAP_FILE: FG_MODELMAP_FILE,
+                LOCAL_EXACT_ADAPTER: '1',
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
+                CUSTOM_PROVIDER_ID: 'freegg', CUSTOM_PROVIDER_NAME: 'FreeGG',
+                GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
+                HAIKU_GPT_PROXY: FG_CONVERTER_URL,
+                MAX_HEDGES: '0',
+                ...(process.env.FG_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.FG_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive FreeGG', FG_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`freegg keepalive proxy spawn: :${FG_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`freegg keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -18297,6 +18481,19 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function fgProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${FG_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...FG_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function axProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -18495,6 +18692,21 @@ async function kkBalance(target, opts = {}) {
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
         force: !!opts.force,
     });
+}
+async function fgBalance(target, opts = {}) {
+    const result = await newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'freegg.app',
+        ccHeaders: FG_CC_HEADERS,
+        usageUrl: 'https://freegg.app/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(FG_DEFAULT_GRANT, Math.ceil(spent / FG_GRANT_STEP) * FG_GRANT_STEP),
+        force: !!opts.force,
+    });
+    // Registration grant is unknown. A key usage response cannot prove remaining funds.
+    if (result.balanceSource === 'guess') return { ...result, balance: null, granted: null,
+        balanceSource: 'unknown', error: result.error || 'Точный баланс FreeGG доступен после входа в кабинет' };
+    return result;
 }
 // APINEX — своя витрина, New-API ручек баланса нет (/v1/dashboard/billing/* → 404).
 // Ключом читается GET /v1/balance: {object:"balance", balance_usd, reserved_usd, rpm,
@@ -19046,6 +19258,7 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function fgApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'freegg' }); }
 function axApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'apinex' }); }
 function kvApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kvotum' }); }
 function trApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'threerouter' }); }
@@ -19377,6 +19590,29 @@ async function handleKkSessions(req, res) {
             kkSave(sessions);
         }
         jsonRes(res, 200, { sessions, activeModel: kkReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleFgSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = fgLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await fgProbe(s.api_key); }));
+            }
+            fgSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => fgApplyBalance(s, await fgBalance(s))));
+            }
+            fgSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: fgReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -19733,6 +19969,18 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await fgProbe(api_key);
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; fgSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -19918,6 +20166,28 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFgBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = fgLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await fgBalance(target || { api_key }, { force });
+            if (target) { fgApplyBalance(target, bal); fgSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('fg:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -20237,6 +20507,9 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleFgSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'freegg', load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance });
+}
 function handleAxSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'apinex', load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance });
 }
@@ -20281,6 +20554,7 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const fgLkPids = new Map();
 const axLkPids = new Map();
 const kvLkPids = new Map();
 const trLkPids = new Map();
@@ -20296,6 +20570,10 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function fgPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -20406,6 +20684,59 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFgSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fgLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = fgLkPids.get(label);
+        if (fgPidAlive(prevPid)) {
+            logLine(`freegg session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'freegg', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('freegg.app', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`freegg session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`freegg session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`freegg session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            fgLkPids.delete(label);
+            logLine(`freegg session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('fg', id);
+        });
+        proc.unref();
+        fgLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            fgLkPids.delete(label);
+            logLine(`freegg session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`freegg session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -21172,6 +21503,7 @@ const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js')
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const FG_SESSIONS_DIR = path.join(__dirname, '..', 'freegg', 'sessions');
 const AX_SESSIONS_DIR = path.join(__dirname, '..', 'apinex', 'sessions');
 const KV_SESSIONS_DIR = path.join(__dirname, '..', 'kvotum', 'sessions');
 const TR_SESSIONS_DIR = path.join(__dirname, '..', 'threerouter', 'sessions');
@@ -21191,6 +21523,13 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function fgB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function fgB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -21541,6 +21880,47 @@ async function handleLsShare(req, res) {
         };
         const share = lsB64UrlEncode(JSON.stringify(payload));
         logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFgShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = fgLkPids.get(label);
+        if (fgPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `freegg/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у fg нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(FG_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'freegg',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = fgB64UrlEncode(JSON.stringify(payload));
+        logLine(`freegg share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -22039,6 +22419,65 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFgImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(fgB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'freegg' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не freegg-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = fgLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'fg_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        fgSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(FG_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(FG_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`freegg import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`freegg import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -22902,6 +23341,36 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = fgLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'fg_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        fgSave(sessions);
+        logLine(`freegg add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -23449,6 +23918,30 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(FG_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        fgSave(sessions);
+        logLine(`freegg set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -23817,6 +24310,29 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        fgSave(sessions);
+        logLine(`freegg rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24163,6 +24679,22 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.id === idKey);
+        fgSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === fgReadActiveKey()) {
+            try { fs.rmSync(FG_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(FG_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`freegg delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -24441,6 +24973,59 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleFgActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в freegg-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = fgLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(FG_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        fgSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-fg');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = FG_KEEPALIVE_URL;   // keepalive :20184 → freegg.app напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — freegg-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const fgCurModel = fgReadActiveModel() || '';
+            if (fgCurModel) settings.model = fgCurModel;
+            else { delete settings.model; logLine('freegg activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из freegg-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`freegg activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20184, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const fgKa = await keepaliveBring(FG_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!fgKa.ok) logLine(`freegg activate: keepalive :${FG_KEEPALIVE_PORT} НЕ поднялся — ${fgKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`freegg activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${FG_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: fgKa.ok, port: FG_KEEPALIVE_PORT, error: fgKa.ok ? null : (fgKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -25471,6 +26056,40 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleFgModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (FG_MODELS_CACHE.data && Date.now() - FG_MODELS_CACHE.ts < FG_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: FG_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${FG_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...FG_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        FG_MODELS_CACHE.data = models;
+        FG_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (FG_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: FG_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleAxModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -25981,6 +26600,38 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(FG_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-fg-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = FG_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`freegg set-model: settings.json FAILED: ${e.message}`);
+        }
+        const fgKaM = await keepaliveBring(FG_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!fgKaM.ok) logLine(`freegg set-model: keepalive :${FG_KEEPALIVE_PORT} НЕ поднялся — ${fgKaM.error || '?'}`);
+        logLine(`freegg set-model: ${m} (base ${FG_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: FG_ACTIVE_MODEL_FILE, base: FG_KEEPALIVE_URL, needRestart: true, keepalive: { up: fgKaM.ok, port: FG_KEEPALIVE_PORT, error: fgKaM.ok ? null : (fgKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -26444,6 +27095,18 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleFgModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(FG_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`freegg modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleAxModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -26616,6 +27279,12 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function fgReadModelMap() {
+    try {
+        const raw = fs.readFileSync(FG_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -34534,6 +35203,8 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [FG_KEEPALIVE_PORT]: { name: 'FreeGG', spawn: fgKeepaliveSpawn },
+        [FG_CONVERTER_PORT]: { name: 'FreeGG конвертер', spawn: fgConverterSpawn, statusPath: '/health' },
         [AX_KEEPALIVE_PORT]: { name: 'APINEX', spawn: axKeepaliveSpawn },
         [KV_KEEPALIVE_PORT]: { name: 'KVOTUM', spawn: kvKeepaliveSpawn },
         [TR_KEEPALIVE_PORT]: { name: 'ThreeRouter', spawn: trKeepaliveSpawn },
@@ -35983,6 +36654,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    fg: { tag: 'freegg',     label: 'FreeGG',     host: 'freegg.app',     keyFile: FG_ACTIVE_KEY_FILE, load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance },
     ax: { tag: 'apinex',     label: 'APINEX',     host: 'api.apinex.bond',     keyFile: AX_ACTIVE_KEY_FILE, load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance },
     kv: { tag: 'kvotum',     label: 'KVOTUM',     host: 'myapi.buzz',     keyFile: KV_ACTIVE_KEY_FILE, load: kvLoad, save: kvSave, balanceFn: kvBalance, applyFn: kvApplyBalance },
     tr: { tag: 'threerouter',     label: 'ThreeRouter',     host: 'api.threerouter.com',     keyFile: TR_ACTIVE_KEY_FILE, load: trLoad, save: trSave, balanceFn: trBalance, applyFn: trApplyBalance },
@@ -37774,6 +38446,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/set-github') return handleArSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/set-github') return handleFgSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-github') return handleKvSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/set-github') return handlePmSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/set-github') return handleCpSetGithub(req, res);
@@ -37838,6 +38511,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/fg/keepalive/state')  return keepaliveFg.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/keepalive/state')  return keepaliveAx.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/keepalive/state')  return keepaliveKv.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/keepalive/state')  return keepaliveTr.state(req, res);
@@ -37855,6 +38529,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/keepalive/config') return keepaliveFg.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/keepalive/config') return keepaliveAx.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/keepalive/config') return keepaliveKv.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/keepalive/config') return keepaliveTr.config(req, res);
@@ -37890,6 +38565,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/keepalive/latency')) return keepaliveFg.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/keepalive/latency')) return keepaliveAx.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/keepalive/latency')) return keepaliveKv.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/keepalive/latency')) return keepaliveTr.latency(req, res);
@@ -37951,6 +38627,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/sessions')) return handleFgSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/sessions')) return handleAxSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/sessions')) return handleKvSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/sessions')) return handleTrSessions(req, res);
@@ -37967,6 +38644,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/ping'))     return handleFgPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/ping'))     return handleAxPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/ping'))     return handleKvPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/ping'))     return handleTrPing(req, res);
@@ -37983,6 +38661,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/balance'))  return handleFgBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/balance'))  return handleAxBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/balance'))  return handleKvBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/balance'))  return handleTrBalance(req, res);
@@ -37999,6 +38678,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/models'))   return handleFgModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/models'))   return handleAxModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/models'))   return handleKvModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tr/models'))   return handleTrModels(req, res);
@@ -38015,6 +38695,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/fg/active-model') return jsonRes(res, 200, { model: fgReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/active-model') return jsonRes(res, 200, { model: axReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/active-model') return jsonRes(res, 200, { model: kvReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/active-model') return jsonRes(res, 200, { model: trReadActiveModel() || null });
@@ -38031,6 +38712,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/fg/modelmap') return jsonRes(res, 200, { ok: true, modelMap: fgReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/modelmap') return jsonRes(res, 200, { ok: true, modelMap: axReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kvReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/modelmap') return jsonRes(res, 200, { ok: true, modelMap: trReadModelMap() });
@@ -38048,6 +38730,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/add')       return handleFgAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/add')       return handleAxAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/add')       return handleKvAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/add')       return handleTrAdd(req, res);
@@ -38064,6 +38747,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/key')       return handleFgSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/key')       return handleAxSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/key')       return handleKvSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/key')       return handleTrSetKey(req, res);
@@ -38081,6 +38765,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/rename')    return handleFgRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/rename')    return handleAxRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/rename')    return handleKvRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/rename')    return handleTrRename(req, res);
@@ -38097,6 +38782,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/delete')    return handleFgDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/delete')    return handleAxDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/delete')    return handleKvDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/delete')    return handleTrDelete(req, res);
@@ -38113,6 +38799,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/activate')  return handleFgActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/activate')  return handleAxActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/activate')  return handleKvActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/activate')  return handleTrActivate(req, res);
@@ -38129,6 +38816,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/set-model') return handleFgSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-model') return handleAxSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-model') return handleKvSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/set-model') return handleTrSetModel(req, res);
@@ -38145,6 +38833,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/set-balance') return handleFgSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-balance') return handleAxSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-balance') return handleKvSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/set-balance') return handleTrSetBalance(req, res);
@@ -38161,6 +38850,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-balance') return handleBaiSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-balance') return handleUkSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/map-profiles') return handleKkMapProfiles(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/map-profiles') return handleFgMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/map-profiles') return handleKvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/map-profiles') return handlePmMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/map-profiles') return handleCpMapProfiles(req, res);
@@ -38169,6 +38859,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/modelmap')  return handleFgModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/modelmap')  return handleAxModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/modelmap')  return handleKvModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/modelmap')  return handleTrModelMap(req, res);
@@ -38177,6 +38868,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/session/open') return handleFgSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/session/open') return handleAxSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/session/open') return handleKvSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/session/open') return handleTrSessionOpen(req, res);
@@ -38197,6 +38889,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/share')    return handleFgShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/share')    return handleAxShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/share')    return handleKvShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/share')    return handleTrShare(req, res);
@@ -38213,6 +38906,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/import')   return handleFgImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/import')   return handleAxImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/import')   return handleKvImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/import')   return handleTrImport(req, res);
@@ -38515,6 +39209,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/ar/add-github')       return handleArAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/add-github')       return handleGoAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add-github')       return handleKkAddGithub(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/fg/add-github')       return handleFgAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/add-github')       return handleKvAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/add-github')       return handlePmAddGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/add-github')       return handleCpAddGithub(req, res);
@@ -38627,7 +39322,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|fg|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

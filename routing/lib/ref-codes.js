@@ -32,6 +32,7 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    freegg:     { host: 'freegg.app',        path: '/sign-up?aff=',  label: 'FreeGG' },
     // KVOTUM (2026-10-30) — форма СВОЯ: рефка ловится на КОРНЕ `/?ref=`, а не на
     // странице регистрации. Сам бандл витрины строит ссылку как
     // `${location.origin}/?ref=${code}` и матчами `[?&]ref=([0-9a-z]{7,16})` по

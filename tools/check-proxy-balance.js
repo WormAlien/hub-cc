@@ -12,6 +12,7 @@ const ACC = require(path.join(ROOT, 'routing', 'lib', 'newapi-account.js'));
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'direct-first-check-'));
 const realFetch = global.fetch;
 const realFetchVia = POOL.fetchVia;
+const realForAccount = POOL.forAccount;
 let fail = 0;
 function check(ok, what) { console.log(`   ${ok ? '·' : '×'} ${what}`); if (!ok) fail++; }
 function response(payload, status = 200, type = 'application/json') {
@@ -49,7 +50,7 @@ async function scenario(name, direct, expectedProxy, assertions) {
 // ── 9. agentrouter: сначала адрес аккаунта, прямой путь - только если адреса нет ──
 // Решение владельца 20.09 (вариант 3 из трёх): чек идёт ТЕМ ЖЕ адресом, что и перелогин,
 // но если адрес в отстое - прямым путём, чтобы отчёт не врал «шлюз лежит».
-async function arScenario(name, key, { cooling, ledgerUsed = 0 }, assertions) {
+async function arScenario(name, key, { cooling, ledgerUsed = 0, proxySequence = null }, assertions) {
     console.log(`\n${name}`);
     const saved = { ...process.env };
     // 🪤 Короткий ключ для файла: русское имя в пути Windows раздувается до сотни знаков
@@ -70,15 +71,27 @@ async function arScenario(name, key, { cooling, ledgerUsed = 0 }, assertions) {
         PROXY_POOL_SOURCE: 'auto',
     });
     POOL._reset();
-    let directCalls = 0, proxyCalls = 0;
+    let directCalls = 0, proxyCalls = 0, forAccountOpts = null;
+    POOL.forAccount = async (sticky, opts) => {
+        forAccountOpts = opts;
+        return realForAccount(sticky, opts);
+    };
     global.fetch = async () => { directCalls++; return response({ success: true, via: 'direct' }); };
-    POOL.fetchVia = async () => { proxyCalls++; return response({ success: true, via: 'proxy' }); };
+    POOL.fetchVia = async () => {
+        proxyCalls++;
+        if (proxySequence && proxyCalls <= proxySequence.length) {
+            const step = proxySequence[proxyCalls - 1];
+            if (step instanceof Error) throw step;
+            return step;
+        }
+        return response({ success: true, via: 'proxy' });
+    };
     try {
         const out = await ACC.accountFetch({ host: 'agentrouter.org', accountId: 'acct_ar', url: 'https://agentrouter.org/api/user/self' });
-        assertions(out, { directCalls, proxyCalls });
+        assertions(out, { directCalls, proxyCalls, forAccountOpts });
     } finally {
         for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
-        Object.assign(process.env, saved); POOL.fetchVia = realFetchVia; global.fetch = realFetch; POOL._reset();
+        Object.assign(process.env, saved); POOL.forAccount = realForAccount; POOL.fetchVia = realFetchVia; global.fetch = realFetch; POOL._reset();
     }
 }
 
@@ -121,6 +134,8 @@ console.log('\n8. fallback failure preserves original failure');
 }
 
 await arScenario('9a. адрес аккаунта есть и не в отстое - идём ИМ, прямого запроса нет', '9a', { cooling: false }, (out, c) => {
+    check(c.forAccountOpts && c.forAccountOpts.usePreflight === false,
+        'AgentRouter не делает лишний preflight: сам запрос уже проверяет адрес');
     check(c.proxyCalls === 1, `адрес попробован один раз (получено ${c.proxyCalls})`);
     check(c.directCalls === 0, `прямой запрос не делался вовсе (получено ${c.directCalls})`);
     check(out.ok && out.viaProxy === true, 'ответ помечен как идущий через адрес аккаунта');
@@ -130,6 +145,16 @@ await arScenario('9b. адрес в отстое - идём прямым пут�
     check(c.directCalls === 1, `прямой запрос сделан один раз (получено ${c.directCalls})`);
     check(c.proxyCalls === 0, `сожжённый адрес не тронут (получено ${c.proxyCalls})`);
     check(out.ok && out.viaProxy === false, 'ответ прямой - отчёт не соврёт про шлюз');
+});
+
+await arScenario('9c. транспортный обрыв адреса - один повтор через тот же адрес', '9c', {
+    cooling: false,
+    proxySequence: [new Error('TLS handshake timeout'), response({ success: true, via: 'same proxy retry' })],
+}, (out, c) => {
+    check(c.proxyCalls === 2, `тот же адрес получил ровно две попытки (получено ${c.proxyCalls})`);
+    check(c.directCalls === 0, `прямой IP не подставлен (получено ${c.directCalls})`);
+    check(out.ok && out.viaProxy === true && out.proxyRetry === true,
+        'вторая попытка через липкий адрес вернулась успехом и помечена как retry');
 });
 
 console.log(fail ? `\n❌ ${fail} failed` : '\n✅ Direct-first transport retries only transport/WAF/429 exactly once.');

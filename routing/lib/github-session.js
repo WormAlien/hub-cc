@@ -51,6 +51,7 @@ const PROFILE_ROOTS = [
     // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
     // GitHub-сессии отвечало бы «неизвестный хост».
     { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
+    { tag: 'fg', dir: path.join(ROOT, 'freegg', 'profiles'), host: 'freegg.app' },
     { tag: 'kv', dir: path.join(ROOT, 'kvotum', 'profiles'), host: 'myapi.buzz' },
     { tag: 'pm', dir: path.join(ROOT, 'premier', 'profiles'), host: 'eide.pro' },
     { tag: 'cp', dir: path.join(ROOT, 'cleanapis', 'profiles'), host: 'cleanapis.com' },

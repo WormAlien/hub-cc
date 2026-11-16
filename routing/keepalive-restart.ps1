@@ -63,6 +63,10 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20184 = @{ UPSTREAM = 'http://127.0.0.1:20185'; KEY_FILE = "$profileDir\.claude\freegg-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'freegg-modelmap.json'); SESSIONS_FILE = (Join-Path $dir 'freegg-sessions.json');
+             LOCAL_EXACT_ADAPTER = '1'; CUSTOM_PROVIDER_ID = 'freegg'; CUSTOM_PROVIDER_NAME = 'FreeGG';
+             GPT_PROXY_FORCE = '0'; HAIKU_GPT_PROXY = 'http://127.0.0.1:20185'; MAX_HEDGES = '0' }
   20190 = @{ UPSTREAM = 'https://api.apinex.bond'; KEY_FILE = "$profileDir\.claude\apinex-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'apinex-modelmap.json') }
   # KVOTUM: keepalive goes through the Anthropic-to-OpenAI converter on :20183
@@ -138,6 +142,18 @@ if ($Port -eq 20182 -and -not (Get-NetTCPConnection -LocalPort 20183 -State List
     Start-Sleep -Milliseconds 250
     if (Get-NetTCPConnection -LocalPort 20183 -State Listen -ErrorAction SilentlyContinue) { break }
   }
+}
+
+if ($Port -eq 20184) {
+  if (-not (Get-NetTCPConnection -LocalPort 20185 -State Listen -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath $node -ArgumentList "`"$(Join-Path $dir 'freegg-proxy.js')`"" -WorkingDirectory $dir -WindowStyle Hidden
+  }
+  $ready = $false
+  for ($i = 0; $i -lt 40; $i++) {
+    try { $r = Invoke-RestMethod 'http://127.0.0.1:20185/health' -TimeoutSec 1; if ($r.ok -and $r.provider -eq 'freegg') { $ready = $true; break } } catch {}
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $ready) { Write-Error 'FreeGG converter is not ready on :20185'; exit 1 }
 }
 
 Start-Process -FilePath $node -ArgumentList "`"$script`"" -WorkingDirectory $dir -WindowStyle Hidden -RedirectStandardOutput (Join-Path $dir "keepalive-$Port.out.log") -RedirectStandardError (Join-Path $dir "keepalive-$Port.err.log")

@@ -24,7 +24,7 @@ const APPROVED_SEED = {
         'agentrouter/gpt-5.6-sol': {
             displayName: 'AgentRouter / GPT 5.6 Sol',
             claudeBehavesAs: 'claude-opus-5',
-            contextTokens: 1050000,
+            contextTokens: 1000000,
             outputTokens: 32000,
             publishedAt: '2026-11-09T00:00:00.000Z',
         },

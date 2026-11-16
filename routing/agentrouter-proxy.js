@@ -18,6 +18,7 @@ const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { chatUsageToAnthropic, responsesUsageToAnthropic } = require('./lib/usage-normalize.js');
 
 // Порт из env, дефолт прежний. Константа мешала проверять конвертер: поднять второй
 // экземпляр рядом с боевым было нельзя, и приёмка шла копией файла с правленым числом —
@@ -549,10 +550,7 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
         content,
         stop_reason: mapStopReason(choice.finish_reason),
         stop_sequence: null,
-        usage: {
-            input_tokens: (openaiResp.usage && openaiResp.usage.prompt_tokens) || 0,
-            output_tokens: (openaiResp.usage && openaiResp.usage.completion_tokens) || 0,
-        },
+        usage: chatUsageToAnthropic(openaiResp.usage),
     };
 }
 
@@ -608,10 +606,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
     function processChunk(chunk) {
         const choice = (chunk.choices && chunk.choices[0]) || null;
         if (chunk.usage) {
-            usage = {
-                input_tokens: chunk.usage.prompt_tokens || 0,
-                output_tokens: chunk.usage.completion_tokens || 0,
-            };
+            usage = chatUsageToAnthropic(chunk.usage, usage);
         }
         if (!choice) return;
         const delta = choice.delta || {};
@@ -667,7 +662,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq) {
         sseWrite(clientRes, 'message_delta', {
             type: 'message_delta',
             delta: { stop_reason: mapStopReason(finishReason), stop_sequence: null },
-            usage: { output_tokens: usage.output_tokens },
+            usage,
         });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
@@ -918,10 +913,7 @@ function convertResponsesToClaude(resp, claudeReq) {
         content,
         stop_reason: stopReason,
         stop_sequence: null,
-        usage: {
-            input_tokens: (resp.usage && resp.usage.input_tokens) || 0,
-            output_tokens: (resp.usage && resp.usage.output_tokens) || 0,
-        },
+        usage: responsesUsageToAnthropic(resp.usage),
     };
 }
 
@@ -1061,7 +1053,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
     let nextBlockIndex = 0;
     let textBlockIndex = null;
     const toolBlocks = new Map();
-    let usage = { input_tokens: 0, output_tokens: 0 };
+    let usage = responsesUsageToAnthropic(null);
     let stopReason = 'end_turn';
     let pendingRefusal = '';
     let buffer = '';
@@ -1101,7 +1093,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             message: {
                 id: msgId, type: 'message', role: 'assistant', model: claudeReq.model,
                 content: [], stop_reason: null, stop_sequence: null,
-                usage: { input_tokens: usage.input_tokens, output_tokens: 0 },
+                usage: { ...usage, output_tokens: 0 },
             },
         });
         sseWrite(clientRes, 'ping', { type: 'ping' });
@@ -1264,10 +1256,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             // text and finish them truthfully instead of guessing that they are free.
             flushPendingRefusal();
             if (r.usage) {
-                usage = {
-                    input_tokens: r.usage.input_tokens || 0,
-                    output_tokens: r.usage.output_tokens || 0,
-                };
+                usage = responsesUsageToAnthropic(r.usage);
             }
             stopReason = reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
             if (toolBlocks.size) {
@@ -1281,10 +1270,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
             const r = ev.response || {};
             flushPendingRefusal();
             if (r.usage) {
-                usage = {
-                    input_tokens: r.usage.input_tokens || 0,
-                    output_tokens: r.usage.output_tokens || 0,
-                };
+                usage = responsesUsageToAnthropic(r.usage);
             }
             if (r.status === 'incomplete' && r.incomplete_details) {
                 stopReason = r.incomplete_details.reason === 'max_output_tokens' ? 'max_tokens' : 'end_turn';
@@ -1324,7 +1310,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
         sseWrite(clientRes, 'message_delta', {
             type: 'message_delta',
             delta: { stop_reason: stopReason, stop_sequence: null },
-            usage: { input_tokens: usage.input_tokens, output_tokens: usage.output_tokens },
+            usage,
         });
         sseWrite(clientRes, 'message_stop', { type: 'message_stop' });
         clientRes.end();
@@ -2044,7 +2030,11 @@ if (process.argv[2] === 'selftest') {
             { type: 'message', content: [{ type: 'output_text', text: 'Держи.' }] },
             { type: 'function_call', call_id: 'toolu_9', name: 'get_weather', arguments: '{"city":"Ростов"}' },
         ],
-        usage: { input_tokens: 11, output_tokens: 22 },
+        usage: {
+            input_tokens: 1011,
+            output_tokens: 22,
+            input_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+        },
     }, { model: 'gpt-6-astra' });
     assert.strictEqual(conv.content.length, 2, 'reasoning не протёк в content (только текст + тул)');
     assert.strictEqual(conv.content[0].type, 'text', 'текст первым');
@@ -2052,6 +2042,9 @@ if (process.argv[2] === 'selftest') {
     assert.deepStrictEqual(conv.content[1].input, { city: 'Ростов' }, 'arguments распарсены в input');
     assert.strictEqual(conv.stop_reason, 'tool_use', 'наличие тула = stop_reason tool_use');
     assert.strictEqual(conv.usage.output_tokens, 22, 'usage переведён из Resp-полей');
+    assert.strictEqual(conv.usage.input_tokens, 11, 'input_tokens содержит только некешированный вход');
+    assert.strictEqual(conv.usage.cache_read_input_tokens, 900, 'Responses cached_tokens доезжает как cache-read');
+    assert.strictEqual(conv.usage.cache_creation_input_tokens, 100, 'Responses cache_write_tokens доезжает как cache-write');
     assert.ok(/^msg/.test(conv.id), 'id переименован из resp_ в msg');
 
     // Незавершённый по потолку ответ — это max_tokens, а не end_turn.
@@ -2120,7 +2113,11 @@ if (process.argv[2] === 'selftest') {
         { type: 'response.output_item.added', output_index: 0, item: { type: 'function_call', call_id: 'call_1', name: 'get_weather' } },
         { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"city":"Rostov"}' },
         { type: 'response.output_item.done', output_index: 0, item: { type: 'function_call', call_id: 'call_1' } },
-        { type: 'response.completed', response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 7 } } },
+        { type: 'response.completed', response: { status: 'completed', usage: {
+            input_tokens: 1005,
+            output_tokens: 7,
+            input_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+        } } },
     ]);
     assert.strictEqual(t2.res.headers && t2.res.headers.code, 200, 'успех отдаёт 200');
     assert.strictEqual(t2.seen.commit, 1, 'commit ровно один');
@@ -2128,10 +2125,10 @@ if (process.argv[2] === 'selftest') {
     assert.ok(/content_block_start/.test(t2all), 'блок тула открыт');
     assert.ok(/"name":"get_weather"/.test(t2all), 'имя тула уехало');
     assert.ok(/tool_use/.test(t2all), 'stop_reason tool_use');
-    assert.ok(/"message_start"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":0\}/.test(t2all),
-        'tool-use message_start сразу несёт точный input usage для Workflow UI');
-    assert.ok(/"message_delta"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":7\}/.test(t2all),
-        'tool-use message_delta сохраняет полный финальный usage');
+    assert.ok(/"message_start"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":0,"cache_read_input_tokens":900,"cache_creation_input_tokens":100\}/.test(t2all),
+        'tool-use message_start сразу несёт точный uncached/cache usage для Workflow UI');
+    assert.ok(/"message_delta"[\s\S]*?"usage":\{"input_tokens":5,"output_tokens":7,"cache_read_input_tokens":900,"cache_creation_input_tokens":100\}/.test(t2all),
+        'tool-use message_delta сохраняет полный финальный uncached/cache usage');
     assert.strictEqual(t2.seen.transient, null, 'повтор не потребовался');
 
     // If a provider emits a tool item before text, deferring that tool for usage

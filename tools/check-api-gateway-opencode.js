@@ -45,8 +45,14 @@ const EXPECTED_PROVIDER = {
         timeout: 600000,
     },
     models: {
-        'agentrouter/gpt-5.6-sol': { name: 'AgentRouter / GPT 5.6 Sol' },
-        'vendor/nested/model': { name: 'Vendor / Nested Model' },
+        'agentrouter/gpt-5.6-sol': {
+            name: 'AgentRouter / GPT 5.6 Sol',
+            limit: { context: 1050000, output: 32000 },
+        },
+        'vendor/nested/model': {
+            name: 'Vendor / Nested Model',
+            limit: { context: 200000, output: 16000 },
+        },
     },
 };
 
@@ -323,8 +329,8 @@ test('preview and status report missing or invalid targets without leaking conte
     const preview = service.preview(MANIFEST);
     assert.equal(preview.status, 'invalid');
     assert.deepEqual(preview.targets[1], {
-        label: 'Missing', status: 'missing',
-        additions: 0, removals: 0, changes: 0,
+        label: 'Missing', status: 'changes',
+        additions: Object.keys(EXPECTED_PROVIDER.models).length, removals: 0, changes: 0,
     });
     assert.deepEqual(preview.targets[2], {
         label: 'Invalid', status: 'invalid',
@@ -333,6 +339,97 @@ test('preview and status report missing or invalid targets without leaking conte
     const text = serialize(preview);
     assert.equal(text.includes(SECRET), false);
     assert.equal(text.includes(f.dir), false);
+});
+
+test('native V2 configs are patched in providers, not duplicated into legacy provider', () => {
+    const native = extra => ({
+        $schema: 'https://opencode.ai/config.json',
+        model: 'abuse-hub/agentrouter/gpt-5.6-sol',
+        agents: { build: { model: 'abuse-hub/agentrouter/gpt-5.6-sol' } },
+        mcp: { servers: { fixture: { type: 'local', command: ['never-run', SECRET] } } },
+        providers: {
+            legacy: { settings: { apiKey: SECRET }, models: { 'legacy-model': { name: 'Legacy' } } },
+            'abuse-hub': {
+                package: 'aisdk:@ai-sdk/openai-compatible',
+                name: 'ABUSE HUB',
+                settings: { baseURL: 'http://127.0.0.1:20100/openai/v1', apiKey: 'dummy', timeout: 600000 },
+                models: { 'stale/model': { name: 'Stale', limit: { context: 1, output: 1 } } },
+            },
+        },
+        ...extra,
+    });
+    const EXPECTED_NATIVE = {
+        package: 'aisdk:@ai-sdk/openai-compatible',
+        name: 'ABUSE HUB',
+        settings: EXPECTED_PROVIDER.options,
+        models: EXPECTED_PROVIDER.models,
+    };
+    const f = makeFixture('native-v2', [
+        { label: 'User config', value: native() },
+        { label: 'Wiki config', value: native() },
+        { label: 'Hub config', value: native() },
+    ]);
+
+    assert.equal(serviceFor(f).preview(MANIFEST).status, 'changes');
+    const result = serviceFor(f).sync(MANIFEST);
+    assert.equal(result.changed, 3);
+    for (const target of f.targets) {
+        const value = parseJsonFile(target.path);
+        assert.equal(value.provider, undefined, 'legacy provider block must not appear');
+        assert.deepEqual(value.providers['abuse-hub'], EXPECTED_NATIVE);
+        assert.deepEqual(Object.keys(value.providers), ['legacy', 'abuse-hub']);
+        assert.equal(JSON.stringify(value).includes(SECRET), true);
+        assert.equal(value.model, 'abuse-hub/agentrouter/gpt-5.6-sol');
+        assert.deepEqual(value.agents, { build: { model: 'abuse-hub/agentrouter/gpt-5.6-sol' } });
+    }
+    assert.equal(serviceFor(f).preview(MANIFEST).status, 'synced');
+    const beforeHashes = f.targets.map(target => hash(target.path));
+    assert.equal(serviceFor(f).sync(MANIFEST).changed, 0);
+    assert.deepEqual(f.targets.map(target => hash(target.path)), beforeHashes);
+});
+
+test('sync accepts an unchanged native V2 target while creating two missing targets', () => {
+    const nativeProvider = {
+        package: 'aisdk:@ai-sdk/openai-compatible',
+        name: 'ABUSE HUB',
+        settings: EXPECTED_PROVIDER.options,
+        models: EXPECTED_PROVIDER.models,
+    };
+    const native = {
+        $schema: 'https://opencode.ai/config.json',
+        model: 'abuse-hub/agentrouter/gpt-5.6-sol',
+        agents: {
+            build: { model: 'abuse-hub/agentrouter/gpt-5.6-sol' },
+            review: { mode: 'subagent', permission: { edit: 'deny' } },
+        },
+        mcp: { servers: { context7: { type: 'remote', url: 'https://fixture.invalid/mcp' } } },
+        providers: {
+            'zai-coding-plan': {
+                package: '@ai-sdk/openai-compatible',
+                settings: { apiKey: `{file:${SECRET}}` },
+                models: { fixture: { name: 'Fixture' } },
+            },
+            'abuse-hub': nativeProvider,
+        },
+    };
+    const f = makeFixture('native-unchanged-two-missing', [
+        { label: 'User config', value: native },
+        { label: 'Wiki config', value: {} },
+        { label: 'Hub config', value: {} },
+    ]);
+    fs.unlinkSync(f.targets[1].path);
+    fs.unlinkSync(f.targets[2].path);
+    const userBefore = fs.readFileSync(f.targets[0].path);
+
+    const result = serviceFor(f).sync(MANIFEST);
+
+    assert.equal(result.changed, 2);
+    assert.deepEqual(fs.readFileSync(f.targets[0].path), userBefore);
+    assert.deepEqual(parseJsonFile(f.targets[0].path).providers['abuse-hub'], nativeProvider);
+    assert.deepEqual(parseJsonFile(f.targets[1].path), { provider: { 'abuse-hub': EXPECTED_PROVIDER } });
+    assert.deepEqual(parseJsonFile(f.targets[2].path), { provider: { 'abuse-hub': EXPECTED_PROVIDER } });
+    assert.deepEqual(backupFiles(f).filter(file => file.startsWith(f.targets[0].path)), []);
+    assert.deepEqual(transientFiles(f), []);
 });
 
 test('sync changes only provider.abuse-hub in all three targets and preserves file style', () => {
@@ -422,7 +519,62 @@ test('second sync is idempotent and does not replace files or backups', () => {
     assert.deepEqual(transientFiles(f), []);
 });
 
-test('sync refuses a missing or invalid target before changing any target', () => {
+test('sync creates a missing target that only stores the abuse-hub provider', () => {
+    const f = makeFixture('sync-missing', [
+        { label: 'User config', value: baseConfig() },
+        { label: 'Wiki config', value: baseConfig() },
+        { label: 'Hub config', value: baseConfig() },
+    ]);
+    fs.unlinkSync(f.targets[1].path);
+    fs.unlinkSync(f.targets[2].path);
+
+    const preview = serviceFor(f).preview(MANIFEST);
+    assert.equal(preview.status, 'changes');
+    assert.equal(preview.targets[1].status, 'changes');
+    assert.equal(preview.targets[1].additions, EXPECTED_PROVIDER.models
+        ? Object.keys(EXPECTED_PROVIDER.models).length : 0);
+
+    const result = serviceFor(f).sync(MANIFEST);
+    assert.equal(result.status, 'synced');
+    assert.deepEqual(
+        f.targets.map(target => ({ label: target.label, status: 'synced', synced: true })),
+        result.targets,
+    );
+    for (const index of [1, 2]) {
+        assert.deepEqual(parseJsonFile(f.targets[index].path), { provider: { 'abuse-hub': EXPECTED_PROVIDER } });
+        assert.deepEqual(backupFiles(f).filter(file => file.startsWith(f.targets[index].path)), []);
+    }
+    assert.equal(serviceFor(f).preview(MANIFEST).status, 'synced');
+    assert.deepEqual(transientFiles(f), []);
+});
+
+test('created target is removed on rollback when a later commit fails', () => {
+    const f = makeFixture('rollback-created', [
+        { label: 'User', value: baseConfig() },
+        { label: 'Wiki', value: baseConfig() },
+        { label: 'Hub', value: baseConfig() },
+    ]);
+    fs.unlinkSync(f.targets[1].path);
+    const before = [fs.readFileSync(f.targets[0].path), null, fs.readFileSync(f.targets[2].path)];
+    const durable = require(DURABLE_PATH);
+    let calls = 0;
+    const injected = {
+        ...durable,
+        commitAtomicSync(stage) {
+            calls += 1;
+            if (calls === 2) throw Object.assign(new Error('fixture commit failure'), { code: 'EIO' });
+            return durable.commitAtomicSync(stage);
+        },
+    };
+    expectCode(() => serviceFor(f, { durableImpl: injected }).sync(MANIFEST),
+        'api_gateway_opencode_transaction_failed');
+    assert.deepEqual(fs.readFileSync(f.targets[0].path), before[0]);
+    assert.equal(fs.existsSync(f.targets[1].path), false);
+    assert.deepEqual(fs.readFileSync(f.targets[2].path), before[2]);
+    assert.deepEqual(transientFiles(f), []);
+});
+
+test('sync refuses an invalid target before changing any target', () => {
     const f = makeFixture('sync-invalid', [
         { label: 'Good', value: baseConfig() },
         { label: 'Missing', value: baseConfig() },

@@ -86,16 +86,29 @@ function harnessOf(ua) {
   return s.split(/[\s/]/)[0].slice(0, 24) || 'unknown';
 }
 
-// Из объекта usage делаем плоскую запись. Имена полей у шлюзов разъезжаются:
-// Anthropic отдаёт cache_read_input_tokens, часть шлюзов — cache_read или ничего.
-function pickUsage(u) {
+// Из объекта usage делаем четыре взаимоисключающие корзины. Форматы разъезжаются:
+// Anthropic уже отдаёт uncached/cache отдельно; OpenAI Chat/Responses кладёт cache
+// внутрь полного prompt total, поэтому его надо вычесть. DeepSeek/Kimi используют
+// свои плоские aliases. Один normalizer на front-door держит это для всех бэкендов.
+function pickUsage(u, mode = 'auto') {
   if (!u || typeof u !== 'object') return null;
-  const n = v => (typeof v === 'number' && isFinite(v) ? v : 0);
+  const n = v => (typeof v === 'number' && isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  const details = (u.input_tokens_details && typeof u.input_tokens_details === 'object')
+    ? u.input_tokens_details
+    : (u.prompt_tokens_details && typeof u.prompt_tokens_details === 'object' ? u.prompt_tokens_details : {});
+  const cr = n(u.cache_read_input_tokens ?? u.cache_read ?? u.cache_read_tokens
+    ?? details.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cached_tokens);
+  const cw = n(u.cache_creation_input_tokens ?? u.cache_creation ?? u.cache_write_tokens
+    ?? details.cache_write_tokens ?? details.cache_creation_tokens ?? details.cache_creation_input_tokens);
+  const prompt = n(u.input_tokens ?? u.prompt_tokens);
+  const totalIncludesCache = mode === 'chat' || mode === 'responses'
+    || mode === 'auto' && (u.prompt_tokens !== undefined
+      || u.prompt_tokens_details !== undefined || u.input_tokens_details !== undefined);
   const out = {
-    in: n(u.input_tokens ?? u.prompt_tokens),
+    in: totalIncludesCache ? Math.max(0, prompt - cr - cw) : prompt,
     out: n(u.output_tokens ?? u.completion_tokens),
-    cr: n(u.cache_read_input_tokens ?? u.cache_read ?? u.cache_read_tokens),
-    cw: n(u.cache_creation_input_tokens ?? u.cache_creation ?? u.cache_write_tokens),
+    cr,
+    cw,
   };
   // `cost` шлюзы отдают в долларах (замер на JustWoker: 0.00131 за запрос). Это
   // единственный источник, по которому видно НАСТОЯЩУЮ ставку за 1M — сохраняем.
@@ -322,7 +335,7 @@ function scanSse(text, state) {
     let o; try { o = JSON.parse(payload); } catch (_) { continue; }
     const m = o.model || (o.message && o.message.model);
     if (m) state.model = m;
-    const u = pickUsage(o.usage || (o.message && o.message.usage));
+    const u = pickUsage(o.usage || (o.message && o.message.usage), state.usageMode);
     if (u) state.usage = u;                    // последний выигрывает, см. 🪤 в шапке
   }
 }
@@ -333,13 +346,14 @@ function createTap(meta, write = appendRecord) {
   try {
     if (meta.method !== 'POST') return null;
     const p = String(meta.url || '').split('?')[0];
-    if (!/\/messages$|\/chat\/completions$/.test(p)) return null;      // токены есть только тут
+    if (!/\/messages$|\/chat\/completions$|\/responses$/.test(p)) return null; // токены есть только тут
     if (!meta.status || meta.status >= 300) return null;                // ошибки не считаем
     const h = meta.headers || {};
     if (h['content-encoding']) return null;                            // сжатое не разбираем
     const ct = String(h['content-type'] || '');
     const sse = ct.includes('event-stream');
-    const state = { buf: '', model: '', usage: null, bytes: 0, started: Date.now() };
+    const usageMode = /\/messages$/.test(p) ? 'anthropic' : (/\/responses$/.test(p) ? 'responses' : 'chat');
+    const state = { buf: '', model: '', usage: null, usageMode, bytes: 0, started: Date.now() };
 
     return {
       chunk(c) {
@@ -356,7 +370,7 @@ function createTap(meta, write = appendRecord) {
             let o; try { o = JSON.parse(state.buf); } catch (_) { o = null; }
             if (o) {
               if (o.model) state.model = o.model;
-              const u = pickUsage(o.usage);
+              const u = pickUsage(o.usage, state.usageMode);
               if (u) state.usage = u;
             }
           }

@@ -80,6 +80,7 @@ test('integration module exposes exact production helpers', () => {
 test('exact routes dispatch before generic handlers and expose canonical state DTO', async () => {
     const service = {
         state: async () => ({ ok: true, public: {}, manifest: { version: 1, revision: 1, enabled: true }, models: [], sidecar: {}, clients: {} }),
+        candidates: async () => ({ ok: true, models: [], candidatesLoaded: true }),
         updateModel: async value => ({ ok: true, revision: 2, value }),
         sidecarStatus: async () => ({ status: 'ready' }),
         clientsStatus: async () => ({ claude: { status: 'ready' } }),
@@ -90,6 +91,7 @@ test('exact routes dispatch before generic handlers and expose canonical state D
     const routes = load().createApiGatewayRoutes({ service, canWrite: () => true });
     const cases = [
         ['GET', '/__switch/api/api-gateway', 'state'],
+        ['GET', '/__switch/api/api-gateway/candidates', 'candidates'],
         ['GET', '/__switch/api/api-gateway/sidecar', 'sidecar'],
         ['GET', '/__switch/api/api-gateway/clients', 'clients'],
         ['GET', '/__switch/api/api-gateway/opencode/preview', 'preview'],
@@ -642,20 +644,21 @@ test('transparent proxy structurally installs exact API Gateway routes before ge
     assert.match(source, /apiGatewayOpenCodeRecovery/);
 });
 
-// Фильтр видимых провайдеров едет в адресе: у GET тела нет. Без него экран показывает все
-// 29 шлюзов и спрашивает сеть у спрятанных - замер 12.11 дал 1080 строк и 29.7 с.
-test('state route passes visible providers from the query and ignores malformed names', async () => {
+// Фильтр видимых провайдеров едет только в отдельный запрос кандидатов. Начальное состояние
+// читает один манифест и не должно ждать сеть шлюзов.
+test('candidate route passes visible providers from the query and ignores malformed names', async () => {
     const seen = [];
     const service = {
-        state: async (options) => { seen.push(options); return { ok: true, models: [] }; },
+        state: async () => ({ ok: true, models: [] }),
+        candidates: async (options) => { seen.push(options); return { ok: true, models: [] }; },
     };
     const routes = load().createApiGatewayRoutes({ service });
     const cases = [
-        ['/__switch/api/api-gateway?provider=alpha&provider=beta', ['alpha', 'beta']],
-        ['/__switch/api/api-gateway?provider=alpha,beta', ['alpha', 'beta']],
-        ['/__switch/api/api-gateway?provider=alpha&provider=../etc', ['alpha']],
-        ['/__switch/api/api-gateway', null],
-        ['/__switch/api/api-gateway?provider=bad name&provider=a b', null],
+        ['/__switch/api/api-gateway/candidates?provider=alpha&provider=beta', ['alpha', 'beta']],
+        ['/__switch/api/api-gateway/candidates?provider=alpha,beta', ['alpha', 'beta']],
+        ['/__switch/api/api-gateway/candidates?provider=alpha&provider=../etc', ['alpha']],
+        ['/__switch/api/api-gateway/candidates', null],
+        ['/__switch/api/api-gateway/candidates?provider=bad name&provider=a b', null],
     ];
     for (const [url, expected] of cases) {
         routes.handle(request({ url }), response());

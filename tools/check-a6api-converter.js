@@ -146,6 +146,23 @@ async function freePort() {
             assert.deepEqual(events.find(e => e.type === 'message_delta').usage, { input_tokens: 42, output_tokens: 7 });
             assert.equal(events.filter(e => e.type === 'message_stop').length, 1); assert.equal(events[0].message.model, MODEL);
         });
+        await test('nested OpenAI cache usage reaches Anthropic terminal event', async () => {
+            respond = (_req, res) => {
+                res.writeHead(200, { 'content-type': 'text/event-stream' });
+                res.end(data(delta({ content: 'cached' })) + data(finish('stop')) + data({ choices: [], usage: {
+                    prompt_tokens: 1042,
+                    completion_tokens: 7,
+                    prompt_tokens_details: { cached_tokens: 900, cache_write_tokens: 100 },
+                } }) + 'data: [DONE]\n\n');
+            };
+            const events = parseEvents((await ask(strict, baseRequest({ stream: true }))).text);
+            assert.deepEqual(events.find(e => e.type === 'message_delta').usage, {
+                input_tokens: 42,
+                output_tokens: 7,
+                cache_read_input_tokens: 900,
+                cache_creation_input_tokens: 100,
+            });
+        });
         await test('late tool ID/name and early split arguments survive a two-turn reasoning loop', async () => {
             respond = (_req, res) => {
                 res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -272,6 +289,42 @@ async function freePort() {
             respond = reply('smart_route_all_candidates_failed');
             r = await ask(a6api, baseRequest());
             assert.equal(r.status, 503); assert.equal(JSON.parse(r.text).error.message, 'upstream HTTP 503');
+        });
+        await test('a6api preserves circuit-blocked code without provider text or false overload', async () => {
+            for (const envelope of [
+                { error: { code: 'subscription_route_circuit_blocked', message: 'fixture-file-key private-detail' } },
+                { code: 'subscription_route_circuit_blocked', message: 'fixture-file-key private-detail' },
+            ]) {
+                respond = (_req, res) => {
+                    res.writeHead(503, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify(envelope));
+                };
+                const r = await ask(a6api, baseRequest());
+                assert.equal(r.status, 503);
+                const body = JSON.parse(r.text);
+                assert.equal(body.error.code, 'subscription_route_circuit_blocked');
+                assert.equal(body.error.type, 'api_error');
+                assert.match(body.error.message, /временно заблокированы после ошибок upstream/);
+                assert.ok(!r.text.includes('fixture-file-key'));
+                assert.ok(!r.text.includes('private-detail'));
+                assert.ok(!r.text.includes('overloaded_error'));
+            }
+        });
+        await test('circuit diagnosis requires matching HTTP status, a6api identity and bounded JSON', async () => {
+            const envelope = { error: { code: 'subscription_route_circuit_blocked', message: 'fixture-file-key' } };
+            respond = (_req, res) => { res.writeHead(401); res.end(JSON.stringify(envelope)); };
+            let r = await ask(a6api, baseRequest());
+            assert.equal(r.status, 401);
+            assert.equal(JSON.parse(r.text).error.code, undefined);
+            respond = (_req, res) => { res.writeHead(503); res.end(JSON.stringify(envelope)); };
+            r = await ask(strict, baseRequest());
+            assert.equal(r.status, 503);
+            assert.equal(JSON.parse(r.text).error.code, undefined);
+            respond = (_req, res) => { res.writeHead(503); res.end(JSON.stringify({ ...envelope, private: 'x'.repeat(65536) })); };
+            r = await ask(a6api, baseRequest());
+            assert.equal(r.status, 503);
+            assert.equal(JSON.parse(r.text).error.code, undefined);
+            assert.equal(JSON.parse(r.text).error.message, 'upstream HTTP 503');
         });
         await test('HTTP upstream failures are sanitized in strict mode', async () => {            respond = (_req, res) => { res.writeHead(401); res.end(JSON.stringify({ error: { message: 'fixture-file-key' } })); };
             const r = await ask(strict, baseRequest()); assert.equal(r.status, 401); assert.ok(!r.text.includes('fixture-file-key'));

@@ -5,6 +5,7 @@
     "нужен FLAT_RATE_HOSTS и maxHedges:0) · paidHedge (параллельный дубль запроса стоит денег: квота/счёт по завершению - тоже FLAT_RATE_HOSTS и maxHedges:0) ·",
     "anthropic (работает /v1/messages — конвертер не нужен) ·",
     "customPanel (у площадки СВОЯ панель, не New API: инструмент печатает чеклист того, чего он проверить не может).",
+    "onboarding: explicit verified newapi-github dialect only; github/ref true and customPanel false. apply generates a generic runtime wrapper, never clones arbitrary provider JavaScript. provision <gateway> --id <existing-pool-id> is inert unless --write; no batch or random GitHub account selection.",
     "Эталон для сверки — kktoken. Он обязан давать ПОЛНО, иначе спека или чекер врут.",
     "hedgesTuned: у старой вкладки дубли уже настроены владельцем - инструмент её не трогает. НОВЫЙ шлюз это поле НЕ получает: инструмент сам создаёт routing/keepalive-config-<порт>.json с maxHedges 0, то есть вкладка стартует без параллельных дублей; дубли включаются потом на вкладке, когда замер покажет, что они бесплатны."
   ],
@@ -450,6 +451,34 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": true,
+    "hedgesTuned": false
+  },
+  "freegg": {
+    "p": "fg",
+    "P": "FG",
+    "full": "freegg",
+    "NAME": "FreeGG",
+    "HOST": "freegg.app",
+    "PORT": 20184,
+    "FOLDER": "freegg",
+    "ICON": "🐴",
+    "COLOR": "red",
+    "REF": "nVhs",
+    "onboarding": {
+      "kind": "newapi-github",
+      "consolePath": "/console/token",
+      "callbackPath": "/api/oauth/github",
+      "tokenName": "1"
+    },
+    "github": true,
+    "ref": true,
+    "flatRate": false,
+    "anthropic": false,
+    "pool": true,
+    "shareScript": false,
+    "autoreg": false,
+    "customPanel": false,
+    "paidHedge": false,
     "hedgesTuned": false
   }
 }

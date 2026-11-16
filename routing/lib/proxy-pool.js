@@ -560,14 +560,17 @@ function tunnel(proxy, host, port) {
 
 // Агент, у которого соединение идёт через туннель. keepAlive выключен намеренно: на
 // публичных прокси переиспользование сокета живёт хуже, чем новый CONNECT.
-function agentFor(proxy) {
+function agentFor(proxy, onSocket = null) {
     if (!proxy) return undefined;      // undefined = глобальный агент node, путь «как раньше»
     const a = new https.Agent({ keepAlive: false });
     a.createConnection = (options, cb) => {
         const host = options.host || options.hostname;
         const port = Number(options.port) || 443;
         tunnel(proxy, host, port).then(sock => {
+            if (onSocket) onSocket(sock);
+            if (sock.destroyed) return;
             const t = tls.connect({ socket: sock, servername: options.servername || host });
+            if (onSocket) onSocket(t);
             t.once('secureConnect', () => cb(null, t));
             t.once('error', e => cb(e));
         }).catch(e => cb(e));
@@ -629,6 +632,8 @@ function fetchVia(proxy, url, { method = 'GET', headers = {}, body = null, timeo
 
         let done = false;
         let guard = null;
+        let rawSocket = null;
+        let tlsSocket = null;
         const finish = (fn, arg) => {
             if (done) return;
             done = true;
@@ -642,7 +647,10 @@ function fetchVia(proxy, url, { method = 'GET', headers = {}, body = null, timeo
             method,
             path: `${u.pathname}${u.search}`,
             headers: h,
-            agent: agentFor(proxy),
+            agent: agentFor(proxy, socket => {
+                if (socket instanceof tls.TLSSocket) tlsSocket = socket;
+                else rawSocket = socket;
+            }),
         }, res => {
             const chunks = [];
             res.on('data', c => chunks.push(c));
@@ -654,7 +662,15 @@ function fetchVia(proxy, url, { method = 'GET', headers = {}, body = null, timeo
         // сокет создаём мы, и штатный таймер node к нему не привязывается — запрос через
         // повисший прокси висел бы вечно, а чек баланса ждал бы его молча.
         guard = setTimeout(() => {
-            req.destroy(new Error(`таймаут ${timeoutMs} мс через прокси ${proxy.label}`));
+            const error = new Error(`таймаут ${timeoutMs} мс через прокси ${proxy.label}`);
+            req.destroy(error);
+            if (tlsSocket && !tlsSocket.destroyed) tlsSocket.destroy(error);
+            if (rawSocket && !rawSocket.destroyed) rawSocket.destroy(error);
+            // С custom createConnection Node может не перенести destroy() на ещё не
+            // переданный агенту TLS-сокет и не эмитнуть request error. Promise обязан
+            // завершиться самим сторожем: иначе один мёртвый маршрут навечно занимает
+            // очередь прокси и все следующие чеки присоединяются к зависшему запросу.
+            finish(reject, error);
         }, timeoutMs);
         req.once('error', e => finish(reject, e));
         if (payload) req.write(payload);

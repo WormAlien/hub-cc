@@ -38,6 +38,24 @@
 
 ## Сервисы и порты
 
+### FreeGG (16.11.2026, live onboarding ещё не принят)
+
+Вкладка `freegg`, prefix `fg`: keepalive `20184` -> `freegg-proxy.js` на `20185` ->
+`freegg.app/v1/responses`. Messages/Chat на площадке дают 410; live Responses и tool
+cycle отвечали 200. Тиры указывают на `gpt-6.1-sol`; дубли выключены по умолчанию.
+
+`tools/add-gateway.js` поддерживает явный `onboarding.kind:newapi-github` и генерирует
+wrapper `freegg/open-session.js` к общему `routing/lib/newapi-onboarding.js` вместо
+клона чужой формы. `provision freegg --id <existing-pool-id>` - сухой прогон;
+`--write` обслуживает ровно выбранный профиль. Runtime подтверждает identity через
+panel self, получает token с простым именем `1` (без бренда/login) и сохраняет полный ключ в точную запись с readback.
+CAPTCHA/device checks требуют человека, 429 останавливает попытку. Сессии/пулы в gitignore.
+
+Ручной live проход impeccableso принят: user 2533, JWT cookies, token 1964 с именем `1`.
+Ключ сохранён отдельно `fg_impeccableso`, inactive; exact self balance $100. Generic key
+reuse/reveal принят без дублей. Full unattended OAuth и production rollout ещё не приняты.
+Канон и ограничения: Obsidian `FreeGG - вкладка и GitHub onboarding`.
+
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
 | `8200` | **ABUSE HUB / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |
@@ -67,10 +85,10 @@
 
 | Операция | Что делает |
 |---|---|
-| `start` | **идемпотентно**: поднимает только то, что лежит. Живой стек не трогает вообще — важно, потому что перезапуск рвёт front-door, а через него ходит Claude Code |
+| `start` | Идемпотентно сохраняет здоровые свои процессы. Если required Node держит порт, но readiness не отвечает, ownership проверяется повторно, процесс останавливается по exact PID и поднимается заново. Чужой держатель не получает kill |
 | `stop` | гасит всё: сервисы, front-door, keepalive **всех** провайдеров и конвертеры Custom-провайдеров (их порты читаются из `routing/custom-providers.json`, заранее они неизвестны) |
 | `restart` | гасит сервисы и тех детей, которых дашборд поднимает обратно сам; keepalive неактивных провайдеров не трогает |
-| `update` | `tools/git-pull-safe.js --stash` → установщик (`install.sh` / `install-mac.sh`, `AUTO=1`) → `restart`. Две фазы: pull может обновить сам `hub.js`, поэтому вторую выполняет свежий процесс |
+| `update` | `tools/git-pull-safe.js --stash` -> установщик (`install.sh` / `install-mac.sh`, `AUTO=1`, `HUB_SKIP_START=1`) -> один `restart` из свежего `hub.js`. Установщик только доставляет зависимости и не запускает второй restart |
 | `check` | **«всё ли в порядке» списком вердиктов**, ничего не меняет: node, зависимости, git-bash, лежащие сервисы, куда реально смотрит Claude Code (`ANTHROPIC_BASE_URL` против живого front-door), та ли это папка (указатель `~/.claude/autoreger-root.txt`), пишется ли `logs/hub`, права |
 | `doctor` | **полный отчёт для ОТПРАВКИ** — `tools/doctor.sh`, 168 строк про venv, PATH, порты, бэкенд, git → `logs/doctor-report.txt`. По нему нельзя понять состояние глазами, и это нормально: он для пересылки, а не для чтения. Разведены 25.08 — до этого «Диагностика» означала дамп, и было непонятно, что она делает |
 
@@ -263,6 +281,14 @@ Wispr (`internal/wispr-art.txt`, 19 строк) стоит **слева от с�
   отвечает. Теперь держатель порта сверяется по имени образа (`tasklist` / `ps`, оно не
   переводится ни на одной локали): чужой — отдельное сообщение с именем и PID, и
   честный отказ вместо «всё уже было поднято».
+- **На macOS `ps -o comm=` возвращает путь Homebrew, а не голое имя.** После первого
+  запуска свои же процессы выглядели как `/opt/homebrew/Cellar/node/.../bin/node`.
+  Lifecycle теперь нормализует имя и требует expected script именно как Node entrypoint,
+  а не где угодно в аргументах. Та же ownership-проверка стоит в start/status/stop/restart,
+  дочерних сервисах и lazy provider start; перед exact-PID termination PID сверяется снова.
+  Darwin argv читается через `tools/mac-process-identity.py` из KERN_PROCARGS2,
+  а executable через proc_pidpath: BSD ps не сохраняет границы аргументов с пробелами.
+  При невозможности прочитать identity процесс не считается своим и не получает kill.
 - **Слушатели искались по слову `LISTENING`.** На части локалей Windows `netstat`
   переводит и состояния — заголовки его таблицы на этой машине уже переведены.
   Языконезависимая примета слушателя добавлена как второе условие: внешний адрес с

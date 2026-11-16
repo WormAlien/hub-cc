@@ -389,30 +389,18 @@ function createApiGatewayDashboardService(options = {}) {
         return clientsFromManifest(await readCurrentManifest());
     }
 
-    async function state({ providers } = {}) {
-        const manifest = await readCurrentManifest();
-        // Каталог собирается только по видимым вкладкам шлюзов: скрытый провайдер не должен стоить
-        // ни сетевых запросов, ни строк в списке. Опубликованная строка остаётся всегда - прятать
-        // её значило бы бросить точный ID без ручки.
-        const visibleProviders = providers instanceof Set
-            ? [...providers]
-            : Array.isArray(providers) ? providers : null;
-        const discoveryOptions = visibleProviders === null
-            ? candidateOptions
-            : { ...candidateOptions, providers: visibleProviders };
-        const [candidatesRaw, passiveRaw, probesRaw, sidecar, clients] = await Promise.all([
-            Promise.resolve().then(() => resolveCandidates(discoveryOptions)).catch(() => []),
-            Promise.resolve().then(() => readPassive(filePaths)).catch(() => ({})),
-            Promise.resolve().then(() => readProbes(filePaths)).catch(() => ({})),
-            sidecarStatus(),
-            clientsFromManifest(manifest),
-        ]);
-        const candidates = candidateMap(candidatesRaw);
-        const passive = normalizePassive(passiveRaw);
-        const probes = normalizeProbes(probesRaw);
+    function manifestDto(manifest) {
+        return {
+            version: manifest.version,
+            revision: manifest.revision,
+            enabled: manifest.enabled,
+        };
+    }
+
+    function publishedRows(manifest, candidates = new Map(), passive = {}, probes = {}) {
         const currentNow = normalizeNow(options.now);
         const publishedModels = isPlainObject(manifest.models) ? manifest.models : {};
-        const publishedRows = Object.keys(publishedModels)
+        return Object.keys(publishedModels)
             .sort(compareText)
             .map(id => makeRow(
                 id,
@@ -423,6 +411,46 @@ function createApiGatewayDashboardService(options = {}) {
                 currentNow,
                 freshMs,
             ));
+    }
+
+    // Первый экран читает только локальный манифест. Discovery, Hermes API, OpenCode status,
+    // health-agg и checksum sidecar живут в отдельных запросах: один медленный шлюз не должен
+    // держать всю вкладку на «Loading...». Это также делает /api-gateway дешёвым источником
+    // опубликованных 1M-моделей для вкладки a6api.
+    async function state() {
+        const manifest = await readCurrentManifest();
+        return {
+            ok: true,
+            public: publicUrls,
+            manifest: manifestDto(manifest),
+            models: publishedRows(manifest),
+            candidatesLoaded: false,
+        };
+    }
+
+    // Каталог - явная вторичная операция. UI вызывает её только после выбора провайдера.
+    async function candidates({ providers } = {}) {
+        const manifest = await readCurrentManifest();
+        // Каталог собирается только по видимым вкладкам шлюзов: скрытый провайдер не должен стоить
+        // ни сетевых запросов, ни строк в списке. Опубликованная строка остаётся всегда - прятать
+        // её значило бы бросить точный ID без ручки.
+        const visibleProviders = providers instanceof Set
+            ? [...providers]
+            : Array.isArray(providers) ? providers : null;
+        const discoveryOptions = visibleProviders === null
+            ? candidateOptions
+            : { ...candidateOptions, providers: visibleProviders };
+        const [candidatesRaw, passiveRaw, probesRaw] = await Promise.all([
+            Promise.resolve().then(() => resolveCandidates(discoveryOptions)).catch(() => []),
+            Promise.resolve().then(() => readPassive(filePaths)).catch(() => ({})),
+            Promise.resolve().then(() => readProbes(filePaths)).catch(() => ({})),
+        ]);
+        const candidates = candidateMap(candidatesRaw);
+        const passive = normalizePassive(passiveRaw);
+        const probes = normalizeProbes(probesRaw);
+        const currentNow = normalizeNow(options.now);
+        const publishedModels = isPlainObject(manifest.models) ? manifest.models : {};
+        const currentPublishedRows = publishedRows(manifest, candidates, passive, probes);
         const visibleSet = visibleProviders === null ? null : new Set(visibleProviders);
         const candidateRows = [...candidates.values()]
             .filter(row => !Object.prototype.hasOwnProperty.call(publishedModels, row.id))
@@ -442,14 +470,9 @@ function createApiGatewayDashboardService(options = {}) {
         return {
             ok: true,
             public: publicUrls,
-            manifest: {
-                version: manifest.version,
-                revision: manifest.revision,
-                enabled: manifest.enabled,
-            },
-            models: publishedRows.concat(candidateRows),
-            sidecar,
-            clients,
+            manifest: manifestDto(manifest),
+            models: currentPublishedRows.concat(candidateRows),
+            candidatesLoaded: true,
         };
     }
 
@@ -505,6 +528,7 @@ function createApiGatewayDashboardService(options = {}) {
 
     return {
         state,
+        candidates,
         updateModel,
         sidecarStatus,
         clientsStatus,

@@ -142,7 +142,7 @@ ok('свой срез без счётчика показывает прежни�
     assert.ok(/1 участник на старой версии/.test(notice), 'про соседа на старой версии тоже сказано: ' + notice);
 });
 
-ok('стрик берётся из активности Claude Code, а не из промптов', () => {
+ok('стрик берётся из канонической активности всех харнессов, а не из legacy-промптов', () => {
     const a = api('cc', 'd7', {});
     assert.strictEqual(a.lgStreak(me({ ccStats: envelope() })), 50, 'стрик счётчика');
     assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ activity: null }) })), 63,

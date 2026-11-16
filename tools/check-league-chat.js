@@ -920,6 +920,15 @@ async function main() {
   };
   const HEX = /#[0-9a-fA-F]{3,8}\b/;
 
+  const intro = HTML.slice(HTML.indexOf('<div class="lgintro">'),
+    HTML.indexOf('<!-- Отметки шлюзов:', HTML.indexOf('<div class="lgintro">')));
+  check('вводный текст Лиги не упирается в старую невидимую границу 72ch',
+    /id="lg-lede"/.test(intro) && !/max-w-\[72ch\]/.test(intro));
+  check('служебные строки состава и legacy сгруппированы в отдельный meta-блок',
+    /id="lg-meta"/.test(intro)
+      && /document\.getElementById\('lg-meta'\)/.test(HTML)
+      && /class="lgcap"/.test(HTML));
+
   check('в строке ленты есть кнопка удаления (.lgdel) с data-seq и aria-label',
     /class="lgdel"/.test(HTML) && /data-seq="\$\{seq\}"/.test(HTML)
       && /aria-label="Удалить /.test(HTML));
@@ -1061,6 +1070,18 @@ async function main() {
   check('выбранная группа помнится между перезагрузками страницы',
     /localStorage\.setItem\(LGC_GID_KEY, k\)/.test(HTML)
       && /localStorage\.getItem\(LGC_GID_KEY\)/.test(HTML));
+  const loadLeague = fnBody('async function lgLoad', 'let _lgResizeRaf');
+  check('фоновая загрузка Лиги запускает группы и лица до клика по сайдбару',
+    /lgChatStart\(\)/.test(loadLeague)
+      && loadLeague.indexOf('lgChatStart()') < loadLeague.indexOf("fetch('/__switch/api/league')"),
+    loadLeague.slice(0, 500));
+  check('после /me загружаются составы ВСЕХ живых групп, а не только открытой',
+    /lgGroupLoadAll\(\)/.test(fnBody('async function lgChatMe', '// Перечитать свою запись'))
+      && /Promise\.all\(lgChatGids\(\)\.map\(gid => lgGroupLoad\(gid\)\)\)/.test(HTML));
+  const groupLoad = fnBody('async function lgGroupLoad', '// Лица нужны не только активному чату');
+  check('пришедшие лица сбрасывают хеш рейтинга до перерисовки мини-блока',
+    /LG\._lastHash = ''/.test(groupLoad)
+      && groupLoad.indexOf("LG._lastHash = ''") < groupLoad.lastIndexOf('lgRender()'));
   check('состояние панели различает «ручек нет», «группы нет» и «групп нет»',
     /'ручек чата ещё нет'/.test(HTML) && /'группы больше нет'/.test(HTML)
       && /'групп пока нет'/.test(HTML));

@@ -38,6 +38,8 @@
  *   node tools/add-gateway.js plan  kktoken      # то же, но «что писать и где»
  *   node tools/add-gateway.js apply fluxnat      # сухой прогон вставок
  *   node tools/add-gateway.js apply fluxnat --write   # вставить (бэкап + node --check)
+ *   node tools/add-gateway.js provision freegg --id <existing-pool-id> [--write]
+ *       # dry-run by default; write provisions exactly this existing account
  *   node tools/add-gateway.js list
  */
 'use strict';
@@ -144,6 +146,53 @@ function toTarget(text, pairs) {
     return out;
 }
 
+// ── explicitly verified generic onboarding (never a site-code clone) ─────────
+function validateOnboarding(gw) {
+    if (!gw || gw.onboarding == null) return null;
+    const o = gw.onboarding;
+    const fail = () => { throw new Error('Invalid generic onboarding configuration; no files written'); };
+    if (!o || typeof o !== 'object' || Array.isArray(o)
+        || Object.keys(o).some(k => !['kind', 'consolePath', 'callbackPath', 'tokenName'].includes(k))
+        || o.kind !== 'newapi-github' || gw.github !== true || gw.ref !== true || gw.customPanel !== false) fail();
+    if (!/^[a-z][a-z0-9_-]*$/.test(gw.full || '') || !/^[a-z][a-z0-9_-]*$/.test(gw.FOLDER || gw.full || '')
+        || !/^[a-z][a-z0-9]*$/.test(gw.p || '') || !/^[A-Z][A-Z0-9]*$/.test(gw.P || '')
+        || typeof gw.HOST !== 'string' || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]+$/.test(gw.HOST)
+        || typeof gw.REF !== 'string' || !/^[A-Za-z0-9_-]+$/.test(gw.REF)) fail();
+    const origin = `https://${gw.HOST}`;
+    for (const key of ['consolePath', 'callbackPath']) {
+        const value = o[key];
+        // Root-relative paths only. Reject normalization, query secrets and redirects.
+        if (typeof value !== 'string' || !/^\/[A-Za-z0-9/_-]+$/.test(value)
+            || value.includes('//') || new URL(value, origin).origin !== origin) fail();
+    }
+    if (typeof o.tokenName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$/.test(o.tokenName)
+        || /^(sk-|gh[pousr]_|github_pat_)/i.test(o.tokenName)) fail();
+    return o;
+}
+function renderOnboardingWrapper(gw) {
+    if (!validateOnboarding(gw)) return null;
+    return "'use strict';\n// Generated generic New API onboarding; no provider-specific browser code.\n"
+        + "Promise.resolve().then(() => require('../routing/lib/newapi-onboarding').runProvider({\n"
+        + `    provider: '${gw.full}', moduleDir: __dirname, label: process.argv[2], mode: process.argv[3] || 'auto',\n`
+        + "})).catch(() => { console.error('Onboarding failed; inspect the selected account locally.'); process.exitCode = 1; });\n";
+}
+
+function onboardingFileState(gw) {
+    const text = renderOnboardingWrapper(gw);
+    if (text === null) return null;
+    const rel = `${gw.FOLDER || gw.full}/open-session.js`;
+    if (!fs.existsSync(path.join(REPO, 'routing', 'lib', 'newapi-onboarding.js'))) {
+        return { rel, status: 'bad', note: 'generic newapi-github runtime missing; no files written' };
+    }
+    const abs = path.join(REPO, rel);
+    if (fs.existsSync(abs)) {
+        return fs.readFileSync(abs, 'utf8') === text
+            ? { rel, status: 'done', note: 'generic newapi-github wrapper already present' }
+            : { rel, status: 'bad', note: 'existing open-session.js is not the generic wrapper; refusing to overwrite' };
+    }
+    return { rel, status: 'insert', create: { text, exclusive: true }, note: 'generate generic newapi-github wrapper' };
+}
+
 // ── проверка одной точки ─────────────────────────────────────────────────────
 
 function countOccurrences(hay, needle) {
@@ -231,6 +280,10 @@ function checkPoint(point, gw, files) {
     const abs = files[point.file] || path.join(REPO, rel);
 
     if (point.kind === 'file') {
+        if (point.file === '%FOLDER%/open-session.js' && gw.onboarding) {
+            const state = onboardingFileState(gw);
+            return state.status === 'done' ? { status: 'ok' } : { status: 'missing', note: state.note };
+        }
         return fs.existsSync(abs)
             ? { status: 'ok' }
             : { status: 'missing', note: `нет файла ${rel}` };
@@ -353,6 +406,11 @@ function planPoint(point, gw, files, src) {
     if (point.kind === 'file') {
         p.fileOnly = true;
         p.state = exists ? 'done' : 'todo';
+        if (point.file === '%FOLDER%/open-session.js' && gw.onboarding) {
+            const state = onboardingFileState(gw);
+            p.state = { done: 'done', insert: 'todo', bad: 'bad' }[state.status];
+            p.note = state.note;
+        }
         return p;
     }
 
@@ -706,6 +764,7 @@ function runPlan(name, spec, config) {
             if (it.fileOnly) {
                 const tail = it.state === 'done' ? `${C.dim}  (уже есть)${C.off}` : '';
                 console.log(`      ${C.dim}создать файл${C.off}  ${it.rel}${tail}`);
+                if (it.note) console.log(`${C.warn}      ↑ ${it.note}${C.off}`);
                 console.log('');
                 continue;
             }
@@ -943,6 +1002,9 @@ function relaxedNeedles(spec, gw) {
 
 function applyPoint(point, rule, src, dst, pairs, files, spec) {
     const p = { id: point.id, title: point.title, status: 'insert', rel: '', at: null, anchor: '', lines: [], note: '' };
+    if (point.kind === 'file' && point.file === '%FOLDER%/open-session.js' && dst.onboarding) {
+        return { ...p, ...onboardingFileState(dst) };
+    }
 
     const offApply = flagsOff(point, dst);
     if (offApply.length) {
@@ -1276,6 +1338,9 @@ function runApply(name, spec, config, write) {
         return 1;
     }
 
+    // A repeat apply must not write anything, including an empty backup directory.
+    if (!tally.insert) return 0;
+
     // Бэкап в отдельную папку с меткой времени: откат должен быть рукой подать.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupDir = path.join(REPO, 'routing', '.backup', `apply-${dst.full}-${stamp}`);
@@ -1319,7 +1384,7 @@ function runApply(name, spec, config, write) {
     for (const it of items.filter((x) => x.status === 'insert' && x.create)) {
         const abs = path.join(REPO, it.rel);
         fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, it.create.text, 'utf8');
+        fs.writeFileSync(abs, it.create.text, { encoding: 'utf8', flag: it.create.exclusive ? 'wx' : 'w' });
         createdRels.push(it.rel);
         written += 1;
         console.log(`${C.ok}создано${C.off} ${it.rel}  ${C.dim}(${it.note})${C.off}`);
@@ -1378,12 +1443,69 @@ function runApply(name, spec, config, write) {
     return 0;
 }
 
+// ── selected existing-account provision (write opt-in; no batches) ────────────
+function runProvision(name, args, spec, config) {
+    try {
+        const gw = config[name];
+        if (!gw || gw.full !== name || !validateOnboarding(gw)) throw new Error();
+        let id = null, write = false;
+        for (let i = 0; i < args.length; i += 1) {
+            if (args[i] === '--write' && !write) { write = true; continue; }
+            if (args[i] === '--id' && id === null && i + 1 < args.length) { id = args[++i]; continue; }
+            throw new Error();
+        }
+        // Stable IDs are never trimmed, repaired, migrated or picked by email/key.
+        if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)) throw new Error();
+        if (onboardingFileState(gw).status !== 'done') throw new Error();
+        const files = specFiles(spec);
+        if (spec.points.some(pt => {
+            const r = pt.kind === 'must-any' ? checkAny(pt, gw, files) : checkPoint(pt, gw, files);
+            return r.status === 'missing';
+        }) || portConflicts(gw, name, config).length) throw new Error();
+        const os = require('os');
+        const poolFile = gw.SESSIONSFILE == null ? path.join(REPO, 'routing', `${gw.full}-sessions.json`)
+            : /^\$ROUTING\/[A-Za-z0-9_/-]+\.json$/.test(gw.SESSIONSFILE)
+                ? path.join(REPO, 'routing', gw.SESSIONSFILE.slice('$ROUTING/'.length))
+                : /^\$PROF\/[.A-Za-z0-9_/-]+\.json$/.test(gw.SESSIONSFILE)
+                    && !gw.SESSIONSFILE.split('/').includes('..')
+                    ? path.join(os.homedir(), gw.SESSIONSFILE.slice('$PROF/'.length)) : null;
+        if (!poolFile) throw new Error();
+        const pool = JSON.parse(fs.readFileSync(poolFile, 'utf8').replace(/^\uFEFF/, ''));
+        if (!Array.isArray(pool) || pool.filter(row => row && row.id === id).length !== 1) throw new Error();
+        const label = `acct_${id}`;
+        const port = process.env.SWITCH_PORT || '8200';
+        if (!/^[0-9]+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw new Error();
+        if (!write) {
+            console.log(`Dry-run: provision ${name} ${label} using local HUB :${port}. No browser, network or writes; add --write.`);
+            return 0;
+        }
+        // Do not inherit child stdout/stderr: even a vendor failure may contain keys.
+        const result = require('child_process').spawnSync(process.execPath,
+            [path.join(REPO, gw.FOLDER || gw.full, 'open-session.js'), label, 'provision'],
+            { cwd: REPO, env: { ...process.env, SWITCH_PORT: port, NEWAPI_HUB_ORIGIN: `http://127.0.0.1:${port}` }, stdio: ['inherit', 'ignore', 'ignore'] });
+        if (result.error || result.status !== 0) {
+            console.error('Provision failed for the selected account; inspect its local state.');
+            return 1;
+        }
+        console.log(`Provision completed: ${name} ${label}. Key values are never printed.`);
+        return 0;
+    } catch {
+        console.error('Provision refused: require a valid generic tab/runtime and exactly one existing pool --id; no files written.');
+        return 2;
+    }
+}
+
 // ── вход ─────────────────────────────────────────────────────────────────────
 
 function main() {
     const [cmd, arg] = process.argv.slice(2);
     const spec = JSON.parse(fs.readFileSync(SPEC_FILE, 'utf8'));
     const config = loadConfig();
+    // Reject invalid explicit onboarding before headers can expose unsafe config.
+    if (config[arg] && ['check', 'plan', 'apply', 'provision'].includes(cmd)) {
+        try { validateOnboarding(config[arg]); }
+        catch { console.error('Invalid generic onboarding configuration; no files written'); return 2; }
+    }
 
     if (cmd === 'list' || !cmd) {
         const gates = Object.entries(config).filter(([k]) => !k.startsWith('_'));   // `_readme` — документация, не шлюз
@@ -1394,6 +1516,7 @@ function main() {
         }
         console.log(`\n${C.dim}node tools/add-gateway.js check <шлюз>   — что уже на месте${C.off}`);
         console.log(`${C.dim}node tools/add-gateway.js plan  <шлюз>   — что и куда писать${C.off}`);
+        console.log(`${C.dim}node tools/add-gateway.js provision <шлюз> --id <existing-pool-id> [--write] — selected account only; dry-run default${C.off}`);
         return 0;
     }
 
@@ -1407,7 +1530,9 @@ function main() {
         return runApply(arg, spec, config, process.argv.includes('--write'));
     }
 
-    console.error(`Неизвестная команда «${cmd}». Есть: check, plan, apply, list`);
+    if (cmd === 'provision') return runProvision(arg, process.argv.slice(4), spec, config);
+
+    console.error(`Неизвестная команда «${cmd}». Есть: check, plan, apply, provision, list`);
     return 2;
 }
 
@@ -1415,4 +1540,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments, portAudit, portConflicts, portGuard, keyGuard };
+module.exports = { validateOnboarding, renderOnboardingWrapper, subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments, portAudit, portConflicts, portGuard, keyGuard };

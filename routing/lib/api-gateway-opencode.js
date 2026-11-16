@@ -8,7 +8,8 @@ const durableDefault = require('./durable-write.js');
 const PROVIDER_NAME = 'abuse-hub';
 const PROVIDER_BASE_URL = 'http://127.0.0.1:20100/openai/v1';
 const JOURNAL_KIND = 'opencode_three_target';
-const HASH_PATTERN = /^[a-f0-9]{64}$/;
+const HASH_PATTERN = /^(?:[a-f0-9]{64}|absent)$/;
+const EMPTY_HASH = 'absent';
 const PHASES = new Set([
     'prepared',
     'staged',
@@ -70,18 +71,25 @@ function sortedPublishedModels(manifest) {
                 || id.indexOf('/') <= 0 || /[\x00-\x1f\x7f]/u.test(id)
                 || !isPlainObject(metadata)
                 || typeof metadata.displayName !== 'string'
-                || metadata.displayName.length === 0) {
+                || metadata.displayName.length === 0
+                || !Number.isSafeInteger(metadata.contextTokens) || metadata.contextTokens <= 0
+                || !Number.isSafeInteger(metadata.outputTokens) || metadata.outputTokens <= 0) {
                 fail('api_gateway_opencode_invalid_manifest');
             }
-            return [id, metadata.displayName];
+            return [id, metadata];
         })
         .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
 }
 
 function projectProvider(manifest) {
     const models = {};
-    for (const [id, displayName] of sortedPublishedModels(manifest)) {
-        models[id] = { name: displayName };
+    for (const [id, metadata] of sortedPublishedModels(manifest)) {
+        // OpenCode reads per-model limits from config only; /v1/models carries no metadata.
+        // Without `limit` it falls back to 200k/32k and a 1M model silently loses its window.
+        models[id] = {
+            name: metadata.displayName,
+            limit: { context: metadata.contextTokens, output: metadata.outputTokens },
+        };
     }
     return {
         npm: '@ai-sdk/openai-compatible',
@@ -108,6 +116,9 @@ function parseJsonBytes(raw) {
     if (value.provider !== undefined && !isPlainObject(value.provider)) {
         fail('api_gateway_opencode_target_invalid');
     }
+    if (value.providers !== undefined && !isPlainObject(value.providers)) {
+        fail('api_gateway_opencode_target_invalid');
+    }
     return value;
 }
 
@@ -127,6 +138,52 @@ function patchProvider(config, provider) {
         configurable: true,
     });
     return next;
+}
+
+// OpenCode 2 native schema: `providers.<id>` with package/settings instead of the legacy
+// `provider.<id>` with npm/options. Patching the wrong block would duplicate the provider.
+function isNativeConfig(value) {
+    return isPlainObject(value) && isPlainObject(value.providers);
+}
+
+function nativeProvider(provider) {
+    return {
+        package: 'aisdk:@ai-sdk/openai-compatible',
+        name: provider.name,
+        settings: provider.options,
+        models: provider.models,
+    };
+}
+
+function patchProviderNative(config, provider) {
+    const next = cloneWithDescriptors(config);
+    const providers = config.providers === undefined ? {} : cloneWithDescriptors(config.providers);
+    Object.defineProperty(providers, PROVIDER_NAME, {
+        value: nativeProvider(provider),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    });
+    Object.defineProperty(next, 'providers', {
+        value: providers,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    });
+    return next;
+}
+
+function currentProviderBlock(value) {
+    if (isNativeConfig(value)) return value.providers[PROVIDER_NAME];
+    return value.provider && value.provider[PROVIDER_NAME];
+}
+
+function patchProviderFor(value, provider) {
+    return isNativeConfig(value) ? patchProviderNative(value, provider) : patchProvider(value, provider);
+}
+
+function encodeFresh(value) {
+    return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 function encodeLike(value, original) {
@@ -231,11 +288,15 @@ function readCurrent(target) {
 
 function stateOfTarget(target, beforeHash, afterHash) {
     const current = readCurrent(target);
-    if (!current) return 'external';
+    if (!current) return beforeHash === EMPTY_HASH ? 'before' : 'external';
     const currentHash = sha256(current);
     if (currentHash === beforeHash) return 'before';
     if (currentHash === afterHash) return 'after';
     return 'external';
+}
+
+function stateMatches(state, expected, beforeHash, afterHash) {
+    return state === expected || (beforeHash === afterHash && (state === 'before' || state === 'after'));
 }
 
 function backupPath(targetPath, transactionId) {
@@ -319,6 +380,7 @@ function finishJournal(journalPath, journal, targets, durableImpl) {
     safeUnlink(journalPath);
     durableImpl.fsyncDir(path.dirname(journalPath));
     for (let index = 0; index < targets.length; index += 1) {
+        if (journal.targets[index].before === journal.targets[index].after) continue;
         keepOnlyBackup(
             targets[index].path,
             journalArtifact(targets[index], journal.targets[index], 'backup'),
@@ -328,6 +390,7 @@ function finishJournal(journalPath, journal, targets, durableImpl) {
 }
 
 function readVerifiedBackup(target, row) {
+    if (row.before === EMPTY_HASH) fail('api_gateway_opencode_recovery_conflict');
     let bytes;
     try { bytes = fs.readFileSync(journalArtifact(target, row, 'backup')); }
     catch { fail('api_gateway_opencode_recovery_conflict'); }
@@ -336,13 +399,25 @@ function readVerifiedBackup(target, row) {
 }
 
 function restoreAfterTargets(states, journal, targets, durableImpl) {
-    const backups = targets.map((target, index) => readVerifiedBackup(target, journal.targets[index]));
+    const backups = targets.map((target, index) => (
+        states[index] !== 'after' || journal.targets[index].before === journal.targets[index].after
+            || journal.targets[index].before === EMPTY_HASH
+            ? null
+            : readVerifiedBackup(target, journal.targets[index])
+    ));
     for (let index = 0; index < targets.length; index += 1) {
-        if (states[index] === 'after') durableImpl.writeAtomic(targets[index].path, backups[index]);
+        if (states[index] !== 'after') continue;
+        if (backups[index]) durableImpl.writeAtomic(targets[index].path, backups[index]);
+        else safeUnlink(targets[index].path);
     }
     for (let index = 0; index < targets.length; index += 1) {
         if (states[index] !== 'external'
-            && stateOfTarget(targets[index], journal.targets[index].before, journal.targets[index].after) !== 'before') {
+            && !stateMatches(
+                stateOfTarget(targets[index], journal.targets[index].before, journal.targets[index].after),
+                'before',
+                journal.targets[index].before,
+                journal.targets[index].after,
+            )) {
             fail('api_gateway_opencode_recovery_conflict');
         }
     }
@@ -357,7 +432,12 @@ function recoverUnlocked(journalPath, targets, durableImpl) {
         journal.targets[index].after,
     ));
     if (states.includes('external')) fail('api_gateway_opencode_recovery_conflict');
-    if (states.every(state => state === 'after')) {
+    if (states.every((state, index) => stateMatches(
+        state,
+        'after',
+        journal.targets[index].before,
+        journal.targets[index].after,
+    ))) {
         try { finishJournal(journalPath, journal, targets, durableImpl); }
         catch (error) {
             if (error instanceof OpenCodeServiceError) throw error;
@@ -483,7 +563,7 @@ function createOpenCodeService({
         const desired = projectProvider(manifest);
         const rows = fixedTargets.map(target => {
             const read = readTarget(target);
-            if (read.state !== 'valid') {
+            if (read.state === 'invalid') {
                 return {
                     label: target.label,
                     status: read.state,
@@ -492,17 +572,21 @@ function createOpenCodeService({
                     changes: 0,
                 };
             }
-            const current = read.value.provider && read.value.provider[PROVIDER_NAME];
-            const diff = structuralDiff(current, desired);
+            const current = read.state === 'missing' ? undefined : currentProviderBlock(read.value);
+            const desiredForFile = read.state !== 'missing' && isNativeConfig(read.value)
+                ? nativeProvider(desired)
+                : desired;
+            const diff = structuralDiff(current, desiredForFile);
+            const different = read.state === 'missing' || diff.different;
             return {
                 label: target.label,
-                status: diff.different ? 'changes' : 'synced',
+                status: different ? 'changes' : 'synced',
                 additions: diff.additions,
                 removals: diff.removals,
                 changes: diff.changes,
             };
         });
-        const aggregate = rows.some(row => row.status === 'invalid' || row.status === 'missing')
+        const aggregate = rows.some(row => row.status === 'invalid')
             ? 'invalid'
             : rows.some(row => row.status === 'changes') ? 'changes' : 'synced';
         return { status: aggregate, targets: rows };
@@ -540,27 +624,36 @@ function createOpenCodeService({
             const desired = projectProvider(manifest);
             const records = fixedTargets.map((target, index) => {
                 const read = readTarget(target);
-                if (read.state !== 'valid') fail('api_gateway_opencode_target_invalid');
-                const after = encodeLike(patchProvider(read.value, desired), read.raw);
+                if (read.state === 'invalid') fail('api_gateway_opencode_target_invalid');
+                // Absent project configs (a fresh hub clone has no repo-level opencode.json) are created
+                // with only the published provider. Without this Sync could never run on a clean install.
+                const created = read.state === 'missing';
+                const value = created ? {} : read.value;
+                const patched = patchProviderFor(value, desired);
+                const after = created ? encodeFresh(patched) : encodeLike(patched, read.raw);
                 return {
                     index,
                     target,
-                    before: read.raw,
+                    created,
+                    before: created ? null : read.raw,
                     after,
-                    beforeHash: sha256(read.raw),
+                    beforeHash: created ? EMPTY_HASH : sha256(read.raw),
                     afterHash: sha256(after),
                     committed: false,
                 };
             });
             const changed = records.filter(record => record.beforeHash !== record.afterHash).length;
             if (changed === 0) return transactionResult(fixedTargets, 0);
+            const changedRecords = records.filter(record => record.beforeHash !== record.afterHash);
 
             const transactionId = `${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
             let journal = null;
             try {
                 for (const record of records) {
                     record.backup = backupPath(record.target.path, transactionId);
-                    durableImpl.writeAtomic(record.backup, record.before);
+                    if (record.beforeHash !== record.afterHash && !record.created) {
+                        durableImpl.writeAtomic(record.backup, record.before);
+                    }
                 }
                 journal = {
                     version: 1,
@@ -575,7 +668,7 @@ function createOpenCodeService({
                     })),
                 };
                 writeJournal(fixedJournalPath, journal, durableImpl);
-                for (const record of records) {
+                for (const record of changedRecords) {
                     record.stage = durableImpl.stageAtomicSync(
                         record.target.path,
                         record.after,
@@ -587,14 +680,19 @@ function createOpenCodeService({
                 writeJournal(fixedJournalPath, journal, durableImpl);
                 step('beforeCommit');
 
-                for (const record of records) {
+                for (const record of changedRecords) {
                     const states = records.map(item => stateOfTarget(
                         item.target,
                         item.beforeHash,
                         item.afterHash,
                     ));
                     const expected = records.map(item => item.committed ? 'after' : 'before');
-                    if (states.some((state, index) => state !== expected[index])) {
+                    if (states.some((state, index) => !stateMatches(
+                        state,
+                        expected[index],
+                        records[index].beforeHash,
+                        records[index].afterHash,
+                    ))) {
                         const error = new OpenCodeServiceError('api_gateway_opencode_source_conflict');
                         Object.defineProperty(error, 'conflictIndexes', {
                             value: states.map((state, index) => state === expected[index] ? -1 : index)
@@ -609,11 +707,12 @@ function createOpenCodeService({
                     step(`afterCommit${record.index + 1}`);
                 }
 
-                if (records.some(record => stateOfTarget(
-                    record.target,
+                if (records.some(record => !stateMatches(
+                    stateOfTarget(record.target, record.beforeHash, record.afterHash),
+                    'after',
                     record.beforeHash,
                     record.afterHash,
-                ) !== 'after')) {
+                ))) {
                     fail('api_gateway_opencode_transaction_failed');
                 }
                 finishJournal(fixedJournalPath, journal, fixedTargets, durableImpl);

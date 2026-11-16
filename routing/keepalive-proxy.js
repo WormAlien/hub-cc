@@ -1784,6 +1784,14 @@ const RETRY_NO_CONTENT = /sensitive words|content-blocked/i;
 // Постоянные ошибки New API на китайском (не ретраить): нет прав, неверный/
 // просроченный токен, нет средств/квоты, модель/канал не существует.
 const RETRY_NO_ZH = /无权|权限|无效|过期|余额|额度|欠费|不存在|认证|封禁|禁用/;
+// Переполнение контекста — ОКОНЧАТЕЛЬНЫЙ отказ: тот же body при повторе даёт тот же
+// ответ, контекст от ретрая не уменьшается. Проверять надо ДО fallback `status >= 500`,
+// иначе 5xx с этой прозой считался транзиентным, и прокси держал клиента удержаниями и
+// повторами вместо мгновенной отдачи — а клиент, не увидев настоящую ошибку, не уходил
+// в компакт. Живое тело из нашего лога 03.11:
+//   prompt is too long: The input (710799 tokens) is longer than the model's context window
+// На 400 его ловил RETRY_NO, но 5xx/413 от того же шлюза проходил как «транзиентный».
+const RETRY_NO_CONTEXT = /exceeds the context window|prompt is too long|input is too long|context[_ ]length[_ ]exceeded|maximum context length|reduce the length of the messages/i;
 const RETRY_OK = /unauthorized client detected|overloaded|too many|rate limit|internal|upstream|temporar|busy|unavailable/i;
 // ── Промах МАРШРУТА, а не сбой шлюза ─────────────────────────────────────────
 // Шлюз отвечает 503, но означает это «такой модели у меня нет ни на одном канале».
@@ -1909,6 +1917,8 @@ function isTransientBody(status, buf) {
   // Проверяем ДО RETRY_NO, потому что `bad request` из RETRY_NO ловит и Bedrock-ответ.
   if (status === 400 && /ValidationException|model identifier|InvokeModel|Bedrock/i.test(s)) return true;
   if (status === 429 && /daily message limit reached|сообщения на сегодня закончились/i.test(s)) return false;
+  // Переполнение контекста — раньше fallback `status >= 500` объявлял его транзиентным.
+  if (RETRY_NO_CONTEXT.test(s)) return false;
   if (RETRY_NO.test(s) || RETRY_NO_ZH.test(s) || RETRY_NO_CONTENT.test(s)) return false;
   if (RETRY_OK.test(s)) return true;
   return status >= 500 || status === 429 || status === 401 || status === 403;
@@ -4385,6 +4395,25 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(isTransientBody(503, Buffer.from('{"retryable":true,"error":{"code":"model_not_found"}}')), true,
     'явный retryable:true шлюза сильнее нашей догадки про промах маршрута');
 
+  // ── Переполнение контекста — окончательный отказ (2026-11-16) ────────────────
+  // Живое тело из нашего же лога (routing/keepalive-20189.log):
+  //   prompt is too long: The input (710799 tokens) is longer than the model's context window
+  // Тот же body при повторе даёт тот же отказ: контекст не уменьшается от ретрая.
+  // Опасен не 400 (его ловит RETRY_NO), а 5xx/413 на той же формулировке: fallback
+  // `status >= 500` считал её транзиентной, и прокси держал клиента удержаниями и
+  // повторами вместо мгновенной отдачи. Клиент из-за этого не уходил в компакт.
+  const CTX_JSON = '{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: The input (710799 tokens) is longer than the model\'s context window"}}';
+  assert.strictEqual(isTransientBody(400, Buffer.from(CTX_JSON)), false,
+    '400 prompt is too long уже постоянная (ловится RETRY_NO)');
+  assert.strictEqual(isTransientBody(413, Buffer.from(CTX_JSON)), false,
+    '413 переполнение контекста — окончательный отказ');
+  assert.strictEqual(isTransientBody(500, Buffer.from(CTX_JSON)), false,
+    '500 с переполнением контекста — окончательный отказ, а не транзиентный 5xx');
+  assert.strictEqual(isTransientBody(503, Buffer.from('exceeds the context window')), false,
+    'голая проза на 503 тоже окончательная');
+  assert.strictEqual(isTransientBody(400, Buffer.from('{"error":{"message":"input is too long for this model"}}')), false,
+    'input is too long — тоже переполнение');
+
   applyPatch({ holdMs: 90000 });
   assert.strictEqual(cfg.holdMs, 90000, 'holdMs применился');
   applyPatch({ holdMs: 10 });
@@ -4709,8 +4738,11 @@ if (process.argv[2] === 'selftest') {
   assert.deepStrictEqual(JSON.parse('   {"type":"message"}'), { type: 'message' },
     'JSON.parse съедает ведущие пробелы — иначе капать было бы нельзя');
   // Взвод только на POST /v1/messages без stream и не на count_tokens.
-  assert.ok(/if \(!streaming && !isModelValidationProbe\(req\.method, reqPath, reqBody\)\s*&& cfg\.jsonHoldMs > 0 && jsonTimer === null/.test(holdSrc),
-    'JSON-удержание взводится только для не-стримового запроса');
+  // `!exactMode` — условие добавлено 16.11.2026: у authenticated exact-пути (Hermes,
+  // OpenCode через API Gateway) заранее открытый HTTP 200 с пробелами превращал
+  // поздний отказ в пустой успешный ответ. Legacy non-exact JSON hold не меняется.
+  assert.ok(/if \(!exactMode && !streaming && !isModelValidationProbe\(req\.method, reqPath, reqBody\)\s*&& cfg\.jsonHoldMs > 0 && jsonTimer === null/.test(holdSrc),
+    'JSON-удержание взводится только для не-стримового запроса и не для exact-пути');
   assert.ok(/!isCountTokens\(req\.method, reqPath\)\)[\s\S]{0,40}?jsonTimer = setTimeout\(commitJson/.test(holdSrc),
     'count_tokens под удержание не попадает — на него отвечаем локально и мгновенно');
   // Коммит НЕ ставит content-length: длину тела мы в этот момент не знаем.

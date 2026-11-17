@@ -893,6 +893,51 @@ function createDelegatedOpenAiSseRestorer({ publicModel, maxLineBytes = OPENAI_S
     return transformer;
 }
 
+// Тело отказа sidecar для лога: причина 400 иначе не сохраняется нигде.
+// Лимит жёсткий (отказ короткий), секреты маскируются — в лог не должны попасть
+// ни ключи, ни адреса апстрима.
+const SIDECAR_REJECTION_MAX_BYTES = 4096;
+// Маскируем и поля с явным именем, и голые ключи известных форматов: тело отказа
+// пишет апстрим, и он не обязан называть поле «api_key».
+const SIDECAR_SECRET_PATTERN = /(bearer\s+|api[_-]?key["']?\s*[:=]\s*["']?|token["']?\s*[:=]\s*["']?|authorization["']?\s*[:=]\s*["']?(?:bearer\s+)?)[^\s"',}]{4,}/gi;
+const SIDECAR_BARE_KEY_PATTERN = /\b(?:sk-[A-Za-z0-9_\-]{8,}|ya29\.[A-Za-z0-9_\-]{8,}|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})/g;
+
+function scrubSidecarRejection(text) {
+    return String(text)
+        .replace(SIDECAR_SECRET_PATTERN, (_m, prefix) => `${prefix}[REDACTED]`)
+        .replace(SIDECAR_BARE_KEY_PATTERN, '[REDACTED]')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 600);
+}
+
+function readSidecarRejection(upstreamResponse, done) {
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    const finish = () => {
+        if (settled) return;
+        settled = true;
+        const raw = Buffer.concat(chunks);
+        chunks.length = 0;
+        done(scrubSidecarRejection(raw.toString('utf8')));
+        raw.fill(0);
+    };
+    upstreamResponse.on('data', chunk => {
+        if (settled) return;
+        bytes += chunk.length;
+        if (bytes > SIDECAR_REJECTION_MAX_BYTES) chunks.push(chunk.subarray(0, Math.max(0, chunk.length - (bytes - SIDECAR_REJECTION_MAX_BYTES))));
+        else chunks.push(chunk);
+        finish();
+        if (!upstreamResponse.destroyed) upstreamResponse.destroy();
+    });
+    upstreamResponse.on('end', finish);
+    upstreamResponse.on('error', finish);
+    upstreamResponse.on('aborted', finish);
+    // Отказ может прийти без тела вовсе — не ждём вечно.
+    setTimeout(finish, 1000).unref?.();
+}
+
 function writePublicDiagnosis(res, diagnosis) {
     const body = Buffer.from(JSON.stringify(diagnosis.body), 'utf8');
     res.writeHead(diagnosis.status, {
@@ -1000,6 +1045,18 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
         // Причина отказа Bifrost в лог: клиент видит обезличенное «Invalid request.», а без
         // этой строки 12.11 невозможно было отличить провал конвертации инструментов от
         // кривого тела запроса — полдня ушло на бисект повторами.
+        //
+        // 🪤 Раньше здесь печатался только content-type, и тело отказа терялось: 17.11
+        // в 01:18 пришёл 400, а в bifrost.log за этот момент не было НИ ОДНОЙ строки —
+        // отказ произошёл до его хендлера, и настоящая причина не сохранилась нигде.
+        // Читаем ограниченный хвост тела, чтобы дефект больше не был невидимым.
+        if (status === 400 || status === 422) {
+            readSidecarRejection(upstreamResponse, text => {
+                log(`sidecar ${status} ${req.method} ${req.url}: ${text || '(пустое тело)'}`);
+                fail(mapped.status, mapped.code);
+            });
+            return;
+        }
         log(`sidecar ${status} ${req.method} ${req.url}: ${upstreamResponse.headers['content-type'] || '-'}`);
         fail(mapped.status, mapped.code);
         return;

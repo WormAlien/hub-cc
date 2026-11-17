@@ -1187,6 +1187,7 @@ async function stop({ phase = 'stop', on = () => {} } = {}) {
 // в нём бывают приватные пути и токены из argv запуска.
 const LAUNCH_FAILURE_TEXT = {
     bifrost_catalog_invalid: 'пины каталогов Bifrost не совпадают с файлами',
+    bifrost_cache_corrupt: 'кэш Bifrost повреждён — перекачиваю артефакт',
     bifrost_checksum_invalid: 'контрольная сумма артефакта Bifrost некорректна',
     bifrost_artifact_mismatch: 'скачанный артефакт Bifrost не совпал по sha256',
     bifrost_download_failed: 'не удалось скачать артефакт Bifrost',

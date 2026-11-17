@@ -494,6 +494,13 @@ function defaultServiceDescriptor({
         version: expectedVersion,
         prepare: async descriptor => {
             if (portError) throw portError;
+            // 🔴 `install: false` оставлял битый кэш мёртвым: ensureInstalled не звался,
+            // а проверка ниже кидала bifrost_cache_corrupt — и человек видел «sidecar
+            // недоступен» при целом интернете и правильных пинах. Лечилось только
+            // ручным `node routing/lib/bifrost-sidecar.js install` (живой случай
+            // 17.11.2026, Windows и macOS одинаково). Самолечение безопасно ровно
+            // потому, что sha256 скачанного сверяется с пином: подменённый или
+            // недокачанный файл не пройдёт проверку и не будет запущен.
             const ready = await prepareLaunch({
                 lockPath,
                 configTemplatePath,
@@ -502,7 +509,7 @@ function defaultServiceDescriptor({
                 platform,
                 arch,
                 baseUrl,
-                install: false,
+                install: true,
             });
             return createServiceDescriptor({
                 executable: ready.executable,

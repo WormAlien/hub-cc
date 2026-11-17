@@ -2482,7 +2482,24 @@ const server = http.createServer((req, res) => {
     if (exactMode) {
       stats.truncated = (stats.truncated || 0) + 1;
       ev.note('truncated');
-      log(`${req.method} ${reqPath} exact route: шлюз закрыл поток без message_stop, рву без досинтеза`);
+      // ── Обрыв посреди вызова инструмента ─────────────────────────────────
+      // 17.11 23:25 AgentRouter закрыл поток при открытом блоке `tool_use`:
+      // ушло 16 КБ, `message_stop` не пришёл, и клиент выбросил вызов
+      // («Partial stream dropped tool call(s) ['delegate_task']»), продолжив
+      // ход как будто всё в порядке.
+      //
+      // 🪤 Соблазнительно отдать in-band `event: error` со словом retry. Так
+      // делать НЕЛЬЗЯ: exact-режим обязан не синтезировать терминальные и
+      // ошибочные события, иначе клиент считает обрезанный `tool_use` целым —
+      // это ловит check-keepalive-exact-routing (aborted === true). Поэтому
+      // единственное, что здесь можно и нужно, — назвать причину в логе, чтобы
+      // потеря действия была видна человеку, а не выглядела тишиной.
+      if (openBlock === 'tool_use') {
+        log(`${req.method} ${reqPath} exact route: обрыв внутри tool_use (отдано ${sentBytes}Б) — вызов инструмента потерян, клиент должен повторить`);
+      } else {
+        log(`${req.method} ${reqPath} exact route: шлюз закрыл поток без message_stop, рву без досинтеза`);
+      }
+      if (openBlock === 'tool_use') ev.note('truncated_tool_use');
       if (!res.writableEnded && !res.destroyed) res.destroy(new Error('exact route truncated stream'));
       return true;
     }

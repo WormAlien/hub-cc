@@ -77,9 +77,9 @@ test('credentials never reach the log', () => {
     }
 });
 
-test('the 400/422 paths go through the body reader', () => {
+test('the 400/422/403 paths go through the body reader', () => {
     // Регресс-замок: без этого вызова причина снова перестанет сохраняться.
-    assert.match(src, /if \(status === 400 \|\| status === 422\) \{\s*readSidecarRejection\(/,
+    assert.match(src, /if \(status === 400 \|\| status === 422 \|\| status === 403\) \{\s*readSidecarRejection\(/,
         'отказ 400 снова логируется без тела');
     assert.match(src, /readSidecarRejection\(upstreamResponse, text => \{/,
         'тело отказа снова не читается');

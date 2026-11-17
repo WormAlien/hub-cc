@@ -810,20 +810,33 @@ function makeA6apiPublicError(code, publicModel, { native = false } = {}) {
     };
 }
 
-function makeRedactedOpenAiError(status, code, publicModel) {
-    const normalizedStatus = status === 400 ? 400 : status === 404 ? 404 : 503;
-    const normalizedCode = normalizedStatus === 400
-        ? 'invalid_request'
-        : normalizedStatus === 404
-            ? 'model_not_found'
-            : (code === 'api_gateway_busy' ? 'api_gateway_busy' : 'upstream_unavailable');
-    const message = normalizedStatus === 400
-        ? 'Invalid request.'
-        : normalizedStatus === 404
-            ? 'Model not found.'
-            : normalizedCode === 'api_gateway_busy'
-                ? 'API Gateway is busy.'
-                : 'Upstream request failed.';
+function makeRedactedOpenAiError(status, code, publicModel, messageOverride) {
+    // content_filtered — отдельный смысл, а не «вышестоящий упал». Без этой ветки
+    // 403 схлопывался в 503 upstream_unavailable, и клиент снова видел безликое
+    // «Upstream request failed.» вместо «провайдер заблокировал содержимое».
+    const normalizedStatus = status === 400 ? 400
+        : status === 404 ? 404
+            : status === 403 && code === 'content_filtered' ? 403
+                : 503;
+    const normalizedCode = normalizedStatus === 403
+        ? 'content_filtered'
+        : normalizedStatus === 400
+            ? 'invalid_request'
+            : normalizedStatus === 404
+                ? 'model_not_found'
+                : (code === 'api_gateway_busy' ? 'api_gateway_busy' : 'upstream_unavailable');
+    const fallbackMessage = normalizedStatus === 403
+        ? 'The provider blocked this request by its content policy.'
+        : normalizedStatus === 400
+            ? 'Invalid request.'
+            : normalizedStatus === 404
+                ? 'Model not found.'
+                : normalizedCode === 'api_gateway_busy'
+                    ? 'API Gateway is busy.'
+                    : 'Upstream request failed.';
+    const message = (typeof messageOverride === 'string' && messageOverride.trim())
+        ? messageOverride.trim()
+        : fallbackMessage;
     const result = {
         error: { message, type: 'api_error', code: normalizedCode },
     };

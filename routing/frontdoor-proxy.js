@@ -663,7 +663,7 @@ function internalMarkerError(res) {
 
 function openAiError(res, status, code, message, publicModel) {
     const projected = publicModel
-        ? makeRedactedOpenAiError(status, code, publicModel)
+        ? makeRedactedOpenAiError(status, code, publicModel, message)
         : { error: { message, type: 'api_error', code } };
     const body = JSON.stringify(projected);
     if (res.headersSent) { try { res.destroy(); } catch { /* ignore */ } return; }
@@ -824,6 +824,33 @@ function statusForSidecar(status) {
     if (status === 400) return { status: 400, code: 'invalid_request' };
     if (status === 404) return { status: 404, code: 'model_not_found' };
     return { status: 503, code: 'upstream_unavailable' };
+}
+
+// ── Блокировка содержимого провайдером ≠ кривой запрос ────────────────────────
+// 17.11 23:30 AgentRouter ответил 400 «This content was flagged for possible
+// cybersecurity risk», и наша цепочка отдала клиенту голое «Invalid request.».
+// Hermes прочитал это как «запрос сломан» и советовал начать новую сессию —
+// совет, который не мог помочь: тело запроса было корректным, отказ шёл по
+// политике вендора. Два РАЗНЫХ смысла нельзя склеивать в один код:
+//   invalid_request     — виноват формат, повторять бессмысленно, менять запрос;
+//   content_filtered    — виноват контент, новый чат тоже не поможет.
+// Поэтому текст вендора проверяем и на 400, и на 403: у разных шлюзов это
+// разные коды, а смысл один.
+const CONTENT_BLOCKED_RE = /content[-\s]?blocked|flagged for possible|content_filter|content policy|safety (?:policy|system)|usage policies|cybersecurity risk/i;
+
+function contentBlockedReason(text) {
+    const raw = typeof text === 'string' ? text : '';
+    if (!CONTENT_BLOCKED_RE.test(raw)) return null;
+    // Наружу — наш короткий текст; подробности вендора (ссылки на их формы,
+    // идентификаторы запросов) клиенту не нужны и не должны утекать.
+    return 'The provider blocked this request by its content policy. '
+        + 'Repeating the same request or starting a new chat will not help: '
+        + 'change the wording or the content of the request.';
+}
+
+function statusForSidecarStatus(status, bodyText) {
+    if (contentBlockedReason(bodyText)) return { status: 403, code: 'content_filtered' };
+    return statusForSidecar(status);
 }
 
 function createDelegatedOpenAiSseRestorer({ publicModel, maxLineBytes = OPENAI_SSE_LINE_MAX_BYTES }) {
@@ -1011,7 +1038,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     let ended = false;
     let settled = false;
     const finishOuter = () => requestCancellationRegistry.finishOuter(handle);
-    const fail = (status = 503, code = 'upstream_unavailable') => {
+    const fail = (status = 503, code = 'upstream_unavailable', message = '') => {
         if (settled) return;
         settled = true;
         const diagnosis = handle.provider === 'a6api'
@@ -1022,7 +1049,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
         finishOuter();
         if (!upstreamResponse.destroyed) upstreamResponse.destroy();
         if (!res.headersSent && !res.destroyed && diagnosis) writePublicDiagnosis(res, diagnosis);
-        else if (!res.headersSent && !res.destroyed) openAiError(res, status, code, '', publicModel);
+        else if (!res.headersSent && !res.destroyed) openAiError(res, status, code, message, publicModel);
         else if (!res.destroyed) res.destroy();
     };
     upstreamResponse.on('error', () => fail());
@@ -1041,7 +1068,6 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     }
     const status = upstreamResponse.statusCode || 503;
     if (status < 200 || status >= 300) {
-        const mapped = statusForSidecar(status);
         // Причина отказа Bifrost в лог: клиент видит обезличенное «Invalid request.», а без
         // этой строки 12.11 невозможно было отличить провал конвертации инструментов от
         // кривого тела запроса — полдня ушло на бисект повторами.
@@ -1050,14 +1076,22 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
         // в 01:18 пришёл 400, а в bifrost.log за этот момент не было НИ ОДНОЙ строки —
         // отказ произошёл до его хендлера, и настоящая причина не сохранилась нигде.
         // Читаем ограниченный хвост тела, чтобы дефект больше не был невидимым.
-        if (status === 400 || status === 422) {
+        if (status === 400 || status === 422 || status === 403) {
             readSidecarRejection(upstreamResponse, text => {
                 log(`sidecar ${status} ${req.method} ${req.url}: ${text || '(пустое тело)'}`);
+                // Блокировка контента — не наша ошибка формата. Отдаём отдельный код
+                // и текст, чтобы клиент не советовал «начать новый чат».
+                const reason = contentBlockedReason(text);
+                if (reason) {
+                    fail(403, 'content_filtered', reason);
+                    return;
+                }
                 fail(mapped.status, mapped.code);
             });
             return;
         }
         log(`sidecar ${status} ${req.method} ${req.url}: ${upstreamResponse.headers['content-type'] || '-'}`);
+        const mapped = statusForSidecar(status);
         fail(mapped.status, mapped.code);
         return;
     }

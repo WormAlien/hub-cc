@@ -198,22 +198,56 @@ fi
 # пакеты ставятся в домашнюю папку, права root не нужны, и claude виден и в новых
 # терминалах, и в DASHBOARD.command (двойной клик → login-shell zsh).
 step "Claude Code"
-if have claude; then
-  ok "claude уже стоит: $(claude --version 2>/dev/null || echo '?')"
+# 🔴 Проверяем НЕ наличие команды, а её ответ. `command -v claude` говорит только,
+# что шим лежит в PATH; сам бинарь при этом может отсутствовать, и человек получает
+#   Error: claude native binary not installed.
+# так и случилось на живом маке 17.11.2026: команда «была», установщик рапортовал
+# «уже стоит», а claude не запускался. Причина — postinstall (install.cjs) не отработал:
+# его глушат --ignore-scripts / некоторые pnpm-конфиги, а платформенную optional-
+# зависимость — --omit=optional.
+claude_ver(){ claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1; }
+CCVER="$(claude_ver)"
+if [ -n "$CCVER" ]; then
+  ok "claude уже стоит: $CCVER"
 else
-  if ! npm install -g @anthropic-ai/claude-code 2>/dev/null; then
-    warn "нет прав на глобальную папку npm ($(npm prefix -g 2>/dev/null)) — переношу её в ~/.npm-global"
-    npm config set prefix "$HOME/.npm-global"
-    mkdir -p "$HOME/.npm-global/bin"
-    export PATH="$HOME/.npm-global/bin:$PATH"
-    if ! grep -qs '.npm-global/bin' "$HOME/.zprofile" 2>/dev/null; then
-      printf '\nexport PATH="$HOME/.npm-global/bin:$PATH"\n' >> "$HOME/.zprofile"
-      ok "~/.npm-global/bin прописан в ~/.zprofile"
+  if have claude; then
+    # Шим есть, бинарь не работает — сначала штатный ремонт, без переустановки.
+    warn "claude есть в PATH, но не отвечает — запускаю postinstall вручную"
+    CC_ROOT="$(npm root -g 2>/dev/null)"
+    if [ -n "$CC_ROOT" ] && [ -f "$CC_ROOT/@anthropic-ai/claude-code/install.cjs" ]; then
+      node "$CC_ROOT/@anthropic-ai/claude-code/install.cjs" || warn "postinstall вернул ошибку"
+    else
+      warn "install.cjs не найден в $CC_ROOT — понадобится переустановка"
     fi
-    npm install -g @anthropic-ai/claude-code || warn "не установился — поставь вручную: npm install -g @anthropic-ai/claude-code"
+    CCVER="$(claude_ver)"
   fi
-  if have claude; then ok "Claude Code установлен: $(claude --version 2>/dev/null || echo '?')"
-  else warn "claude всё ещё не виден в PATH — открой НОВЫЙ терминал и проверь: claude --version"; fi
+  if [ -z "$CCVER" ]; then
+    if ! npm install -g @anthropic-ai/claude-code 2>/dev/null; then
+      warn "нет прав на глобальную папку npm ($(npm prefix -g 2>/dev/null)) — переношу её в ~/.npm-global"
+      npm config set prefix "$HOME/.npm-global"
+      mkdir -p "$HOME/.npm-global/bin"
+      export PATH="$HOME/.npm-global/bin:$PATH"
+      if ! grep -qs '.npm-global/bin' "$HOME/.zprofile" 2>/dev/null; then
+        printf '\nexport PATH="$HOME/.npm-global/bin:$PATH"\n' >> "$HOME/.zprofile"
+        ok "~/.npm-global/bin прописан в ~/.zprofile"
+      fi
+      npm install -g @anthropic-ai/claude-code || warn "не установился — поставь вручную: npm install -g @anthropic-ai/claude-code"
+    fi
+    # npm с allow-scripts не запускает postinstall без одобрения — ровно из-за этого
+    # шим появляется, а бинаря нет. Ставим нативный бинарь сразу после установки.
+    CC_ROOT="$(npm root -g 2>/dev/null)"
+    if [ -n "$CC_ROOT" ] && [ -f "$CC_ROOT/@anthropic-ai/claude-code/install.cjs" ]; then
+      node "$CC_ROOT/@anthropic-ai/claude-code/install.cjs" >/dev/null 2>&1 || true
+    fi
+    CCVER="$(claude_ver)"
+  fi
+  # Итог проверяем по ОТВЕТУ команды: успех установки без запуска — не успех.
+  if [ -n "$CCVER" ]; then ok "Claude Code установлен: $CCVER"
+  else
+    warn "claude всё ещё не запускается."
+    warn "  Починить вручную: node \"\$(npm root -g)/@anthropic-ai/claude-code/install.cjs\""
+    warn "  Или переустановить: npm uninstall -g @anthropic-ai/claude-code && npm cache clean --force && npm install -g @anthropic-ai/claude-code"
+  fi
 fi
 
 # 7. Конфиги из *.example (существующие не перезаписываем)

@@ -334,6 +334,61 @@ function pidAlive(pid) {
 // НАШ процесс или чужой? Раньше start() в обоих случаях говорил «уже поднят, не
 // трогаю», и посторонняя программа на :8200 выглядела как успешно поднятый дашборд.
 // Имя образа не переводится ни на одной локали, в отличие от текста вокруг него.
+//
+// ── Один опрос процессов вместо запуска PowerShell на каждый PID ─────────────
+// 🪤 Живая жалоба владельца 18.11: ярлык ABUSE HUB «лагает и не прогружает список
+// по 10 секунд». Замер: statusVerified() = 9.7 с, из них весь смысл — 9 PID по
+// ~0.5 с на КАЖДЫЙ запуск powershell (Get-CimInstance). Экземпляр PowerShell
+// стоит полсекунды независимо от объёма вопроса, поэтому вопросы «CommandLine
+// вот этого pid» и «ExecutablePath вот этого pid» складывались в секунды.
+// Опрашивать процессы пачкой дешевле, чем по одному: один запуск отдаёт и
+// исполняемый файл, и командную строку сразу для всех нужных PID.
+//
+// Кэш намеренно живёт ОДИН вызов statusVerified (scope): владелец списка сам
+// решает, когда данные устарели. Держать кэш между вызовами нельзя — сразу
+// после запуска сервиса его PID ещё не виден снимку, и «свой» процесс
+// выглядел бы чужим (ровно этот дефект ловит check-mac-lifecycle).
+function createProcessTable() {
+    // pid -> { executable, commandLine } | null (процесса нет)
+    const table = new Map();
+    let loaded = false;
+
+    const load = () => {
+        if (loaded) return;
+        loaded = true;
+        try {
+            const command = 'Get-CimInstance Win32_Process | '
+                + 'Select-Object ProcessId,ExecutablePath,CommandLine | '
+                + 'ConvertTo-Json -Compress';
+            const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command],
+                { encoding: 'utf8', windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+            if (r.status !== 0 || !String(r.stdout || '').trim()) return;
+            const parsed = JSON.parse(String(r.stdout));
+            for (const row of (Array.isArray(parsed) ? parsed : [parsed])) {
+                const pid = Number(row && row.ProcessId);
+                if (!pid) continue;
+                table.set(pid, {
+                    executable: String((row && row.ExecutablePath) || '').trim(),
+                    commandLine: String((row && row.CommandLine) || '').trim(),
+                });
+            }
+        } catch { /* снимок недоступен — все вопросы останутся без ответа */ }
+    };
+
+    return {
+        executable(pid) {
+            load();
+            const row = table.get(Number(pid));
+            return row ? row.executable : '';
+        },
+        commandLine(pid) {
+            load();
+            const row = table.get(Number(pid));
+            return row ? row.commandLine : '';
+        },
+    };
+}
+
 function pidImage(pid) {
     try {
         if (IS_WIN) {
@@ -980,13 +1035,14 @@ function statusRows(items, map = listeners(), activePort = activeUpstreamPort(),
 async function statusRowsVerified(items, map = listeners(), activePort = activeUpstreamPort(), role = 'service', {
     verifyServiceIdentity: verifyIdentity = verifyServiceIdentity,
     verifyProcessOwnership: verifyOwnership = verifyProcessOwnership,
+    adapters = {},
 } = {}) {
     const rows = statusRows(items, map, activePort, role);
     await Promise.all(rows.map(async (row, index) => {
         const svc = items[index];
         if (!svc || !row.pids.length) return;
         const verifier = svc.executable ? verifyIdentity : verifyOwnership;
-        const checks = await Promise.all(row.pids.map(pid => verifier(svc, pid)));
+        const checks = await Promise.all(row.pids.map(pid => verifier(svc, pid, adapters)));
         const verified = checks.length === 1 && checks[0] === true;
         row.up = verified;
         row.foreign = !verified;
@@ -1006,13 +1062,23 @@ async function statusVerified({
 } = {}) {
     const map = getListeners();
     const activePort = getActivePort();
+    // Один снимок процессов на весь список: без него каждый PID стоил отдельного
+    // запуска PowerShell (~0.5 с), и statusVerified уходил в 10 секунд.
+    const table = process.platform === 'win32' ? createProcessTable() : null;
+    const adapters = table ? {
+        pidImage: pid => path.basename(table.executable(pid)) || pidImage(pid),
+        pidExecutable: pid => table.executable(pid),
+        pidArguments: pid => table.commandLine(pid),
+    } : {};
     return [
         ...await statusRowsVerified(services, map, activePort, 'service', {
             verifyServiceIdentity: verifyIdentity,
             verifyProcessOwnership: verifyOwnership,
+            adapters,
         }),
         ...await statusRowsVerified(childServiceDescriptors(childItems), map, activePort, 'child', {
             verifyProcessOwnership: verifyOwnership,
+            adapters,
         }),
         ...statusRows(customItems, map, activePort, 'child'),
     ];

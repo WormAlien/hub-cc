@@ -41,6 +41,30 @@ test('OAuth callback network failure never replays the one-time code', async () 
     assert.equal(auth.error.code, 'oauth_transport_failed');
 });
 
+test('classic New API OAuth callback captures flat identity without confusing an API key with bearer auth', async () => {
+    const { watchPanelAuth } = require(runtimePath);
+    let handler;
+    const auth = await watchPanelAuth({ route: async (_pattern, cb) => { handler = cb; } },
+        { origin: 'https://panel.example', callbackPath: '/api/oauth/github' });
+    await handler({ request: () => ({ url: () => 'https://panel.example/api/oauth/github?code=fixture' }),
+        fetch: async () => ({ text: async () => JSON.stringify({ success: true, data: { id: 41, username: 'alice' } }), status: () => 200 }),
+        fulfill: async () => {}, abort: async () => {} });
+    assert.equal(auth.user?.id, 41);
+    assert.equal(auth.user?.source, 'oauth');
+    assert.equal(auth.bearer, '');
+});
+
+test('ambiguous active tokens with the same name are refused before reveal or create', async () => {
+    const { ensurePanelKey } = require(runtimePath);
+    let writes = 0;
+    const client = async (_route, method = 'GET') => {
+        if (method !== 'GET') writes++;
+        return { items: [{ id: 7, name: '1', status: 1 }, { id: 8, name: '1', status: 1 }] };
+    };
+    await assert.rejects(ensurePanelKey(client, { name: '1' }), /token_name_ambiguous/);
+    assert.equal(writes, 0);
+});
+
 test('only the exact existing row is updated and read back', async () => {
     const { saveSelectedKey } = require(runtimePath);
     const rows = [{ id: 'fg_1', email: 'alice', api_key: 'no-key' }, { id: 'fg_2', email: 'bob', api_key: 'untouched' }];
@@ -56,12 +80,89 @@ test('only the exact existing row is updated and read back', async () => {
     await assert.rejects(saveSelectedKey({ id: 'missing', key: 'fixture-generated-key', p: 'fg', readPool: () => rows, request }), /pool_target_missing/);
 });
 
+test('GitHub TOTP recovery works on an existing two-factor page even without a stored password', async () => {
+    const { recoverGithubLogin } = require(runtimePath);
+    let received;
+    const result = await recoverGithubLogin({ url: () => 'https://github.com/sessions/two-factor/app' },
+        { login: 'alice', totpSecret: 'fixture-totp' }, {
+            fillLogin: async (_page, account, opts) => { received = { account, opts }; return { ok: true }; },
+            sessionProbe: async () => true, log: () => {},
+        });
+    assert.equal(result.ok, true);
+    assert.equal(received.account.totpSecret, 'fixture-totp');
+    assert.equal(received.account.password, undefined);
+    assert.equal(typeof received.opts.sessionProbe, 'function');
+});
+
+test('TOTP-only recovery waits for the exact GitHub 2FA page instead of failing the login page', () => {
+    const { canRecoverGithubLogin } = require(runtimePath);
+    assert.equal(canRecoverGithubLogin('https://github.com/login', { password: 'fixture-password' }), true);
+    assert.equal(canRecoverGithubLogin('https://github.com/login', { totpSecret: 'fixture-totp' }), false);
+    assert.equal(canRecoverGithubLogin('https://github.com/sessions/two-factor/app', { totpSecret: 'fixture-totp' }), true);
+    assert.equal(canRecoverGithubLogin('https://github.com/login', {}), false);
+});
+
+test('New API GitHub onboarding without a referral reaches launch using common defaults', async () => {
+    const { runProvider } = require(runtimePath);
+    let launches = 0;
+    await assert.rejects(runProvider({ provider: 'examplegw', moduleDir: '/fixture/examplegw', label: 'acct_chosen',
+        config: { full: 'examplegw', p: 'zz', HOST: 'example.invalid', github: true, ref: false,
+            onboarding: { kind: 'newapi-github' } },
+        readPool: () => [{ id: 'chosen', ghId: 'alice' }], account: { id: 'alice', login: 'alice' },
+        launch: async () => { launches++; throw new Error('fixture-launch-marker'); },
+    }), /fixture-launch-marker/);
+    assert.equal(launches, 1);
+});
+
+test('referral bootstrap retries once when the panel stores aff after the first navigation', async () => {
+    const { persistReferral } = require(runtimePath);
+    let visits = 0, reads = 0;
+    const page = {
+        goto: async url => { assert.equal(url, 'https://freegg.app/sign-up?aff=nVhs'); visits++; },
+        waitForTimeout: async () => {},
+        evaluate: async () => (++reads === 1 ? null : 'nVhs'),
+    };
+    assert.equal(await persistReferral(page, 'https://freegg.app/sign-up?aff=nVhs'), 'nVhs');
+    assert.equal(visits, 2, 'the same referral is revisited once before failing');
+});
+
 test('runtime validates selected id and bound GitHub before opening a browser', async () => {
     const { runProvider } = require(runtimePath);
     let launches = 0;
     await assert.rejects(runProvider({ provider: 'freegg', moduleDir: '/fixture/freegg', label: '../escape',
         config: { full: 'freegg' }, launch: async () => { launches++; } }), /profile_label_invalid/);
     assert.equal(launches, 0);
+});
+
+test('existing classic token list full key is reused without unsupported reveal', async () => {
+    const { ensurePanelKey } = require(runtimePath);
+    let calls = 0;
+    const key = await ensurePanelKey(async () => {
+        calls++;
+        return [{ id: 7, name: '1', status: 1, key: 'fixture-classic-full-key' }];
+    }, { name: '1', keyPrefix: 'sk-' });
+    assert.equal(key, 'sk-' + 'fixture-classic-full-key');
+    assert.equal(calls, 1, 'a full key does not need a reveal API');
+});
+
+test('real common GitHub login completes a TOTP-only page with explicit opt-in', async () => {
+    const { recoverGithubLogin } = require(runtimePath);
+    let filled = false, submits = 0;
+    const page = {
+        url: () => 'https://github.com/sessions/two-factor/app',
+        evaluate: async () => ({ text: '', iframes: [] }),
+        waitForTimeout: async () => {},
+        locator: selector => ({ first: () => ({
+            count: async () => selector === '#app_totp' && !filled ? 1 : 0,
+            isVisible: async () => selector === '#app_totp' && !filled,
+            fill: async value => { assert.match(value, /^\d{6}$/); filled = true; },
+            click: async () => { submits++; },
+        }) }),
+    };
+    const result = await recoverGithubLogin(page, { login: 'alice', totpSecret: 'JBSWY3DPEHPK3PXP' },
+        { sessionProbe: async () => filled, log: () => {} });
+    assert.equal(result.ok, true);
+    assert.equal(submits, 0, 'auto-submitted TOTP form is not submitted twice');
 });
 
 test('wrong GitHub identity is rejected before granting OAuth consent', async () => {

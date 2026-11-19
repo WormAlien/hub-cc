@@ -30,6 +30,136 @@ function fixture(t) {
     const snapshot = () => { const result = {}; const walk = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else result[path.relative(root, p)] = fs.readFileSync(p).toString('base64'); } }; walk(root); return result; };
     return { root, gw, config, spec, write, json, save, run, snapshot, wrapper: path.join(root, 'examplegw', 'open-session.js') };
 }
+test('omitted onboarding fields use safe defaults without modifying source config', t => {
+    const f = fixture(t); const tool = require('./add-gateway.js');
+    f.gw.onboarding = { kind: 'newapi-github' }; f.save();
+    const before = structuredClone(f.gw);
+    Object.freeze(f.gw.onboarding); Object.freeze(f.gw);
+    assert.deepEqual(tool.validateOnboarding(f.gw), {
+        kind: 'newapi-github', consolePath: '/console/token', callbackPath: '/api/oauth/github', tokenName: '1',
+    });
+    assert.deepEqual(f.gw, before, 'defaults are ephemeral, not a config migration');
+    const configBefore = fs.readFileSync(path.join(f.root, 'tools/gateways.config.json'));
+    const drySnapshot = f.snapshot();
+    for (const command of ['plan', 'apply']) {
+        const result = f.run(command, 'examplegw');
+        assert.equal(result.status, 0, result.output);
+        assert.deepEqual(f.snapshot(), drySnapshot);
+    }
+    const result = f.run('apply', 'examplegw', '--write');
+    assert.equal(result.status, 0, result.output);
+    assert.equal(fs.readFileSync(f.wrapper, 'utf8'), tool.renderOnboardingWrapper(f.gw));
+    assert.equal(f.run('check', 'examplegw').status, 0);
+    assert.deepEqual(fs.readFileSync(path.join(f.root, 'tools/gateways.config.json')), configBefore);
+});
+test('partial defaults preserve literal explicit values and disabled referral does not require a code', t => {
+    const f = fixture(t); const tool = require('./add-gateway.js');
+    for (const ref of [false, undefined]) {
+        const gw = { ...f.gw, ref, REF: undefined, onboarding: { kind: 'newapi-github', tokenName: '2' } };
+        Object.freeze(gw.onboarding); Object.freeze(gw);
+        assert.deepEqual(tool.validateOnboarding(gw), {
+            kind: 'newapi-github', consolePath: '/console/token', callbackPath: '/api/oauth/github', tokenName: '2',
+        });
+    }
+    assert.deepEqual(tool.validateOnboarding({ ...f.gw, onboarding: {
+        kind: 'newapi-github', consolePath: '/custom/token', callbackPath: '/api/custom/github',
+    } }), { kind: 'newapi-github', consolePath: '/custom/token', callbackPath: '/api/custom/github', tokenName: '1' });
+    for (const key of ['consolePath', 'callbackPath', 'tokenName']) {
+        for (const value of ['', null, false, 1]) {
+            assert.throws(() => tool.validateOnboarding({ ...f.gw, onboarding: { kind: 'newapi-github', [key]: value } }),
+                /Invalid generic onboarding/, 'only omitted fields receive defaults');
+        }
+    }
+    for (const REF of [undefined, '', ' bad ', 'fixture-secret?']) {
+        assert.throws(() => tool.validateOnboarding({ ...f.gw, ref: true, REF }), /Invalid generic onboarding/);
+    }
+});
+test('verified GitHub onboarding supports a provider without referral', t => {
+    const f = fixture(t); const tool = require('./add-gateway.js');
+    f.gw.ref = false; delete f.gw.REF; f.gw.onboarding = { kind: 'newapi-github' }; f.save();
+    const configBefore = fs.readFileSync(path.join(f.root, 'tools/gateways.config.json'));
+    const result = f.run('apply', 'examplegw', '--write');
+    assert.equal(result.status, 0, result.output);
+    assert.equal(fs.readFileSync(f.wrapper, 'utf8'), tool.renderOnboardingWrapper(f.gw));
+    assert.equal(f.run('check', 'examplegw').status, 0);
+    assert.equal(f.run('plan', 'examplegw').status, 0);
+    f.json('routing/examplegw-sessions.json', [{ id: 'chosen', ghId: 'gh-selected' }]);
+    const before = f.snapshot();
+    const provision = f.run('provision', 'examplegw', '--id', 'chosen');
+    assert.equal(provision.status, 0, provision.output);
+    assert.deepEqual(f.snapshot(), before, 'ref-free provision dry-run is inert');
+    assert.deepEqual(fs.readFileSync(path.join(f.root, 'tools/gateways.config.json')), configBefore);
+});
+test('generated GitHub picker metadata opts into automatic onboarding only for verified dialect', t => {
+    const f = fixture(t);
+    // Reuse the production registry point/rule instead of adding a second registry.
+    const productionSpec = JSON.parse(fs.readFileSync(path.join(__dirname, 'gateways.spec.json')));
+    f.spec.files.frontend = 'routing/proxy-dashboard.html';
+    f.spec.points.push(productionSpec.points.find(p => p.id === '2.15'));
+    f.spec.inserts['2.15'] = productionSpec.inserts['2.15'];
+    Object.assign(f.config.kktoken, { NAME: 'Reference', HOST: 'reference.invalid' });
+    const sourceLine = "  kk: { label: 'Reference', host: 'reference.invalid', reload: () => loadKkSessions(), list: () => state.kktoken, open: id => kkOpenLk(id) },";
+    f.write('routing/proxy-dashboard.html', 'const NEWAPI_SEED_PROV = {\n' + sourceLine + '\n};\n');
+    f.save();
+    const dryBefore = f.snapshot(); const dry = f.run('apply', 'examplegw');
+    assert.equal(dry.status, 0, dry.output);
+    assert.match(dry.output, /autoOnboarding: true/);
+    assert.deepEqual(f.snapshot(), dryBefore);
+    const applied = f.run('apply', 'examplegw', '--write');
+    assert.equal(applied.status, 0, applied.output);
+    const frontend = fs.readFileSync(path.join(f.root, 'routing/proxy-dashboard.html'), 'utf8');
+    assert.equal(frontend.split('\n').filter(l => l.includes('const NEWAPI_SEED_PROV')).length, 1);
+    assert.equal(frontend.split('\n').filter(l => l.includes('zz: {')).length, 1);
+    assert.match(frontend.split('\n').find(l => l.includes('zz: {')), /autoOnboarding: true/);
+    assert.ok(frontend.includes(sourceLine), 'source metadata remains byte-for-byte unchanged');
+    assert.equal(f.run('check', 'examplegw').status, 0);
+    const repeat = f.snapshot();
+    assert.equal(f.run('apply', 'examplegw', '--write').status, 0);
+    assert.deepEqual(f.snapshot(), repeat);
+});
+test('generated opted-in session handler accepts provision while legacy generation preserves its modes', t => {
+    for (const optedIn of [true, false]) {
+        const f = fixture(t);
+        if (!optedIn) delete f.gw.onboarding;
+        f.spec.files.backend = 'routing/transparent-proxy.js';
+        f.spec.points.push({ id: '1.17', title: 'Session open', file: 'backend', kind: 'must', expect: 'function handle%x%SessionOpen(' });
+        f.spec.inserts['1.17'] = { span: 'braces' };
+        f.write('routing/transparent-proxy.js', `function handleKkSessionOpen(body) {
+    const wantMode = body.mode;
+    const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode : 'register';
+    return mode;
+}
+`);
+        f.save();
+        const result = f.run('apply', 'examplegw', '--write');
+        assert.equal(result.status, 0, result.output);
+        const source = fs.readFileSync(path.join(f.root, 'routing/transparent-proxy.js'), 'utf8');
+        const generated = new Function(source + ';return handleZzSessionOpen;')();
+        assert.equal(generated({ mode: 'provision' }), optedIn ? 'provision' : 'register');
+        assert.equal(generated({ mode: 'console' }), 'console');
+        assert.equal(generated({ mode: 'register' }), 'register');
+    }
+});
+
+test('legacy GitHub picker metadata does not inherit a source onboarding opt-in', t => {
+    const f = fixture(t);
+    delete f.gw.onboarding;
+    const productionSpec = JSON.parse(fs.readFileSync(path.join(__dirname, 'gateways.spec.json')));
+    f.spec.files.frontend = 'routing/proxy-dashboard.html';
+    f.spec.points.push(productionSpec.points.find(p => p.id === '2.15'));
+    f.spec.inserts['2.15'] = productionSpec.inserts['2.15'];
+    Object.assign(f.config.kktoken, { NAME: 'Reference', HOST: 'reference.invalid' });
+    const sourceLine = "  kk: { label: 'Reference', autoOnboarding: true, host: 'reference.invalid' },";
+    f.write('routing/proxy-dashboard.html', 'const NEWAPI_SEED_PROV = {\n' + sourceLine + '\n};\n');
+    f.save();
+    const result = f.run('apply', 'examplegw', '--write');
+    assert.equal(result.status, 0, result.output);
+    const frontend = fs.readFileSync(path.join(f.root, 'routing/proxy-dashboard.html'), 'utf8');
+    assert.ok(frontend.includes(sourceLine), 'source opt-in is unchanged');
+    assert.equal(frontend.split('\n').find(l => l.includes('zz: {')),
+        "  zz: { label: 'Example', host: 'example.invalid' },", 'legacy target has no autoOnboarding field');
+    assert.equal(fs.existsSync(f.wrapper), false);
+});
 test('explicit verified dialect generates a generic wrapper without cloning provider code; dry-run is inert', t => {
     const f = fixture(t);
     f.write('kktoken/open-session.js', "throw new Error('arbitrary site-specific clone forbidden');\n");
@@ -85,7 +215,7 @@ test('without explicit onboarding old gateway scripts and manual creation behavi
 test('explicit dialect validates paths, identifiers, flags and rejects secret-bearing config without disclosing it', t => {
     const cases = [
         gw => { gw.onboarding.kind = 'custom'; },
-        gw => { gw.github = false; }, gw => { gw.ref = false; }, gw => { gw.customPanel = true; },
+        gw => { gw.github = false; }, gw => { gw.ref = 'false'; }, gw => { gw.customPanel = true; },
         gw => { gw.full = "examplegw'; throw new Error('injected')"; },
         gw => { gw.FOLDER = '../outside'; }, gw => { gw.HOST = 'user:fixture-secret@example.invalid'; },
         gw => { gw.onboarding.consolePath = 'https://outside.invalid/console/token'; },

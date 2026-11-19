@@ -160,7 +160,9 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     const left = typeof opts.secondsLeft === 'function' ? opts.secondsLeft : secondsLeft;
     const sleep = (ms) => page.waitForTimeout(opts.sleepMs || ms);
 
-    if (!login || !password) {
+    const totpOnly = opts.allowTotpOnly === true && secret
+        && /^https:\/\/github\.com\/sessions\/two-factor\/app(?:[?#]|$)/.test(page.url());
+    if (!login || !password && !totpOnly) {
         return { ok: false, wall: null, why: 'в записи нет логина или пароля - заполнять нечем' };
     }
 

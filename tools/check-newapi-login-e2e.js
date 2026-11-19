@@ -1,0 +1,134 @@
+'use strict';
+// Real Chromium + production runtime/GitHub-login with synthetic credentials only.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const http = require('node:http');
+const { once } = require('node:events');
+const { chromium } = require('playwright');
+const { runProvider } = require('../routing/lib/newapi-onboarding');
+const { totpCode } = require('../routing/lib/totp');
+const scratch = process.env.HERMES_TEST_SCRATCH || 'C:/Users/WormAlien/AppData/Local/hermes/cache/scratch';
+
+test('selected GitHub password and TOTP flow creates classic named key once and reuses it', async () => {
+    const root = fs.mkdtempSync(path.join(scratch, 'newapi-login-e2e-'));
+    const moduleDir = path.join(root, 'fxqidian');
+    fs.mkdirSync(moduleDir, { recursive: true });
+    const rows = [{ id: 'fx_fixture', ghId: 'gh_fixture', api_key: 'no-key-fixture', active: false },
+        { id: 'untouched', ghId: 'other', api_key: 'fixture-other', active: true }];
+    const account = { id: 'gh_fixture', login: 'alice', password: 'fixture-password', totpSecret: 'JBSWY3DPEHPK3PXP' };
+    let tokenCreated = false, creates = 0, writes = 0, loginPosts = 0, totpPosts = 0, consents = 0;
+    const logs = [];
+    const api = http.createServer((req, res) => {
+        let raw = '';
+        req.on('data', chunk => { raw += chunk; });
+        req.on('end', () => {
+            res.setHeader('content-type', 'application/json');
+            if (req.url === '/callback') return res.end(JSON.stringify({ success: true, data: { id: 41, username: 'alice' } }));
+            assert.equal(req.url, '/__switch/api/fx/key');
+            const body = JSON.parse(raw);
+            assert.equal(body.id, 'fx_fixture');
+            rows[0].api_key = body.api_key;
+            writes++;
+            res.end('{"ok":true}');
+        });
+    });
+    api.listen(0, '127.0.0.1');
+    await once(api, 'listening');
+    const hubOrigin = `http://127.0.0.1:${api.address().port}`;
+    const contexts = [];
+    const launch = async (dir, options) => {
+        const context = await chromium.launchPersistentContext(dir, { ...options, headless: true, channel: undefined });
+        contexts.push(context);
+        // Authentication callback still executes watchPanelAuth/route.fetch, but the
+        // fixture transport targets a local server instead of the real OAuth host.
+        const originalRoute = context.route.bind(context);
+        context.route = (matcher, handler) => {
+            if (typeof matcher !== 'function') return originalRoute(matcher, handler);
+            return originalRoute(matcher, route => handler({
+                request: () => route.request(),
+                fetch: options => route.fetch({ ...options, url: hubOrigin + '/callback' }),
+                fulfill: options => route.fulfill(options),
+                abort: () => route.abort(),
+            }));
+        };
+        await originalRoute('**/*', async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            if (url.hostname === 'github.com') {
+                if (url.pathname === '/login') return route.fulfill({ contentType: 'text/html', body:
+                    '<form action="/sessions" method="post"><input id="login_field" name="login"><input id="password" name="password" type="password"><input name="commit" type="submit" value="Sign in"></form>' });
+                if (url.pathname === '/sessions') {
+                    const form = new URLSearchParams(req.postData());
+                    assert.equal(form.get('login'), account.login);
+                    assert.equal(form.get('password'), account.password);
+                    loginPosts++;
+                    return route.fulfill({ contentType: 'text/html', body: '<script>location.href="https://github.com/sessions/two-factor/app"</script>' });
+                }
+                if (url.pathname === '/sessions/two-factor/app') return route.fulfill({ contentType: 'text/html', body:
+                    '<form id="otp" action="/sessions/two-factor" method="post"><input id="app_totp" name="app_otp" oninput="if(this.value.length===6)document.getElementById(\'otp\').submit()"></form>' });
+                if (url.pathname === '/sessions/two-factor') {
+                    const submitted = new URLSearchParams(req.postData()).get('app_otp');
+                    assert.equal(submitted, totpCode(account.totpSecret));
+                    totpPosts++;
+                    await context.addCookies([{ name: 'dotcom_user', value: 'alice', domain: '.github.com', path: '/' },
+                        { name: 'user_session', value: 'fixture-session', domain: '.github.com', path: '/' }]);
+                    return route.fulfill({ contentType: 'text/html', body: '<script>location.href="https://github.com/login/oauth/authorize"</script>' });
+                }
+                if (url.pathname === '/login/oauth/authorize') return route.fulfill({ contentType: 'text/html', body:
+                    '<button name="authorize" value="1" onclick="location.href=\'https://fxqidian.de5.net/oauth/github?code=fixture\'">Authorize</button>' });
+                throw new Error('unexpected GitHub fixture route ' + url.pathname);
+            }
+            if (url.hostname !== 'fxqidian.de5.net') return route.abort();
+            if (url.pathname === '/sign-up') return route.fulfill({ contentType: 'text/html', body:
+                '<script>localStorage.setItem("aff","9BEo")</script><button onclick="location.href=\'https://github.com/login\'">Continue with GitHub</button>' });
+            if (url.pathname === '/oauth/github') {
+                consents++;
+                await context.addCookies([{ name: 'session', value: 'fixture-classic-session', domain: 'fxqidian.de5.net', path: '/' }]);
+                return route.fulfill({ contentType: 'text/html', body:
+                    '<script>fetch("/api/oauth/github?code=fixture").then(r=>r.json()).then(j=>{localStorage.setItem("user",JSON.stringify(j.data));location.href="/keys"})</script>' });
+            }
+            if (url.pathname === '/keys') return route.fulfill({ contentType: 'text/html', body: 'Token console' });
+            let data;
+            if (url.pathname === '/api/user/self') {
+                if (req.headers()['new-api-user'] !== '41') return route.fulfill({ status: 401, contentType: 'application/json', body: '{"success":false}' });
+                data = { id: 41, username: 'alice' };
+            } else if (url.pathname === '/api/token/' && req.method() === 'GET') {
+                assert.equal(req.headers()['new-api-user'], '41');
+                data = tokenCreated ? [{ id: 7, name: '1', status: 1, key: 'fixture-classic-full-key' }] : [];
+            } else if (url.pathname === '/api/token/' && req.method() === 'POST') {
+                assert.equal(req.postDataJSON().name, '1');
+                tokenCreated = true; creates++;
+            } else throw new Error('unexpected vendor fixture route ' + url.pathname);
+            return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
+        });
+        return context;
+    };
+    try {
+        const opts = { provider: 'fxqidian', moduleDir, label: 'acct_fx_fixture', mode: 'provision',
+            config: { full: 'fxqidian', p: 'fx', HOST: 'fxqidian.de5.net', github: true, ref: true,
+                onboarding: { kind: 'newapi-github', consolePath: '/keys', callbackPath: '/api/oauth/github', tokenName: '1' } },
+            readPool: () => rows, account, launch, hubOrigin, timeoutMs: 30000, log: line => logs.push(line) };
+        assert.equal((await runProvider(opts)).ok, true);
+        assert.equal(creates, 1); assert.equal(writes, 1);
+        assert.equal(loginPosts, 1); assert.equal(totpPosts, 1); assert.equal(consents, 1);
+        assert.equal(rows[0].api_key, 'sk-' + 'fixture-classic-full-key');
+        assert.equal(rows[0].active, false); assert.equal(rows[1].api_key, 'fixture-other');
+        assert.equal((await runProvider(opts)).ok, true);
+        assert.equal(creates, 1, 'repeat does not create a duplicate key');
+        assert.equal(loginPosts, 1, 'repeat preserves existing GitHub session');
+        assert.equal(totpPosts, 1); assert.equal(consents, 1);
+        assert.ok(!logs.join('\n').includes(account.password));
+        assert.ok(!logs.join('\n').includes(account.totpSecret));
+        assert.ok(!logs.join('\n').includes('fixture-classic-full-key'));
+    } catch (error) {
+        console.error('E2E_FAILURE', error.code || error.message, logs);
+        throw error;
+    } finally {
+        for (const context of contexts) await Promise.race([context.close().catch(() => {}),
+            new Promise(resolve => setTimeout(resolve, 3000))]);
+        api.closeAllConnections();
+        await new Promise(resolve => api.close(resolve));
+    }
+});

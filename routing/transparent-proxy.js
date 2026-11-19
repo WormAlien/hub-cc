@@ -20715,7 +20715,7 @@ async function handleFgSessionOpen(req, res) {
         // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
         // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
         const wantMode = String(body.mode || '').trim();
-        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+        const mode = (wantMode === 'console' || wantMode === 'register' || wantMode === 'provision') ? wantMode
             : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`freegg session/open [${label}]: ${String(d).trim()}`));
@@ -21194,7 +21194,7 @@ async function handleFxSessionOpen(req, res) {
         // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
         // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
         const wantMode = String(body.mode || '').trim();
-        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+        const mode = (wantMode === 'console' || wantMode === 'register' || wantMode === 'provision') ? wantMode
             : isRealKey(target.api_key) ? 'console' : 'register';
         const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
         proc.stdout.on('data', d => logLine(`fxqidian session/open [${label}]: ${String(d).trim()}`));

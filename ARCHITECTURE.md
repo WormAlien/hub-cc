@@ -38,7 +38,11 @@
 
 ## Сервисы и порты
 
-### FreeGG (16.11.2026, live onboarding ещё не принят)
+### New API selected-account onboarding (19.11.2026, local source acceptance)
+
+Fxqidian now uses the shared `newapi-onboarding.js` wrapper and explicit `/keys` console config. Its existing GitHub manager metadata opts into add-github -> session/open provision -> exact key readback, without a credentials popup or activating the account. The common runtime supports classic flat OAuth identity/list keys and JWT/reveal, uses the existing GitHub password/TOTP module, and rejects ambiguous tokens. Optional referrals/default paths are supported without migrating other existing provider configs. New explicitly supported generator targets receive the same wrapper, metadata and provision mode. Real Chromium local password/TOTP/token repeat and desktop/mobile manager fixtures pass; live fxqidian identity selection and production restart remain unperformed. Canon: `ABUSE HUB - New API onboarding - Surface Canon`.
+
+### FreeGG (19.11.2026, source fix принят; live Mac rollout не выполнен)
 
 Вкладка `freegg`, prefix `fg`: keepalive `20184` -> `freegg-proxy.js` на `20185` ->
 `freegg.app/v1/responses`. Messages/Chat на площадке дают 410; live Responses и tool
@@ -55,6 +59,13 @@ CAPTCHA/device checks требуют человека, 429 останавлив�
 Ключ сохранён отдельно `fg_impeccableso`, inactive; exact self balance $100. Generic key
 reuse/reveal принят без дублей. Full unattended OAuth и production rollout ещё не приняты.
 Канон и ограничения: Obsidian `FreeGG - вкладка и GitHub onboarding`.
+
+Журнал живого dashboard показал корень first-run сбоя: первый процесс завершался с
+`referral_not_saved`, второй заход по той же рефке проходил. Общий runtime теперь делает один
+ограниченный повтор bootstrap. FreeGG явно включён в manager `autoOnboarding`, а `fg/session/open`
+сохраняет `mode: provision`: выбор GitHub создаёт одну inactive запись, получает ключ и принимает
+его readback без ручного второго клика и credentials popup. Source TDD/UI/Mac lifecycle зелёные;
+доставка другу на Mac и production restart остаются отдельной приёмкой.
 
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
@@ -460,11 +471,13 @@ Canonical publication state:
 OpenAI path:
 
 - `GET /openai/v1/models` is served directly from the manifest and does not depend on Bifrost;
+- Published model rows expose `context_length` from `contextTokens` and `max_output_tokens` from `outputTokens`. Hermes can discover the gateway's exact per-model bounds instead of falling back to its family catalog; these are metadata, not a new request-token enforcement layer. `check-api-gateway-hermes-metadata.js` runs the real Front Door on a dynamic port; `HERMES_METADATA_PYTHON` optionally exercises an installed Hermes resolver/compressor with an isolated home, stale cache and changed manifest. Existing runtime objects may keep their already-resolved window until re-resolution;
 - `POST /openai/v1/chat/completions` delegates protocol conversion to checksum-pinned Bifrost v2.5.0 on `127.0.0.1:20135`;
 - front-door authenticates each Bifrost callback with a one-use 256-bit capability bound to the exact canonical model;
 - `x-route-final` plus `x-route-exact` suppress every tier/catalog/model/provider substitution, hedge and extra generation while same-provider key/account rotation remains allowed;
 - every public JSON/SSE object restores the immutable canonical ID; truncated streams never receive synthetic success;
 - the outer leg creates no usage row. The internal Messages leg creates the single usage row;
+- Custom converters publish zero initial input for strict or authenticated exact streams: pinned Bifrost otherwise retains the preliminary estimate instead of final input. Final `message_delta` carries the provider-normalized input/output/cache buckets; non-exact legacy start estimates are unchanged. Regression: `node tools/check-bifrost-converter-usage.js` uses the real converter, usage tap and pinned binary on dynamic localhost ports;
 - Windows cancellation is correlated through the callback registry and destroys the paid backend socket even when Bifrost does not propagate disconnects itself.
 
 Local trust and lifecycle:

@@ -23,7 +23,9 @@ async function ensurePanelKey(client, { name, keyPrefix = '' }) {
     const data = await client('/api/token/?p=0&size=100');
     const items = Array.isArray(data) ? data : data?.items || data?.records;
     if (!Array.isArray(items)) throw safeFailure('token_list_invalid');
-    let token = items.find(t => t.name === name && Number(t.status) === 1);
+    const active = items.filter(t => t.name === name && Number(t.status) === 1);
+    if (active.length > 1) throw safeFailure('token_name_ambiguous');
+    let token = active[0];
     if (!token) {
         await client('/api/token/', 'POST', { name, expired_time: -1, remain_quota: 0, unlimited_quota: true,
             model_limits_enabled: false, model_limits: '', allow_ips: '', allow_user_quota_query: false,
@@ -35,6 +37,9 @@ async function ensurePanelKey(client, { name, keyPrefix = '' }) {
         token = matches[0];
     }
     if (!Number.isSafeInteger(Number(token.id)) || Number(token.id) < 1) throw safeFailure('token_identity_invalid');
+    if (typeof token.key === 'string' && token.key.length >= 16 && !token.key.includes('*') && !token.key.includes('…')) {
+        return keyPrefix && !token.key.startsWith(keyPrefix) ? keyPrefix + token.key : token.key;
+    }
     const revealed = await client(`/api/token/${token.id}/key`, 'POST', {});
     const raw = typeof revealed === 'string' ? revealed : revealed?.key;
     if (typeof raw !== 'string' || raw.length < 16 || raw.includes('*')) throw safeFailure('token_reveal_failed');
@@ -51,7 +56,10 @@ async function watchPanelAuth(context, { origin, callbackPath }) {
             if (response.status() === 200 && json?.success === true) {
                 const data = json.data || {};
                 auth.bearer = data.access_token || auth.bearer;
-                if (data.user && new URL(route.request().url()).pathname === callbackPath) auth.user = { ...data.user, source: 'oauth' };
+                if (new URL(route.request().url()).pathname === callbackPath) {
+                    const user = data.user || (Number(data.id) > 0 ? data : null);
+                    if (user) auth.user = { ...user, source: 'oauth' };
+                }
                 if (typeof data.sk === 'string' && data.sk.length >= 16 && !data.sk.includes('*')) auth.key = data.sk;
             } else if (new URL(route.request().url()).pathname === callbackPath) {
                 auth.error = safeFailure('oauth_rejected', response.status());
@@ -103,15 +111,40 @@ async function fetchJson(url, options) {
         return { status: response.status, json: await response.json().catch(() => null) };
     } catch { throw safeFailure('request_transport_failed'); }
 }
+function canRecoverGithubLogin(url, account) {
+    const current = new URL(url);
+    if (current.hostname !== 'github.com' || current.protocol !== 'https:') return false;
+    return !!account.password || current.pathname === '/sessions/two-factor/app' && !!account.totpSecret;
+}
+async function recoverGithubLogin(page, account, { fillLogin, sessionProbe, log } = {}) {
+    const url = new URL(page.url());
+    if (url.hostname !== 'github.com' || url.protocol !== 'https:') throw safeFailure('github_origin_rejected');
+    const totpOnly = url.pathname === '/sessions/two-factor/app' && !!account.totpSecret;
+    if (!account.password && !totpOnly) return { ok: false, wall: 'credentials_missing' };
+    return (fillLogin || require('./gh-login').fillGithubLogin)(page, account,
+        { log, sessionProbe, allowTotpOnly: totpOnly });
+}
+async function persistReferral(page, referral) {
+    const expected = new URL(referral).searchParams.get('aff');
+    for (let attempt = 0; attempt < 2; attempt++) {
+        await page.goto(referral, { waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1200);
+        const actual = await page.evaluate(() => localStorage.getItem('aff'));
+        if (actual === expected) return actual;
+    }
+    throw safeFailure('referral_not_saved');
+}
 async function runProvider({ provider, moduleDir, label, mode = 'auto', config, launch, readPool, account,
     hubOrigin = process.env.NEWAPI_HUB_ORIGIN || 'http://127.0.0.1:8200', log = console.log,
     timeoutMs = 600000 } = {}) {
     if (!/^acct_[a-zA-Z0-9_-]+$/.test(String(label || ''))) throw safeFailure('profile_label_invalid');
     const root = path.dirname(moduleDir);
     config ||= readJson(path.join(root, 'tools', 'gateways.config.json'))[provider];
-    if (config?.full !== provider || config?.onboarding?.kind !== 'newapi-github' || !config.github || !config.ref) {
+    if (config?.full !== provider || config?.onboarding?.kind !== 'newapi-github' || !config.github) {
         throw safeFailure('onboarding_not_configured');
     }
+    config = { ...config, onboarding: { consolePath: '/console/token', callbackPath: '/api/oauth/github',
+        tokenName: '1', ...config.onboarding } };
     const poolFile = path.join(root, 'routing', `${provider}-sessions.json`);
     readPool ||= () => { const data = readJson(poolFile); return Array.isArray(data) ? data : data.sessions; };
     const id = label.slice(5);
@@ -121,8 +154,8 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     account ||= readJson(path.join(root, 'routing', 'github-accounts.json')).find(row => row.id === target.ghId);
     if (!account || !account.login) throw safeFailure('github_account_missing');
     const origin = `https://${config.HOST}`;
-    const referral = require('./ref-codes').url(provider);
-    if (new URL(referral).origin !== origin || !new URL(referral).searchParams.get('aff')) throw safeFailure('referral_not_configured');
+    const referral = config.ref ? require('./ref-codes').url(provider) : origin + '/sign-in';
+    if (new URL(referral).origin !== origin || config.ref && !new URL(referral).searchParams.get('aff')) throw safeFailure('referral_not_configured');
     for (const route of [config.onboarding.consolePath, config.onboarding.callbackPath]) {
         if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//') || new URL(route, origin).origin !== origin) {
             throw safeFailure('onboarding_route_invalid');
@@ -176,16 +209,22 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
                 }
             }
         }
-        log(`GitHub ${account.login}: открываю реферальную страницу ${provider}`);
-        await page.goto(referral, { waitUntil: 'domcontentloaded' });
-        await page.waitForTimeout(1200);
-        const aff = await page.evaluate(() => localStorage.getItem('aff'));
-        if (aff !== new URL(referral).searchParams.get('aff')) throw safeFailure('referral_not_saved');
+        log(`GitHub ${account.login}: открываю страницу входа ${provider}`);
+        if (config.ref) await persistReferral(page, referral);
+        else {
+            await page.goto(referral, { waitUntil: 'domcontentloaded' });
+            await page.waitForTimeout(1200);
+        }
         // Already logged in: prove identity through /self, no logout or new OAuth state.
         let me = null;
         const probeSelf = async () => {
             if (new URL(page.url()).origin !== origin) return null;
-            const headers = auth.bearer ? { Authorization: 'Bearer ' + auth.bearer } : {};
+            const storedUserId = await page.evaluate(() => {
+                try { return Number(JSON.parse(localStorage.getItem('user') || '{}').id) || null; } catch { return null; }
+            });
+            const userId = auth.user?.id || storedUserId;
+            const headers = { ...(auth.bearer ? { Authorization: 'Bearer ' + auth.bearer } : {}),
+                ...(Number(userId) > 0 ? { 'New-Api-User': String(userId) } : {}) };
             const r = await browserRequest(origin + '/api/user/self', { headers });
             return r.status === 200 && r.json?.success === true && Number(r.json.data?.id) > 0 ? r.json.data : null;
         };
@@ -208,9 +247,9 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
                             consentAttempted = true;
                             await consent.click({ timeout: 10000 });
                         }
-                    } else if (!loginAttempted && account.password) {
+                    } else if (!loginAttempted && canRecoverGithubLogin(ghPage.url(), account)) {
                         loginAttempted = true;
-                        const result = await require('./gh-login').fillGithubLogin(ghPage, account, { log,
+                        const result = await recoverGithubLogin(ghPage, account, { log,
                             sessionProbe: async () => {
                                 try { await verifyGithubIdentity(context, account.login);
                                     return (await context.cookies('https://github.com')).some(c => c.name === 'user_session' && c.value); }
@@ -256,4 +295,5 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     } finally { await context.close().catch(() => {}); }
 }
 module.exports = { createPanelClient, ensurePanelKey, safeFailure, watchPanelAuth, saveSelectedKey,
-    runProvider, verifyGithubIdentity, verifyPanelIdentity, cookieDictionary };
+    runProvider, verifyGithubIdentity, verifyPanelIdentity, cookieDictionary, canRecoverGithubLogin,
+    recoverGithubLogin, persistReferral };

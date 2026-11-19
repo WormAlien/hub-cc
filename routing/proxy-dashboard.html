@@ -18789,6 +18789,7 @@ function newapiAddTakeGh(prov, ghId) {
   if (block) return toast(`🐙 ${g.nickname || g.login}: ${block}`, 'warn', 7000);
   // Засвеченный ник рисуется двумя кнопками — клик по самой строке для него не действие.
   if (a && a.usedHere && !ghRowSeedBlock(a)) return;
+  if (NEWAPI_SEED_PROV[prov]?.autoOnboarding) return newapiAddSeedPick(prov, ghId, null);
   if (a && !ghRowSeedBlock(a)) return newapiAddSeedPick(prov, ghId, null);
   return newapiAddInstant(prov, ghId);
 }
@@ -18836,6 +18837,7 @@ async function newapiAddInstant(prov, ghId) {
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || 'ошибка');
     newapiAddGhReset(prov);          // форма в этом пути больше не участвует
+    if (p.autoOnboarding) return await newapiAutoOnboard(prov, data.id);
     toast(`🐙 ${g.nickname || g.login}: запись создана, открываю регистрацию`, 'success', 4000);
     await p.reload();
     // Ключа нет → session/open сам выберет mode 'register' и уйдёт по реф-ссылке.
@@ -18875,12 +18877,12 @@ const NEWAPI_SEED_PROV = {
   sk: { label: 'SeekAi',      host: 'seekai.cc',         color: 'cyan',  reload: () => loadSkSessions(), list: () => state.seekai,     render: () => renderSk(), setKey: id => skSetKey(id), open: id => skOpenLk(id) },
   ts: { label: 'TrueSOTA',    host: 'true-sota.com',     color: 'azure', reload: () => loadTsSessions(), list: () => state.truesota,   render: () => renderTs(), setKey: id => tsSetKey(id), open: id => tsOpenLk(id) },
   kk: { label: 'KKtoken',     host: 'kktoken.cc',        color: 'emerald', reload: () => loadKkSessions(), list: () => state.kktoken,  render: () => renderKk(), setKey: id => kkSetKey(id), open: id => kkOpenLk(id) },
-  fg: { label: 'FreeGG',     host: 'freegg.app',        color: 'red', reload: () => loadFgSessions(), list: () => state.freegg,  render: () => renderFg(), setKey: id => fgSetKey(id), open: id => fgOpenLk(id) },
+  fg: { label: 'FreeGG', autoOnboarding: true, host: 'freegg.app',        color: 'red', reload: () => loadFgSessions(), list: () => state.freegg,  render: () => renderFg(), setKey: id => fgSetKey(id), open: id => fgOpenLk(id) },
   kv: { label: 'KVOTUM',     host: 'myapi.buzz',        color: 'violet', reload: () => loadKvSessions(), list: () => state.kvotum,  render: () => renderKv(), setKey: id => kvSetKey(id), open: id => kvOpenLk(id) },
   pm: { label: 'Premier',     host: 'eide.pro',        color: 'amber', reload: () => loadPmSessions(), list: () => state.premier,  render: () => renderPm(), setKey: id => pmSetKey(id), open: id => pmOpenLk(id) },
   cp: { label: 'Clean APIs',     host: 'cleanapis.com',        color: 'blue', reload: () => loadCpSessions(), list: () => state.cleanapis,  render: () => renderCp(), setKey: id => cpSetKey(id), open: id => cpOpenLk(id) },
   ab: { label: 'Artbloom',     host: 'api.artbloom.tech',        color: 'pink', reload: () => loadAbSessions(), list: () => state.artbloom,  render: () => renderAb(), setKey: id => abSetKey(id), open: id => abOpenLk(id) },
-  fx: { label: 'Fxqidian',     host: 'fxqidian.de5.net',        color: 'rose', reload: () => loadFxSessions(), list: () => state.fxqidian,  render: () => renderFx(), setKey: id => fxSetKey(id), open: id => fxOpenLk(id) },
+  fx: { label: 'Fxqidian', autoOnboarding: true, host: 'fxqidian.de5.net',        color: 'rose', reload: () => loadFxSessions(), list: () => state.fxqidian,  render: () => renderFx(), setKey: id => fxSetKey(id), open: id => fxOpenLk(id) },
   bd: { label: 'BudsAI',     host: 'apichat.budsin.dev',        color: 'teal', reload: () => loadBdSessions(), list: () => state.budsin,  render: () => renderBd(), setKey: id => bdSetKey(id), open: id => bdOpenLk(id) },
   nv: { label: 'Nova',     host: 'nova.vcrauo.com',        color: 'cyan', reload: () => loadNvSessions(), list: () => state.nova,  render: () => renderNv(), setKey: id => nvSetKey(id), open: id => nvOpenLk(id) },
   tb: { label: 'Tabi Token',  host: 'tabitoken.com',   color: 'amber',   reload: () => loadTbSessions(), list: () => state.tabi,        render: () => renderTb(), setKey: id => tbSetKey(id), open: id => tbOpenLk(id) },
@@ -19071,6 +19073,30 @@ function newapiSeedRender(data) {
   $('gh-seed-list').innerHTML = rows.join('') || '<div class="text-xs text-faint px-1 py-3">хранилище GitHub пусто — добавь аккаунты во вкладке GitHub</div>';
 }
 
+async function newapiAutoOnboard(prov, id) {
+  const p = NEWAPI_SEED_PROV[prov];
+  const previousKey = p.list().find(r => r.id === id)?.api_key;
+  toast('Вхожу выбранным GitHub и получаю API-ключ…', 'info', 7000);
+  const response = await fetch(`/__switch/api/${prov}/session/open`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, mode: 'provision' }),
+  });
+  const opened = await response.json();
+  if (!response.ok || opened.error) throw new Error(opened.error || 'не удалось начать вход');
+  const deadline = Date.now() + 120000;
+  do {
+    await p.reload();
+    const row = p.list().find(r => r.id === id);
+    if (row && /^sk-/.test(row.api_key || '') && row.api_key !== previousKey) {
+      toast('API-ключ сохранён в выбранный аккаунт', 'success', 6000);
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  } while (Date.now() < deadline);
+  toast('Ключ ещё не получен. Проверь окно входа; повторить можно кнопкой браузера в этой записи.', 'warn', 10000);
+  return false;
+}
+
 async function newapiAddGithub(ghId, opts) {
   const prov = ghSeedProv;
   const p = NEWAPI_SEED_PROV[prov];
@@ -19094,6 +19120,7 @@ async function newapiAddGithub(ghId, opts) {
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'ошибка');
     closeGhSeedModal();
+    if (p.autoOnboarding) return await newapiAutoOnboard(prov, data.id);
     // Сессии не было вовсе (harvest код 3): запись заведена пустышкой, и это не отказ -
     // вход по логину в аккаунт провайдера оживит и запись, и общий снимок. Обещать
     // «сессия переехала» в этом случае нельзя: браузер откроется на логине.

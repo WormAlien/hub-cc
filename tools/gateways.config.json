@@ -262,6 +262,12 @@
     "ICON": "🔮",
     "COLOR": "rose",
     "REF": "9BEo",
+    "onboarding": {
+      "kind": "newapi-github",
+      "consolePath": "/keys",
+      "callbackPath": "/api/oauth/github",
+      "tokenName": "1"
+    },
     "github": true,
     "ref": true,
     "flatRate": false,

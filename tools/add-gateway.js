@@ -153,21 +153,34 @@ function validateOnboarding(gw) {
     const fail = () => { throw new Error('Invalid generic onboarding configuration; no files written'); };
     if (!o || typeof o !== 'object' || Array.isArray(o)
         || Object.keys(o).some(k => !['kind', 'consolePath', 'callbackPath', 'tokenName'].includes(k))
-        || o.kind !== 'newapi-github' || gw.github !== true || gw.ref !== true || gw.customPanel !== false) fail();
+        || o.kind !== 'newapi-github' || gw.github !== true || gw.customPanel !== false
+        || (gw.ref !== undefined && typeof gw.ref !== 'boolean')) fail();
     if (!/^[a-z][a-z0-9_-]*$/.test(gw.full || '') || !/^[a-z][a-z0-9_-]*$/.test(gw.FOLDER || gw.full || '')
         || !/^[a-z][a-z0-9]*$/.test(gw.p || '') || !/^[A-Z][A-Z0-9]*$/.test(gw.P || '')
         || typeof gw.HOST !== 'string' || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9-]+$/.test(gw.HOST)
-        || typeof gw.REF !== 'string' || !/^[A-Za-z0-9_-]+$/.test(gw.REF)) fail();
+        || (gw.ref === true && (typeof gw.REF !== 'string' || !/^[A-Za-z0-9_-]+$/.test(gw.REF)))) fail();
+    const normalized = {
+        ...o,
+        consolePath: o.consolePath === undefined ? '/console/token' : o.consolePath,
+        callbackPath: o.callbackPath === undefined ? '/api/oauth/github' : o.callbackPath,
+        tokenName: o.tokenName === undefined ? '1' : o.tokenName,
+    };
     const origin = `https://${gw.HOST}`;
     for (const key of ['consolePath', 'callbackPath']) {
-        const value = o[key];
+        const value = normalized[key];
         // Root-relative paths only. Reject normalization, query secrets and redirects.
         if (typeof value !== 'string' || !/^\/[A-Za-z0-9/_-]+$/.test(value)
             || value.includes('//') || new URL(value, origin).origin !== origin) fail();
     }
-    if (typeof o.tokenName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$/.test(o.tokenName)
-        || /^(sk-|gh[pousr]_|github_pat_)/i.test(o.tokenName)) fail();
-    return o;
+    if (typeof normalized.tokenName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$/.test(normalized.tokenName)
+        || /^(sk-|gh[pousr]_|github_pat_)/i.test(normalized.tokenName)) fail();
+    return normalized;
+}
+function renderSeedMetadata(text, gw) {
+    // Transform the existing registry entry, never create a second registry.
+    const clean = text.replace(/\bautoOnboarding\s*:\s*(?:true|false)\s*,\s*/g, '');
+    return gw.onboarding?.kind === 'newapi-github'
+        ? clean.replace(/(\blabel:\s*'[^']*',)/, '$1 autoOnboarding: true,') : clean;
 }
 function renderOnboardingWrapper(gw) {
     if (!validateOnboarding(gw)) return null;
@@ -1168,6 +1181,9 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
     p.lines = lines
         .slice(start, region.end + 1)
         .map(l => toTarget(l, pairs))
+        .map(l => point.id === '2.15' ? renderSeedMetadata(l, dst) : l)
+        .map(l => point.id === '1.17' && dst.onboarding?.kind === 'newapi-github'
+            ? l.replace("wantMode === 'register')", "wantMode === 'register' || wantMode === 'provision')") : l)
         // Отступ новой записи берём от эталона — он уже выровнен по файлу.
         .map(l => (l === '' ? l : l));
     p.note = `${span}, строк ${region.end - start + 1}`;

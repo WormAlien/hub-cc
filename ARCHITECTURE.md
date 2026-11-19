@@ -67,6 +67,13 @@ reuse/reveal принят без дублей. Full unattended OAuth и producti
 его readback без ручного второго клика и credentials popup. Source TDD/UI/Mac lifecycle зелёные;
 доставка другу на Mac и production restart остаются отдельной приёмкой.
 
+У недавно купленного GitHub OAuth может запросить TOTP дважды: после password login и повторно
+для sudo/authorization. Один onboarding run хранит использованные TOTP-коды и число фактических
+отправок: тот же код не повторяется, максимум три отправки, `/sessions/sudo` переключается на
+authenticator app. Любой уход с `https://github.com` до exact provider callback останавливает
+автоматику; существующая `user_session` не завершает промежуточный 2FA/sudo экран. Real Chromium
+fixture принимает полный password -> TOTP -> sudo -> новый TOTP -> OAuth callback -> key readback.
+
 | Порт   | Сервис                  | Файл                           | Роль |
 |--------|-------------------------|--------------------------------|------|
 | `8200` | **ABUSE HUB / Dashboard** | `routing/transparent-proxy.js` | UI `/__switch` + все `/__switch/api/*`. Редактирует `~/.claude/settings.json`. **Не** проксирует трафик API. |

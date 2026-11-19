@@ -18,7 +18,9 @@ test('selected GitHub password and TOTP flow creates classic named key once and 
     const rows = [{ id: 'fx_fixture', ghId: 'gh_fixture', api_key: 'no-key-fixture', active: false },
         { id: 'untouched', ghId: 'other', api_key: 'fixture-other', active: true }];
     const account = { id: 'gh_fixture', login: 'alice', password: 'fixture-password', totpSecret: 'JBSWY3DPEHPK3PXP' };
+    const fixtureTotps = ['111111', '222222'];
     let tokenCreated = false, creates = 0, writes = 0, loginPosts = 0, totpPosts = 0, consents = 0;
+    const submittedTotps = [];
     const logs = [];
     const api = http.createServer((req, res) => {
         let raw = '';
@@ -70,12 +72,17 @@ test('selected GitHub password and TOTP flow creates classic named key once and 
                     '<form id="otp" action="/sessions/two-factor" method="post"><input id="app_totp" name="app_otp" oninput="if(this.value.length===6)document.getElementById(\'otp\').submit()"></form>' });
                 if (url.pathname === '/sessions/two-factor') {
                     const submitted = new URLSearchParams(req.postData()).get('app_otp');
-                    assert.equal(submitted, totpCode(account.totpSecret));
-                    totpPosts++;
+                    assert.equal(submitted, fixtureTotps[totpPosts]);
+                    submittedTotps.push(submitted); totpPosts++;
                     await context.addCookies([{ name: 'dotcom_user', value: 'alice', domain: '.github.com', path: '/' },
                         { name: 'user_session', value: 'fixture-session', domain: '.github.com', path: '/' }]);
-                    return route.fulfill({ contentType: 'text/html', body: '<script>location.href="https://github.com/login/oauth/authorize"</script>' });
+                    if (totpPosts === 1) return route.fulfill({ contentType: 'text/html', body:
+                        '<script>location.href="https://github.com/sessions/sudo"</script>' });
+                    return route.fulfill({ contentType: 'text/html', body:
+                        '<script>location.href="https://github.com/login/oauth/authorize"</script>' });
                 }
+                if (url.pathname === '/sessions/sudo') return route.fulfill({ contentType: 'text/html', body:
+                    '<a href="/sessions/two-factor/app">Authenticator app</a>' });
                 if (url.pathname === '/login/oauth/authorize') return route.fulfill({ contentType: 'text/html', body:
                     '<button name="authorize" value="1" onclick="location.href=\'https://fxqidian.de5.net/oauth/github?code=fixture\'">Authorize</button>' });
                 throw new Error('unexpected GitHub fixture route ' + url.pathname);
@@ -109,16 +116,18 @@ test('selected GitHub password and TOTP flow creates classic named key once and 
         const opts = { provider: 'fxqidian', moduleDir, label: 'acct_fx_fixture', mode: 'provision',
             config: { full: 'fxqidian', p: 'fx', HOST: 'fxqidian.de5.net', github: true, ref: true,
                 onboarding: { kind: 'newapi-github', consolePath: '/keys', callbackPath: '/api/oauth/github', tokenName: '1' } },
-            readPool: () => rows, account, launch, hubOrigin, timeoutMs: 30000, log: line => logs.push(line) };
+            readPool: () => rows, account, launch, hubOrigin, timeoutMs: 45000, log: line => logs.push(line),
+            githubLoginOptions: { totpCode: () => fixtureTotps[Math.min(totpPosts, fixtureTotps.length - 1)] } };
         assert.equal((await runProvider(opts)).ok, true);
         assert.equal(creates, 1); assert.equal(writes, 1);
-        assert.equal(loginPosts, 1); assert.equal(totpPosts, 1); assert.equal(consents, 1);
+        assert.equal(loginPosts, 1); assert.equal(totpPosts, 2); assert.equal(consents, 1);
+        assert.notEqual(submittedTotps[0], submittedTotps[1], 'sudo challenge waits for a fresh TOTP window');
         assert.equal(rows[0].api_key, 'sk-' + 'fixture-classic-full-key');
         assert.equal(rows[0].active, false); assert.equal(rows[1].api_key, 'fixture-other');
         assert.equal((await runProvider(opts)).ok, true);
         assert.equal(creates, 1, 'repeat does not create a duplicate key');
         assert.equal(loginPosts, 1, 'repeat preserves existing GitHub session');
-        assert.equal(totpPosts, 1); assert.equal(consents, 1);
+        assert.equal(totpPosts, 2); assert.equal(consents, 1);
         assert.ok(!logs.join('\n').includes(account.password));
         assert.ok(!logs.join('\n').includes(account.totpSecret));
         assert.ok(!logs.join('\n').includes('fixture-classic-full-key'));

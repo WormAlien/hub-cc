@@ -152,7 +152,7 @@ function validateOnboarding(gw) {
     const o = gw.onboarding;
     const fail = () => { throw new Error('Invalid generic onboarding configuration; no files written'); };
     if (!o || typeof o !== 'object' || Array.isArray(o)
-        || Object.keys(o).some(k => !['kind', 'consolePath', 'callbackPath', 'tokenName'].includes(k))
+        || Object.keys(o).some(k => !['kind', 'consolePath', 'callbackPath', 'browserCallbackPath', 'tokenName'].includes(k))
         || o.kind !== 'newapi-github' || gw.github !== true || gw.customPanel !== false
         || (gw.ref !== undefined && typeof gw.ref !== 'boolean')) fail();
     if (!/^[a-z][a-z0-9_-]*$/.test(gw.full || '') || !/^[a-z][a-z0-9_-]*$/.test(gw.FOLDER || gw.full || '')
@@ -166,10 +166,10 @@ function validateOnboarding(gw) {
         tokenName: o.tokenName === undefined ? '1' : o.tokenName,
     };
     const origin = `https://${gw.HOST}`;
-    for (const key of ['consolePath', 'callbackPath']) {
+    for (const key of ['consolePath', 'callbackPath', ...(normalized.browserCallbackPath === undefined ? [] : ['browserCallbackPath'])]) {
         const value = normalized[key];
         // Root-relative paths only. Reject normalization, query secrets and redirects.
-        if (typeof value !== 'string' || !/^\/[A-Za-z0-9/_-]+$/.test(value)
+        if (typeof value !== 'string' || !/^\/[A-Za-z0-9/_-]*$/.test(value)
             || value.includes('//') || new URL(value, origin).origin !== origin) fail();
     }
     if (typeof normalized.tokenName !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$/.test(normalized.tokenName)

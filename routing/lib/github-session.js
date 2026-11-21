@@ -122,8 +122,10 @@ let lastScanStats = null;
 function scanStats() { return lastScanStats; }
 
 function cookiesMtime(dir) {
-    try { return fs.statSync(path.join(dir, 'Default', 'Network', 'Cookies')).mtimeMs; }
-    catch { return 0; }
+    try {
+        const file = nac.cookieDbPath(dir);
+        return file ? fs.statSync(file).mtimeMs : 0;
+    } catch { return 0; }
 }
 
 function loadIndex() {

@@ -8,6 +8,25 @@
 
 ---
 
+## macOS Chrome v11 cookies / GPT 6.1 (21.11.2026)
+
+`routing/lib/newapi-account.js` supports macOS AES-128-CBC cookies with both
+`v10` (`saltysalt`) and `v11` (`pepper`) PBKDF2 salts. Chrome's custom user-data
+profiles can contain both formats; writeback preserves each row's encryption tag.
+GitHub indexing uses the same cookie DB resolver as balance checks, including
+`Default/Cookies`, instead of assuming `Default/Network/Cookies`.
+
+Regression: `node tools/check-mac-cookie-v11.js` (synthetic v10/v11/mixed profiles,
+read/write/tag preservation and index mtime). Live account self checks passed for
+three profiles; production dashboard restart is a separate deployment step.
+
+`normalizeCcModel` and dashboard `CC_1M_RE` recognize GPT 6.1 sol/luna/terra with
+provider prefixes. The client suffix is idempotent and the context override is
+1050000; GPT upstream IDs remain without `[1m]`. Regressions:
+`tools/check-1m.js`, `tools/check-upstream-model.js`. An isolated Claude Code
+2.1.330 accepted the explicit `/model agentrouter/gpt-6.1-sol[1m]`; the observed
+historical 401 `Нет ключа AgentRouter` is not a suffix rejection.
+
 ## Premier - квота сообщений (23.10.2026, WIP)
 
 Вкладка не готова к выпуску. Подтверждённые незакрытые дефекты: нет авторотации по

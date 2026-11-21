@@ -649,7 +649,7 @@ function normalizeCcModel(m, activeBackend) {
     // Опубликованная в API Gateway модель с окном 1M - по манифесту, а не по имени.
     // `s` здесь уже без суффикса, поэтому id сравнивается как есть.
     if (slash > 0 && publishedOneMModels().has(s)) return `${s}[1m]`;
-    return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-5\.6-(?:sol|luna|terra)$)/.test(s) ? `${s}[1m]` : s;
+    return /^(?:[A-Za-z0-9_.-]+\/)?(claude-(opus|sonnet)-|glm-5\.3(?:$|-)|gpt-(?:5\.6|6\.1)-(?:sol|luna|terra)$)/.test(s) ? `${s}[1m]` : s;
 }
 
 // ---- Отсутствие модели = 200k, поэтому пустой `model` тоже чиним здесь -------

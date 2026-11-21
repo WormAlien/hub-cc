@@ -147,6 +147,9 @@ if (src) {
                 ['ComboWombo', 'ComboWombo'],                 // виртуальная модель шлюза
                 ['opus-4.8', 'opus-4.8'],                     // notion: не claude-*
                 ['opus[1m]', 'opus[1m]'],
+                ['gpt-6.1-sol', 'gpt-6.1-sol[1m]'],
+                ['agentrouter/gpt-6.1-sol', 'agentrouter/gpt-6.1-sol[1m]'],
+                ['agentrouter/gpt-6.1-sol[1m]', 'agentrouter/gpt-6.1-sol[1m]'],
                 ['gpt-5.6-sol', 'gpt-5.6-sol[1m]'],
                 ['gpt-5.6-luna', 'gpt-5.6-luna[1m]'],
                 ['gpt-5.6-terra', 'gpt-5.6-terra[1m]'],
@@ -252,6 +255,10 @@ if (src) {
                 const withCtx = new Function(`${ctxPreamble}${ctxSuffix[0]}; return withCtxSuffix;`)();
                 if (arModelCommandSrc) {
                     const arModelCommand = new Function(`${ctxPreamble}${ctxSuffix[0]}\n${arModelCommandSrc[0]}; return arModelCommand;`)();
+                    const got61 = arModelCommand('gpt-6.1-sol');
+                    if (got61 !== '/model agentrouter/gpt-6.1-sol[1m]') {
+                        fails.push(`arModelCommand(gpt-6.1-sol) = ${got61}`);
+                    }
                     const got = arModelCommand('gpt-5.6-sol');
                     if (got !== '/model agentrouter/gpt-5.6-sol[1m]') {
                         fails.push(`arModelCommand(gpt-5.6-sol) = ${got} - ожидалось /model agentrouter/gpt-5.6-sol[1m]`);
@@ -259,6 +266,7 @@ if (src) {
                 }
                 // 1) БЕЗ второго аргумента клиент и сервер обязаны совпадать буквально.
                 for (const id of ['claude-opus-4-6', 'aipm/claude-opus-4-6', 'ar/claude-sonnet-5',
+                    'agentrouter/gpt-6.1-sol', 'gpt-6.1-sol', 'agentrouter/gpt-6.1-sol[1m]',
                     'glm-5.3', 'aipm/glm-5.3', 'gpt-5.6-sol', 'justwoker/gpt-5.6-sol',
                     'hcnsec/kimi-k3', 'claude-opus-5[1m]', 'ComboWombo',
                     'aikeysapi/gpt-5.6-sol', 'ak/claude-opus-5']) {
@@ -446,6 +454,9 @@ if (src) {
                 // и кастомных моделей) отменены: `null` означает не «пусть CC решит сам»,
                 // а «отдай ему запасной предел 300k», из-за чего и падало
                 // `Context limit reached (483k/300k)` при знаменателе `⧉ N/1M`.
+                ['gpt-6.1-sol', 1050000],
+                ['agentrouter/gpt-6.1-sol', 1050000],
+                ['agentrouter/gpt-6.1-sol[1m]', 1050000],
                 ['gpt-5.6-sol', 1050000],
                 ['glm-5.3', 1050000],
                 ['glm-5.3[1m]', 1050000],

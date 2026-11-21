@@ -591,8 +591,11 @@ function macStripPrefix(out) {
 function macDecryptCookie(enc, key) {
     try {
         if (!Buffer.isBuffer(enc) || enc.length < 3 + 16) return null;
-        if (enc.slice(0, 3).toString('latin1') !== 'v10') return null;
-        const d = crypto.createDecipheriv('aes-128-cbc', key, MAC_IV);
+        const tag = enc.slice(0, 3).toString('latin1');
+        if (tag !== 'v10' && tag !== 'v11') return null;
+        const cipherKey = Buffer.isBuffer(key) ? (tag === 'v10' ? key : null) : key && key[tag];
+        if (!cipherKey) return null;
+        const d = crypto.createDecipheriv('aes-128-cbc', cipherKey, MAC_IV);
         d.setAutoPadding(false);            // padding снимаем сами: Chromium иногда пишет свой
         let out = Buffer.concat([d.update(enc.slice(3)), d.final()]);
         const pad = out[out.length - 1];
@@ -605,15 +608,21 @@ function macDecryptCookie(enc, key) {
     } catch { return null; }
 }
 
-function macEncryptCookie(value, key, hostKey) {
-    const c = crypto.createCipheriv('aes-128-cbc', key, MAC_IV);
+function macEncryptCookie(value, key, hostKey, tag = 'v10') {
+    const cipherKey = Buffer.isBuffer(key) ? key : key[tag];
+    const c = crypto.createCipheriv('aes-128-cbc', cipherKey, MAC_IV);
     const prefix = crypto.createHash('sha256').update(String(hostKey)).digest();
     const body = Buffer.concat([c.update(Buffer.concat([prefix, Buffer.from(String(value), 'utf8')])), c.final()]);
-    return Buffer.concat([Buffer.from('v10', 'latin1'), body]);
+    return Buffer.concat([Buffer.from(tag, 'latin1'), body]);
 }
 
 function macKeyFromPassword(pw) {
-    return crypto.pbkdf2Sync(String(pw), MAC_SALT, MAC_ITER, 16, 'sha1');
+    // Chrome's custom user-data directories now use v11 with the pepper salt.
+    // Keep both derivations: one profile can contain old v10 and new v11 rows.
+    return {
+        v10: crypto.pbkdf2Sync(String(pw), MAC_SALT, MAC_ITER, 16, 'sha1'),
+        v11: crypto.pbkdf2Sync(String(pw), 'pepper', MAC_ITER, 16, 'sha1'),
+    };
 }
 
 // Кандидаты ключей в порядке ДЕШЕВИЗНЫ, а не вероятности.
@@ -748,8 +757,8 @@ function decryptCookieValue(enc, key) {
 // чтении, включая 32-байтный префикс SHA-256 от host_key (проверено на живом профиле:
 // у всех записей плейнтекст начинается именно им). Без префикса браузер сочтёт куку
 // испорченной и молча её выбросит.
-function encryptCookieValue(value, key, hostKey) {
-    if (IS_MAC) return macEncryptCookie(value, key, hostKey);
+function encryptCookieValue(value, key, hostKey, tag = 'v10') {
+    if (IS_MAC) return macEncryptCookie(value, key, hostKey, tag);
     const iv = crypto.randomBytes(12);
     const c = crypto.createCipheriv('aes-256-gcm', key, iv);
     const prefix = crypto.createHash('sha256').update(String(hostKey)).digest();
@@ -850,7 +859,7 @@ function writeProfileCookies(profileDir, host, cookies) {
         db = new Database(src);
         db.pragma('busy_timeout = 2000');
         const sel = db.prepare(
-            'SELECT rowid, host_key, name FROM cookies WHERE name = ? AND (host_key = ? OR host_key = ?)'
+            'SELECT rowid, host_key, name, encrypted_value FROM cookies WHERE name = ? AND (host_key = ? OR host_key = ?)'
         );
         const upd = db.prepare(
             'UPDATE cookies SET value = \'\', encrypted_value = ?, last_update_utc = ?, last_access_utc = ? WHERE rowid = ?'
@@ -863,7 +872,9 @@ function writeProfileCookies(profileDir, host, cookies) {
                 if (!row) { missing.push(name); continue; }
                 // Префикс считаем от host_key ИМЕННО этой строки: у части куки он
                 // с ведущей точкой, и хеш от другого варианта браузер не примет.
-                upd.run(encryptCookieValue(cookies[name], key, row.host_key), now, now, row.rowid);
+                const tag = IS_MAC && Buffer.isBuffer(row.encrypted_value)
+                    && row.encrypted_value.subarray(0, 3).toString('latin1') === 'v11' ? 'v11' : 'v10';
+                upd.run(encryptCookieValue(cookies[name], key, row.host_key, tag), now, now, row.rowid);
                 written.push(name);
             }
         })();
@@ -1752,7 +1763,7 @@ async function accountFetch({ host, accountId = null, profileDir = null, url, op
 module.exports = {
     QUOTA_PER_UNIT_DEFAULT, HOST_AUTH, authKind,
     profileAesKey, warmAesKeys, readProfileCookies, cookieHeaderFor, githubLogin,
-    cookieBackendReady, cookieFailReason, cookieDbLocked,
+    cookieBackendReady, cookieFailReason, cookieDbLocked, cookieDbPath,
     writeProfileCookies, syncJarToProfile,
     sessionUserId, userIdFromUsername,
     quotaPerUnit, quotaToUsd, statusMeta, usdToLocal, hostGate,

@@ -29,6 +29,9 @@ try {
 }
 
 const cases = [
+  ['gpt-6.1-sol', 'agentrouter/gpt-6.1-sol[1m]', 'gpt-6.1-sol'],
+  ['gpt-6.1-sol[1m]', 'gpt-6.1-sol[1m]', 'gpt-6.1-sol'],
+  ['agentrouter/gpt-6.1-sol[1m]', 'claude-opus-5[1m]', 'agentrouter/gpt-6.1-sol'],
   ['gpt-5.6-sol', 'claude-opus-5[1m]', 'gpt-5.6-sol'],
   ['gpt-5.6-sol[1m]', 'claude-opus-5[1m]', 'gpt-5.6-sol'],
   ['gpt-5.6-luna', 'gpt-5.6-sol[1m]', 'gpt-5.6-luna'],

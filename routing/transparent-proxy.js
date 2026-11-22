@@ -36337,6 +36337,9 @@ async function bootSweepStaleChildren() {
     const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active, GEMINI_ENGINE_PORT]);   // эти пересоздаём отдельно
     const swept = [];
     if (active === A6_KEEPALIVE_PORT) keep.add(A6_CONVERTER_PORT);
+    // FreeGG, like A6/Xingchi, is an inseparable keepalive+Responses adapter pair.
+    // Preserving :20184 while sweeping :20185 leaves every FreeGG request at 529.
+    if (active === FG_KEEPALIVE_PORT) keep.add(FG_CONVERTER_PORT);
     // Xingchi — пара keepalive+конвертер как A6/FreeGG: активная вкладка держит оба.
     if (active === XC_KEEPALIVE_PORT) keep.add(XC_CONVERTER_PORT);
     for (const [p, inst] of Object.entries(keepaliveInstances())) {

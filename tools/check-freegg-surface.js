@@ -9,6 +9,12 @@ assert.ok(!/только Opus|opus-only|гранта нет|панель пла�
 assert.ok(panel.includes('/v1/responses'), 'FreeGG explains its actual endpoint');
 assert.ok(panel.includes('автоматически'), 'FreeGG explains automatic key onboarding');
 const backend = fs.readFileSync(path.join(root, 'routing/transparent-proxy.js'), 'utf8');
+const sweepStart = backend.indexOf('async function bootSweepStaleChildren');
+const sweepEnd = backend.indexOf('async function bootRecreateActiveCustomProxy', sweepStart);
+assert.ok(sweepStart >= 0 && sweepEnd > sweepStart, 'boot sweep function missing');
+assert.match(backend.slice(sweepStart, sweepEnd),
+    /active === FG_KEEPALIVE_PORT\) keep\.add\(FG_CONVERTER_PORT\)/,
+    'active FreeGG converter must survive the boot stale-child sweep');
 const spawn = backend.slice(backend.indexOf('async function fgKeepaliveSpawn()'), backend.indexOf('async function axKeepaliveSpawn()'));
 assert.ok(spawn.includes('UPSTREAM: FG_CONVERTER_URL'));
 assert.ok(spawn.includes('GPT_PROXY_FORCE: \'0\''), 'FreeGG cannot inherit the global AR converter');

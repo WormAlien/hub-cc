@@ -59,6 +59,7 @@ const {
     readA6apiPublicErrorCode,
     makeA6apiPublicError,
 } = require('./lib/api-gateway.js');
+const { prepareHermesAgentrouterCheckpoint } = require('./lib/hermes-agentrouter-checkpoint.js');
 const { createRequestCancellationRegistry } = require('./lib/request-cancellation.js');
 const { createLocalHopAuth } = require('./lib/local-hop-auth.js');
 const LOCAL_HOP_SELFTEST_FILE = process.argv[2] === 'selftest'
@@ -810,12 +811,16 @@ function validateOpenAiIngressBody(raw, manifest) {
         }
     }
     const recognized = recognizeCallableModel(body.model, { backendsPath: REGISTRY_FILE });
-    body = withOutputCeiling(body, manifest);
+    // Adapt only a byte-recognized stock checkpoint on the validated provider.
+    // Identity is fixed before compatibility and never re-derived from its body.
+    const checkpoint = prepareHermesAgentrouterCheckpoint(body, recognized);
+    body = withOutputCeiling(checkpoint.body, manifest);
     return {
         publicModel: recognized.id,
         provider: recognized.provider,
         bareModel: recognized.model,
         streamMode: body.stream === true,
+        checkpointMetadata: checkpoint.metadata,
         sidecarBody: { ...body, model: `${BIFROST_PROVIDER}/${recognized.id}` },
     };
 }

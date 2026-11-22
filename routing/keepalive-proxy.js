@@ -2744,7 +2744,12 @@ const server = http.createServer((req, res) => {
     stopTimer();
     if (aborted || res.writableEnded) return;
     let obj;
-    try {
+    if (status === 504 || status === 524) {
+      // The HTTP status is authoritative even when the edge sent HTML. Once
+      // SSE headers are committed, preserve that identity without vendor prose.
+      obj = { type: 'error', error: { type: 'api_error', code: 'upstream_timeout',
+        status_code: status, message: 'Upstream request timed out.' } };
+    } else try {
       obj = JSON.parse((buf || Buffer.alloc(0)).toString('utf8'));
       if (!obj || !obj.error) throw 0;
     } catch (e) {
@@ -2752,6 +2757,11 @@ const server = http.createServer((req, res) => {
     }
     if (!obj.type) obj.type = 'error';
     res.write(`event: error\ndata: ${JSON.stringify(obj)}\n\n`);
+    // Only the authenticated exact route can attest the actual HTTP timeout.
+    // Vendor envelopes/headers are not allowed to supply this local evidence.
+    if (exactMode && (status === 504 || status === 524)) {
+      res.addTrailers({ 'x-abuse-hub-upstream-status': String(status) });
+    }
     res.end();
   };
 

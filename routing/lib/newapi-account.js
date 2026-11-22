@@ -243,7 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
-    'api.xingchiapi.com': 'jwt',
+    'xingchiapi.com': 'jwt',
     'freegg.app': 'jwt',
     'api.apinex.bond': 'jwt',
     // myapi.buzz (KVOTUM, 2026-10-30) — НЕ New API вовсе: свой движок (FastAPI + SPA).

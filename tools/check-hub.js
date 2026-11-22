@@ -1569,6 +1569,23 @@ async function headerAnim() {
     code === 0 ? ok('выход из меню с капелью — чистый') : (bad('выход с капелью', `получили ${code}`), kill());
 }
 
+// ── 15. Пины каталогов Bifrost ───────────────────────────────────────────────
+//
+// Сверка идёт по БАЙТАМ файла, а `*.json text` + core.autocrlf=true делают CRLF-копию
+// «чистой» для git: `git status` молчит, а sidecar потом не стартует с
+// bifrost_catalog_invalid. Живой случай 21.11.2026: checkout ветки без правил
+// `bifrost-*.json eol=lf` переписал оба каталога в CRLF, и общий прогон этого не видел.
+// Логика живёт в одном месте - в самом гварде, здесь только его вердикт.
+function bifrostCatalogPins() {
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'check-bifrost-catalog-pins.js')],
+        { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+    const out = `${r.stdout || ''}${r.stderr || ''}`;
+    const failed = out.split(/\r?\n/).filter(l => l.startsWith('FAIL'));
+    failed.length === 0 && r.status === 0
+        ? ok('пины каталогов Bifrost совпадают с файлами на диске и с git-блобом')
+        : bad('пины каталогов Bifrost', failed.join('; ') || `гвард вышел с кодом ${r.status}`);
+}
+
 (async () => {
     console.log('\x1b[1m\n8. Механика на подставном порту (живой стек не трогаем)\x1b[0m');
     await mechanics();
@@ -1584,6 +1601,8 @@ async function headerAnim() {
     await headerAnim();
     console.log('\x1b[1m\n14. Пачка нажатий не теряется\x1b[0m');
     await keyBurst();
+    console.log('\x1b[1m\n15. Пины каталогов Bifrost\x1b[0m');
+    bifrostCatalogPins();
     console.log(`\n\x1b[1mИтого: ${pass} проверок пройдено, ${fails.length} провалено\x1b[0m`);
     if (fails.length) {
         for (const f of fails) console.log(`  \x1b[31m✗\x1b[0m ${f}`);

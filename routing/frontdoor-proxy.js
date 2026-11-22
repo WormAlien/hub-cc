@@ -823,7 +823,143 @@ function validateOpenAiIngressBody(raw, manifest) {
 function statusForSidecar(status) {
     if (status === 400) return { status: 400, code: 'invalid_request' };
     if (status === 404) return { status: 404, code: 'model_not_found' };
+    if (status === 504 || status === 524) return { status: 504, code: 'upstream_timeout' };
     return { status: 503, code: 'upstream_unavailable' };
+}
+
+function callbackPublicDiagnosis(handle, publicModel) {
+    const code = callbackPublicErrorCodes.get(handle);
+    const specialized = handle.provider === 'a6api' ? makeA6apiPublicError(code, publicModel) : null;
+    if (specialized) return specialized;
+    return code === 'upstream_timeout'
+        ? { status: 504, body: makeRedactedOpenAiError(504, code, publicModel) }
+        : null;
+}
+
+// FX's native edge sends a provisional input estimate at message_start and
+// corrected usage at message_delta. Pinned Bifrost retains nonzero start input;
+// adapt only the authenticated callback response, never the prompt/native leg.
+function createBifrostNativeFinalUsageRestorer() {
+    const inputFields = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'];
+    let pending = Buffer.alloc(0);
+    const restore = frame => {
+        const lines = frame.toString('utf8').split('\n').map(line =>
+            line.endsWith(String.fromCharCode(13)) ? line.slice(0, -1) : line);
+        const data = lines.filter(line => line.startsWith('data:'));
+        if (!data.length) return frame;
+        let value;
+        try { value = JSON.parse(data.map(line => line.slice(5).replace(/^ /, '')).join('\n')); }
+        catch { return frame; }
+        if (!value || value.type !== 'message_start' || !value.message
+            || !value.message.usage || Array.isArray(value.message.usage)) return frame;
+        const usage = { ...value.message.usage };
+        for (const field of inputFields) if (Object.hasOwn(usage, field)) usage[field] = 0;
+        value.message = { ...value.message, usage };
+        let emitted = false;
+        return Buffer.from(lines.flatMap(line => {
+            if (!line.startsWith('data:')) return [line];
+            if (emitted) return [];
+            emitted = true;
+            return [`data: ${JSON.stringify(value)}`];
+        }).join('\n'), 'utf8');
+    };
+    return new Transform({
+        transform(chunk, _encoding, callback) {
+            try {
+                pending = Buffer.concat([pending, chunk]);
+                for (;;) {
+                    const lf = pending.indexOf('\n\n'), crlf = pending.indexOf(Buffer.from([13, 10, 13, 10]));
+                    const boundary = lf < 0 ? crlf : crlf < 0 ? lf : Math.min(lf, crlf);
+                    if (boundary < 0) break;
+                    if (boundary > OPENAI_SSE_LINE_MAX_BYTES) throw new Error('Native SSE event is too large.');
+                    const ending = boundary === crlf ? 4 : 2;
+                    this.push(restore(pending.subarray(0, boundary)));
+                    this.push(pending.subarray(boundary, boundary + ending));
+                    pending = pending.subarray(boundary + ending);
+                }
+                if (pending.length > OPENAI_SSE_LINE_MAX_BYTES) throw new Error('Native SSE event is too large.');
+                callback();
+            } catch (error) { callback(error); }
+        },
+        flush(callback) {
+            // EOF is not a successful model terminal; never repair missing events.
+            if (pending.length) this.push(pending);
+            pending = Buffer.alloc(0);
+            callback();
+        },
+    });
+}
+
+// Keepalive's precommit changes HTTP status to 200 before the vendor replies.
+// A locally generated transport trailer authenticates the safe error envelope:
+// provider prose or an echoed JSON status_code alone is never evidence, even
+// through a local proxy. Observe bounded complete SSE without changing output.
+function observeCallbackPreOutputTimeout(upstreamResponse, handle, state) {
+    const mediaType = String(upstreamResponse.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+    const encoding = String(upstreamResponse.headers['content-encoding'] || '').trim().toLowerCase();
+    if (!state.local || handle.provider === 'a6api' || !handle.streamMode
+        || upstreamResponse.statusCode !== 200 || mediaType !== 'text/event-stream'
+        || (encoding && encoding !== 'identity')) return;
+    const maxBytes = 4096;
+    let pending = Buffer.alloc(0), event = '', data = [], eventBytes = 0;
+    let valid = true, sawError = false, timeoutStatus = null;
+    const disable = () => { valid = false; pending = Buffer.alloc(0); data = []; event = ''; eventBytes = 0; };
+    const dispatch = () => {
+        if (!event && data.length === 0) return;
+        let value;
+        try { value = JSON.parse(data.join('\n')); } catch { disable(); return; }
+        if (!value || Array.isArray(value) || typeof value !== 'object') { disable(); return; }
+        if (!sawError && event === 'ping' && value.type === 'ping' && !Object.hasOwn(value, 'error')) {
+            // No model output; pings cannot establish timeout identity themselves.
+        } else if (!sawError && event === 'error' && value.type === 'error'
+            && value.error && !Array.isArray(value.error) && typeof value.error === 'object') {
+            sawError = true;
+            const error = value.error;
+            const keys = Object.keys(error);
+            if (Object.keys(value).length === 2 && error.type === 'api_error'
+                && error.code === 'upstream_timeout' && error.message === 'Upstream request timed out.'
+                && (error.status_code === 504 || error.status_code === 524)
+                && keys.length === 4 && keys.every(key => ['type', 'code', 'message', 'status_code'].includes(key))) {
+                timeoutStatus = error.status_code;
+            }
+        } else { disable(); return; }
+        event = ''; data = []; eventBytes = 0;
+    };
+    upstreamResponse.on('data', chunk => {
+        if (!valid) return;
+        pending = Buffer.concat([pending, chunk]);
+        let newline;
+        while (valid && (newline = pending.indexOf(0x0a)) >= 0) {
+            if (newline > maxBytes) { disable(); return; }
+            let line = pending.subarray(0, newline);
+            pending = pending.subarray(newline + 1);
+            if (line.length && line[line.length - 1] === 0x0d) line = line.subarray(0, -1);
+            if (!line.length) { dispatch(); continue; }
+            if (line[0] === 0x3a) continue;
+            eventBytes += line.length;
+            if (eventBytes > maxBytes) { disable(); return; }
+            const text = line.toString('utf8');
+            if (text.startsWith('event:') && !event) event = text.slice(6).trim();
+            else if (text.startsWith('data:')) data.push(text.slice(5).replace(/^ /, ''));
+            else { disable(); return; }
+        }
+        if (valid && pending.length > maxBytes) disable();
+    });
+    upstreamResponse.on('error', disable);
+    upstreamResponse.on('aborted', disable);
+    upstreamResponse.on('end', () => {
+        if (!valid || !sawError || pending.length || event || data.length || !upstreamResponse.complete
+            || requestCancellationRegistry.isCancelled(handle)) { disable(); return; }
+        const trailer = 'x-abuse-hub-upstream-status';
+        const raw = upstreamResponse.rawTrailers || [];
+        let count = 0;
+        for (let i = 0; i < raw.length; i += 2) if (String(raw[i]).toLowerCase() === trailer) count += 1;
+        const status = upstreamResponse.trailers[trailer];
+        if (count === 1 && timeoutStatus !== null && status === String(timeoutStatus)) {
+            callbackPublicErrorCodes.set(handle, 'upstream_timeout');
+        }
+        disable();
+    });
 }
 
 // ── Блокировка содержимого провайдером ≠ кривой запрос ────────────────────────
@@ -880,6 +1016,12 @@ function createDelegatedOpenAiSseRestorer({ publicModel, maxLineBytes = OPENAI_S
         try { value = JSON.parse(payload); } catch { fail('Invalid delegated SSE JSON.'); }
         if (!value || Array.isArray(value) || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
             fail('Delegated SSE data must be an object.');
+        }
+        // Bifrost may convert a truncated native tool stream into a terminal
+        // error object. Once model data escaped, only a transport abort is safe:
+        // cleanly ending that object would launder an incomplete tool call.
+        if (sawJsonObject && value.error !== null && value.error !== undefined) {
+            fail('Delegated SSE failed after model output.');
         }
         const restored = restoreDelegatedOpenAiObject(value, publicModel);
         sawJsonObject = true;
@@ -1041,9 +1183,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     const fail = (status = 503, code = 'upstream_unavailable', message = '') => {
         if (settled) return;
         settled = true;
-        const diagnosis = handle.provider === 'a6api'
-            ? makeA6apiPublicError(callbackPublicErrorCodes.get(handle), publicModel)
-            : null;
+        const diagnosis = callbackPublicDiagnosis(handle, publicModel);
         callbackPublicErrorCodes.delete(handle);
         requestCancellationRegistry.cancel(handle, 'sidecar_response_failure');
         finishOuter();
@@ -1056,7 +1196,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     upstreamResponse.on('aborted', () => fail());
     upstreamResponse.on('close', () => { if (!ended) fail(); });
 
-    if (handle.provider === 'a6api' && callbackPublicErrorCodes.has(handle)) {
+    if (callbackPublicDiagnosis(handle, publicModel)) {
         fail();
         return;
     }
@@ -1068,6 +1208,7 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
     }
     const status = upstreamResponse.statusCode || 503;
     if (status < 200 || status >= 300) {
+        const mapped = statusForSidecar(status);
         // Причина отказа Bifrost в лог: клиент видит обезличенное «Invalid request.», а без
         // этой строки 12.11 невозможно было отличить провал конвертации инструментов от
         // кривого тела запроса — полдня ушло на бисект повторами.
@@ -1091,7 +1232,6 @@ function forwardDelegatedJson(upstreamResponse, req, res, handle, publicModel, {
             return;
         }
         log(`sidecar ${status} ${req.method} ${req.url}: ${upstreamResponse.headers['content-type'] || '-'}`);
-        const mapped = statusForSidecar(status);
         fail(mapped.status, mapped.code);
         return;
     }
@@ -1159,7 +1299,9 @@ function forwardOpenAi(req, res, validated) {
         outerTerminal = true;
         requestCancellationRegistry.finishOuter(handle);
     };
-    const failSidecar = () => {
+    const failSidecar = (timedOut = false) => {
+        const diagnosis = callbackPublicDiagnosis(handle, validated.publicModel);
+        callbackPublicErrorCodes.delete(handle);
         if (!sidecarConnected) {
             requestCancellationRegistry.finishInner(handle);
         } else {
@@ -1167,7 +1309,8 @@ function forwardOpenAi(req, res, validated) {
         }
         finishOuter();
         if (!res.headersSent && !res.destroyed) {
-            openAiError(res, 503, 'upstream_unavailable', '', validated.publicModel);
+            if (diagnosis) writePublicDiagnosis(res, diagnosis);
+            else openAiError(res, timedOut ? 504 : 503, timedOut ? 'upstream_timeout' : 'upstream_unavailable', '', validated.publicModel);
         } else if (!res.destroyed) {
             res.destroy();
         }
@@ -1182,7 +1325,7 @@ function forwardOpenAi(req, res, validated) {
     }, upstreamResponse => {
         sidecarConnected = true;
         upstreamResponse.on('end', finishOuter);
-        if (handle.provider === 'a6api' && callbackPublicErrorCodes.has(handle)) {
+        if (callbackPublicDiagnosis(handle, validated.publicModel)) {
             return forwardDelegatedJson(upstreamResponse, req, res, handle, validated.publicModel);
         }
         if (validated.streamMode) {
@@ -1240,9 +1383,13 @@ function forwardOpenAi(req, res, validated) {
         if (!res.writableFinished) abort();
         else finishOuter();
     });
-    upstream.on('timeout', () => upstream.destroy(new Error('Bifrost timeout')));
+    let sidecarTimedOut = false;
+    upstream.on('timeout', () => {
+        sidecarTimedOut = true;
+        upstream.destroy(new Error('Bifrost timeout'));
+    });
     upstream.on('error', () => {
-        if (!gone) failSidecar();
+        if (!gone) failSidecar(sidecarTimedOut);
     });
     upstream.end(payload);
 }
@@ -1488,9 +1635,10 @@ async function internalCallback(req, res) {
     const u = state.url;
     const requester = u.protocol === 'https:' ? https.request : http.request;
     let retried = false;
-    const failInner = () => {
+    const failInner = (timedOut = false) => {
         if (!res.headersSent && !res.destroyed && !requestCancellationRegistry.isCancelled(handle)) {
-            apiError(res, 502, 'Internal upstream request failed.');
+            if (timedOut) callbackPublicErrorCodes.set(handle, 'upstream_timeout');
+            apiError(res, timedOut ? 504 : 502, timedOut ? 'Internal upstream request timed out.' : 'Internal upstream request failed.');
         } else if (!res.destroyed) res.destroy();
         finishInner();
     };
@@ -1530,7 +1678,17 @@ async function internalCallback(req, res) {
                     onFinish: finishInner,
                 });
             }
-            res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers);
+            if (upstreamResponse.statusCode === 504 || upstreamResponse.statusCode === 524) {
+                callbackPublicErrorCodes.set(handle, 'upstream_timeout');
+            }
+            observeCallbackPreOutputTimeout(upstreamResponse, handle, state);
+            const restoreFinalUsage = handle.publicModel === 'fxqidian/glm-5.3-flash' && handle.streamMode
+                && upstreamResponse.statusCode === 200
+                && String(upstreamResponse.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase() === 'text/event-stream'
+                && !upstreamResponse.headers['content-encoding'];
+            const responseHeaders = { ...upstreamResponse.headers };
+            if (restoreFinalUsage) delete responseHeaders['content-length'];
+            res.writeHead(upstreamResponse.statusCode || 502, responseHeaders);
             const tap = createTap({
                 method: 'POST', url: '/v1/messages', backend: state.backend,
                 ua: identity['user-agent'], status: upstreamResponse.statusCode, headers: upstreamResponse.headers,
@@ -1540,7 +1698,14 @@ async function internalCallback(req, res) {
                 upstreamResponse.on('end', tap.end);
                 upstreamResponse.on('aborted', tap.end);
             }
-            upstreamResponse.pipe(res);
+            if (restoreFinalUsage) {
+                pipeline(upstreamResponse, createBifrostNativeFinalUsageRestorer(), res, error => {
+                    if (error) {
+                        if (!res.destroyed) res.destroy();
+                        finishInner();
+                    }
+                });
+            } else upstreamResponse.pipe(res);
             upstreamResponse.on('error', () => {
                 if (!res.destroyed) res.destroy();
                 finishInner();
@@ -1550,11 +1715,15 @@ async function internalCallback(req, res) {
         });
         backendReq = candidate;
         let connected = false;
+        let candidateTimedOut = false;
         candidate.on('socket', socket => {
             if (!socket.connecting) connected = true;
             else socket.once('connect', () => { connected = true; });
         });
-        candidate.on('timeout', () => candidate.destroy(new Error('upstream timeout')));
+        candidate.on('timeout', () => {
+            candidateTimedOut = true;
+            candidate.destroy(new Error('upstream timeout'));
+        });
         candidate.on('error', error => {
             if (candidate !== backendReq || terminal) return;
             const port = upstreamPortOf(state);
@@ -1571,7 +1740,7 @@ async function internalCallback(req, res) {
                 });
                 return;
             }
-            failInner();
+            failInner(candidateTimedOut);
         });
         if (requestCancellationRegistry.isCancelled(handle)) {
             candidate.destroy(cancelError);

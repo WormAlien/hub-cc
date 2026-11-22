@@ -7304,7 +7304,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-emerald">🪙</span> <a href="https://kktoken.cc/sign-up?aff=Sog2" data-ref-link="kktoken" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-emerald">KKtoken</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-emerald text-xs">kktoken.cc</code> · клик по ключу = активный (через keepalive <code class="font-mono text-emerald text-xs">:20161</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-emerald text-xs">kktoken.cc</code> · клик по ключу = активный (через keepalive <code class="font-mono text-emerald text-xs">:20161</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -7460,9 +7460,9 @@ window.finNavCount = async () => {
         <header class="flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
-              <span class="text-purple">🌠</span> <a href="https://api.xingchiapi.com/sign-up?aff=UJAXQ4QTR94U" data-ref-link="xingchi" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-purple">Xingchi</a>
+              <span class="text-purple">🌠</span> <a href="https://xingchiapi.com/register?aff=UJAXQ4QTR94U" data-ref-link="xingchi" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-purple">Xingchi</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-purple text-xs">api.xingchiapi.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-purple text-xs">:20186</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-purple text-xs">api.xingchiapi.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-purple text-xs">:20186</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -7482,10 +7482,11 @@ window.finNavCount = async () => {
           </div>
         </div>
 
-        <!-- Keepalive конфиг мульти-запроса (runtime, без рестарта :20186).
-             🪤 Ретраи здесь не роскошь: у xingchi каждый ЧЕТВЁРТЫЙ POST /v1/messages
-             отдаёт пустой 403 от кромки Cloudflare (замер 31.08 — отказы на 4/8/12/16/20
-             из 20). Ставить «попыток на запрос» в 1 = каждый четвёртый запрос в лицо. -->
+        <!-- xingchi: площадка отдаёт ТОЛЬКО /v1/responses и пускает только харнесс-клиенты
+             по User-Agent (замер 21.11.2026: claude-cli/codex/opencode/hermes → 200,
+             curl/Node/python → 403 client_not_allowed). Поэтому keepalive :20186
+             ходит не на площадку, а в свой конвертер :20187. Комментарий эталона про
+             «каждый четвёртый пустой 403 от Cloudflare» здесь НЕ подтверждён. -->
         <div id="xc-keepalive" class="rounded-xl bg-surface border border-line-soft p-4">
           <div class="flex items-center justify-between mb-3">
             <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20186 — мульти-запрос (второй запрос при тишине) · применяется БЕЗ рестарта</h2>
@@ -7602,13 +7603,13 @@ window.finNavCount = async () => {
         </div>
 
         <div class="text-xs text-faint">
-          <span>base → <code class="text-ink">http://localhost:20186</code> keepalive → <code class="text-ink">api.xingchiapi.com</code> (корень, БЕЗ <code class="text-ink">/v1</code>)</span>
+          <span>base → <code class="text-ink">http://localhost:20186</code> конвертер <code class="text-ink">:20187</code> → <code class="text-ink">api.xingchiapi.com/v1/responses</code></span>
           <span class="mx-2 opacity-40">·</span>
           <span>ключи <code class="text-ink">sk-…</code> — бери в консоли после GitHub-входа</span>
           <span class="mx-2 opacity-40">·</span>
           <span>🪤 <code class="text-ink">tool_choice</code> шлюз молча выбрасывает, <code class="text-ink">max_tokens</code> игнорирует</span>
           <span class="mx-2 opacity-40">·</span>
-          <a href="https://api.xingchiapi.com/sign-up?aff=UJAXQ4QTR94U" data-ref-link="xingchi" target="_blank" class="text-purple hover:underline">регистрация по рефке</a>
+          <a href="https://xingchiapi.com/register?aff=UJAXQ4QTR94U" data-ref-link="xingchi" target="_blank" class="text-purple hover:underline">регистрация по рефке</a>
         </div>
       </div>
     </div>
@@ -8662,7 +8663,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-orange">📞</span> <a href="https://api-ru.dacall.ai/sign-up?aff=Sog2" data-ref-link="dacall" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-orange">dacall.AI</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-orange text-xs">api-ru.dacall.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-orange text-xs">:20177</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-orange text-xs">api-ru.dacall.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-orange text-xs">:20177</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -8871,7 +8872,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-blue">🧼</span> <a href="https://cleanapis.com/sign-up?aff=Sog2" data-ref-link="cleanapis" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-blue">Clean APIs</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-blue text-xs">cleanapis.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-blue text-xs">:20164</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-blue text-xs">cleanapis.com</code> · клик по ключу = активный (через keepalive <code class="font-mono text-blue text-xs">:20164</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -9190,7 +9191,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-rose">🔮</span> <a href="https://fxqidian.de5.net/sign-up?aff=9BEo" data-ref-link="fxqidian" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-rose">Fxqidian</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-rose text-xs">fxqidian.de5.net</code> · клик по ключу = активный (через keepalive <code class="font-mono text-rose text-xs">:20175</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-rose text-xs">fxqidian.de5.net</code> · клик по ключу = активный (через keepalive <code class="font-mono text-rose text-xs">:20175</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -9348,7 +9349,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-violet">🀄</span> <a href="https://lsapi.cloud/sign-up?aff=YaPV" data-ref-link="lsapi" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-violet">Lingshu</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-violet text-xs">lsapi.cloud</code> · клик по ключу = активный (через keepalive <code class="font-mono text-violet text-xs">:20174</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-violet text-xs">lsapi.cloud</code> · клик по ключу = активный (через keepalive <code class="font-mono text-violet text-xs">:20174</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -9523,7 +9524,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-teal">🌿</span> <a href="https://apichat.budsin.dev/sign-up?aff=Sog2" data-ref-link="budsin" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-teal">BudsAI</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-teal text-xs">apichat.budsin.dev</code> · клик по ключу = активный (через keepalive <code class="font-mono text-teal text-xs">:20173</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-teal text-xs">apichat.budsin.dev</code> · клик по ключу = активный (через keepalive <code class="font-mono text-teal text-xs">:20173</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -10050,7 +10051,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-amber">🅱️</span> <a href="https://chat.b.ai/sign-up?aff=6H755H" data-ref-link="bai" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-amber">B.AI</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-amber text-xs">chat.b.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-amber text-xs">:20169</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-amber text-xs">chat.b.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-amber text-xs">:20169</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -10210,7 +10211,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-sky">🔑</span> <a href="https://www.getunikey.ai/sign-up?aff=6ssC" data-ref-link="getunikey" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-sky">UniKey</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">www.getunikey.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20168</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-sky text-xs">www.getunikey.ai</code> · клик по ключу = активный (через keepalive <code class="font-mono text-sky text-xs">:20168</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -10372,7 +10373,7 @@ window.finNavCount = async () => {
             <h1 class="text-2xl font-semibold tracking-tight flex items-center gap-2.5">
               <span class="text-indigo">🔷</span> <a href="https://emtf.aipm9527.site/sign-up?aff=NS3L" data-ref-link="aipm" target="_blank" rel="noopener" title="регистрация по реф-ссылке" class="text-ink underline underline-offset-4 hover:text-indigo">AIPM</a>
             </h1>
-            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-indigo text-xs">emtf.aipm9527.site</code> · клик по ключу = активный (через keepalive <code class="font-mono text-indigo text-xs">:20163</code>) · GitHub-вход в консоль · каталог — <b>только Opus</b> (<code class="font-mono text-xs">claude-sonnet-5</code> и <code class="font-mono text-xs">gpt-5</code> отдают 403) · гранта нет, панель платная</p>
+            <p class="text-sm text-muted mt-1">ключи <code class="font-mono text-indigo text-xs">emtf.aipm9527.site</code> · клик по ключу = активный (через keepalive <code class="font-mono text-indigo text-xs">:20163</code>) · GitHub-вход в консоль · каталог <b>23 модели</b> (<code class="font-mono text-xs">gpt-6.1-sol</code>, <code class="font-mono text-xs">gpt-6-astra</code>, …) · площадка отдаёт <b>только <code class="font-mono text-xs">/v1/responses</code></b> · гранта нет, панель платная</p>
           </div>
         </header>
 
@@ -20665,7 +20666,7 @@ function renderXcGauge() {
     ].filter(Boolean).join(''),
     note: st.withBalance && st.withBalance < st.total
       ? 'Запас считается по известным балансам (Σ balance / Σ grant). Клик 💰 у ключа = чек баланса.'
-      : 'Активация → keepalive http://localhost:20186 → api.xingchiapi.com (напрямую). Ретраи keepalive обязательны: каждый четвёртый запрос кромка Cloudflare отдаёт пустым 403.',
+      : 'Активация → keepalive :20186 → конвертер :20187 → api.xingchiapi.com/v1/responses. Площадка пускает только харнесс-клиенты по User-Agent, поэтому без конвертера каждый запрос получал бы 403 client_not_allowed.',
   });
 }
 

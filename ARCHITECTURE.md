@@ -506,6 +506,10 @@ OpenAI path:
 - Custom converters publish zero initial input for strict or authenticated exact streams: pinned Bifrost otherwise retains the preliminary estimate instead of final input. Final `message_delta` carries the provider-normalized input/output/cache buckets; non-exact legacy start estimates are unchanged. Regression: `node tools/check-bifrost-converter-usage.js` uses the real converter, usage tap and pinned binary on dynamic localhost ports;
 - Windows cancellation is correlated through the callback registry and destroys the paid backend socket even when Bifrost does not propagate disconnects itself.
 
+FX GLM source repair (22.11.2026; production activation is separate): physical 504/524 and proven Front Door transport timeouts retain `504 upstream_timeout`. After native keepalive precommit, only an authenticated exact hop emits the generated safe timeout envelope plus a physical-status trailer; the callback validates both before model output and never forwards the trailer to Bifrost or the public client. Vendor prose/status echoes/forged fields cannot manufacture that diagnosis. Ordinary400/content-policy403 and cancellation stay distinct; truncated tool output remains fail-closed.
+
+Only the `fxqidian/glm-5.3-flash` converter-facing native SSE neutralizes provisional start input/cache counters so pinned Bifrost consumes final provider usage. The native client leg, final delta, request prompt/tools/thinking and other model IDs are unchanged. `tools/check-fxqidian-gateway-errors.js` exercises real pinned errors, final usage/cache/reasoning and cancellation; `tools/check-keepalive-timeout-identity.js` verifies the authenticated precommit seam. Source acceptance does not fix origin latency or prove running-PID loading. Canonical details and remaining activation: Obsidian's ABUSE HUB API Gateway page.
+
 Local trust and lifecycle:
 
 - Bifrost artifacts and local catalogs are hash-pinned for Windows, Linux and Darwin amd64/arm64;

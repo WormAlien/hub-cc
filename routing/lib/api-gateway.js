@@ -819,23 +819,28 @@ function makeRedactedOpenAiError(status, code, publicModel, messageOverride) {
     const normalizedStatus = status === 400 ? 400
         : status === 404 ? 404
             : status === 403 && code === 'content_filtered' ? 403
-                : 503;
+                : status === 504 && code === 'upstream_timeout' ? 504
+                    : 503;
     const normalizedCode = normalizedStatus === 403
         ? 'content_filtered'
         : normalizedStatus === 400
             ? 'invalid_request'
             : normalizedStatus === 404
                 ? 'model_not_found'
-                : (code === 'api_gateway_busy' ? 'api_gateway_busy' : 'upstream_unavailable');
+                : normalizedStatus === 504
+                    ? 'upstream_timeout'
+                    : (code === 'api_gateway_busy' ? 'api_gateway_busy' : 'upstream_unavailable');
     const fallbackMessage = normalizedStatus === 403
         ? 'The provider blocked this request by its content policy.'
         : normalizedStatus === 400
             ? 'Invalid request.'
             : normalizedStatus === 404
                 ? 'Model not found.'
-                : normalizedCode === 'api_gateway_busy'
-                    ? 'API Gateway is busy.'
-                    : 'Upstream request failed.';
+                : normalizedStatus === 504
+                    ? 'Upstream request timed out.'
+                    : normalizedCode === 'api_gateway_busy'
+                        ? 'API Gateway is busy.'
+                        : 'Upstream request failed.';
     const message = (typeof messageOverride === 'string' && messageOverride.trim())
         ? messageOverride.trim()
         : fallbackMessage;

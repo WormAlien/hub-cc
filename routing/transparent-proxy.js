@@ -9629,7 +9629,11 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
-    'api.xingchiapi.com':      path.join(__dirname, '..', 'xingchi', 'profiles'),
+    // Кабинет и рефка живут на КОРНЕ `xingchiapi.com` (панель), а не на API-хосте:
+    // `api.xingchiapi.com` — только шлюз `/v1`. Ключ карты обязан совпадать с тем, что
+    // передаёт `newapiSyncProfile` в handleXcSessionOpen, иначе `newapiProfileDir`
+    // вернёт null и куки в профиль не поедут (аккаунт открывается разлогиненным).
+    'xingchiapi.com':  path.join(__dirname, '..', 'xingchi', 'profiles'),
     'freegg.app':      path.join(__dirname, '..', 'freegg', 'profiles'),
     'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
     'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),
@@ -18877,16 +18881,47 @@ async function kkBalance(target, opts = {}) {
         force: !!opts.force,
     });
 }
+// Xingchi — своя панель (не New API): ручек `/api/user/self`, `/api/status`,
+// `/v1/dashboard/billing/*` у площадки НЕТ (замер 21.11.2026: всё это 404). Но баланс
+// читается КЛЮЧОМ из `GET /v1/usage`, и он точный:
+//   { balance, remaining, unit:"USD", planName:"钱包余额", isValid, mode:"unrestricted",
+//     usage:{ today:{cost,actual_cost,input_tokens,output_tokens,requests}, total:{…} },
+//     model_stats:[…] }
+// Замер 21.11 на двух ключах: `remaining` совпал (`299.9963868`), `unit` USD. Поэтому
+// цифру берём оттуда, а не через `newapiBalance` (копия от kktoken ходила бы в
+// несуществующие New-API пути и молча падала в «угадать грант»).
+// `spent` = `usage.total.cost` (в USD); `granted` не считаем — гранта у площадки нет.
 async function xcBalance(target, opts = {}) {
-    return newapiBalance({
-        target: typeof target === 'string' ? { api_key: target } : (target || {}),
-        host: 'api.xingchiapi.com',
-        ccHeaders: XC_CC_HEADERS,
-        usageUrl: 'https://api.xingchiapi.com/v1/dashboard/billing/usage',
-        subUrl: null,
-        guessGrant: spent => Math.max(XC_DEFAULT_GRANT, Math.ceil(spent / XC_GRANT_STEP) * XC_GRANT_STEP),
+    const t = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = t.api_key;
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    const lib = newapiLib();
+    const gated = fn => (lib && lib.hostGate) ? lib.hostGate('api.xingchiapi.com', fn) : fn();
+    let res;
+    try {
+        res = await gated(() => fetch('https://api.xingchiapi.com/v1/usage', {
+            headers: { ...XC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+            signal: AbortSignal.timeout(15000),
+        }));
+    } catch (e) { return { status: 'unknown', error: e.message }; }
+    if (res.status === 401 || res.status === 403) return { status: 'dead', error: `HTTP ${res.status}` };
+    if (res.status !== 200) return { status: 'unknown', error: `HTTP ${res.status}` };
+    let d = {};
+    try { d = await res.json(); } catch (e) { return { status: 'unknown', error: 'ответ не JSON' }; }
+    const num = v => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+    const bal = num(d.remaining) ?? num(d.balance);
+    if (bal == null) return { status: 'unknown', error: 'в ответе нет remaining/balance' };
+    const total = (d.usage && d.usage.total) || {};
+    const spent = num(total.cost) ?? num(total.actual_cost) ?? 0;
+    return {
+        status: 'live',
+        balanceSource: 'key',
+        balance: bal,
+        spent,
+        unit: d.unit || 'USD',
+        planName: d.planName || null,
         force: !!opts.force,
-    });
+    };
 }
 async function fgBalance(target, opts = {}) {
     const result = await newapiBalance({
@@ -20969,7 +21004,7 @@ async function handleXcSessionOpen(req, res) {
 
         const script = path.join(__dirname, '..', 'xingchi', 'open-session.js');
         // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
-        newapiSyncProfile('api.xingchiapi.com', label, 'перед ЛК');
+        newapiSyncProfile('xingchiapi.com', label, 'перед ЛК');
         // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
         // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
         // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка

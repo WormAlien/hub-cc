@@ -51,6 +51,12 @@ const PROFILE_ROOTS = [
     // оба на `kktoken.cc`. Без строки hostToTag('kktoken.cc') вернул бы null, и заселение
     // GitHub-сессии отвечало бы «неизвестный хост».
     { tag: 'kk', dir: path.join(ROOT, 'kktoken', 'profiles'), host: 'kktoken.cc' },
+    // Xingchi (2026-11-21). 🪤 Панель (кабинет, рефка, куки входа) — КОРЕНЬ
+    // `xingchiapi.com`; `api.xingchiapi.com` — только шлюз `/v1` и там кук кабинета нет.
+    // Строка обязана совпадать с ключом NEWAPI_PROFILE_DIRS и HOST_AUTH БАЙТ В БАЙТ,
+    // иначе hostToTag вернёт null, профиль выпадет из индекса и кнопка 🌐 откроет
+    // аккаунт разлогиненным. Тег `xc` — ключ в GH_POOL_LOADERS.
+    { tag: 'xc', dir: path.join(ROOT, 'xingchi', 'profiles'), host: 'xingchiapi.com' },
     { tag: 'fg', dir: path.join(ROOT, 'freegg', 'profiles'), host: 'freegg.app' },
     { tag: 'kv', dir: path.join(ROOT, 'kvotum', 'profiles'), host: 'myapi.buzz' },
     { tag: 'pm', dir: path.join(ROOT, 'premier', 'profiles'), host: 'eide.pro' },

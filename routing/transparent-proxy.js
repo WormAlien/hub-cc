@@ -9629,11 +9629,14 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
-    // Кабинет и рефка живут на КОРНЕ `xingchiapi.com` (панель), а не на API-хосте:
-    // `api.xingchiapi.com` — только шлюз `/v1`. Ключ карты обязан совпадать с тем, что
-    // передаёт `newapiSyncProfile` в handleXcSessionOpen, иначе `newapiProfileDir`
-    // вернёт null и куки в профиль не поедут (аккаунт открывается разлогиненным).
+    // Xingchi (2026-11-21). 🪤 У этой площадки панель и API — РАЗНЫЕ хосты:
+    // кабинет/рефка/куки входа живут на `xingchiapi.com`, а `api.xingchiapi.com` —
+    // только шлюз `/v1`. Поэтому в карте ДВЕ строки на один каталог профилей:
+    // хост панели нужен кнопке 🌐 (`handleXcSessionOpen` зовёт syncProfile с ним), а
+    // API-хост — спеке add-gateway (точка 1.8g ждёт `'%HOST%':`, где %HOST% — `HOST`
+    // из конфига шлюза). Обе смотрят в `xingchi/profiles`, так что профиль один.
     'xingchiapi.com':  path.join(__dirname, '..', 'xingchi', 'profiles'),
+    'api.xingchiapi.com':  path.join(__dirname, '..', 'xingchi', 'profiles'),
     'freegg.app':      path.join(__dirname, '..', 'freegg', 'profiles'),
     'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
     'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),

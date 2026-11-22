@@ -57,6 +57,9 @@ const PROFILE_ROOTS = [
     // иначе hostToTag вернёт null, профиль выпадет из индекса и кнопка 🌐 откроет
     // аккаунт разлогиненным. Тег `xc` — ключ в GH_POOL_LOADERS.
     { tag: 'xc', dir: path.join(ROOT, 'xingchi', 'profiles'), host: 'xingchiapi.com' },
+    // Второй адрес того же каталога: у xingchi панель и API — разные хосты, и `HOST`
+    // в конфиге шлюза (его ждёт спека add-gateway) — это `api.xingchiapi.com`.
+    { tag: 'xc', dir: path.join(ROOT, 'xingchi', 'profiles'), host: 'api.xingchiapi.com' },
     { tag: 'fg', dir: path.join(ROOT, 'freegg', 'profiles'), host: 'freegg.app' },
     { tag: 'kv', dir: path.join(ROOT, 'kvotum', 'profiles'), host: 'myapi.buzz' },
     { tag: 'pm', dir: path.join(ROOT, 'premier', 'profiles'), host: 'eide.pro' },

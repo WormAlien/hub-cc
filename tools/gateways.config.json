@@ -474,6 +474,7 @@
       "kind": "newapi-github",
       "consolePath": "/console/token",
       "callbackPath": "/api/oauth/github",
+      "browserCallbackPath": "/",
       "tokenName": "1"
     },
     "github": true,

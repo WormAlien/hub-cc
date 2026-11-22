@@ -47389,6 +47389,15 @@ function lgChatEmptyHtml() {
   if (!lgChatLive()) {
     // Свежая установка либо «скачавший»: рейтинг у него есть и он честный, а чата нет,
     // потому что чат живёт в группах. Это состояние наблюдателя, а не ошибка.
+    //
+    // 🪤 Здесь же оказывается ДРУГОЙ случай, снаружи неотличимый: конфиг заполнен
+    // (enabled+url+key есть), но приёмник эту личность не знает — у установки остался
+    // токен прежней ноды или её записи никогда не было. Живой случай 22.11.2026:
+    // месяц не заходил, после обновления — 401 «такой личности нет», а кнопка
+    // «вступить» идёт через хаб с ключом и получает replay прежней личности.
+    // Поэтому при непустом конфиге показываем переподключение, а не «вступить».
+    const stale = lgReceiverNotAccepted();
+    if (stale) return stale;
     return `<div class="lgnone"><b>Чат живёт в группах, а ты пока ни в одной.</b>
       <div>Рейтинг выше — общий, он виден всем и без группы. Переписка — нет: её и просил
         закрыть владелец. Попроси у участника строку приглашения (одна строка вида
@@ -47631,6 +47640,33 @@ async function lgInvRevoke(id) {
   } catch (e) { LGC.invErr = 'не погашено: ' + (e.message || 'запрос не ушёл'); }
   lgInvPaint();
 }
+// Переподключение сломанной личности: размен приглашения БЕЗ ключа этой установки.
+// Отдельная функция, а не флаг у lgJoin, потому что ручка другая (`/redeem`) и
+// последствия другие: `redeem` ПЕРЕЗАПИСЫВАЕТ league-config.json, а `/join` — нет.
+async function lgRedeem() {
+  const inp = document.getElementById('lg-joinv');
+  const raw = inp ? String(inp.value || '').trim() : '';
+  if (!raw) return;
+  LGC.joinErr = '';
+  const body = /^xgl1_/.test(raw) ? { invite: raw } : { code: raw };
+  try {
+    const r = await fetch('/__switch/api/league/redeem', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || j.ok !== true) {
+      // 409 здесь означает ровно то, что мы лечим: приёмник опознал прежнюю личность.
+      LGC.joinErr = r.status === 409
+        ? 'переподключение не прошло: приёмник опознал прежнюю личность. Нужен код от владельца приёмника.'
+        : lgInvWhy(r.status, j, 'переподключаться');
+    } else {
+      if (inp) inp.value = '';
+      toast('переподключено — личность заведена заново', 'success');
+      await lgChatMe();
+      lgChatFetch();
+    }
+  } catch (e) { LGC.joinErr = 'не переподключено: ' + (e.message || 'запрос не ушёл'); }
+  lgChatPaint();
+}
 // Вступление по чужому приглашению. Единственная ручка без секрета, которая создаёт
 // личность, поэтому у приёмника на ней свои пределы частоты — отказ 429 здесь законный.
 async function lgJoin() {
@@ -47669,6 +47705,41 @@ function lgJoinHtml() {
       >${lgEsc(LGC.joinErr)}</div>` : ''}
     <div class="lgcap" style="flex-basis:100%">строка одноразовая и живёт сутки; вставляй
       её здесь, а не в общий чат</div></div>`;
+}
+
+// Установка считает себя подключённой (в конфиге есть адрес и ключ), но приёмник эту
+// личность не принял. Снаружи это выглядит как «групп нет», хотя причина другая и
+// действие другое: не «вступить», а «переподключиться».
+//
+// 🔴 Кнопка «вступить» здесь НЕ годится: она идёт через хаб, хаб подставляет свой
+// `X-League-Key`, приёмник опознаёт прежнюю запись и уходит в `replay` — новая
+// личность не заводится, а приглашение сжигается. Живой случай 22.11.2026.
+// Поэтому переподключение идёт в `/redeem`, который уходит БЕЗ ключа.
+function lgReceiverNotAccepted() {
+  // Источник — `LG.data.receiver` (ручка `GET /__switch/api/league`), а не `LGC.me`:
+  // `/league/me` отдаёт личность и группы, блока `receiver` в нём нет вовсе.
+  const r = (typeof LG !== 'undefined' && LG.data && LG.data.receiver) || null;
+  const last = r && r.last;
+  if (!r || !r.configured || !last || last.ok !== false) return '';
+  // Только отказы по личности. Транспортный отказ («приёмник не ответил») лечится
+  // кнопкой «проверить сейчас», а не новым приглашением.
+  const code = String(last.code || '');
+  if (code !== 'unknown_identity' && code !== 'revoked' && code !== 'unauthorized') return '';
+  const why = code === 'revoked'
+    ? 'Эта личность отозвана на приёмнике. Сам по себе отзыв не обходится: нужен новый код от владельца приёмника.'
+    : 'Приёмник эту личность не знает: в конфиге хаба остался токен, которого на ноде нет. Это не потеря данных — просто записи для тебя не завели.';
+  return `<div class="lgnone"><b>Хаб отвечает, но приёмник лигу не принял.</b>
+    <div>${lgEsc(why)}</div>
+    <div class="lgcap" style="margin-top:9px">вставь новое приглашение — токен заменится,
+      прежний конфиг сохранится рядом как <code>league-config.json.bak</code></div>
+    <div class="lgjoin">
+      <input id="lg-joinv" type="text" spellcheck="false" autocomplete="off"
+        placeholder="xgl1_… — строка приглашения от участника"
+        aria-label="Строка приглашения для переподключения">
+      <button class="lgtgl lgprime" id="lg-redeemb" type="button">переподключиться</button>
+      ${LGC.joinErr ? `<div class="lgcap" role="status" style="flex-basis:100%;color:var(--lg-rose)"
+        >${lgEsc(LGC.joinErr)}</div>` : ''}
+    </div></div>`;
 }
 function lgInvPaint() {
   const box = document.getElementById('lg-invbox');
@@ -48464,9 +48535,15 @@ function lgChatWire() {
     // «Вступить» живёт в пустом состоянии, то есть внутри той же перерисовываемой
     // коробки: делегированием, иначе слушатель умирает вместе с разметкой.
     else if (e.target.closest('#lg-joinb')) lgJoin();
+    else if (e.target.closest('#lg-redeemb')) lgRedeem();
   });
   document.getElementById('lg-gapbox').addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target && e.target.id === 'lg-joinv') { e.preventDefault(); lgJoin(); }
+    if (e.key === 'Enter' && e.target && e.target.id === 'lg-joinv') {
+      e.preventDefault();
+      // В состоянии «личность не принята» Enter должен переподключать, а не
+      // вступать: иначе клавиша делает не то, что обещает видимая кнопка.
+      (lgReceiverNotAccepted() ? lgRedeem : lgJoin)();
+    }
   });
   // «Убрать мои» — здесь же, в единственной проводке оболочки: второго DOMContentLoaded
   // в этом файле быть не должно, на нём страница уже падала.

@@ -11666,6 +11666,47 @@ const LEAGUE_AGENT = new https.Agent({ keepAlive: false, maxCachedSessions: 0 })
 // ответа: `ETag` и `Content-Disposition` приёмника нужны отдаче как есть, а второй раз
 // придумать имя файла хабу нечем — он его не хранит. Второго транспорта в файле быть не
 // должно: проверка отпечатка живёт ровно здесь, и её копия неизбежно разойдётся с этой.
+// Тот же транспорт, но БЕЗ `X-League-Key`. Нужен ровно одной ручке — `redeem`:
+// заводить новую личность может только тот, у кого токена ещё нет, а любой
+// присланный ключ заставит приёмник опознать прежнюю запись и уйти в `replay`.
+// Сделано копией, а не флагом внутри `leagueReq`, намеренно: ключ здесь должен
+// отсутствовать ПО КОНСТРУКЦИИ, а не по условию, которое однажды снимут.
+function leagueReqNoKey(cfg, pathname, method, bodyStr, opt) {
+    const o = opt || {};
+    const tmo = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 20000;
+    const u = new URL(cfg.url + pathname);
+    const tls = u.protocol === 'https:';
+    const lib = tls ? https : http;
+    const headers = {};
+    for (const [k, v] of Object.entries(o.headers || {})) {
+        if (v !== undefined && v !== null && !/^x-league-key$/i.test(k)) headers[k] = v;
+    }
+    if (bodyStr) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = Buffer.byteLength(bodyStr);
+    }
+    const opts = {
+        host: cfg.ip || u.hostname, port: u.port || (tls ? 443 : 80),
+        path: u.pathname + u.search, method, headers, timeout: tmo,
+    };
+    if (tls && LEAGUE_AGENT) opts.agent = LEAGUE_AGENT;
+    if (tls) {
+        if (cfg.pin) { opts.rejectUnauthorized = false; opts.servername = undefined; }
+        else { opts.servername = u.hostname; opts.headers.Host = u.hostname; }
+    }
+    return new Promise((resolve, reject) => {
+        const req = lib.request(opts, res => {
+            const parts = [];
+            res.on('data', ch => parts.push(ch));
+            res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(parts).toString('utf8') }));
+        });
+        req.on('timeout', () => req.destroy(new Error(`таймаут ${Math.round(tmo / 1000)} с`)));
+        req.on('error', reject);
+        if (bodyStr) req.write(bodyStr);
+        req.end();
+    });
+}
+
 function leagueReq(cfg, pathname, method, bodyStr, opt) {
     const o = opt || {};
     const tmo = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 20000;
@@ -11903,6 +11944,90 @@ async function handleLeague(req, res) {
 async function handleLeagueSync(req, res) {
     try { jsonRes(res, 200, await leagueSync()); }
     catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// POST /__switch/api/league/redeem { code | invite } — подключиться заново.
+//
+// Зачем отдельная ручка, а не `/join`. У `/join` есть свойство, которое делает его
+// непригодным для починки: хаб добавляет к ЛЮБОМУ запросу `X-League-Key` (см.
+// `leagueReq`), и приёмник опознаёт по нему уже существующего участника. Тогда
+// `handleJoin` уходит в ветку `replay`, новый токен НЕ выдаётся, а в ответ приходит
+// чужая (своя же) личность — и приглашение при этом сжигается. Проверено живьём
+// 22.11.2026: размен через хаб вернул мою запись WormAlien вместо новой.
+//
+// Здесь запрос уходит БЕЗ ключа вообще: заводить новую личность может только тот,
+// кто ещё не имеет токена. Поэтому и готовность проверяется без ключа — нужен
+// только адрес приёмника.
+//
+// 🔴 Старый токен не выбрасываем молча: он уезжает в `league-config.json.bak` рядом
+// с конфигом. Бесполезный токен терять не страшно, но стирать чужой файл без следа —
+// значит оставить человека без пути назад, если что-то пойдёт не так.
+async function handleLeagueRedeem(req, res) {
+    if (!leagueWriteGuard(req, res)) return;
+    const b = await leagueReadBody(req, res);
+    if (!b) return;
+    const body = leagueBodyPick(b.body, ['code', 'invite']);
+    if (!body.code && !body.invite) {
+        return jsonRes(res, 400, { error: 'нужен code или invite (строка xgl1_…)' });
+    }
+    const c = leagueConfig();
+    if (!c.url) return jsonRes(res, 503, { error: LEAGUE_NO_RECEIVER });
+    let r;
+    try {
+        // Пятый аргумент `{ noKey: true }` — суть всей ручки. Через `leagueReq`
+        // с обходом ключа: остальная механика (пин, SNI, агент без переиспользования
+        // сессии) должна быть ровно та же, что у обычного обмена, иначе получится
+        // «починка», которая ходит другим транспортом и ломается иначе.
+        r = await leagueReqNoKey(c, '/join', 'POST', JSON.stringify(body),
+            { timeoutMs: LEAGUE_CHAT_TIMEOUT_MS });
+    } catch (e) {
+        return jsonRes(res, 502, { error: 'приёмник не ответил: ' + e.message,
+            hint: 'это сетевая ошибка, а не отказ в приглашении' });
+    }
+    let d = null;
+    try { d = JSON.parse(r.body); } catch { /* ответ не JSON */ }
+    if (r.status !== 200) {
+        return jsonRes(res, r.status, d && typeof d === 'object' ? d
+            : { error: `приёмник ответил ${r.status}` });
+    }
+    if (!d || d.ok !== true) return jsonRes(res, 502, { error: 'приёмник ответил без ok' });
+    if (d.replay) {
+        // Ключ всё-таки уехал. Не считаем успехом: новая личность не заведена.
+        return jsonRes(res, 409, { error: 'приёмник опознал прежнюю личность вместо новой',
+            hint: 'размен должен идти без ключа этой установки' });
+    }
+    const token = String(d.token || '');
+    if (!token) {
+        return jsonRes(res, 502, { error: 'приёмник ответил ok, но без токена',
+            hint: 'размен не состоялся — попроси новое приглашение' });
+    }
+    // Сохраняем: сначала копия прежнего конфига, потом атомарная запись нового.
+    try {
+        if (fs.existsSync(LEAGUE_CONFIG_FILE)) {
+            fs.copyFileSync(LEAGUE_CONFIG_FILE, LEAGUE_CONFIG_FILE + '.bak');
+        }
+        const out = { enabled: true, url: c.url };
+        if (c.ip) out.ip = c.ip;
+        if (c.pin) out.pin = c.pin;
+        out.key = token;
+        out.everyMin = c.everyMin || 10;
+        const tmp = LEAGUE_CONFIG_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(out, null, 2) + '\n', { mode: 0o600 });
+        fs.renameSync(tmp, LEAGUE_CONFIG_FILE);
+    } catch (e) {
+        // Токен получен, но записать не смогли — и показать его больше не сможем.
+        return jsonRes(res, 500, { error: 'токен получен, но конфиг не записался: ' + e.message,
+            hint: 'токен уже не будет показан — попроси новое приглашение' });
+    }
+    // В лог — только факт и число групп. Ни токена, ни его длины, ни кода.
+    logLine(`league переподключение: личность заведена, групп `
+        + `${Array.isArray(d.groups) ? d.groups.length : 0}`);
+    // Сразу пробуем обмен на новом ключе: человеку не нужно ждать тика, а нам —
+    // узнавать о неудаче через десять минут.
+    leagueSync().catch(() => {});
+    return jsonRes(res, 200, { ok: true, memberId: d.memberId || null,
+        groups: Array.isArray(d.groups) ? d.groups.length : 0,
+        note: 'прежний конфиг сохранён как league-config.json.bak' });
 }
 
 // POST /__switch/api/league/nick { nick } → сохраняет ник рядом с installId.
@@ -13053,6 +13178,13 @@ function leagueApiRoute(req, res) {
     }
     if (tail === '/join') {
         if (M === 'POST') { handleLeagueJoin(req, res); return true; }
+        return only('POST');
+    }
+    // Переподключение: размен приглашения БЕЗ ключа этой установки. Отдельно от
+    // `/join`, потому что `/join` уходит с ключом и получает `replay` вместо новой
+    // личности — см. разбор в `handleLeagueRedeem`.
+    if (tail === '/redeem') {
+        if (M === 'POST') { handleLeagueRedeem(req, res); return true; }
         return only('POST');
     }
     if (tail === '/apply') {

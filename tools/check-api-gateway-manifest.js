@@ -447,6 +447,8 @@ test('OpenAI model projection is exact, sorted, and disabled state is stable', (
             'second/z-model': {
                 ...META,
                 displayName: 'Z model',
+                contextTokens: 128000,
+                outputTokens: 8192,
                 publishedAt: '2026-11-09T00:00:02.999Z',
             },
             'agentrouter/a/model': {
@@ -457,8 +459,8 @@ test('OpenAI model projection is exact, sorted, and disabled state is stable', (
         },
     };
     assert.deepEqual(lib.toOpenAiModels(manifest), [
-        { id: 'agentrouter/a/model', object: 'model', created: 1794182401, owned_by: 'abuse-hub' },
-        { id: 'second/z-model', object: 'model', created: 1794182402, owned_by: 'abuse-hub' },
+        { id: 'agentrouter/a/model', object: 'model', created: 1794182401, owned_by: 'abuse-hub', context_length: 1000000, max_output_tokens: 32000 },
+        { id: 'second/z-model', object: 'model', created: 1794182402, owned_by: 'abuse-hub', context_length: 128000, max_output_tokens: 8192 },
     ]);
     manifest.enabled = false;
     expectCode(() => lib.toOpenAiModels(manifest), 'api_gateway_disabled');

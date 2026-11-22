@@ -810,6 +810,8 @@ elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
 elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
+elif [ "$provider" = "xingchi" ] && [ -f "$ROUTING/xingchi-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/xingchi-sessions.json" "$PROF/.claude/xingchi-active-key.txt" "xc/balance" 90
 elif [ "$provider" = "freegg" ] && [ -f "$ROUTING/freegg-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/freegg-sessions.json" "$PROF/.claude/freegg-active-key.txt" "fg/balance" 90
 elif [ "$provider" = "apinex" ] && [ -f "$ROUTING/apinex-sessions.json" ]; then

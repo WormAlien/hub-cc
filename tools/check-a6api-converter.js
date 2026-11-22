@@ -143,6 +143,8 @@ async function freePort() {
             };
             const r = await ask(strict, baseRequest({ stream: true })); const events = parseEvents(r.text);
             assert.equal(collectContent(events)[0].text, 'hello Ж中');
+            assert.deepEqual(events[0].message.usage, { input_tokens: 0, output_tokens: 0 },
+                'strict start does not publish a provisional input estimate');
             assert.deepEqual(events.find(e => e.type === 'message_delta').usage, { input_tokens: 42, output_tokens: 7 });
             assert.equal(events.filter(e => e.type === 'message_stop').length, 1); assert.equal(events[0].message.model, MODEL);
         });
@@ -396,6 +398,7 @@ async function freePort() {
             respond = (_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(data(delta({ content: 'ok' })) + data({ choices: [], usage: { prompt_tokens: 0, completion_tokens: 0 } }) + data(finish('stop'))); };
             const r = await ask(legacy, baseRequest({ stream: true })), events = parseEvents(r.text);
             assert.ok(events.some(e => e.type === 'message_stop'));
+            assert.ok(events[0].message.usage.input_tokens > 0, 'legacy start estimate is unchanged');
             const usage = events.find(e => e.type === 'message_delta').usage;
             assert.ok(usage.input_tokens > 0); assert.ok(usage.output_tokens > 0);
         });

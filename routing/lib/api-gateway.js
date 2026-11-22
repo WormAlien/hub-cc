@@ -258,6 +258,8 @@ function toOpenAiModels(manifest) {
             object: 'model',
             created: Math.floor(Date.parse(metadata.publishedAt) / 1000),
             owned_by: 'abuse-hub',
+            context_length: metadata.contextTokens,
+            max_output_tokens: metadata.outputTokens,
         });
     }
     models.sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);

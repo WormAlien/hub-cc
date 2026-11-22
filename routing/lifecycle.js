@@ -165,6 +165,8 @@ function children() {
         { port: 20159, name: 'SeekAi keepalive', respawn: false },
         { port: 20160, name: 'TrueSOTA keepalive', respawn: false },
         { port: 20161, name: 'KKtoken keepalive', respawn: false },
+        { port: 20186, name: 'Xingchi keepalive', respawn: false },
+        { port: 20187, name: 'Xingchi конвертер', respawn: false },
         { port: 20184, name: 'FreeGG keepalive', respawn: false },
         { port: 20185, name: 'FreeGG конвертер', respawn: false },
         { port: 20190, name: 'APINEX keepalive', respawn: false },
@@ -1627,6 +1629,7 @@ function childServiceDescriptors(items = children()) {
         [20192, 'custom-openai-proxy.js'],
         [20171, 'custom-openai-proxy.js'],
         [20185, 'freegg-proxy.js'],
+        [20187, 'xingchi-proxy.js'],
         [8300, 'transparent-proxy.js'],
     ]);
     const knownPorts = new Set(children().map(item => item.port));

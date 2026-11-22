@@ -63,6 +63,8 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20186 = @{ UPSTREAM = 'https://api.xingchiapi.com'; KEY_FILE = "$profileDir\.claude\xingchi-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'xingchi-modelmap.json') }
   20184 = @{ UPSTREAM = 'http://127.0.0.1:20185'; KEY_FILE = "$profileDir\.claude\freegg-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'freegg-modelmap.json'); SESSIONS_FILE = (Join-Path $dir 'freegg-sessions.json');
              LOCAL_EXACT_ADAPTER = '1'; CUSTOM_PROVIDER_ID = 'freegg'; CUSTOM_PROVIDER_NAME = 'FreeGG';

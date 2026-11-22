@@ -111,56 +111,18 @@ async function fetchJson(url, options) {
         return { status: response.status, json: await response.json().catch(() => null) };
     } catch { throw safeFailure('request_transport_failed'); }
 }
-function githubRecoveryKind(url, account, { passwordAttempted = false, totpAttempts = 0 } = {}) {
-    let current; try { current = new URL(url); } catch { return null; }
-    if (current.hostname !== 'github.com' || current.protocol !== 'https:') return null;
-    if (/^\/sessions\/(?:two-factor(?:\/app)?|sudo)(?:\/|$)/.test(current.pathname)
-        && account.totpSecret) return 'totp';
-    if (!passwordAttempted && account.password) return 'password';
-    return null;
-}
 function canRecoverGithubLogin(url, account) {
-    return githubRecoveryKind(url, account) !== null;
+    const current = new URL(url);
+    if (current.hostname !== 'github.com' || current.protocol !== 'https:') return false;
+    return !!account.password || current.pathname === '/sessions/two-factor/app' && !!account.totpSecret;
 }
-function providerOAuthCompletion(value, origin, callbackPath, browserCallbackPath) {
-    try {
-        const current = new URL(value);
-        if (current.origin !== origin) return false;
-        const browserCallback = callbackPath.replace(/^\/api(?=\/)/, '');
-        const code = current.searchParams.get('code') || '';
-        const state = current.searchParams.get('state') || '';
-        if ([callbackPath, browserCallback].includes(current.pathname)) return code.length > 0;
-        return browserCallbackPath !== undefined && current.pathname === browserCallbackPath
-            && code.length > 0 && state.length > 0;
-    } catch { return false; }
-}
-async function stableGithubAuthorize(page, proof) {
-    const exact = () => {
-        try {
-            const current = new URL(page.url());
-            return current.origin === 'https://github.com' && current.pathname === '/login/oauth/authorize';
-        } catch { return false; }
-    };
-    if (!exact()) return false;
-    if (proof && !await proof()) return false;
-    return exact();
-}
-async function recoverGithubLogin(page, account, { fillLogin, sessionProbe, log, totpState, completionUrl } = {}) {
+async function recoverGithubLogin(page, account, { fillLogin, sessionProbe, log } = {}) {
     const url = new URL(page.url());
     if (url.hostname !== 'github.com' || url.protocol !== 'https:') throw safeFailure('github_origin_rejected');
-    const totpOnly = /^\/sessions\/(?:two-factor(?:\/app)?|sudo)(?:\/|$)/.test(url.pathname)
-        && !!account.totpSecret;
+    const totpOnly = url.pathname === '/sessions/two-factor/app' && !!account.totpSecret;
     if (!account.password && !totpOnly) return { ok: false, wall: 'credentials_missing' };
-    const challengeCleared = async () => {
-        const current = new URL(page.url());
-        if (current.origin === 'https://github.com') {
-            if (require('./gh-login').githubChallengePending(current.href)) return false;
-            if (current.pathname !== '/login/oauth/authorize') return false;
-        } else if (!completionUrl || !completionUrl(current.href)) throw safeFailure('github_origin_rejected');
-        return sessionProbe ? sessionProbe() : false;
-    };
     return (fillLogin || require('./gh-login').fillGithubLogin)(page, account,
-        { log, sessionProbe: challengeCleared, completionUrl, allowTotpOnly: !!account.totpSecret, totpState });
+        { log, sessionProbe, allowTotpOnly: totpOnly });
 }
 async function persistReferral(page, referral) {
     const expected = new URL(referral).searchParams.get('aff');
@@ -174,7 +136,7 @@ async function persistReferral(page, referral) {
 }
 async function runProvider({ provider, moduleDir, label, mode = 'auto', config, launch, readPool, account,
     hubOrigin = process.env.NEWAPI_HUB_ORIGIN || 'http://127.0.0.1:8200', log = console.log,
-    timeoutMs = 600000, githubLoginOptions = {}, beforeGithubAction } = {}) {
+    timeoutMs = 600000 } = {}) {
     if (!/^acct_[a-zA-Z0-9_-]+$/.test(String(label || ''))) throw safeFailure('profile_label_invalid');
     const root = path.dirname(moduleDir);
     config ||= readJson(path.join(root, 'tools', 'gateways.config.json'))[provider];
@@ -205,8 +167,7 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
         args: ['--window-size=600,1000'], ignoreDefaultArgs: ['--disable-extensions'] });
     const capture = require('./gh-live-capture').makeCapture({ label, moduleDir, poolFile });
     const auth = await watchPanelAuth(context, { origin, callbackPath: config.onboarding.callbackPath });
-    let stateStatus = 0, passwordAttempted = false, totpAttempts = 0, consentAttempted = false;
-    const totpState = { usedCodes: new Set(), submissions: 0, maxSubmissions: 3 };
+    let stateStatus = 0, loginAttempted = false, consentAttempted = false;
     context.on('response', response => {
         const url = new URL(response.url());
         if (url.origin === origin && url.pathname === '/api/oauth/state') stateStatus = response.status();
@@ -276,48 +237,28 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
             while (Date.now() < deadline) {
                 if (auth.error) throw auth.error;
                 if (stateStatus === 429) throw safeFailure('oauth_rate_limited', 429);
-                const ghPage = context.pages().find(p => {
-                    if (p.isClosed()) return false;
-                    try { return new URL(p.url()).origin === 'https://github.com'; } catch { return false; }
-                });
+                const ghPage = context.pages().find(p => !p.isClosed() && new URL(p.url()).hostname === 'github.com');
                 if (ghPage) {
                     const url = new URL(ghPage.url());
-                    if (url.pathname === '/login/oauth/authorize') {
-                        if (!await stableGithubAuthorize(ghPage,
-                            () => verifyGithubIdentity(context, account.login).then(() => true))) {
-                            throw safeFailure('github_origin_rejected');
-                        }
+                    if (/^\/login\/oauth\/authorize/.test(url.pathname)) {
+                        await verifyGithubIdentity(context, account.login);
                         const consent = ghPage.locator('button[name="authorize"][value="1"]');
                         if (!consentAttempted && await consent.isVisible().catch(() => false)) {
-                            if (beforeGithubAction) await beforeGithubAction('consent', ghPage);
-                            if (new URL(ghPage.url()).origin !== 'https://github.com'
-                                || new URL(ghPage.url()).pathname !== '/login/oauth/authorize') throw safeFailure('github_origin_rejected');
-                            if (!await require('./gh-login').guardedGithubClick(consent, ghPage)) {
-                                throw safeFailure('github_origin_rejected');
-                            }
                             consentAttempted = true;
+                            await consent.click({ timeout: 10000 });
                         }
-                    } else {
-                        const recovery = githubRecoveryKind(ghPage.url(), account, { passwordAttempted, totpAttempts });
-                        if (recovery) {
-                            if (recovery === 'password') passwordAttempted = true;
-                            else totpAttempts++;
-                        const result = await recoverGithubLogin(ghPage, account, { log, totpState,
-                            fillLogin: (loginPage, creds, options) => require('./gh-login').fillGithubLogin(loginPage, creds,
-                                { ...options, ...githubLoginOptions, beforeGithubAction }),
-                            completionUrl: value => providerOAuthCompletion(value, origin,
-                                config.onboarding.callbackPath, config.onboarding.browserCallbackPath),
+                    } else if (!loginAttempted && canRecoverGithubLogin(ghPage.url(), account)) {
+                        loginAttempted = true;
+                        const result = await recoverGithubLogin(ghPage, account, { log,
                             sessionProbe: async () => {
                                 try { await verifyGithubIdentity(context, account.login);
                                     return (await context.cookies('https://github.com')).some(c => c.name === 'user_session' && c.value); }
                                 catch { return false; }
                             } });
-                        if (result.wall === 'totp_exhausted') throw safeFailure('github_totp_exhausted');
                         if (!result.ok) throw safeFailure('github_login_requires_user');
-                        } else if (!passwordAttempted && !totpAttempts) {
-                            passwordAttempted = true;
-                            log(`GitHub ${account.login}: сохранённой сессии нет, войдите в открытом окне. Пароль в лог не пишется.`);
-                        }
+                    } else if (!loginAttempted) {
+                        loginAttempted = true;
+                        log(`GitHub ${account.login}: сохранённой сессии нет, войдите в открытом окне. Пароль в лог не пишется.`);
                     }
                 }
                 if (auth.user?.id || auth.bearer) me = await probeSelf();
@@ -354,5 +295,5 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     } finally { await context.close().catch(() => {}); }
 }
 module.exports = { createPanelClient, ensurePanelKey, safeFailure, watchPanelAuth, saveSelectedKey,
-    runProvider, verifyGithubIdentity, verifyPanelIdentity, cookieDictionary, githubRecoveryKind,
-    canRecoverGithubLogin, providerOAuthCompletion, stableGithubAuthorize, recoverGithubLogin, persistReferral };
+    runProvider, verifyGithubIdentity, verifyPanelIdentity, cookieDictionary, canRecoverGithubLogin,
+    recoverGithubLogin, persistReferral };

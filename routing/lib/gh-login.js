@@ -38,13 +38,6 @@ const SEL = {
     pass: ['#password', 'input[name="password"]', 'input[autocomplete="current-password"]'],
     totp: ['#app_totp', 'input[name="app_otp"]', 'input[name="otp"]', 'input[autocomplete="one-time-code"]'],
     submit: ['input[name="commit"]', 'button[type="submit"]', 'input[type="submit"]'],
-    totpAlternative: [
-        'a[href*="/sessions/two-factor/app"]',
-        'a[href*="totp"]',
-        'a:has-text("Authenticator app")',
-        'a:has-text("authentication app")',
-        'a:has-text("Use your authenticator")',
-    ],
 };
 
 // Стенки. Проверяются по адресу, тексту и адресам iframe разом - капча живёт в iframe и в
@@ -60,54 +53,7 @@ const WALL_WHY = {
     captcha: 'GitHub показал капчу',
     flagged: 'GitHub помечал аккаунт (flagged / suspended / необычная активность)',
     totp_missing: 'GitHub спрашивает код 2FA, а TOTP-секрета в записи нет',
-    totp_exhausted: 'GitHub продолжает спрашивать 2FA после допустимого числа кодов',
-    origin: 'GitHub-вход ушёл с https://github.com — автоматика остановлена',
 };
-
-function githubUrl(value) {
-    try {
-        const url = new URL(String(value || ''));
-        return url.origin === 'https://github.com' ? url : null;
-    } catch { return null; }
-}
-function githubChallengePending(value) {
-    const url = githubUrl(value);
-    return !!url && (/^\/sessions\/(?:two-factor(?:\/app)?|sudo)(?:\/|$)/.test(url.pathname)
-        || url.pathname === '/settings/two_factor_checkup');
-}
-
-async function guardedGithubFill(locator, page, value) {
-    if (typeof locator.evaluate !== 'function') {
-        if (!githubUrl(page.url())) return false;
-        await locator.fill(value);
-        return !!githubUrl(page.url());
-    }
-    return locator.evaluate((element, nextValue) => {
-        if (location.origin !== 'https://github.com') return false;
-        const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-            : element instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
-        const setter = prototype && Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-        if (!setter || !element.isConnected) return false;
-        element.focus();
-        setter.call(element, nextValue);
-        element.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: nextValue }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-    }, value);
-}
-
-async function guardedGithubClick(locator, page) {
-    if (typeof locator.evaluate !== 'function') {
-        if (!githubUrl(page.url())) return false;
-        await locator.click({ timeout: 5000 });
-        return true;
-    }
-    return locator.evaluate(element => {
-        if (location.origin !== 'https://github.com' || !element.isConnected) return false;
-        element.click();
-        return true;
-    });
-}
 
 // Экран account chooser: `github.com/switch_account?return_to=…` («Your accounts»). GitHub
 // показывает его, когда в профилеChrome остался другой сохранённый аккаунт и он просит выбрать,
@@ -120,8 +66,7 @@ function isSwitchAccount(url) {
     return /github\.com\/switch_account/i.test(String(url || ''));
 }
 
-async function pickSwitchAccount(page, login, log, beforeGithubAction) {
-    if (!githubUrl(page.url())) return false;
+async function pickSwitchAccount(page, login, log) {
     // Основной путь GitHub рендерит: <form action="/switch_account?…"><button name="target" value="<login>">Continue as …</button></form>
     let used = 'button[name="target"]';
     let loc = page.locator(`button[name="target"][value="${login}"]`).first();
@@ -138,11 +83,8 @@ async function pickSwitchAccount(page, login, log, beforeGithubAction) {
         }
     }
     try {
-        if (githubUrl(page.url()) && await loc.count() && githubUrl(page.url()) && await loc.isVisible()) {
-            if (!githubUrl(page.url())) return false;
-            if (beforeGithubAction) await beforeGithubAction('chooser', page);
-            if (!githubUrl(page.url())) return false;
-            if (!await guardedGithubClick(loc, page)) return false;
+        if (await loc.count() && await loc.isVisible()) {
+            await loc.click({ timeout: 5000 });
             log(`   🔀 account chooser: выбран «${login}» (${used})`);
             return true;
         }
@@ -154,15 +96,10 @@ async function pickSwitchAccount(page, login, log, beforeGithubAction) {
 
 /** Первый видимый локатор из списка селекторов или null. */
 async function firstVisible(page, list) {
-    if (!githubUrl(page.url())) return null;
     for (const sel of list) {
         const loc = page.locator(sel).first();
         try {
-            if (!githubUrl(page.url())) return null;
-            if (await loc.count() && githubUrl(page.url()) && await loc.isVisible()) {
-                if (!githubUrl(page.url())) return null;
-                return { loc, sel };
-            }
+            if (await loc.count() && await loc.isVisible()) return { loc, sel };
         } catch { /* отвалился между проверками - идём дальше */ }
     }
     return null;
@@ -170,7 +107,6 @@ async function firstVisible(page, list) {
 
 /** Текст и адреса iframe со страницы. Не прочиталось - пусто, а не падение. */
 async function pageInfo(page) {
-    if (!githubUrl(page.url())) return { text: '', iframes: [] };
     try {
         return await page.evaluate(() => ({
             text: document.body ? String(document.body.innerText || '').slice(0, 2000) : '',
@@ -188,18 +124,11 @@ function detectWall(url, info) {
     return null;
 }
 
-async function clickSubmit(page, log, beforeGithubAction) {
-    if (!githubUrl(page.url())) return false;
+async function clickSubmit(page, log) {
     const sub = await firstVisible(page, SEL.submit);
     if (sub) {
-        if (!githubUrl(page.url())) return false;
         const text = (await sub.loc.innerText().catch(() => '')) || (await sub.loc.getAttribute('value').catch(() => '')) || sub.sel;
-        if (!githubUrl(page.url())) return false;
-        if (beforeGithubAction) await beforeGithubAction('submit', page);
-        if (!githubUrl(page.url())) return false;
-        const clicked = await guardedGithubClick(sub.loc, page)
-            .catch(e => { log(`   ⚠️ подтверждение не нажалось: ${String(e.message || e).split('\n')[0]}`); return false; });
-        if (!clicked) return false;
+        await sub.loc.click({ timeout: 5000 }).catch(e => log(`   ⚠️ подтверждение не нажалось: ${String(e.message || e).split('\n')[0]}`));
         log(`   🖱️ нажато: «${String(text).trim() || sub.sel}»`);
         return true;
     }
@@ -230,14 +159,9 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     const code = typeof opts.totpCode === 'function' ? opts.totpCode : totpCode;
     const left = typeof opts.secondsLeft === 'function' ? opts.secondsLeft : secondsLeft;
     const sleep = (ms) => page.waitForTimeout(opts.sleepMs || ms);
-    const completionUrl = typeof opts.completionUrl === 'function' ? opts.completionUrl : null;
-    const beforeGithubAction = typeof opts.beforeGithubAction === 'function' ? opts.beforeGithubAction : null;
-    const totpState = opts.totpState && typeof opts.totpState === 'object' ? opts.totpState : {};
-    if (!(totpState.usedCodes instanceof Set)) totpState.usedCodes = new Set();
-    if (!Number.isSafeInteger(totpState.submissions) || totpState.submissions < 0) totpState.submissions = 0;
-    if (!Number.isSafeInteger(totpState.maxSubmissions) || totpState.maxSubmissions < 1) totpState.maxSubmissions = 3;
 
-    const totpOnly = opts.allowTotpOnly === true && secret && githubChallengePending(page.url());
+    const totpOnly = opts.allowTotpOnly === true && secret
+        && /^https:\/\/github\.com\/sessions\/two-factor\/app(?:[?#]|$)/.test(page.url());
     if (!login || !password && !totpOnly) {
         return { ok: false, wall: null, why: 'в записи нет логина или пароля - заполнять нечем' };
     }
@@ -248,19 +172,13 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     const started = Date.now();
 
     while (Date.now() < deadline) {
-        const href = page.url();
-        if (!githubUrl(href)) {
-            if (completionUrl && completionUrl(href) && probe && await probe()) return { ok: true };
-            return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-        }
         if (probe && await probe()) return { ok: true };
         if (onStep) await onStep({ step: ++steps, url: page.url() });
-        if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
         // Account chooser: выбрать НАШ логин ровно один раз. Повторная попытка на той же
         // странице - цикл, поэтому после первой попытки экран либо уходит, либо это стенка.
         if (!switchHandled && isSwitchAccount(page.url())) {
             switchHandled = true;
-            await pickSwitchAccount(page, login, log, beforeGithubAction);
+            await pickSwitchAccount(page, login, log);
             await sleep(2500);
             continue;
         }
@@ -271,26 +189,6 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
         const loginF = await firstVisible(page, SEL.login);
         const passF = await firstVisible(page, SEL.pass);
         const totpF = await firstVisible(page, SEL.totp);
-
-        const current = githubUrl(page.url());
-        if (secret && !totpF && current && current.pathname.startsWith('/sessions/sudo')) {
-            const alternative = await firstVisible(page, SEL.totpAlternative);
-            if (alternative) {
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (beforeGithubAction) await beforeGithubAction('sudo-alternative', page);
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (!await guardedGithubClick(alternative.loc, page)) {
-                    return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                }
-                log('   🔑 sudo: выбран вход через authenticator app');
-                await sleep(1000);
-                continue;
-            }
-            if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-            await page.goto('https://github.com/sessions/two-factor/app', { waitUntil: 'domcontentloaded' }).catch(() => {});
-            await sleep(1000);
-            continue;
-        }
 
         // После submit поля могут исчезнуть на мгновение (переход, POST /session). Это
         // НЕ успех и НЕ стенка: если формы нет дольше пары секунд, страницу перезагружаем -
@@ -307,65 +205,43 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
 
         if (loginF || passF) {
             if (loginF && !filledLogin) {
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (beforeGithubAction) await beforeGithubAction('login-fill', page);
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (!await guardedGithubFill(loginF.loc, page, login)) {
-                    return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                }
+                await loginF.loc.fill(login);
                 log(`   ✍️ логин «${login}» вписан`);
                 filledLogin = true;
             }
             if (passF && !filledPass) {
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (beforeGithubAction) await beforeGithubAction('password-fill', page);
-                if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                if (!await guardedGithubFill(passF.loc, page, password)) {
-                    return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                }
+                await passF.loc.fill(password);
                 log(`   ✍️ пароль вписан (${password.length} симв., значение в лог не пишу)`);
                 filledPass = true;
             }
             // Подтверждение ОДНО на два поля: см. правило 1 в шапке.
-            await clickSubmit(page, log, beforeGithubAction);
+            await clickSubmit(page, log);
             await sleep(2500);
             continue;
         }
 
         if (totpF) {
             if (!secret) return { ok: false, wall: 'totp_missing', why: WALL_WHY.totp_missing };
-            if (totpState.submissions >= totpState.maxSubmissions) {
-                return { ok: false, wall: 'totp_exhausted', why: WALL_WHY.totp_exhausted };
-            }
             const now = code(secret);
             if (!now) return { ok: false, wall: 'totp_missing', why: 'TOTP-секрет не разбирается' };
-            if (totpState.usedCodes.has(now) || now === lastCode) {
+            if (now === lastCode) {
                 // Тот же код второй раз GitHub отвергает: ждём смены окна (правило 3).
                 log('   ⏳ жду смены окна кода - повтор не отправляю');
                 await sleep(1500);
                 continue;
             }
-            if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-            if (beforeGithubAction) await beforeGithubAction('totp-fill', page);
-            if (!githubUrl(page.url())) return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-            try {
-                if (!await guardedGithubFill(totpF.loc, page, now)) {
-                    return { ok: false, wall: 'origin', why: WALL_WHY.origin };
-                }
-            }
-            catch { await sleep(500); continue; }
+            await totpF.loc.fill(now).catch(() => {});
             lastCode = now;
-            totpState.usedCodes.add(now);
-            totpState.submissions++;
             log(`   🔑 код 2FA вписан, до смены окна ${left()} с`);
             await sleep(700);
             // 🔴 Самопереход формы (правило 2): жмём, только если поле ещё на экране.
-            if (await totpF.loc.isVisible().catch(() => false)) await clickSubmit(page, log, beforeGithubAction);
+            if (await totpF.loc.isVisible().catch(() => false)) await clickSubmit(page, log);
             else log('   ⚡ форму отправила сама страница - кнопку не жму');
             await sleep(3000);
             continue;
         }
 
+        if (probe && await probe()) return { ok: true };
         await sleep(1000);
     }
 
@@ -373,5 +249,4 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
     return { ok: false, wall: null, why: `вход не подтвердился за ${spent} с` };
 }
 
-module.exports = { fillGithubLogin, detectWall, firstVisible, SEL, WALLS, WALL_WHY, isSwitchAccount,
-    pickSwitchAccount, githubUrl, githubChallengePending, guardedGithubFill, guardedGithubClick };
+module.exports = { fillGithubLogin, detectWall, firstVisible, SEL, WALLS, WALL_WHY, isSwitchAccount, pickSwitchAccount };

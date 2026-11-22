@@ -487,5 +487,27 @@
     "customPanel": false,
     "paidHedge": false,
     "hedgesTuned": false
+  },
+  "xingchi": {
+    "p": "xc",
+    "P": "XC",
+    "full": "xingchi",
+    "NAME": "Xingchi",
+    "HOST": "api.xingchiapi.com",
+    "PORT": 20186,
+    "FOLDER": "xingchi",
+    "ICON": "🌠",
+    "COLOR": "purple",
+    "REF": "UJAXQ4QTR94U",
+    "github": false,
+    "ref": true,
+    "flatRate": false,
+    "anthropic": false,
+    "pool": true,
+    "shareScript": false,
+    "autoreg": false,
+    "customPanel": true,
+    "paidHedge": true,
+    "hedgesTuned": false
   }
 }

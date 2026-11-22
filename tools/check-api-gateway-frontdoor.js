@@ -694,6 +694,8 @@ async function waitForReady(port) {
                 object: 'model',
                 created: 1794182400,
                 owned_by: 'abuse-hub',
+                context_length: 1050000,
+                max_output_tokens: 32000,
             }],
         });
         assert.match(String(listed.headers['content-type']), /^application\/json/);
@@ -1310,6 +1312,7 @@ async function waitForReady(port) {
             object: 'list',
             data: [{
                 id: 'agentrouter/gpt-5.6-sol', object: 'model', created: 1794182400, owned_by: 'abuse-hub',
+                context_length: 1050000, max_output_tokens: 32000,
             }],
         });
         assert.deepEqual(fs.readFileSync(manifestPath), recoveryManifestBefore);

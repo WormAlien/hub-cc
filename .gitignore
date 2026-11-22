@@ -453,6 +453,12 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/xingchi-sessions.json
+# Xingchi: профили браузера и снимки (куки, localStorage, тысячи файлов кеша).
+# Папки закрываем ДО первого прогона: там живая сессия кабинета.
+xingchi/profiles/
+xingchi/sessions/
+xingchi/gh-sessions/
 routing/freegg-sessions.json
 freegg/profiles/
 freegg/sessions/

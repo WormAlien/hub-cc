@@ -349,16 +349,19 @@ function sseWrite(res, event, data) {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
-function handleStreaming(clientRes, upstreamRes, claudeReq) {
+function handleStreaming(clientRes, upstreamRes, claudeReq, exactMode = false) {
     clientRes.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
     });
     const msgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // Bifrost retains a nonzero message_start input instead of the corrected final
+    // input. Strict/exact converters publish final usage in message_delta;
+    // keep the initial estimate internal and preserve the legacy wire contract.
     sseWrite(clientRes, 'message_start', {
         type: 'message_start',
-        message: { id: msgId, type: 'message', role: 'assistant', model: claudeReq.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: estimateTokens(claudeReq), output_tokens: 0 } },
+        message: { id: msgId, type: 'message', role: 'assistant', model: claudeReq.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: STRICT_TOOLS_VISION || exactMode ? 0 : estimateTokens(claudeReq), output_tokens: 0 } },
     });
     sseWrite(clientRes, 'ping', { type: 'ping' });
 
@@ -689,7 +692,7 @@ function handleMessages(req, res, body, trustedAdapter) {
         }
         if (claudeReq.stream) {
             stats.streamed++;
-            handleStreaming(res, upRes, claudeReq);
+            handleStreaming(res, upRes, claudeReq, exactMode);
         } else {
             let b = '';
             if (STRICT_TOOLS_VISION) upRes.setEncoding('utf8');

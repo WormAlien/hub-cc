@@ -254,6 +254,18 @@ const BACKENDS = {
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
+    xingchi: {
+        label: 'Xingchi',
+        base_url: 'http://localhost:20186',
+        api_key: 'dummy',           // real key keepalive reads from xingchi-active-key.txt
+        model: null,
+        clear_helper: true,
+        // Keepalive :20186 -> Responses converter :20187 -> api.xingchiapi.com/v1/responses.
+        // Площадка открывает ТОЛЬКО /v1/responses и пускает только харнесс-клиенты по
+        // User-Agent, поэтому апстрим keepalive — свой конвертер, а не корень площадки.
+        // Активация через handleXcActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в xingchi-active-key.txt и инжектится прокси на каждый запрос.
+    },
     freegg: {
         label: 'FreeGG',
         base_url: 'http://localhost:20184',
@@ -690,6 +702,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    xingchi: 'xingchi',
     freegg: 'freegg',
     apinex: 'apinex',
     kvotum: 'kvotum',
@@ -984,7 +997,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 const BACKEND_ALIASES = {
     a6: 'a6api',
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', fg: 'freegg', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', xc: 'xingchi', fg: 'freegg', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     gm: 'gemini',
     rm: 'rumeng',
@@ -1163,7 +1176,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
     a6api: 'a6api',
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', xingchi: 'xc', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -2292,6 +2305,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveXc = makeKeepaliveHandlers(Number(process.env.XC_KEEPALIVE_PORT || 20186));
 const keepaliveFg = makeKeepaliveHandlers(Number(process.env.FG_KEEPALIVE_PORT || 20184));
 const keepaliveAx = makeKeepaliveHandlers(Number(process.env.AX_KEEPALIVE_PORT || 20190));
 const keepaliveKv = makeKeepaliveHandlers(Number(process.env.KV_KEEPALIVE_PORT || 20182));
@@ -5389,6 +5403,8 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive Xingchi',  port: Number(process.env.XC_KEEPALIVE_PORT || 20186), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Xingchi конвертер',  port: Number(process.env.XC_CONVERTER_PORT || 20187), path: '/health' },
         { name: 'Keepalive FreeGG',  port: Number(process.env.FG_KEEPALIVE_PORT || 20184), path: '/__keepalive/api/status', keepalive: true },
         { name: 'FreeGG конвертер',  port: Number(process.env.FG_CONVERTER_PORT || 20185), path: '/health' },
         { name: 'Keepalive APINEX',  port: Number(process.env.AX_KEEPALIVE_PORT || 20190), path: '/__keepalive/api/status', keepalive: true },
@@ -9613,6 +9629,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'api.xingchiapi.com':      path.join(__dirname, '..', 'xingchi', 'profiles'),
     'freegg.app':      path.join(__dirname, '..', 'freegg', 'profiles'),
     'api.apinex.bond':      path.join(__dirname, '..', 'apinex', 'profiles'),
     'myapi.buzz':      path.join(__dirname, '..', 'kvotum', 'profiles'),
@@ -9775,7 +9792,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, fgLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, xcLkPids, fgLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -16670,6 +16687,45 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const XC_SESSIONS_FILE = path.join(__dirname, 'xingchi-sessions.json');
+const XC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'xingchi-active-key.txt');
+const XC_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'xingchi-active-model.txt');
+const XC_BASE_URL = 'https://api.xingchiapi.com/v1';
+// SSE keepalive proxy для xingchi: держит SSE-паузы thinking-моделей и режет [1m]-суффиксы.
+// 🪤 Комментарий эталона kktoken про «каждый четвёртый POST отдаёт пустой 403 от кромки
+// Cloudflare» здесь НЕ подтверждён и в этот регион не переносится: замер 21.11.2026 живым
+// ключом владельца показал отказы по User-Agent-фильтру площадки, а не по счётчику запросов.
+// Ретрай 403 в keepalive-proxy.js остаётся страховкой, а не замеренным фактом.
+//
+// 🔴 ГЛАВНОЕ ОТЛИЧИЕ ОТ ЭТАЛОНА. Площадка открывает ТОЛЬКО Responses API, а Claude Code и
+// Hermes говорят Anthropic-форматом:
+//     POST /v1/messages         → 403 «This group does not allow /v1/messages dispatch»
+//     POST /v1/chat/completions → 400 chat_completions_disabled (просят /v1/responses)
+//     POST /v1/responses        → 200, живой ответ gpt-6.1-sol
+// Поэтому keepalive НЕЛЬЗЯ пускать на корень api.xingchiapi.com напрямую: он шлёт
+// `/v1/messages` и получил бы 403 на каждом запросе. Апстримом keepalive служит СВОЙ
+// конвертер `xingchi-proxy.js` (:20187), который переводит Anthropic → Responses:
+//     Claude Code → keepalive :20186 → конвертер :20187 → api.xingchiapi.com /v1/responses
+// Конвертер спавнится вместе с keepalive: без него поднятый keepalive форвардил бы в мёртвый
+// локальный порт, а это выглядит как «вкладка есть, а ответов нет».
+const XC_UPSTREAM = 'https://api.xingchiapi.com';
+const XC_KEEPALIVE_PORT = 20186;
+const XC_KEEPALIVE_URL = `http://localhost:${XC_KEEPALIVE_PORT}`;
+const XC_MODELMAP_FILE = path.join(__dirname, 'xingchi-modelmap.json');
+// Конвертер Anthropic → Responses. Порт отдельный от keepalive: иначе они подрались бы
+// за один порт, а роль у них разная (один держит паузы, другой меняет протокол).
+const XC_CONVERTER_PORT = Number(process.env.XC_CONVERTER_PORT || 20187);
+const XC_CONVERTER_URL = `http://127.0.0.1:${XC_CONVERTER_PORT}`;
+const XC_CONVERTER_SCRIPT = path.join(__dirname, 'xingchi-proxy.js');
+// Резерв «угадать грант» (см. newapiBalance). У xingchi гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const XC_GRANT_STEP = 5;
+const XC_DEFAULT_GRANT = 5;
+const XC_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const FG_SESSIONS_FILE = path.join(__dirname, 'freegg-sessions.json');
 const FG_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'freegg-active-key.txt');
 const FG_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'freegg-active-model.txt');
@@ -17092,6 +17148,13 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const XC_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const FG_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -17289,6 +17352,32 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function xcLoad() {
+    try {
+        const raw = fs.readFileSync(XC_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'Xingchi');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'xc_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { xcSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -17673,6 +17762,9 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function xcSave(arr) {
+    durableWriteJson(XC_SESSIONS_FILE, arr);
+}
 function fgSave(arr) {
     durableWriteJson(FG_SESSIONS_FILE, arr);
 }
@@ -17720,6 +17812,10 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function xcReadActiveModel() {
+    try { return fs.readFileSync(XC_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function fgReadActiveModel() {
@@ -17784,6 +17880,10 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function xcReadActiveKey() {
+    try { return fs.readFileSync(XC_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function fgReadActiveKey() {
@@ -17877,6 +17977,77 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function xcConverterSpawn() {
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(XC_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        // Ключ и апстрим конвертер читает сам (файл активного ключа + env-дефолт),
+        // поэтому конфиг не пишем: у него нет ничего, что вкладка выбирает на ходу.
+        const child = spawn(process.execPath, [XC_CONVERTER_SCRIPT], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                XC_LISTEN_PORT: String(XC_CONVERTER_PORT),
+                XC_UPSTREAM_BASE: `${XC_UPSTREAM}/v1`,
+                XC_KEY_FILE: XC_ACTIVE_KEY_FILE,
+            },
+        });
+        watchChildExit(child, 'конвертер Xingchi', XC_CONVERTER_PORT);
+        child.unref();
+        logLine(`xingchi конвертер spawn: :${XC_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`xingchi конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function xcKeepaliveSpawn() {
+    try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive: у xingchi `/v1/messages` закрыт (403),
+        // поэтому апстрим keepalive — свой конвертер, а не корень площадки. Поднятый
+        // keepalive без конвертера форвардил бы в мёртвый порт.
+        await xcConverterSpawn();
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(XC_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(XC_KEEPALIVE_PORT),
+                // Апстрим — СВОЙ конвертер, не корень площадки: `/v1/messages` у xingchi
+                // отдаёт 403, и прямой форвард умирал бы на каждом запросе.
+                UPSTREAM: XC_CONVERTER_URL,
+                KEY_FILE: XC_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: XC_SESSIONS_FILE,
+                MODELMAP_FILE: XC_MODELMAP_FILE,
+                LOCAL_EXACT_ADAPTER: '1',
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
+                CUSTOM_PROVIDER_ID: 'xingchi', CUSTOM_PROVIDER_NAME: 'Xingchi',
+                GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
+                HAIKU_GPT_PROXY: XC_CONVERTER_URL,
+                MAX_HEDGES: '0',
+                ...(process.env.XC_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.XC_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive Xingchi', XC_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`xingchi keepalive proxy spawn: :${XC_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`xingchi keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -18481,6 +18652,19 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function xcProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${XC_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...XC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function fgProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -18690,6 +18874,17 @@ async function kkBalance(target, opts = {}) {
         usageUrl: 'https://kktoken.cc/v1/dashboard/billing/usage',
         subUrl: null,
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function xcBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'api.xingchiapi.com',
+        ccHeaders: XC_CC_HEADERS,
+        usageUrl: 'https://api.xingchiapi.com/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(XC_DEFAULT_GRANT, Math.ceil(spent / XC_GRANT_STEP) * XC_GRANT_STEP),
         force: !!opts.force,
     });
 }
@@ -19258,6 +19453,7 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function xcApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'xingchi' }); }
 function fgApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'freegg' }); }
 function axApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'apinex' }); }
 function kvApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kvotum' }); }
@@ -19590,6 +19786,29 @@ async function handleKkSessions(req, res) {
             kkSave(sessions);
         }
         jsonRes(res, 200, { sessions, activeModel: kkReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleXcSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = xcLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await xcProbe(s.api_key); }));
+            }
+            xcSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => xcApplyBalance(s, await xcBalance(s))));
+            }
+            xcSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: xcReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -19969,6 +20188,18 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await xcProbe(api_key);
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; xcSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -20166,6 +20397,28 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleXcBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = xcLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await xcBalance(target || { api_key }, { force });
+            if (target) { xcApplyBalance(target, bal); xcSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('xc:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -20507,6 +20760,9 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleXcSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'xingchi', load: xcLoad, save: xcSave, balanceFn: xcBalance, applyFn: xcApplyBalance });
+}
 function handleFgSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'freegg', load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance });
 }
@@ -20554,6 +20810,7 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const xcLkPids = new Map();
 const fgLkPids = new Map();
 const axLkPids = new Map();
 const kvLkPids = new Map();
@@ -20570,6 +20827,10 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function xcPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -20684,6 +20945,59 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleXcSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xcLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = xcLkPids.get(label);
+        if (xcPidAlive(prevPid)) {
+            logLine(`xingchi session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'xingchi', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('api.xingchiapi.com', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`xingchi session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`xingchi session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`xingchi session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            xcLkPids.delete(label);
+            logLine(`xingchi session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('xc', id);
+        });
+        proc.unref();
+        xcLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            xcLkPids.delete(label);
+            logLine(`xingchi session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`xingchi session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -21503,6 +21817,7 @@ const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js')
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const XC_SESSIONS_DIR = path.join(__dirname, '..', 'xingchi', 'sessions');
 const FG_SESSIONS_DIR = path.join(__dirname, '..', 'freegg', 'sessions');
 const AX_SESSIONS_DIR = path.join(__dirname, '..', 'apinex', 'sessions');
 const KV_SESSIONS_DIR = path.join(__dirname, '..', 'kvotum', 'sessions');
@@ -21523,6 +21838,13 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function xcB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function xcB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -21880,6 +22202,47 @@ async function handleLsShare(req, res) {
         };
         const share = lsB64UrlEncode(JSON.stringify(payload));
         logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleXcShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = xcLkPids.get(label);
+        if (xcPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `xingchi/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у xc нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(XC_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'xingchi',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = xcB64UrlEncode(JSON.stringify(payload));
+        logLine(`xingchi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -22419,6 +22782,65 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleXcImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(xcB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'xingchi' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не xingchi-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = xcLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'xc_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        xcSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(XC_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(XC_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`xingchi import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`xingchi import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -23341,6 +23763,36 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = xcLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'xc_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        xcSave(sessions);
+        logLine(`xingchi add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -23918,6 +24370,30 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(XC_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        xcSave(sessions);
+        logLine(`xingchi set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24310,6 +24786,29 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        xcSave(sessions);
+        logLine(`xingchi rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24679,6 +25178,22 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.id === idKey);
+        xcSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === xcReadActiveKey()) {
+            try { fs.rmSync(XC_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(XC_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`xingchi delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -24973,6 +25488,59 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleXcActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в xingchi-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = xcLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(XC_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        xcSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-xc');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = XC_KEEPALIVE_URL;   // keepalive :20186 → конвертер :20187 → api.xingchiapi.com /v1/responses
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — xingchi-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const xcCurModel = xcReadActiveModel() || '';
+            if (xcCurModel) settings.model = xcCurModel;
+            else { delete settings.model; logLine('xingchi activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из xingchi-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`xingchi activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20186, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const xcKa = await keepaliveBring(XC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!xcKa.ok) logLine(`xingchi activate: keepalive :${XC_KEEPALIVE_PORT} НЕ поднялся — ${xcKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`xingchi activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${XC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: xcKa.ok, port: XC_KEEPALIVE_PORT, error: xcKa.ok ? null : (xcKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -26056,6 +26624,40 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleXcModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (XC_MODELS_CACHE.data && Date.now() - XC_MODELS_CACHE.ts < XC_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: XC_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${XC_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...XC_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+        }));
+        XC_MODELS_CACHE.data = models;
+        XC_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (XC_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: XC_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
 async function handleFgModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -26600,6 +27202,38 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(XC_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-xc-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = XC_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`xingchi set-model: settings.json FAILED: ${e.message}`);
+        }
+        const xcKaM = await keepaliveBring(XC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!xcKaM.ok) logLine(`xingchi set-model: keepalive :${XC_KEEPALIVE_PORT} НЕ поднялся — ${xcKaM.error || '?'}`);
+        logLine(`xingchi set-model: ${m} (base ${XC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: XC_ACTIVE_MODEL_FILE, base: XC_KEEPALIVE_URL, needRestart: true, keepalive: { up: xcKaM.ok, port: XC_KEEPALIVE_PORT, error: xcKaM.ok ? null : (xcKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -27095,6 +27729,18 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleXcModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(XC_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`xingchi modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleFgModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -27279,6 +27925,12 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function xcReadModelMap() {
+    try {
+        const raw = fs.readFileSync(XC_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -35203,6 +35855,8 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [XC_KEEPALIVE_PORT]: { name: 'Xingchi', spawn: xcKeepaliveSpawn },
+        [XC_CONVERTER_PORT]: { name: 'Xingchi конвертер', spawn: xcConverterSpawn, statusPath: '/health' },
         [FG_KEEPALIVE_PORT]: { name: 'FreeGG', spawn: fgKeepaliveSpawn },
         [FG_CONVERTER_PORT]: { name: 'FreeGG конвертер', spawn: fgConverterSpawn, statusPath: '/health' },
         [AX_KEEPALIVE_PORT]: { name: 'APINEX', spawn: axKeepaliveSpawn },
@@ -35409,6 +36063,8 @@ async function bootSweepStaleChildren() {
     const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active, GEMINI_ENGINE_PORT]);   // эти пересоздаём отдельно
     const swept = [];
     if (active === A6_KEEPALIVE_PORT) keep.add(A6_CONVERTER_PORT);
+    // Xingchi — пара keepalive+конвертер как A6/FreeGG: активная вкладка держит оба.
+    if (active === XC_KEEPALIVE_PORT) keep.add(XC_CONVERTER_PORT);
     for (const [p, inst] of Object.entries(keepaliveInstances())) {
         const port = Number(p);
         if (keep.has(port)) continue;
@@ -36654,6 +37310,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    xc: { tag: 'xingchi',     label: 'Xingchi',     host: 'api.xingchiapi.com',     keyFile: XC_ACTIVE_KEY_FILE, load: xcLoad, save: xcSave, balanceFn: xcBalance, applyFn: xcApplyBalance },
     fg: { tag: 'freegg',     label: 'FreeGG',     host: 'freegg.app',     keyFile: FG_ACTIVE_KEY_FILE, load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance },
     ax: { tag: 'apinex',     label: 'APINEX',     host: 'api.apinex.bond',     keyFile: AX_ACTIVE_KEY_FILE, load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance },
     kv: { tag: 'kvotum',     label: 'KVOTUM',     host: 'myapi.buzz',     keyFile: KV_ACTIVE_KEY_FILE, load: kvLoad, save: kvSave, balanceFn: kvBalance, applyFn: kvApplyBalance },
@@ -38511,6 +39168,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/xc/keepalive/state')  return keepaliveXc.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/keepalive/state')  return keepaliveFg.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/keepalive/state')  return keepaliveAx.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/keepalive/state')  return keepaliveKv.state(req, res);
@@ -38529,6 +39187,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/keepalive/config') return keepaliveXc.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/keepalive/config') return keepaliveFg.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/keepalive/config') return keepaliveAx.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/keepalive/config') return keepaliveKv.config(req, res);
@@ -38565,6 +39224,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/keepalive/latency')) return keepaliveXc.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/keepalive/latency')) return keepaliveFg.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/keepalive/latency')) return keepaliveAx.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/keepalive/latency')) return keepaliveKv.latency(req, res);
@@ -38627,6 +39287,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/sessions')) return handleXcSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/sessions')) return handleFgSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/sessions')) return handleAxSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/sessions')) return handleKvSessions(req, res);
@@ -38644,6 +39305,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/ping'))     return handleXcPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/ping'))     return handleFgPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/ping'))     return handleAxPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/ping'))     return handleKvPing(req, res);
@@ -38661,6 +39323,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/balance'))  return handleXcBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/balance'))  return handleFgBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/balance'))  return handleAxBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/balance'))  return handleKvBalance(req, res);
@@ -38678,6 +39341,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/models'))   return handleXcModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/models'))   return handleFgModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/models'))   return handleAxModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kv/models'))   return handleKvModels(req, res);
@@ -38695,6 +39359,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/xc/active-model') return jsonRes(res, 200, { model: xcReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/active-model') return jsonRes(res, 200, { model: fgReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/active-model') return jsonRes(res, 200, { model: axReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/active-model') return jsonRes(res, 200, { model: kvReadActiveModel() || null });
@@ -38712,6 +39377,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/xc/modelmap') return jsonRes(res, 200, { ok: true, modelMap: xcReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/modelmap') return jsonRes(res, 200, { ok: true, modelMap: fgReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/modelmap') return jsonRes(res, 200, { ok: true, modelMap: axReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/kv/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kvReadModelMap() });
@@ -38730,6 +39396,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/add')       return handleXcAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/add')       return handleFgAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/add')       return handleAxAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/add')       return handleKvAdd(req, res);
@@ -38747,6 +39414,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/key')       return handleXcSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/key')       return handleFgSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/key')       return handleAxSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/key')       return handleKvSetKey(req, res);
@@ -38765,6 +39433,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/rename')    return handleXcRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/rename')    return handleFgRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/rename')    return handleAxRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/rename')    return handleKvRename(req, res);
@@ -38782,6 +39451,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/delete')    return handleXcDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/delete')    return handleFgDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/delete')    return handleAxDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/delete')    return handleKvDelete(req, res);
@@ -38799,6 +39469,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/activate')  return handleXcActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/activate')  return handleFgActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/activate')  return handleAxActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/activate')  return handleKvActivate(req, res);
@@ -38816,6 +39487,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/set-model') return handleXcSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/set-model') return handleFgSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-model') return handleAxSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-model') return handleKvSetModel(req, res);
@@ -38833,6 +39505,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/set-balance') return handleXcSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/set-balance') return handleFgSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-balance') return handleAxSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-balance') return handleKvSetBalance(req, res);
@@ -38859,6 +39532,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/modelmap')  return handleXcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/modelmap')  return handleFgModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/modelmap')  return handleAxModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/modelmap')  return handleKvModelMap(req, res);
@@ -38868,6 +39542,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/session/open') return handleXcSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/session/open') return handleFgSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/session/open') return handleAxSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/session/open') return handleKvSessionOpen(req, res);
@@ -38889,6 +39564,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/share')    return handleXcShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/share')    return handleFgShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/share')    return handleAxShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/share')    return handleKvShare(req, res);
@@ -38906,6 +39582,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/import')   return handleXcImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/import')   return handleFgImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/import')   return handleAxImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kv/import')   return handleKvImport(req, res);
@@ -39322,7 +39999,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|fg|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|xc|fg|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

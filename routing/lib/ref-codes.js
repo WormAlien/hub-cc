@@ -32,6 +32,11 @@ const SHAPES = {
     // KKtoken (2026-08-31) — New API, форма как у остальных: `/sign-up?aff=`.
     // Хост без поддомена: панель и шлюз оба на `kktoken.cc`.
     kktoken:     { host: 'kktoken.cc',        path: '/sign-up?aff=',  label: 'KKtoken' },
+    // Xingchi (2026-11-21) — форма СВОЯ: `/register?aff=`, как у AgentRouter/ThreeRouter,
+    // а не `/sign-up?aff=` эталона. Хост — сам `xingchiapi.com` (панель), а не API-хост
+    // `api.xingchiapi.com`: рефка владельца ведёт именно на панель. Проверено живой
+    // ссылкой владельца: `https://xingchiapi.com/register?aff=UJAXQ4QTR94U` → 200.
+    xingchi:     { host: 'xingchiapi.com',    path: '/register?aff=',  label: 'Xingchi' },
     freegg:     { host: 'freegg.app',        path: '/sign-up?aff=',  label: 'FreeGG' },
     // KVOTUM (2026-10-30) — форма СВОЯ: рефка ловится на КОРНЕ `/?ref=`, а не на
     // странице регистрации. Сам бандл витрины строит ссылку как

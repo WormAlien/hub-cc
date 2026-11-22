@@ -26,6 +26,7 @@ const POOLS = [
     { id: 'tb', file: 'tabi-sessions.json', name: 'Tabi Token' },
     // KKtoken (31.08) — восьмой шлюз, деньги живые, значит идёт в сумму шапки.
     { id: 'kk', file: 'kktoken-sessions.json', name: 'KKtoken' },
+    { id: 'xc', file: 'xingchi-sessions.json', name: 'Xingchi' },
     { id: 'fg', file: 'freegg-sessions.json', name: 'FreeGG' },
     { id: 'ax', file: 'apinex-sessions.json', name: 'APINEX' },
     { id: 'kv', file: 'kvotum-sessions.json', name: 'KVOTUM' },

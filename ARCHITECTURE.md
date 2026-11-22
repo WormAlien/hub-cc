@@ -57,6 +57,58 @@ historical 401 `Нет ключа AgentRouter` is not a suffix rejection.
 
 ## Сервисы и порты
 
+### Stock Hermes compact on AgentRouter (22.11.2026, source acceptance)
+
+The OpenAI Front Door now recognizes the pinned stock Hermes checkpoint scaffold
+before Bifrost conversion. `routing/lib/hermes-agentrouter-checkpoint.js` applies
+only after the existing registry resolves the provider to `agentrouter`; ordinary
+requests, tool calls, other providers, and unknown scaffold revisions pass unchanged.
+The adapter separates instructions from the byte-preserved historical archive,
+retains prior checkpoint/memory/focus/provenance/redaction rules, and requests a
+concise checkpoint on the same model. Explicit reasoning settings still win.
+It does not change credentials, route identity, response status, or usage accounting.
+
+Checks: `node tools/check-hermes-agentrouter-checkpoint.js` (9 cases),
+`node tools/check-stock-hermes-checkpoint-stack.js` (10 cases with real pinned
+Bifrost), Front Door selftest and API integration regressions. A clean Hermes
+git-archive snapshot passed manual and automatic core compression through this
+isolated stack on SQLite copies (416 -> 94, originals archived, no fallback).
+Fixture summaries are test data. Parent live stock-core acceptance also passed
+through the isolated stack and existing AgentRouter native relay: manual 328.310s,
+automatic 168.741s, both 416 -> 94, real committed summaries, same model, no fallback.
+Transport retries included two failed/cancelled attempts and two complete replies;
+they are recorded rather than hidden. Production rollout remains separate.
+
+Actual stock-core acceptance through the serving production Front Door on :20100
+also passed: manual 208.647s and automatic 170.191s, both 416 -> 94, real SQLite
+commits with original archive rows intact. The serving owned process started after
+the adapter source; no additional hub restart was needed.
+
+The shipped `HERMES_TUI_RPC_TIMEOUT_MS=660000` extends the stock client's manual
+wait without modifying source. A prior idle-only renderer probe is not evidence
+that normal stock compression animation is broken. Keep the stock renderer and
+verify the actual turn path; do not retain a UI patch on that premise. The Hermes
+source cleanup is owner-approved, but gateway reload cannot interrupt other live
+sessions without separate permission. Canon: `ABUSE HUB API Gateway - единый вход
+для Claude Code, OpenCode и Hermes`.
+
+Our compact-specific Hermes runtime/shared/UI edits are now removed: 14 tracked
+files match stock HEAD; 14 custom helpers/tests were moved to verified backups.
+Unrelated source edits and user sessions/configuration remain intact. The stock
+TUI was rebuilt. `node tools/launch-hermes.js [args]` launches installed stock
+Hermes with its shipped 660-second RPC setting only when the user has not set it;
+arguments, explicit settings, working directory and interactive stdio are preserved.
+Launcher fixtures: 11 passed, 1 POSIX-only skip. Current open clients and gateway
+still need their supported reload; no forced interruption of live sessions occurred.
+
+Stock automatic animation is verified on the real prompt.submit/turn/status-event
+path and stock Ink renderer in Windows ConPTY: 68 compacting redraws and two
+distinct frames, followed by compacted and idle. Parent source/PTY/SQLite readback
+passed (one summary, 51 archived rows, integrity OK, no remaining owned processes).
+This animation test used a local HTTP fixture, not another provider generation.
+Canonical idle manual comparison covered summary preparation only and is not a
+complete slash/receipt animation acceptance. Do not generalize it to all stock UI.
+
 ### New API selected-account onboarding (19.11.2026, local source acceptance)
 
 Fxqidian now uses the shared `newapi-onboarding.js` wrapper and explicit `/keys` console config. Its existing GitHub manager metadata opts into add-github -> session/open provision -> exact key readback, without a credentials popup or activating the account. The common runtime supports classic flat OAuth identity/list keys and JWT/reveal, uses the existing GitHub password/TOTP module, and rejects ambiguous tokens. Optional referrals/default paths are supported without migrating other existing provider configs. New explicitly supported generator targets receive the same wrapper, metadata and provision mode. Real Chromium local password/TOTP/token repeat and desktop/mobile manager fixtures pass; live fxqidian identity selection and production restart remain unperformed. Canon: `ABUSE HUB - New API onboarding - Surface Canon`.

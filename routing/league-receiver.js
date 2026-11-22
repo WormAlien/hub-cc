@@ -394,8 +394,16 @@ let INSTANCE = '';
 try { INSTANCE = String(fs.readFileSync(INSTANCE_FILE, 'utf8')).trim(); } catch { /* первый старт */ }
 if (!/^[a-f0-9]{16}$/.test(INSTANCE)) {
     INSTANCE = crypto.randomBytes(8).toString('hex');
+    // 🪤 Если файл не записался, instance будет НОВЫМ на каждом рестарте, и хабы
+    // увидят «нода переехала» там, где был обычный перезапуск — а это разрешение на
+    // авто-джойн, которое выдавать нельзя. Поэтому сбой записи — громкая ошибка:
+    // приёмник работает, но идентичность нестабильна, и это надо видеть.
     try { fs.writeFileSync(INSTANCE_FILE, INSTANCE + '\n', { mode: 0o600 }); }
-    catch (e) { console.error('instance-id не записался: ' + e.message); }
+    catch (e) {
+        console.error('❗ instance-id не записался: ' + e.message
+            + ' — идентичность приёмника НЕСТАБИЛЬНА: после рестарта instance станет другим,'
+            + ' и клиенты примут это за переезд ноды. Исправь права на ' + DATA);
+    }
 }
 
 const log = m => console.log(`[${new Date().toISOString()}] ${m}`);

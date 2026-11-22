@@ -557,6 +557,7 @@ outlook/sessions/
 # Лига: конфиг отправителя содержит секрет приёмника, данные приёмника — чужие срезы
 routing/league-config.json
 routing/league-data/
+routing/league-client-state/
 routing/league-peers.json
 # Настройки графика, снятые с ноды (см. LEAGUE_CHART_FILE): состояние, а не код.
 routing/league-chart.json

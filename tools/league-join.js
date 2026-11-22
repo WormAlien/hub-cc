@@ -46,6 +46,8 @@ const opt = (n, d) => {
   return hit === undefined ? d : hit.slice(p.length);
 };
 const ROOT = path.join(__dirname, '..');
+// --out переопределяет конфиг: это же нужно тестам (`tools/check-league-check-only.js`)
+// и повторным проверкам, которые не должны трогать боевой league-config.json.
 const CONFIG_FILE = opt('out', path.join(ROOT, 'routing', 'league-config.json'));
 const IDENTITY_FILE = path.join(ROOT, 'routing', 'hub-identity.json');
 
@@ -121,12 +123,27 @@ if (existing && existing.__broken) fail(`${CONFIG_FILE} лежит, но это 
 if (!/^https?:\/\//i.test(URL_BASE)) fail('нужен --url=http(s)://адрес:порт');
 if (kr.err) fail(kr.err);
 const IS_TLS = /^https:/i.test(URL_BASE);
-// Без пина на https идти нельзя: сертификат приёмника самоподписанный, и хаб
-// отключает проверку CA ТОЛЬКО когда есть отпечаток (`if (cfg.pin)` в leagueReq).
-// Пустой пин = доверие любому центру = доверие любому, кто нас перехватил.
-if (IS_TLS && PIN.length !== 64) {
+// Пин нужен не «потому что https», а «потому что доверять цепочке нечем».
+// Два законных случая различаются по тому, КУДА идёт соединение:
+//
+//   • по ДОМЕННОМУ имени (SNI отправляется, hostname проверяется) — работает обычная
+//     проверка CA. Требовать pin здесь бессмысленно и вредно: `lg.xgate.online` сидит
+//     за Cloudflare с валидной цепочкой, и `--check-only` на живой установке падал с
+//     «для https нужен --pin» ещё ДО сетевых запросов (живой случай 22.11.2026).
+//   • по IP / без SNI (самоподписанный сертификат) — CA проверить нечем, и тогда pin
+//     обязателен: иначе секрет уедет любому, кто перехватил соединение.
+//
+// Ровно так же решает сам хаб: в `leagueReq` `rejectUnauthorized=false` включается
+// ТОЛЬКО при непустом `cfg.pin`; без пина остаётся обычная проверка с servername.
+const BY_IP = !!IP;
+const NEED_PIN = IS_TLS && BY_IP;
+if (NEED_PIN && PIN.length !== 64) {
   fail(PIN ? `отпечаток не похож на sha256: ${PIN.length} hex-символов вместо 64`
-    : 'для https нужен --pin=<sha256 сертификата>, иначе секрет уедет кому угодно');
+    : 'соединение по IP/без SNI требует --pin=<sha256 сертификата>, иначе секрет уедет кому угодно '
+      + '(по доменному имени pin не нужен — хватает проверки CA)');
+}
+if (IS_TLS && !NEED_PIN && PIN && PIN.length !== 64) {
+  fail(`отпечаток не похож на sha256: ${PIN.length} hex-символов вместо 64`);
 }
 if (bad) { console.log('\nитог: не настроено\n'); process.exit(1); }
 const KEY = kr.key;
@@ -257,6 +274,7 @@ const jsonOf = r => { try { return JSON.parse(r.body); } catch { return null; } 
 
   console.log('\nприёмник:');
   let health = null;
+  let remoteInstance = null;
   try {
     // /health — единственная ручка без ключа. Ответ на неё и есть доказательство,
     // что приёмник жив: ни ping, ни «порт открыт» этого не доказывают.
@@ -265,6 +283,21 @@ const jsonOf = r => { try { return JSON.parse(r.body); } catch { return null; } 
     if (h.status === 200 && health && health.ok) {
       okLine(`/health → 200 за ${h.ms} мс, установок сдаёт срезы: ${health.installs}`
         + (health.last ? `, последний ${health.last}` : ''));
+      // instance — идентичность ноды. По нему различаются «нода другая» и «токен
+      // отозван на этой же»: см. routing/lib/league-instance.js.
+      if (health.instance) {
+        remoteInstance = String(health.instance);
+        note(`instance приёмника: ${remoteInstance}`);
+        const lg = require(path.join(__dirname, '..', 'routing', 'lib', 'league-instance.js'));
+        const prev = lg.known();
+        const v = lg.verdict({ remote: remoteInstance, enabled: true });
+        if (prev) note(`прежний подтверждённый instance: ${prev} → ${v.state}`);
+        else note('прежний instance неизвестен: состояние unknown_prev, авто-джойн НЕ разрешён');
+        if (v.state === 'changed') {
+          note('нода ДРУГАЯ. Это переезд приёмника, а не отзыв; но переподключаться');
+          note('можно только если личность не отозвана — смена ноды отзыва не отменяет.');
+        }
+      }
     } else fail(`/health → ${h.status}: ${String(h.body).slice(0, 120)}`);
   } catch (e) {
     fail(`/health не ответил: ${e.message}`);
@@ -273,25 +306,61 @@ const jsonOf = r => { try { return JSON.parse(r.body); } catch { return null; } 
       : '     контроль тоже лёг — виноват туннель или сеть, приёмник тут не при чём');
   }
   if (health) {
+    // ⚠️ /peers НЕ доказывает, что секрет принят: ручка публичная (handlePeers не
+    // требует ключа — `identity` приходит только из authOf, а публичный вызов идёт
+    // с `true` и без проверки). 200 на /peers означает лишь «приёмник жив».
+    // Настоящая авторизация личности — `GET /me` через authOfAny: он отвечает 401
+    // ровно в трёх случаях, и все три надо различать, а не сваливать в один текст:
+    //   «токен не принят: такой личности у приёмника нет»  — личность неизвестна
+    //   «эта личность отозвана»                            — отзыв/выход
+    //   «заявка ещё не одобрена» (403)                     — pending
+    // Это и есть контракт приёмника (routing/league-receiver.js, GET /me).
     try {
-      const p = await req(`/peers?installId=${encodeURIComponent(ME)}`, { key: KEY });
-      if (p.status === 200) {
-        const d = jsonOf(p) || {};
-        okLine(`/peers → 200 за ${p.ms} мс: секрет принят, соседей видно ${(d.peers || []).length}`);
-      } else if (p.status === 401) {
-        fail('/peers → 401: приёмник не принял секрет — он не тот или обрезан при копировании');
-      } else fail(`/peers → ${p.status}: ${String(p.body).slice(0, 120)}`);
-    } catch (e) { fail(`/peers не ответил: ${e.message}`); }
+      const m = await req('/me', { key: KEY });
+      const d = jsonOf(m) || {};
+      const errText = String(d.error || '');
+      if (m.status === 200) {
+        const st = String(d.status || '');
+        if (st === 'active') {
+          okLine(`/me → 200 за ${m.ms} мс: секрет принят, личность «${d.nick || '—'}» (${st})`);
+          if (d.installId) note(`installId у приёмника: ${d.installId}`);
+        } else {
+          fail(`/me → 200, но личность в состоянии «${st || '—'}», а не active`);
+        }
+      } else if (m.status === 401) {
+        // Три разных 401 — три разных действия. Не склеиваем в «токен не принят».
+        if (/отозван/i.test(errText)) {
+          fail('/me → 401: личность ОТОЗВАНА или вышла из Лиги — авто-джойн запрещён, нужен новый токен от владельца');
+        } else if (/такой личности/i.test(errText)) {
+          fail('/me → 401: приёмник не знает эту личность (неизвестная личность, не отзыв)');
+        } else {
+          fail(`/me → 401: секрет не принят — ${errText || 'причина не указана'}`);
+        }
+        note('подсказка: /peers публичен и 200 на нём ничего не доказывает');
+      } else if (m.status === 403) {
+        fail(`/me → 403: заявка ещё не одобрена владельцем (${errText || 'pending'})`);
+      } else {
+        fail(`/me → ${m.status}: ${String(m.body).slice(0, 120)}`);
+      }
+    } catch (e) {
+      // Транспортный отказ — это НЕ «токен не принят». Разделяем честно.
+      fail(`/me не ответил (транспорт): ${e.message}`);
+      note('это отказ транспорта, а не отказ авторизации: токен мог быть и принят');
+    }
   }
-  if (IS_TLS) {
+  if (IS_TLS && NEED_PIN) {
     // Два запроса — два рукопожатия. Если пин сверился не на всех, значит агент
     // где-то переиспользовал сессию, и проверка отпечатка была пустой.
+    // Считаем только когда пин вообще требуется (соединение по IP): по доменному
+    // имени сверять нечего — там работает проверка CA и hostname.
     const want = health ? 2 : 1;
     if (pinFailed) {
       note('рукопожатие оборвано на несовпавшем отпечатке — сверь `pin` с владельцем;'
         + ' сертификат приёмника могли перевыпустить');
     } else if (pinChecked >= want) okLine(`отпечаток сверен на всех ${pinChecked} рукопожатиях`);
     else fail(`отпечаток сверен ${pinChecked} раз из ${want} — сессия переиспользована?`);
+  } else if (IS_TLS) {
+    note('соединение по доменному имени: сертификат проверен цепочкой CA и hostname, pin не нужен');
   }
 
   if (!bad) {

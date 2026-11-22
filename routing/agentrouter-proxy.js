@@ -24,7 +24,10 @@ const { chatUsageToAnthropic, responsesUsageToAnthropic } = require('./lib/usage
 // экземпляр рядом с боевым было нельзя, и приёмка шла копией файла с правленым числом —
 // то есть мимо настоящего кода. Прод от этого не меняется: без LISTEN_PORT всё те же 20132.
 const LISTEN_PORT = Number(process.env.LISTEN_PORT || 20132);
-const UPSTREAM_BASE = 'https://agentrouter.org';
+// UPSTREAM_BASE переопределяется окружением ТОЛЬКО для локальных тестов
+// (`tools/check-ar-client-gone.js` поднимает mock /v1/responses). Боевой дефолт
+// остаётся agentrouter.org: без переменной поведение не меняется.
+const UPSTREAM_BASE = String(process.env.AR_UPSTREAM_BASE || 'https://agentrouter.org').replace(/\/+$/, '');
 const ACTIVE_KEY_FILE = path.join(require('os').homedir(), '.claude', 'ar-active-key.txt');
 const MAX_TOKENS_LIMIT = 64000;
 const REQUEST_TIMEOUT_MS = 600000;
@@ -981,6 +984,7 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody
     let attempt = 0;
     let activeRequest = null;
     let finished = false;
+    let clientGone = false;   // клиент закрыл соединение — это НЕ отказ апстрима
 
     const run = () => {
         if (finished || clientRes.writableEnded || clientRes.destroyed) return;
@@ -1004,6 +1008,10 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody
 
             const stream = createResponsesEmitter(clientRes, claudeReq, {
                 onCommit: () => { finished = true; },
+                // Эмиттер спрашивает «клиент ещё здесь?» в момент отказа. Флаг ставится
+                // обработчиком close ниже, поэтому это честный факт, а не догадка по
+                // clientRes.destroyed (к тому моменту поток бывает закрыт и апстримом).
+                isClientGone: () => clientGone,
                 onContentFilter: (info) => {
                     if (attempt < RESPONSES_CONTENT_FILTER_ATTEMPTS) {
                         stats.contentFilterRetries += 1;
@@ -1022,6 +1030,17 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody
                 },
                 onHardFail: (info) => {
                     finished = true;
+                    // 🪤 Уход клиента — НЕ отказ апстрима. Раньше оба случая сходились в
+                    // empty_stream, и в журнале появлялся «502 upstream вернул поток без
+                    // содержимого» там, где на самом деле клиент закрыл соединение
+                    // (живой случай 22.11: [frontdoor] клиент ушёл → ECONNRESET →
+                    // [ar] empty_stream - отдаю 502). Клиенту писать уже некуда, а
+                    // ложный 502 уводил разбор в чужую сторону.
+                    if (info.code === 'client_gone') {
+                        stats.clientGone = (stats.clientGone || 0) + 1;
+                        logLine('responses: клиент ушёл до контента - не считаю отказом апстрима');
+                        return;
+                    }
                     logLine(`responses: отказ до контента (${info.code}) - отдаю 502`);
                     claudeError(clientRes, 502, info.message, 'api_error');
                 },
@@ -1032,13 +1051,28 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody
         }, (err) => {
             if (finished) return;
             finished = true;
+            // 🔴 Уход клиента приходит СЮДА, а не в finish(): keepalive по close клиента
+            // рвёт апстрим, и запрос падает с «socket hang up» / ECONNRESET. Раньше это
+            // логировалось и отдавалось как «responses upstream error ... → 502», хотя
+            // вендор ни при чём — соединение закрыл Claude Code (живой случай 22.11.2026).
+            // Клиенту писать уже некуда; в журнал — правду.
+            if (clientGone) {
+                stats.clientGone = (stats.clientGone || 0) + 1;
+                logLine(`responses: клиент ушёл до контента - не считаю отказом апстрима (${err.message})`);
+                return;
+            }
             logLine(`responses upstream error: ${err.message}`);
             claudeError(clientRes, 502, 'upstream: ' + err.message);
         });
     };
 
     run();
+    // Явный признак «клиент закрыл соединение». `clientRes.destroyed` для этого не
+    // годится: на момент разбора отказа поток бывает уже закрыт и со стороны апстрима,
+    // и тогда уход клиента не отличить от пустого ответа вендора. Флаг ставится ровно
+    // в обработчике close самого ответа — то есть только по факту ухода клиента.
     clientRes.on('close', () => {
+        if (!clientRes.writableEnded) clientGone = true;
         if (!clientRes.writableEnded && activeRequest && !activeRequest.destroyed) activeRequest.destroy();
     });
     return activeRequest;
@@ -1046,7 +1080,7 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest, blockedBody
 
 // Разбор событий Responses в Anthropic-SSE. Заголовки отдаёт только при commit() -
 // то есть когда terminal event подтвердил, что накопленный ответ не content_filter.
-function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilter, onTransientFail, onHardFail }) {
+function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilter, onTransientFail, onHardFail, isClientGone }) {
     let started = false;
     let ended = false;
     let failed = false;   // отказ уже отдан наружу — finish() не должен перекрыть его «пустотой»
@@ -1292,7 +1326,22 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
         // Если отказ уже отдан событием (failed), не перекрываем его этой веткой.
         if (!started) {
             if (failed) return;
-            return onHardFail({ code: 'empty_stream', message: errorMessage || 'upstream вернул поток без содержимого' });
+            // 🔴 Два разных мира, и путать их нельзя:
+            //   client_gone  — соединение закрыл КЛИЕНТ (Claude Code ушёл по своим причинам:
+            //                  Escape, новый ввод, таймаут харнесса). Апстрим тут ни при чём,
+            //                  и «502 upstream вернул поток без содержимого» — ложь, которая
+            //                  уводит разбор в чужую сторону (живой случай 22.11.2026:
+            //                  frontdoor «клиент ушёл» → ECONNRESET → ar empty_stream → 502).
+            //   empty_stream — апстрим реально закрыл поток, не прислав ни одного события
+            //                  контента. Это уже про вендора.
+            const gone = typeof isClientGone === 'function' ? !!isClientGone() : false;
+            const code = gone ? 'client_gone' : 'empty_stream';
+            return onHardFail({
+                code,
+                message: gone
+                    ? 'клиент закрыл соединение до первого события'
+                    : (errorMessage || 'upstream вернул поток без содержимого'),
+            });
         }
         closeTextBlock();
         closeAllToolBlocks();
@@ -1336,7 +1385,7 @@ function createResponsesEmitter(clientRes, claudeReq, { onCommit, onContentFilte
 
 // ══════════════════════ HANDLERS ══════════════════════
 
-const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, contentFilterRetries: 0, contentFilterExhausted: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
+const stats = { requests: 0, streamed: 0, errors: 0, sanitized: 0, blocked: 0, contentFilterRetries: 0, contentFilterExhausted: 0, clientGone: 0, lastBlockedDump: '', lastModel: '', started: new Date().toISOString() };
 
 function claudeError(res, code, message, errType) {
     stats.errors++;

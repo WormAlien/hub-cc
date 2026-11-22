@@ -52,6 +52,8 @@ const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForMode
 // гоняет её на временных файлах); сюда приходят только две ручки и общая функция
 // возврата. `tierMapFile`/`writeTierMap` передаются инъекцией — см. `poolDropTiers`.
 const poolDropLib = require('./lib/pooldrop');
+// Чистая логика «какая нода у приёмника» — см. ее шапку и tools/check-league-instance-verdict.js
+const leagueInstance = require('./lib/league-instance');
 
 // Источники каталога моделей для вкладки «Маршруты»: живой ключ → ключ аккаунта из пула →
 // наш снимок каталога. Разбор цепочки — в самом модуле.
@@ -11429,20 +11431,39 @@ function leagueSelf() {
         },
     };
 }
-// Версия сборки хаба — чтобы в лиге было видно, кто сидит на старой. Считается один
-// раз по требованию: `git rev-parse` на старте процесса не нужен никому.
+// Версия сборки хаба — чтобы в лиге было видно, кто сидит на старой. Считается ОДИН
+// раз, на старте процесса, и запоминается вместе с временем старта.
+//
+// 🪤 Раньше это считалось «по требованию» (лениво, при первом запросе). Тогда после
+// `git pull` файлы на диске уже новые, а процесс в памяти — старый, и `hubBuild()`
+// отдавал СВЕЖИЙ HEAD как «версию работающего кода». Именно так возникает разбор
+// несуществующей сборки: диагностика читает fb60018, а в памяти живёт предыдущий код.
+// Живой случай 22.11.2026: HEAD fb60018 при неустановленном SHA процесса.
+// Теперь снимок берётся при загрузке модуля, до любых обновлений на диске.
+// Время старта ЭТОГО процесса. Нужно, чтобы диагностика могла отличить «код на диске
+// новый» от «код в памяти новый»: после обновления файлов SHA выше — это HEAD на момент
+// старта, а process_started_at показывает, когда процесс действительно поднялся.
+const HUB_STARTED_MS = Date.now();
+const HUB_STARTED_AT = new Date(HUB_STARTED_MS).toISOString();
+
 let HUB_BUILD = null;
-function hubBuild() {
-    if (HUB_BUILD) return HUB_BUILD;
+function computeBuild() {
     let ver = null, sha = null;
     try { ver = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version || null; } catch (e) {}
     try {
         sha = execFileSync('git', ['rev-parse', '--short', 'HEAD'],
             { cwd: __dirname, encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     } catch (e) { /* не git-чекаут — сойдёт и без sha */ }
-    HUB_BUILD = { ver, sha };
+    return { ver, sha, capturedAt: new Date().toISOString(), source: sha ? 'git rev-parse при старте процесса' : 'package.json (git недоступен)' };
+}
+function hubBuild() {
+    if (HUB_BUILD) return HUB_BUILD;
+    HUB_BUILD = computeBuild();
     return HUB_BUILD;
 }
+// Снимок берётся сразу при загрузке модуля: к моменту первого запроса файлы на диске
+// могли уже обновиться, и тогда «версия процесса» стала бы версией чужого кода.
+hubBuild();
 
 // Соседи по лиге. Приёмника пока нет — файл появится, когда поднимем его на Финке;
 // до тех тех пор лига честно показывает одну строку и объясняет, чего не хватает.
@@ -11723,9 +11744,49 @@ async function leagueSync() {
     try {
         const me = leagueSelf();
         const r = await leagueReq(c, '/slice', 'POST', JSON.stringify(me));
-        if (r.status !== 200) throw new Error(`slice ${r.status}: ${r.body.slice(0, 160)}`);
+        if (r.status !== 200) {
+            // Отказ по личности — отдельный класс, а не «сеть отвалилась». Раньше всё
+            // сваливалось в один throw, и сообщение про остановленный хаб приклеивалось
+            // к доказанному 401 (живой случай 22.11.2026).
+            const why = String((() => { try { return (JSON.parse(r.body) || {}).error || ''; } catch { return ''; } })());
+            if (r.status === 401 || r.status === 403) {
+                const kind = /отозван/i.test(why) ? 'revoked'
+                    : /такой личности/i.test(why) ? 'unknown_identity'
+                        : r.status === 403 ? 'pending' : 'unauthorized';
+                // Отказ по личности — и есть тот случай, ради которого хранится instance.
+                // Спрашиваем /health (единственная ручка без ключа) и сравниваем с
+                // подтверждённым: сменился → переезд ноды; тот же → токен правда отозван.
+                let seen = null;
+                try {
+                    const h = await leagueReq(c, '/health', 'GET');
+                    if (h.status === 200) { const hd = JSON.parse(h.body) || {}; if (hd.instance) seen = String(hd.instance); }
+                } catch { /* не ответил — значит останется receiver_down */ }
+                const verdict = leagueInstanceVerdict(seen);
+                LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: false,
+                    error: why || `slice ${r.status}`, code: kind, verdict: verdict.state,
+                    instance: seen, peers: LEAGUE_SYNC_LAST.peers };
+                logLine(`league sync (${c.url}): приёмник не принял личность (${kind}),`
+                    + ` состояние ноды: ${verdict.state}${seen ? ` (instance ${seen})` : ''}` + `: ${why || r.status}`);
+                return { ok: false, error: why || `slice ${r.status}`, code: kind, verdict: verdict.state };
+            }
+            throw new Error(`slice ${r.status}: ${r.body.slice(0, 160)}`);
+        }
         const p = await leagueReq(c, `/peers?installId=${encodeURIComponent(me.installId)}`, 'GET');
         if (p.status !== 200) throw new Error(`peers ${p.status}: ${p.body.slice(0, 120)}`);
+        // Обмен прошёл — значит личность ПРИНЯТА этой нодой. Фиксируем её instance,
+        // чтобы следующее «нет» можно было сравнить с подтверждённым «да».
+        // Берём из /health: он единственный отдаёт instance без ключа.
+        let confirmedInstance = null;
+        try {
+            const h = await leagueReq(c, '/health', 'GET');
+            if (h.status === 200) {
+                const hd = JSON.parse(h.body) || {};
+                if (hd.instance) {
+                    confirmedInstance = String(hd.instance);
+                    leagueReceiverInstanceRemember(hd.instance, { confirmedBy: 'slice+peers' });
+                }
+            }
+        } catch { /* /health не ответил — не повод ронять обмен */ }
         const doc = JSON.parse(p.body);
         const peers = Array.isArray(doc.peers) ? doc.peers : [];
         const tmp = LEAGUE_PEERS_FILE + '.tmp';
@@ -11772,7 +11833,7 @@ async function leagueSync() {
                 }
             } catch { /* мусор от приёмника - не повод ронять обмен */ }
         }
-        LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: true, error: null, peers: peers.length };
+        LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: true, error: null, peers: peers.length, instance: confirmedInstance };
         return { ok: true, peers: peers.length };
     } catch (e) {
         LEAGUE_SYNC_LAST = { at: new Date().toISOString(), ok: false, error: e.message, peers: LEAGUE_SYNC_LAST.peers };
@@ -11822,6 +11883,15 @@ async function handleLeague(req, res) {
                 url: c.url || null,
                 everyMin: c.everyMin,
                 last: LEAGUE_SYNC_LAST,
+                // Какой instance приёмника мы ПОДТВЕРДИЛИ, и как это соотносится с тем,
+                // что нода отдаёт сейчас. Именно эти шесть состояний (unknown_prev,
+                // changed, same, receiver_down, disabled, config_broken) различают
+                // переезд ноды, отзыв личности и транспортный отказ. Раньше этого
+                // различения не было вовсе — клиент не помнил прежний instance.
+                instance: {
+                    confirmed: leagueReceiverInstanceKnown(),
+                    verdict: leagueInstanceVerdict((LEAGUE_SYNC_LAST && LEAGUE_SYNC_LAST.instance) || null),
+                },
                 note: (c.enabled && c.url && c.key) ? null
                     : 'приёмник не настроен: нет routing/league-config.json',
             },
@@ -12166,6 +12236,40 @@ function leagueWriteGuard(req, res) {
 // Три поля вместе, потому что без любого из них запрос бессмыслен: адрес без ключа
 // получит 401, ключ без адреса некуда посылать.
 function leagueChatReady(c) { return !!(c.enabled && c.url && c.key); }
+
+// Файл «последний подтверждённый instance приёмника». Нужен ровно для одного: отличить
+// «нода переехала» (instance сменился — можно авто-джойн) от «нас отозвали на той же
+// ноде» (instance тот же — обходить нельзя). До этого файла не было вообще, и клиент
+// не мог ответить на этот вопрос даже теоретически.
+//
+// 🪤 Отсутствующий файл — это состояние UNKNOWN, а НЕ «нода новая». Старые установки
+// (живой случай 22.11.2026: клиент месяц не заходил) приходят ровно с такой дыркой, и
+// трактовать её как разрешение на авто-джойн значило бы обходить отзыв молча.
+// Поэтому: нет файла → пишем текущий instance, ничего не подключая.
+// Каталог клиентского состояния Лиги. Нарочно НЕ `routing/league-data/`: тот каталог —
+// данные ПРИЁМНИКА (secret, instance-id, срезы), и на клиентской установке его обычно
+// нет вовсе. Смешивать две сущности в одном каталоге значило бы путать «идентичность
+// ноды» с «тем, что клиент помнит о ноде». Сама логика — в routing/lib/league-instance.js.
+const LEAGUE_INSTANCE_FILE = leagueInstance.DEFAULT_FILE;
+
+function leagueReceiverInstanceKnown() { return leagueInstance.known({ file: LEAGUE_INSTANCE_FILE }); }
+
+function leagueReceiverInstanceRemember(instance, extra) {
+    const ok = leagueInstance.remember({ file: LEAGUE_INSTANCE_FILE, instance, extra });
+    if (!ok && instance) logLine(`league: instance приёмника не записался (${String(instance).slice(0, 16)})`);
+    return ok;
+}
+
+// Читаемое состояние для диагностики: именно эти исходы и надо различать.
+// Полный список — в шапке routing/lib/league-instance.js.
+function leagueInstanceVerdict(remoteInstance) {
+    const c = leagueConfig();
+    const v = leagueInstance.verdict({
+        file: LEAGUE_INSTANCE_FILE, remote: remoteInstance,
+        enabled: !!c.enabled, broken: !!c.__broken,
+    });
+    return v;
+}
 
 // Ответ приёмника → браузеру. Тело и код отдаём КАК ЕСТЬ, когда приёмник ответил:
 // его «нет» (429 «один в минуту», 413 «длинно») вкладке важнее нашей обёртки. Свой
@@ -38199,6 +38303,19 @@ const server = http.createServer((req, res) => {
             ),
             oauth: oauthStatus(),
             settings_file: SETTINGS_FILE,
+            // Версия РАБОТАЮЩЕГО процесса, а не текущий git HEAD. Снимок берётся при
+            // загрузке модуля (см. hubBuild) — иначе после обновления файлов на диске
+            // диагностика выдавала бы новый HEAD за SHA кода в памяти. Живой случай
+            // 22.11.2026: HEAD fb60018 при неустановленном SHA процесса.
+            build: {
+                version: hubBuild().ver,
+                sha: hubBuild().sha,
+                captured_at: hubBuild().capturedAt,
+                source: hubBuild().source,
+                process_started_at: HUB_STARTED_AT,
+                pid: process.pid,
+                uptime_ms: Date.now() - HUB_STARTED_MS,
+            },
         });
     }
 

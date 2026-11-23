@@ -131,6 +131,14 @@ CAPTCHA/device checks требуют человека, 429 останавлив�
 reuse/reveal принят без дублей. Full unattended OAuth и production rollout ещё не приняты.
 Канон и ограничения: Obsidian `FreeGG - вкладка и GitHub onboarding`.
 
+Rate-limit routing остаётся opt-in: `FG_RATE_BALANCE=1` + явный
+`FG_RATE_SCOPE=account|key|shared`; откат — `FG_RATE_BALANCE=0`. На account/key scope
+keepalive выбирает least-inflight кандидата, временно исключает только token-rate-limit
+кандидата, допускает один pre-content fallback и сохраняет `Retry-After`. Shared scope
+никогда не перебирает пул. HTTP/SSE `server_error` не считается доказательством лимита.
+Live A/B headers дали лишь предварительное свидетельство отдельных account counters;
+естественная paired-429 проба ещё не поймана, поэтому production-флаг по умолчанию выключен.
+
 Журнал живого dashboard показал корень first-run сбоя: первый процесс завершался с
 `referral_not_saved`, второй заход по той же рефке проходил. Общий runtime теперь делает один
 ограниченный повтор bootstrap. FreeGG явно включён в manager `autoOnboarding`, а `fg/session/open`

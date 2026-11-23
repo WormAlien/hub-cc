@@ -117,6 +117,21 @@ const AR_ACTIVE_KEY_FILE = process.env.KEY_FILE
 // Имя файла пула приходит env'ом от того, кто запускает прокси (spawn в transparent-proxy).
 const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
 const activeKeyLib = require('./lib/active-key');
+const { createFreeggRatePolicy, errorInfo: freeggRateErrorInfo } = require('./lib/freegg-rate-policy');
+const FREEGG_RATE_SCOPE = String(process.env.FREEGG_RATE_SCOPE || 'off').toLowerCase();
+const FREEGG_RATE_BALANCE = process.env.FREEGG_RATE_BALANCE === '1';
+const FREEGG_RATE_TEST_CONTROL = process.env.FREEGG_RATE_TEST_CONTROL === '1';
+const freeggFallbackRaw = Number(process.env.FREEGG_RATE_MAX_FALLBACKS || 1);
+const FREEGG_RATE_MAX_FALLBACKS = Number.isFinite(freeggFallbackRaw) ? Math.max(0, Math.min(1, Math.round(freeggFallbackRaw))) : 1;
+const freeggBudgetRaw = Number(process.env.FREEGG_RATE_BUDGET_MS || 120000);
+const FREEGG_RATE_BUDGET_MS = Number.isFinite(freeggBudgetRaw) ? Math.max(1000, freeggBudgetRaw) : 120000;
+const freeggRate = createFreeggRatePolicy({
+    enabled: FREEGG_RATE_BALANCE && process.env.CUSTOM_PROVIDER_ID === 'freegg',
+    scope: FREEGG_RATE_SCOPE,
+    sessionsFile: SESSIONS_FILE,
+    defaultCooldownMs: Number(process.env.FREEGG_RATE_COOLDOWN_MS || 60000),
+    jitterMs: Number(process.env.FREEGG_RATE_JITTER_MS || 1000),
+});
 
 let poolKeyLogged = '';                       // чтобы «взял из пула» не сыпалось в лог каждый запрос
 // Свободный ключ того же пула для ОДНОГО субагентского запроса. Активный файл не трогаем.
@@ -1489,6 +1504,7 @@ function publicState() {
     // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
     // отличить «тумблер выключен» от «прокси не знает этот шлюз».
     rotate: { on: ROTATE_ON, provider: ROTATE_PROVIDER || null, maxPerRequest: MAX_ROTATIONS },
+    freeggRate: freeggRate.snapshot(),
     stats: Object.assign({}, stats),
     // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
     // поллингом, что и счётчики, не дёргая график.
@@ -1615,6 +1631,12 @@ function handleControl(req, res, reqPath, presentedRouteAuth) {
   if (req.method === 'GET' && reqPath === '/__state') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify(publicState()));
+    return;
+  }
+  if (FREEGG_RATE_TEST_CONTROL && req.method === 'POST' && reqPath === '/__freegg-rate/reset') {
+    freeggRate.reset();
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('{"ok":true}');
     return;
   }
   // GET /__latency?window=<сек> — история времени ответа для графика в панели.
@@ -2434,6 +2456,15 @@ const server = http.createServer((req, res) => {
   let keyOverride = '';
   let keyFallbacks = 0;
   const triedKeys = new Set();
+  const triedFreeggGroups = new Set();
+  // Ownership belongs to an upstream attempt, not to the client request: retries
+  // and hedges may overlap and must release exactly their own account lease.
+  const releaseAttemptLease = (attemptReq) => {
+    if (!attemptReq || !attemptReq.__freeggLease) return;
+    const lease = attemptReq.__freeggLease;
+    attemptReq.__freeggLease = null;
+    lease.release();
+  };
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
   // Удержание запроса, пока лежит путь до шлюза (см. DEFAULT_CFG.holdMs). Бюджет свой,
   // отдельно и от maxAttempts, и от ротации: он мерит не «сколько раз спросили», а
@@ -2805,7 +2836,7 @@ const server = http.createServer((req, res) => {
   // ПОСЛЕ model-echo к исходящим SSE-байтам. Гейт EMPTY_TEXT_FIX — только odyssey.
   const emptyTextFilter = EMPTY_TEXT_FIX ? makeEmptyTextFilter() : null;
 
-  const forward = (status, headers, stream) => {
+  const forward = (status, headers, stream, attemptReq) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
     stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
     try {
@@ -2832,7 +2863,7 @@ const server = http.createServer((req, res) => {
           const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
           if (!out.length) return;           // всё удержано фильтром пустого text-блока
           if (!contentSent) { contentSent = true; clearEmptyGuard(); }
-          armStall(stream);
+          armStall(stream, attemptReq);
           sentBytes += out.length;
           res.write(out);
           noteStop(out);
@@ -2840,6 +2871,7 @@ const server = http.createServer((req, res) => {
           armTimer();
         });
         stream.on('end', () => {
+          releaseAttemptLease(attemptReq);
           const rest = flushSseEcho();
           if (rest) {
             const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
@@ -2855,9 +2887,11 @@ const server = http.createServer((req, res) => {
           if (!res.writableEnded) res.end();
         });
         stream.on('error', (err) => {
+          const retried = retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream);
+          releaseAttemptLease(attemptReq);
           // Обрыв ДО первого байта содержимого — не поломка ответа, а неудавшаяся
           // попытка: клиент видел только пинги, значит запрос можно переиграть.
-          if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
+          if (retried) return;
           stopTimer();
           ev.note('abort');
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
@@ -3039,7 +3073,7 @@ const server = http.createServer((req, res) => {
       const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
       if (!out.length) return;             // всё удержано фильтром пустого text-блока
       if (!contentSent) { contentSent = true; clearEmptyGuard(); }
-      armStall(stream);
+      armStall(stream, attemptReq);
       sentBytes += out.length;
       res.write(out);
       noteStop(out);
@@ -3047,6 +3081,7 @@ const server = http.createServer((req, res) => {
       armTimer();
     });
     stream.on('end', () => {
+      releaseAttemptLease(attemptReq);
       const rest = flushSseEcho();
       if (rest) {
         const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
@@ -3061,7 +3096,9 @@ const server = http.createServer((req, res) => {
       if (!truncated) res.end();
     });
     stream.on('error', (err) => {
-      if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
+      const retried = retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream);
+      releaseAttemptLease(attemptReq);
+      if (retried) return;
       stopTimer();
       ev.note('abort');
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
@@ -3069,7 +3106,8 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  const settle = (r) => {
+  const settle = (r, releaseLease = true) => {
+    if (releaseLease) releaseAttemptLease(r);
     winner = r;
     finished = true;
     for (const x of activeSet) {
@@ -3092,6 +3130,7 @@ const server = http.createServer((req, res) => {
     log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${took}ms`);
   };
   const giveUp = (why) => {
+    for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
     finished = true;
     stats.errors += 1;
     for (const x of activeSet) {
@@ -3170,12 +3209,14 @@ const server = http.createServer((req, res) => {
   };
   const retryEmptyStream = (why, stream) => {
     clearEmptyGuard();
-    if (exactMode) return false;
+    if (exactMode || freeggRate.enabled) return false;
     if (contentSent || aborted || cfg.emptyStreamMs <= 0) return false;
     if (emptyRetries >= EMPTY_MAX_RETRIES) return false;
     emptyRetries += 1;
+    const replacedAttempts = [...activeSet];
+    for (const attemptReq of replacedAttempts) releaseAttemptLease(attemptReq);
     try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
-    for (const x of activeSet) { try { x.destroy(); } catch (e) { /* уже мёртв */ } }
+    for (const x of activeSet) { x.__retired = true; try { x.destroy(); } catch (e) { /* уже мёртв */ } }
     activeSet.clear();
     finished = false;          // победителя не было: то, что пришло, содержимого не несёт
     winner = null;
@@ -3189,7 +3230,7 @@ const server = http.createServer((req, res) => {
   // Поток встал посреди ответа: переиграть нельзя, но висеть вечно — хуже, чем ошибка.
   // Взводится и перевзводится на КАЖДОМ байте содержимого, поэтому живой поток его не
   // видит вообще.
-  const armStall = (stream) => {
+  const armStall = (stream, attemptReq) => {
     if (cfg.stallMs <= 0) return;
     if (stallTimer !== null) clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
@@ -3197,6 +3238,7 @@ const server = http.createServer((req, res) => {
       if (aborted || res.writableEnded) return;
       stopTimer();
       ev.note('stall');
+      releaseAttemptLease(attemptReq);
       if (exactMode) {
         const error = new Error(`exact route upstream stream stalled ${cfg.stallMs}ms mid-response`);
         log(`${req.method} ${reqPath} exact route: поток встал на ${cfg.stallMs}мс, рву upstream/downstream без синтетического события`);
@@ -3231,8 +3273,10 @@ const server = http.createServer((req, res) => {
     }, cfg.emptyStreamMs);
   };
   const attemptDone = (r, why, delayMs) => {
+    releaseAttemptLease(r);
     activeSet.delete(r);
     if (finished || aborted) return;
+    if (freeggRate.enabled) { giveUp(why); return; }
     // Бюджет ВРЕМЕНИ на повторы — см. DEFAULT_CFG.retryBudgetMs. Повтор после дорогого
     // отказа клиент уже не дождётся: `524` приходит через ~100 с, три попытки давали
     // 381 с при нуле содержимого.
@@ -3313,7 +3357,7 @@ const server = http.createServer((req, res) => {
   // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
   // мульти-запросы выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
-    if (exactMode) return;
+    if (freeggRate.enabled || exactMode) return;
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
     if (hedgesLaunched >= cfg.maxHedges) return;
@@ -3383,8 +3427,35 @@ const server = http.createServer((req, res) => {
     // 🎯 Файла нет (шлюз не активирован) - ключ берётся из пула аккаунтов: без этого
     // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
+    let attemptLease = null;
     {
-      const arKey = keyOverride || spreadKey(triedKeys) || activeKeyNow();
+      const preferredKey = activeKeyNow();
+      attemptLease = freeggRate.enabled ? freeggRate.acquire(triedFreeggGroups, preferredKey) : null;
+      if (freeggRate.enabled && !attemptLease) {
+        finished = true;
+        stats.errors += 1;
+        stopTimer();
+        const retryMs = freeggRate.nearestRetryMs();
+        const error = { type: 'rate_limit_error', code: 'rate_limit_exceeded',
+          message: 'All FreeGG accounts are temporarily cooling down.' };
+        const responseHeaders = { 'content-type': 'application/json; charset=utf-8' };
+        if (retryMs != null) {
+          error.retry_after_ms = Math.max(0, Math.round(retryMs));
+          responseHeaders['retry-after'] = String(Math.max(0, Math.ceil(retryMs / 1000)));
+        }
+        const responseBody = Buffer.from(JSON.stringify({ type: 'error', error }));
+        responseHeaders['content-length'] = String(responseBody.length);
+        if (!res.headersSent) {
+          res.writeHead(429, responseHeaders);
+          res.end(responseBody);
+        } else if (clientSSE) {
+          inbandError(429, responseBody);
+        } else if (!res.writableEnded) {
+          res.destroy();
+        }
+        return;
+      }
+      const arKey = (attemptLease && attemptLease.key) || keyOverride || spreadKey(triedKeys) || preferredKey;
       if (arKey) {
         sentKey = arKey;
         triedKeys.add(arKey);
@@ -3450,10 +3521,11 @@ const server = http.createServer((req, res) => {
         upRes.on('error', () => onEnd());
       };
       const forwardBuffered = (buf, hdrs) => {
+        releaseAttemptLease(upReq);
         const pt = new PassThrough();
         pt.end(buf);
         settle(upReq);
-        forward(status, hdrs, pt);
+        forward(status, hdrs, pt, upReq);
       };
 
       // 200 на не-stream /v1/messages: апстрим отдаёт JSON как text/plain, иногда
@@ -3489,8 +3561,50 @@ const server = http.createServer((req, res) => {
 
       if (shouldRetryStatus(status)) {
         drain(() => {
-          if (finished || aborted) return;
+          if (finished || aborted) {
+            releaseAttemptLease(upReq);
+            return;
+          }
           const buf = Buffer.concat(chunks, size);
+          const rateInfo = freeggRateErrorInfo(status, headers, buf);
+          if (freeggRate.enabled && rateInfo.tokenRateLimit && upReq.__freeggLease) {
+            const failed = upReq.__freeggLease;
+            upReq.__freeggLease = null;
+            failed.release();
+            triedFreeggGroups.add(failed.group);
+            freeggRate.cooldown(failed, rateInfo.retryMs);
+            activeSet.delete(upReq);
+            if (freeggRate.scope !== 'shared' && keyFallbacks < FREEGG_RATE_MAX_FALLBACKS
+                && Date.now() - started < FREEGG_RATE_BUDGET_MS) {
+              const next = freeggRate.acquire(triedFreeggGroups, '');
+              if (next) {
+                next.release();
+                keyFallbacks += 1;
+                bonusAttempts += 1;
+                stats.keyFallbacks += 1;
+                log(`${req.method} ${reqPath} FreeGG token rate limit: account cooldown, fallback #${keyFallbacks}`);
+                makeUpstream('FreeGG account fallback');
+                return;
+              }
+            }
+            const retryMs = freeggRate.nearestRetryMs();
+            const out = (() => {
+              try {
+                const parsed = JSON.parse(buf.toString('utf8') || '{}');
+                parsed.type = parsed.type || 'error';
+                parsed.error = parsed.error || {};
+                parsed.error.type = parsed.error.type || 'rate_limit_error';
+                parsed.error.code = parsed.error.code || rateInfo.code || 'rate_limit_exceeded';
+                if (retryMs != null) parsed.error.retry_after_ms = Math.max(0, Math.round(retryMs));
+                return Buffer.from(JSON.stringify(parsed));
+              } catch { return buf; }
+            })();
+            const outHeaders = { ...headers };
+            delete outHeaders['content-length'];
+            if (retryMs != null) outHeaders['retry-after'] = String(Math.max(0, Math.ceil(retryMs / 1000)));
+            forwardBuffered(out, outHeaders);
+            return;
+          }
           // Отказ по деньгам или мёртвый ключ — это не ошибка запроса, а конец
           // аккаунта. Ретрай тем же ключом бессмыслен (проверено: три попытки в
           // пустой аккаунт и 502), отдать клиенту тоже нельзя, пока в пуле есть
@@ -3723,12 +3837,13 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      settle(upReq);
-      forward(status, headers, upRes);
+      settle(upReq, !isSSE);
+      forward(status, headers, upRes, upReq);
     });
 
     ctrace = traceConn(upReq, t.requester);
     activeSet.add(upReq);
+    upReq.__freeggLease = attemptLease;
     upReq.__attempt = attempt;
     upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
@@ -3743,7 +3858,8 @@ const server = http.createServer((req, res) => {
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
-      if (finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
+      releaseAttemptLease(upReq);
+      if (upReq.__retired || finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
       // Обрыв на сокете ИЗ ПУЛА — подпись отмершего keep-alive соединения: апстрим закрыл
       // его молча, пока мы простаивали, и узнали мы об этом только записью в трубу.
       log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`
@@ -3935,11 +4051,12 @@ const server = http.createServer((req, res) => {
     scheduleHedge();
   });
 
-  req.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
-  res.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
+  req.on('error', () => { aborted = true; for (const attemptReq of activeSet) releaseAttemptLease(attemptReq); stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
+  res.on('error', () => { aborted = true; for (const attemptReq of activeSet) releaseAttemptLease(attemptReq); stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
   res.on('close', () => {
     if (!res.writableEnded) {
       aborted = true;
+      for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
       ev.note('clientgone');
       // 🪤 Без этой строки уход клиента приходилось восстанавливать по front-door и
       // цепочкам пингов: 05.09 на разбор одного такого случая ушло десять минут, а ответ
@@ -3957,6 +4074,7 @@ const server = http.createServer((req, res) => {
   req.on('close', () => {
     if (!req.complete) {
       aborted = true;
+      for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
       stopTimer();
       for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
       activeSet.clear();
@@ -4724,7 +4842,7 @@ if (process.argv[2] === 'selftest') {
   // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
   // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
   // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
-  assert.ok(/if \(exactMode\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
+  assert.ok(/if \(exactMode \|\| freeggRate\.enabled\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
     'переигрываем пустой поток только пока клиенту не ушло содержимое');
   assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
     'у переигровки пустого потока есть потолок');
@@ -4793,9 +4911,9 @@ if (process.argv[2] === 'selftest') {
   applyPatch({ stallMs: 0 });
   assert.strictEqual(cfg.stallMs, 0, '0 выключает страховку от вставшего потока');
   assert.strictEqual(DEFAULT_CFG.stallMs, 180000, 'поставочные 180с');
-  assert.strictEqual((holdSrc.match(/armStall\(stream\);/g) || []).length, 2,
+  assert.strictEqual((holdSrc.match(/armStall\(stream, attemptReq\);/g) || []).length, 2,
     'страховка перевзводится на обеих SSE-ветках, то есть на каждом байте содержимого');
-  assert.ok(/armStall = \(stream\) => \{[\s\S]*?event: error[\s\S]*?res\.end\(\);/.test(holdSrc),
+  assert.ok(/armStall = \(stream, attemptReq\) => \{[\s\S]*?event: error[\s\S]*?res\.end\(\);/.test(holdSrc),
     'вставший поток получает явный overloaded_error вместо бесконечного ожидания');
 
   // 🪤 Наш таймаут сокета в этой сцене бесполезен: после заголовков стоит finished, а

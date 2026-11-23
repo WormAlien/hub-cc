@@ -18350,6 +18350,14 @@ async function fgKeepaliveSpawn() {
                 LOCAL_EXACT_ADAPTER: '1',
                 ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
                 CUSTOM_PROVIDER_ID: 'freegg', CUSTOM_PROVIDER_NAME: 'FreeGG',
+                // Scope is supported only behind an explicit experimental flag. Rollback:
+                // FG_RATE_BALANCE=0 (default) restores the single selected-key path.
+                FREEGG_RATE_BALANCE: process.env.FG_RATE_BALANCE || '0',
+                FREEGG_RATE_SCOPE: process.env.FG_RATE_SCOPE || 'off',
+                FREEGG_RATE_COOLDOWN_MS: process.env.FG_RATE_COOLDOWN_MS || '60000',
+                FREEGG_RATE_JITTER_MS: process.env.FG_RATE_JITTER_MS || '1000',
+                FREEGG_RATE_MAX_FALLBACKS: process.env.FG_RATE_MAX_FALLBACKS || '1',
+                FREEGG_RATE_BUDGET_MS: process.env.FG_RATE_BUDGET_MS || '120000',
                 GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
                 HAIKU_GPT_PROXY: FG_CONVERTER_URL,
                 MAX_HEDGES: '0',

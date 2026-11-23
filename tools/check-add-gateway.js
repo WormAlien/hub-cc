@@ -46,6 +46,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { spawnSync } = require('child_process');
 
 const REPO = path.join(__dirname, '..');
@@ -765,6 +766,106 @@ section('маршруты и обвязка · полнота спеки (уро
     check(/своя панель \(не New API\)/.test(runCheckOut(custom[0])), `у «${custom[0]}» печатается чеклист ручных решений`);
     check(!/своя панель \(не New API\)/.test(runCheckOut('kktoken')), 'у эталона чеклист не печатается — флаг выключен');
     check(tool.claimComments([]).length === 0, 'claimComments на пустом списке не падает');
+
+    // Новый provider с подтверждённым пулом получает тот же opt-in bounded rate toggle.
+    // Без явного rateBalance:true контракт не включается: pool ещё не доказывает
+    // независимые account identities. rateBalance:false — явный opt-out.
+    check(typeof tool.rateBalanceEnabled === 'function' && typeof tool.rateBalanceFiles === 'function' && typeof tool.rateBalanceUiInsert === 'function',
+        'rate-balance scaffolding экспортирован для независимой проверки');
+    const freshPool = {
+        p: 'zz', P: 'ZZ', full: 'zzgw-test-fixture', NAME: 'ZZ Gateway', HOST: 'zzgw.test',
+        PORT: 20999, FOLDER: 'zzgw-test-fixture', ICON: '🧪', COLOR: 'sky', REF: 'fixture',
+        github: false, ref: false, flatRate: false, anthropic: true, pool: true,
+        shareScript: false, autoreg: false, customPanel: false, paidHedge: false,
+        hedgesTuned: false, rateBalance: true,
+    };
+    check(tool.rateBalanceEnabled(freshPool) === true,
+        'новый provider с pool автоматически получает bounded rate toggle');
+    check(tool.rateBalanceEnabled({ ...freshPool, rateBalance: undefined }) === false,
+        'provider без явного подтверждения account identities не получает toggle');
+    check(tool.rateBalanceEnabled({ ...freshPool, rateBalance: false }) === false,
+        'явный rateBalance:false выключает scaffold для несовместимой площадки');
+    const rb = tool.rateBalanceFiles(freshPool);
+    check(rb.length === 1 && /routing[\\/]rate-balance-providers\.json$/.test(rb[0].path),
+        'scaffold пишет один общий registry, не копии FreeGG-кода по вкладкам');
+    check(rb[0].doc[freshPool.full] && rb[0].doc[freshPool.full].scope === 'account'
+        && rb[0].doc[freshPool.full].enabled === false
+        && rb[0].doc[freshPool.full].sessionsFile === '$ROUTING/zzgw-test-fixture-sessions.json',
+        'новый registry entry безопасно стартует OFF с account scope');
+    check(tool.rateBalanceUiInsert(freshPool) === "providerRateBalanceMount('zz','zzgw-test-fixture','ZZ Gateway');",
+        'новая вкладка получает общий UI mount рядом с Keepalive');
+    const generatedShowTab = "if (name === 'zzgw-test-fixture') { load(); providerRateBalanceMount('zz','zzgw-test-fixture','ZZ Gateway'); }";
+    check(spawnSync(process.execPath, ['--check', '-'], { input: generatedShowTab, encoding: 'utf8' }).status === 0,
+        'генерируемый showTab mount остаётся валидным JavaScript');
+    const syntheticFrontend = path.join(os.tmpdir(), 'add-gateway-rate-showtab-' + process.pid + '.html');
+    fs.writeFileSync(syntheticFrontend, "if (name === 'kktoken') { loadKk(); }\n", 'utf8');
+    try {
+        const point = { id: '2.5r', title: 'rate mount', file: 'frontend', kind: 'must', expect: "providerRateBalanceMount('%p%','%full%','%NAME%')", when: ['rateBalance'] };
+        const rule = { mode: 'before-close', ref: "if (name === '%full%')", find: "if (name === '%full%')" };
+        const applied = tool.applyPoint(point, rule, config.kktoken, freshPool, tool.tokenPairs(config.kktoken, freshPool), { frontend: syntheticFrontend }, { points: [point] });
+        check(applied.status === 'deferred',
+            'одиночный rate mount ждёт сгенерированный target region и не мутирует source');
+    } finally { fs.rmSync(syntheticFrontend, { force: true }); }
+    const combinedDir = fs.mkdtempSync(path.join(os.tmpdir(), 'add-gateway-rate-combined-'));
+    const combinedBackend = path.join(combinedDir, 'backend.js');
+    const combinedFrontend = path.join(combinedDir, 'frontend.html');
+    const applyToFile = (file, planned) => {
+        let lines = fs.readFileSync(file, 'utf8').split('\n');
+        for (const item of [...planned].sort((a, b) => b.at - a.at)) {
+            if (item.lines.length === 1 && item.lines[0].index != null) lines[item.lines[0].index] = item.lines[0].text;
+            else lines.splice(item.at, 0, ...item.lines.map(x => x.text != null ? x.text : x));
+        }
+        fs.writeFileSync(file, lines.join('\n'), 'utf8');
+    };
+    try {
+        fs.writeFileSync(combinedBackend, `async function kkKeepaliveSpawn() {\n  const child = spawn(process.execPath, [KEEPALIVE_PROXY_FILE], {\n    env: {\n      PORT: String(KK_KEEPALIVE_PORT),\n      SESSIONS_FILE: KK_SESSIONS_FILE,\n    },\n  });\n}\n`, 'utf8');
+        fs.writeFileSync(combinedFrontend, "if (name === 'kktoken') { loadKk(); }\n", 'utf8');
+        const ids = new Set(['1.7', '2.5', '2.5r', '2.5s']);
+        const points = spec.points.filter(p => ids.has(p.id));
+        const files = { ...tool.specFiles(spec), backend: combinedBackend, frontend: combinedFrontend };
+        const planned = points.map(point => tool.applyPoint(point, spec.inserts[point.id], config.kktoken,
+            freshPool, tool.tokenPairs(config.kktoken, freshPool), files, spec));
+        const deferred = planned.filter(x => x.status === 'deferred');
+        for (const item of deferred) {
+            const owner = planned.find(x => x.id === (item.id === '2.5r' ? '2.5' : '1.7') && x.status === 'insert');
+            if (!owner) continue;
+            if (item.id === '2.5r') {
+                const i = owner.lines.findIndex(line => String(line.text != null ? line.text : line).includes("if (name === 'zzgw-test-fixture')"));
+                if (i >= 0) { const line = String(owner.lines[i].text != null ? owner.lines[i].text : owner.lines[i]); const close = line.lastIndexOf('}'); owner.lines[i] = line.slice(0, close) + ` ${tool.rateBalanceUiInsert(freshPool)} ` + line.slice(close); item.status = 'done'; }
+            } else {
+                const i = owner.lines.findIndex(line => String(line.text != null ? line.text : line).includes('SESSIONS_FILE: ZZ_SESSIONS_FILE'));
+                if (i >= 0) { owner.lines.splice(i + 1, 0, "                ...(providerRateSpawnEnv('zzgw-test-fixture', ZZ_SESSIONS_FILE)),"); item.status = 'done'; }
+            }
+        }
+        check(planned.every(x => ['insert', 'done', 'skip'].includes(x.status)),
+            'combined rate scaffold строит применимый план без bad/manual точек');
+        applyToFile(combinedBackend, planned.filter(x => x.rel.endsWith('backend.js') && x.status === 'insert'));
+        applyToFile(combinedFrontend, planned.filter(x => x.rel.endsWith('frontend.html') && x.status === 'insert'));
+        const generatedBackend = fs.readFileSync(combinedBackend, 'utf8');
+        const generatedFrontend = fs.readFileSync(combinedFrontend, 'utf8');
+        const sourceBranch = generatedFrontend.match(/if \(name === 'kktoken'\)[^\n]*/)?.[0] || '';
+        const targetBranch = generatedFrontend.match(/if \(name === 'zzgw-test-fixture'\)[^\n]*/)?.[0] || '';
+        const sourceSpawn = generatedBackend.match(/async function kkKeepaliveSpawn\(\)[\s\S]*?^}/m)?.[0] || '';
+        const targetSpawn = generatedBackend.match(/async function zzKeepaliveSpawn\(\)[\s\S]*?^}/m)?.[0] || '';
+        check(!sourceBranch.includes('zzgw-test-fixture') && targetBranch.includes(tool.rateBalanceUiInsert(freshPool)),
+            'combined apply оставляет source showTab чистым и монтирует toggle только в target');
+        const targetRateCalls = (targetSpawn.match(/providerRateSpawnEnv\('zzgw-test-fixture', ZZ_SESSIONS_FILE\)/g) || []).length;
+        if (process.env.DEBUG_COMBINED_RATE === '1') console.log({ sourceSpawn, targetSpawn, targetRateCalls });
+        check(!sourceSpawn.includes('zzgw-test-fixture') && targetRateCalls === 1,
+            'combined apply оставляет source spawn чистым и передаёт rate env target ровно один раз');
+        check(spawnSync(process.execPath, ['--check', combinedBackend], { encoding: 'utf8' }).status === 0,
+            'combined generated backend остаётся валидным JavaScript');
+    } finally { fs.rmSync(combinedDir, { recursive: true, force: true }); }
+    const dashboardHtml = fs.readFileSync(path.join(REPO, 'routing', 'proxy-dashboard.html'), 'utf8');
+    check(/function providerRateBalanceMount[\s\S]*?\$\(pfx \+ '-keepalive'\)/.test(dashboardHtml),
+        'общий UI mount ищет реальный id <prefix>-keepalive');
+    const backendJs = fs.readFileSync(path.join(REPO, 'routing', 'transparent-proxy.js'), 'utf8');
+    check(/function providerRateSpawnEnv[\s\S]*?CUSTOM_PROVIDER_ID[\s\S]*?CUSTOM_PROVIDER_NAME[\s\S]*?SESSIONS_FILE[\s\S]*?rateBalanceEnv/.test(backendJs),
+        'общий spawn helper передаёт provider id, sessions и rate policy env');
+    check(tool.rateBalanceFiles(config.freegg).length === 0,
+        'повторный apply не переписывает уже совпадающий registry');
+    const notFresh = tool.rateBalanceFiles({ ...freshPool, rateBalance: false });
+    check(notFresh.length === 0, 'provider без opt-in не получает registry write');
 
     // 7. Создание файлов (`inserts[id] = { create: "fromSource" }`). До 01.10 инструмент файлов
     // не создавал ВООБЩЕ: `kind: "file"` умел только «файла нет», и каждая новая вкладка

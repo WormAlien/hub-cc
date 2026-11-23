@@ -206,6 +206,37 @@ function onboardingFileState(gw) {
     return { rel, status: 'insert', create: { text, exclusive: true }, note: 'generate generic newapi-github wrapper' };
 }
 
+function rateBalanceEnabled(gw) {
+    return !!(gw && gw.rateBalance === true && gw.pool === true);
+}
+function rateBalanceUiInsert(gw) {
+    if (!rateBalanceEnabled(gw)) return null;
+    return `providerRateBalanceMount('${gw.p}','${gw.full}','${String(gw.NAME).replace(/'/g, "\\'")}');`;
+}
+function rateBalanceFiles(gw) {
+    if (!rateBalanceEnabled(gw)) return [];
+    const file = path.join(REPO, 'routing', 'rate-balance-providers.json');
+    const sessionsFile = gw.SESSIONSFILE || `$ROUTING/${gw.full}-sessions.json`;
+    const row = { pfx: gw.p, name: gw.NAME, port: gw.PORT, scope: 'account', enabled: false, sessionsFile };
+    try {
+        const current = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+        if (current && !Array.isArray(current) && JSON.stringify(current[gw.full]) === JSON.stringify(row)) return [];
+    } catch {}
+    return [{
+        path: file,
+        doc: { [gw.full]: row },
+    }];
+}
+function mergeRateBalanceRegistry(file, additions) {
+    let doc = {};
+    if (fs.existsSync(file)) {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('invalid rate-balance registry');
+        doc = parsed;
+    }
+    return { ...doc, ...additions };
+}
+
 // ── проверка одной точки ─────────────────────────────────────────────────────
 
 function countOccurrences(hay, needle) {
@@ -517,7 +548,7 @@ const C = process.stdout.isTTY
     ? { ok: '\x1b[32m', bad: '\x1b[31m', warn: '\x1b[33m', dim: '\x1b[2m', off: '\x1b[0m', b: '\x1b[1m' }
     : { ok: '', bad: '', warn: '', dim: '', off: '', b: '' };
 
-const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript', 'customPanel', 'paidHedge', 'hedgesTuned'];
+const FLAGS = ['github', 'ref', 'flatRate', 'anthropic', 'pool', 'shareScript', 'customPanel', 'paidHedge', 'hedgesTuned', 'rateBalance'];
 
 /**
  * Что инструмент НЕ может решить за чужую панель. Печатается, когда вкладка помечена `customPanel`.
@@ -1073,6 +1104,17 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
 
     const hay = fs.readFileSync(abs, 'utf8');
     const lines = hay.split('\n');
+    const mappedIds = new Set(['2.5r', '2.5s']);
+    const targetRef = mappedIds.has(point.id) && rule.ref != null ? subst(rule.ref, dst) : null;
+    const targetStart = targetRef ? lines.findIndex(l => l.includes(targetRef)) : -1;
+
+    // Rate additions belong to the generated target region. When that region is produced
+    // in the same apply, patch its planned clone instead of mutating the source exemplar.
+    if (mappedIds.has(point.id) && targetStart < 0) {
+        p.status = 'deferred';
+        p.note = 'применить к сгенерированному target region';
+        return p;
+    }
 
     // Идемпотентность: если результат уже на месте — не трогаем. Иначе повторный
     // прогон удвоил бы записи, а это ровно та порча, которую дорого искать глазами.
@@ -1088,10 +1130,11 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
         if (needle == null) return false;
         return point.within ? withinMarker(hay, subst(point.within, dst), needle) : hay.includes(needle);
     };
-    if (!rule.mode || rule.mode === 'after') {
+    if (!rule.mode || rule.mode === 'after' || rule.mode === 'spawn-env') {
         if (alreadyThere(targetNeedle)) { p.status = 'done'; p.note = 'уже на месте'; return p; }
-    } else if (rule.mode === 'inline') {
-        if (alreadyThere(subst(rule.add, dst))) { p.status = 'done'; p.note = 'уже на месте'; return p; }
+    } else if (rule.mode === 'inline' || rule.mode === 'before-close') {
+        const generated = rule.mode === 'before-close' ? rateBalanceUiInsert(dst) : subst(rule.add, dst);
+        if (generated && alreadyThere(generated)) { p.status = 'done'; p.note = 'уже на месте'; return p; }
     }
 
     // 🪤 Источник и цель совпали - это НЕ ошибка сама по себе, и раньше здесь стоял жёсткий
@@ -1112,7 +1155,9 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
     // иголка заведомо не уникальна (`kkLkPids` живёт и в своём объявлении, и в пулах
     // других шлюзов), поэтому линию задаёт маркер, а не первое вхождение.
     let start;
-    if (point.within) {
+    if (targetStart >= 0) {
+        start = targetStart;
+    } else if (point.within) {
         const marker = subst(point.within, src);
         const hit = findWithinLine(hay, marker, ref);
         if (!hit) { p.status = 'bad'; p.note = `маркер не найден: ${marker}`; return p; }
@@ -1139,11 +1184,44 @@ function applyPoint(point, rule, src, dst, pairs, files, spec) {
         }
         const addDst = subst(rule.add, dst);
         const at = lines[start].indexOf(findSrc) + findSrc.length;
+        p.status = 'insert';
         p.at = start + 1;
         p.anchor = stripCr(lines[start]);
         p.lines = [{ index: start, text: lines[start].slice(0, at) + addDst + lines[start].slice(at) }];
         p.delta = { from: findSrc, to: addDst };
         p.note = 'дописать в якорную строку';
+        return p;
+    }
+    if (rule.mode === 'before-close') {
+        const find = targetStart >= 0 ? subst(rule.find, dst) : subst(rule.find, src);
+        const line = lines[start];
+        const close = line.lastIndexOf('}');
+        if (!line.includes(find) || close < 0) {
+            p.status = 'bad';
+            p.note = `не найдена строка/закрывающая скобка для «${find}»`;
+            return p;
+        }
+        const addDst = rateBalanceUiInsert(dst);
+        if (!addDst) { p.status = 'skip'; return p; }
+        p.status = 'insert';
+        p.at = start + 1;
+        p.anchor = stripCr(line);
+        p.lines = [{ index: start, text: line.slice(0, close) + ` ${addDst} ` + line.slice(close) }];
+        p.delta = { from: '}', to: ` ${addDst} }` };
+        p.note = 'дописать перед закрывающей скобкой showTab';
+        return p;
+    }
+    if (rule.mode === 'spawn-env') {
+        const region = extractRegion(lines, start, 'braces');
+        if (region.error) { p.status = 'bad'; p.note = region.error; return p; }
+        const sessions = `SESSIONS_FILE: ${dst.P}_SESSIONS_FILE`;
+        const at = lines.findIndex((line, i) => i >= start && i <= region.end && line.includes(sessions));
+        if (at < 0) { p.status = 'bad'; p.note = `target spawn не содержит ${sessions}`; return p; }
+        p.status = 'insert';
+        p.at = at + 1;
+        p.anchor = stripCr(lines[at]);
+        p.lines = [`                ...(providerRateSpawnEnv('${dst.full}', ${dst.P}_SESSIONS_FILE)),`];
+        p.note = 'добавить provider/session/rate env в target spawn';
         return p;
     }
 
@@ -1274,6 +1352,42 @@ function runApply(name, spec, config, write) {
         return applyPoint(pt, inserts[pt.id], ptSrc, dst, pairsFor(ptSrc), files, spec);
     });
 
+    const deferred = items.filter(x => x.status === 'deferred');
+    const findGenerated = (id) => items.find(x => x.id === id && x.status === 'insert' && x.lines.length);
+    for (const item of deferred) {
+        const owner = findGenerated(item.id === '2.5r' ? '2.5' : '1.7');
+        if (!owner) { item.status = 'bad'; item.note = 'target region не сгенерирован в этом apply'; continue; }
+        const needle = item.id === '2.5r' ? `if (name === '${dst.full}')` : `async function ${dst.p}KeepaliveSpawn()`;
+        const index = owner.lines.findIndex(line => String(line.text != null ? line.text : line).includes(needle));
+        if (index < 0) { item.status = 'bad'; item.note = `target region не содержит ${needle}`; continue; }
+        if (item.id === '2.5r') {
+            const line = String(owner.lines[index].text != null ? owner.lines[index].text : owner.lines[index]);
+            const close = line.lastIndexOf('}');
+            const mount = rateBalanceUiInsert(dst);
+            owner.lines[index] = line.slice(0, close) + ` ${mount} ` + line.slice(close);
+        } else {
+            const insertAt = owner.lines.findIndex((line, i) => i >= index
+                && String(line.text != null ? line.text : line).includes(`SESSIONS_FILE: ${dst.P}_SESSIONS_FILE`));
+            if (insertAt < 0) { item.status = 'bad'; item.note = 'target spawn не содержит SESSIONS_FILE'; continue; }
+            const generated = `providerRateSpawnEnv('${dst.full}', ${dst.P}_SESSIONS_FILE)`;
+            const existing = owner.lines.some(line => String(line.text != null ? line.text : line).includes(generated));
+            if (!existing) {
+                owner.lines.splice(insertAt + 1, 0, `                ...(${generated}),`);
+            } else {
+                const seen = new Set();
+                owner.lines = owner.lines.filter(line => {
+                    const text = String(line.text != null ? line.text : line);
+                    if (!text.includes(generated)) return true;
+                    if (seen.has(generated)) return false;
+                    seen.add(generated);
+                    return true;
+                });
+            }
+        }
+        item.status = 'done';
+        item.note = 'встроено в сгенерированный target region';
+    }
+
     const tally = { insert: 0, done: 0, skip: 0, manual: 0, bad: 0 };
     for (const it of items) tally[it.status] += 1;
 
@@ -1355,12 +1469,20 @@ function runApply(name, spec, config, write) {
     }
 
     // A repeat apply must not write anything, including an empty backup directory.
-    if (!tally.insert) return 0;
+    const registryWrites = rateBalanceFiles(dst);
+    if (!tally.insert && !registryWrites.length) return 0;
 
     // Бэкап в отдельную папку с меткой времени: откат должен быть рукой подать.
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupDir = path.join(REPO, 'routing', '.backup', `apply-${dst.full}-${stamp}`);
     fs.mkdirSync(backupDir, { recursive: true });
+
+    for (const registry of registryWrites) {
+        const existed = fs.existsSync(registry.path);
+        const doc = mergeRateBalanceRegistry(registry.path, registry.doc);
+        if (existed) fs.writeFileSync(path.join(backupDir, path.basename(registry.path)), fs.readFileSync(registry.path));
+        fs.writeFileSync(registry.path, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+    }
 
     const byFile = new Map();
     for (const it of items) {
@@ -1443,6 +1565,8 @@ function runApply(name, spec, config, write) {
     const guards = [
         ['check-gh-seed-hosts.js', 'индекс профилей GitHub сходится с таблицей заселения'],
         ['check-spec-tokens.js', 'токены подстановки в спеке целы'],
+        ['check-freegg-legacy-rate-runtime.js', 'legacy FG_RATE_* включает реальный keepalive runtime'],
+        ['check-add-gateway.js', 'общий scaffold вкладки, OFF policy и UI mount сходятся'],
     ];
     for (const [file, what] of guards) {
         const abs = path.join(__dirname, file);
@@ -1556,4 +1680,4 @@ function main() {
 // функции отсюда, и без этой развилки импорт выполнял бы `main()` с чужим argv.
 if (require.main === module) process.exit(main());
 
-module.exports = { validateOnboarding, renderOnboardingWrapper, subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments, portAudit, portConflicts, portGuard, keyGuard };
+module.exports = { validateOnboarding, renderOnboardingWrapper, rateBalanceEnabled, rateBalanceUiInsert, rateBalanceFiles, mergeRateBalanceRegistry, applyPoint, subst, xForm, tokenPairs, toTarget, loadConfig, specFiles, foreignMarkers, codeArtifacts, nestedEntries, checkHtmlStructure, flagsOff, relaxedNeedles, claimComments, portAudit, portConflicts, portGuard, keyGuard };

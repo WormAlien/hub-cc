@@ -117,20 +117,26 @@ const AR_ACTIVE_KEY_FILE = process.env.KEY_FILE
 // Имя файла пула приходит env'ом от того, кто запускает прокси (spawn в transparent-proxy).
 const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
 const activeKeyLib = require('./lib/active-key');
-const { createFreeggRatePolicy, errorInfo: freeggRateErrorInfo } = require('./lib/freegg-rate-policy');
-const FREEGG_RATE_SCOPE = String(process.env.FREEGG_RATE_SCOPE || 'off').toLowerCase();
-const FREEGG_RATE_BALANCE = process.env.FREEGG_RATE_BALANCE === '1';
-const FREEGG_RATE_TEST_CONTROL = process.env.FREEGG_RATE_TEST_CONTROL === '1';
-const freeggFallbackRaw = Number(process.env.FREEGG_RATE_MAX_FALLBACKS || 1);
-const FREEGG_RATE_MAX_FALLBACKS = Number.isFinite(freeggFallbackRaw) ? Math.max(0, Math.min(1, Math.round(freeggFallbackRaw))) : 1;
-const freeggBudgetRaw = Number(process.env.FREEGG_RATE_BUDGET_MS || 120000);
-const FREEGG_RATE_BUDGET_MS = Number.isFinite(freeggBudgetRaw) ? Math.max(1000, freeggBudgetRaw) : 120000;
-const freeggRate = createFreeggRatePolicy({
-    enabled: FREEGG_RATE_BALANCE && process.env.CUSTOM_PROVIDER_ID === 'freegg',
-    scope: FREEGG_RATE_SCOPE,
+const { createRateBalancePolicy, errorInfo: rateBalanceErrorInfo } = require('./lib/rate-balance-policy');
+const hasGenericRateBalance = process.env.RATE_BALANCE != null
+    && !(process.env.CUSTOM_PROVIDER_ID === 'freegg' && process.env.FREEGG_RATE_BALANCE === '1');
+const RATE_BALANCE_ENABLED = hasGenericRateBalance
+    ? process.env.RATE_BALANCE === '1'
+    : process.env.FREEGG_RATE_BALANCE === '1';
+const RATE_BALANCE_SCOPE = String(hasGenericRateBalance
+    ? (process.env.RATE_BALANCE_SCOPE || 'off')
+    : (process.env.FREEGG_RATE_SCOPE || 'off')).toLowerCase();
+const RATE_BALANCE_TEST_CONTROL = process.env.RATE_BALANCE_TEST_CONTROL === '1' || process.env.FREEGG_RATE_TEST_CONTROL === '1';
+const rateFallbackRaw = Number(process.env.RATE_BALANCE_MAX_FALLBACKS || process.env.FREEGG_RATE_MAX_FALLBACKS || 1);
+const RATE_BALANCE_MAX_FALLBACKS = Number.isFinite(rateFallbackRaw) ? Math.max(0, Math.min(1, Math.round(rateFallbackRaw))) : 1;
+const rateBudgetRaw = Number(process.env.RATE_BALANCE_BUDGET_MS || process.env.FREEGG_RATE_BUDGET_MS || 120000);
+const RATE_BALANCE_BUDGET_MS = Number.isFinite(rateBudgetRaw) ? Math.max(1000, rateBudgetRaw) : 120000;
+const rateBalance = createRateBalancePolicy({
+    enabled: RATE_BALANCE_ENABLED && !!process.env.CUSTOM_PROVIDER_ID,
+    scope: RATE_BALANCE_SCOPE,
     sessionsFile: SESSIONS_FILE,
-    defaultCooldownMs: Number(process.env.FREEGG_RATE_COOLDOWN_MS || 60000),
-    jitterMs: Number(process.env.FREEGG_RATE_JITTER_MS || 1000),
+    defaultCooldownMs: Number(process.env.RATE_BALANCE_COOLDOWN_MS || process.env.FREEGG_RATE_COOLDOWN_MS || 60000),
+    jitterMs: Number(process.env.RATE_BALANCE_JITTER_MS || process.env.FREEGG_RATE_JITTER_MS || 1000),
 });
 
 let poolKeyLogged = '';                       // чтобы «взял из пула» не сыпалось в лог каждый запрос
@@ -1504,7 +1510,8 @@ function publicState() {
     // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
     // отличить «тумблер выключен» от «прокси не знает этот шлюз».
     rotate: { on: ROTATE_ON, provider: ROTATE_PROVIDER || null, maxPerRequest: MAX_ROTATIONS },
-    freeggRate: freeggRate.snapshot(),
+    rateBalance: rateBalance.snapshot(),
+    freeggRate: CUSTOM_PROVIDER_ID === 'freegg' ? rateBalance.snapshot() : undefined,
     stats: Object.assign({}, stats),
     // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
     // поллингом, что и счётчики, не дёргая график.
@@ -1622,6 +1629,8 @@ function handleControl(req, res, reqPath, presentedRouteAuth) {
         retries: cfg.maxAttempts,
         hedge_ms: cfg.hedgeMs,
         max_hedges: cfg.maxHedges,
+        rateBalance: rateBalance.snapshot(),
+        freeggRate: CUSTOM_PROVIDER_ID === 'freegg' ? rateBalance.snapshot() : undefined,
       } : {}),
     };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -1633,8 +1642,9 @@ function handleControl(req, res, reqPath, presentedRouteAuth) {
     res.end(JSON.stringify(publicState()));
     return;
   }
-  if (FREEGG_RATE_TEST_CONTROL && req.method === 'POST' && reqPath === '/__freegg-rate/reset') {
-    freeggRate.reset();
+  if (RATE_BALANCE_TEST_CONTROL && req.method === 'POST'
+      && (reqPath === '/__rate-balance/reset' || reqPath === '/__freegg-rate/reset')) {
+    rateBalance.reset();
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end('{"ok":true}');
     return;
@@ -2456,13 +2466,13 @@ const server = http.createServer((req, res) => {
   let keyOverride = '';
   let keyFallbacks = 0;
   const triedKeys = new Set();
-  const triedFreeggGroups = new Set();
+  const triedRateBalanceGroups = new Set();
   // Ownership belongs to an upstream attempt, not to the client request: retries
   // and hedges may overlap and must release exactly their own account lease.
   const releaseAttemptLease = (attemptReq) => {
-    if (!attemptReq || !attemptReq.__freeggLease) return;
-    const lease = attemptReq.__freeggLease;
-    attemptReq.__freeggLease = null;
+    if (!attemptReq || !attemptReq.__rateBalanceLease) return;
+    const lease = attemptReq.__rateBalanceLease;
+    attemptReq.__rateBalanceLease = null;
     lease.release();
   };
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
@@ -3209,7 +3219,7 @@ const server = http.createServer((req, res) => {
   };
   const retryEmptyStream = (why, stream) => {
     clearEmptyGuard();
-    if (exactMode || freeggRate.enabled) return false;
+    if (exactMode || rateBalance.enabled) return false;
     if (contentSent || aborted || cfg.emptyStreamMs <= 0) return false;
     if (emptyRetries >= EMPTY_MAX_RETRIES) return false;
     emptyRetries += 1;
@@ -3276,7 +3286,7 @@ const server = http.createServer((req, res) => {
     releaseAttemptLease(r);
     activeSet.delete(r);
     if (finished || aborted) return;
-    if (freeggRate.enabled) { giveUp(why); return; }
+    if (rateBalance.enabled) { giveUp(why); return; }
     // Бюджет ВРЕМЕНИ на повторы — см. DEFAULT_CFG.retryBudgetMs. Повтор после дорогого
     // отказа клиент уже не дождётся: `524` приходит через ~100 с, три попытки давали
     // 381 с при нуле содержимого.
@@ -3357,7 +3367,7 @@ const server = http.createServer((req, res) => {
   // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
   // мульти-запросы выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
-    if (freeggRate.enabled || exactMode) return;
+    if (rateBalance.enabled || exactMode) return;
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
     if (hedgesLaunched >= cfg.maxHedges) return;
@@ -3430,14 +3440,14 @@ const server = http.createServer((req, res) => {
     let attemptLease = null;
     {
       const preferredKey = activeKeyNow();
-      attemptLease = freeggRate.enabled ? freeggRate.acquire(triedFreeggGroups, preferredKey) : null;
-      if (freeggRate.enabled && !attemptLease) {
+      attemptLease = rateBalance.enabled ? rateBalance.acquire(triedRateBalanceGroups, preferredKey) : null;
+      if (rateBalance.enabled && !attemptLease) {
         finished = true;
         stats.errors += 1;
         stopTimer();
-        const retryMs = freeggRate.nearestRetryMs();
+        const retryMs = rateBalance.nearestRetryMs();
         const error = { type: 'rate_limit_error', code: 'rate_limit_exceeded',
-          message: 'All FreeGG accounts are temporarily cooling down.' };
+          message: 'All provider accounts are temporarily cooling down.' };
         const responseHeaders = { 'content-type': 'application/json; charset=utf-8' };
         if (retryMs != null) {
           error.retry_after_ms = Math.max(0, Math.round(retryMs));
@@ -3566,28 +3576,28 @@ const server = http.createServer((req, res) => {
             return;
           }
           const buf = Buffer.concat(chunks, size);
-          const rateInfo = freeggRateErrorInfo(status, headers, buf);
-          if (freeggRate.enabled && rateInfo.tokenRateLimit && upReq.__freeggLease) {
-            const failed = upReq.__freeggLease;
-            upReq.__freeggLease = null;
+          const rateInfo = rateBalanceErrorInfo(status, headers, buf);
+          if (rateBalance.enabled && rateInfo.tokenRateLimit && upReq.__rateBalanceLease) {
+            const failed = upReq.__rateBalanceLease;
+            upReq.__rateBalanceLease = null;
             failed.release();
-            triedFreeggGroups.add(failed.group);
-            freeggRate.cooldown(failed, rateInfo.retryMs);
+            triedRateBalanceGroups.add(failed.group);
+            rateBalance.cooldown(failed, rateInfo.retryMs);
             activeSet.delete(upReq);
-            if (freeggRate.scope !== 'shared' && keyFallbacks < FREEGG_RATE_MAX_FALLBACKS
-                && Date.now() - started < FREEGG_RATE_BUDGET_MS) {
-              const next = freeggRate.acquire(triedFreeggGroups, '');
+            if (rateBalance.scope !== 'shared' && keyFallbacks < RATE_BALANCE_MAX_FALLBACKS
+                && Date.now() - started < RATE_BALANCE_BUDGET_MS) {
+              const next = rateBalance.acquire(triedRateBalanceGroups, '');
               if (next) {
                 next.release();
                 keyFallbacks += 1;
                 bonusAttempts += 1;
                 stats.keyFallbacks += 1;
-                log(`${req.method} ${reqPath} FreeGG token rate limit: account cooldown, fallback #${keyFallbacks}`);
-                makeUpstream('FreeGG account fallback');
+                log(`${req.method} ${reqPath} provider token rate limit: account cooldown, fallback #${keyFallbacks}`);
+                makeUpstream('provider account fallback');
                 return;
               }
             }
-            const retryMs = freeggRate.nearestRetryMs();
+            const retryMs = rateBalance.nearestRetryMs();
             const out = (() => {
               try {
                 const parsed = JSON.parse(buf.toString('utf8') || '{}');
@@ -3843,7 +3853,7 @@ const server = http.createServer((req, res) => {
 
     ctrace = traceConn(upReq, t.requester);
     activeSet.add(upReq);
-    upReq.__freeggLease = attemptLease;
+    upReq.__rateBalanceLease = attemptLease;
     upReq.__attempt = attempt;
     upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
@@ -4842,7 +4852,7 @@ if (process.argv[2] === 'selftest') {
   // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
   // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
   // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
-  assert.ok(/if \(exactMode \|\| freeggRate\.enabled\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
+  assert.ok(/if \(exactMode \|\| rateBalance\.enabled\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
     'переигрываем пустой поток только пока клиенту не ушло содержимое');
   assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
     'у переигровки пустого потока есть потолок');

@@ -1,0 +1,10 @@
+{
+  "freegg": {
+    "pfx": "fg",
+    "name": "FreeGG",
+    "port": 20184,
+    "scope": "account",
+    "enabled": false,
+    "sessionsFile": "$ROUTING/freegg-sessions.json"
+  }
+}

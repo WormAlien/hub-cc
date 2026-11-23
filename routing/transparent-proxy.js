@@ -12358,6 +12358,32 @@ function leagueWriteGuard(req, res) {
     }
     return true;
 }
+// Общая ограда для остальных JSON-записей dashboard. По тем же причинам, что у
+// leagueWriteGuard: сервер доступен из LAN, а text/plain POST проходит без CORS preflight.
+// Отсутствующие browser-заголовки оставляем CLI/fixture-клиентам, но тело всё равно JSON.
+function hubWriteGuard(req, res) {
+    const h = (req && req.headers) || {};
+    const site = String(h['sec-fetch-site'] || '').toLowerCase();
+    if (site && site !== 'same-origin') {
+        jsonRes(res, 403, { error: `запись разрешена только со страницы самого хаба (Sec-Fetch-Site: ${site})` });
+        return false;
+    }
+    const origin = String(h.origin || '');
+    if (!site && origin) {
+        const host = String(h.host || '').toLowerCase();
+        const oHost = origin.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+        if (!host || oHost !== host) {
+            jsonRes(res, 403, { error: 'запись разрешена только со страницы самого хаба (чужой Origin)' });
+            return false;
+        }
+    }
+    const hasBody = Number(h['content-length']) > 0 || !!h['transfer-encoding'];
+    if (hasBody && !/^application\/json\b/i.test(String(h['content-type'] || ''))) {
+        jsonRes(res, 415, { error: 'тело записи принимается только как application/json' });
+        return false;
+    }
+    return true;
+}
 // Три поля вместе, потому что без любого из них запрос бессмыслен: адрес без ключа
 // получит 401, ключ без адреса некуда посылать.
 function leagueChatReady(c) { return !!(c.enabled && c.url && c.key); }
@@ -17001,6 +17027,95 @@ const FG_UPSTREAM = 'https://freegg.app';
 const FG_KEEPALIVE_PORT = Number(process.env.FG_KEEPALIVE_PORT || 20184);
 const FG_KEEPALIVE_URL = `http://localhost:${FG_KEEPALIVE_PORT}`;
 const FG_MODELMAP_FILE = path.join(__dirname, 'freegg-modelmap.json');
+// Локальный продуктовый выбор пользователя. Файл gitignored как runtime state,
+// а не env: тумблер обязан переживать update/restart на этой конкретной установке.
+// Кладём рядом с остальным runtime state в ~/.claude: checkout можно заменить целиком.
+const RATE_BALANCE_REGISTRY_FILE = path.join(__dirname, 'rate-balance-providers.json');
+const LEGACY_FG_RATE_CONFIG_FILE = path.join(os.homedir(), '.claude', 'freegg-rate-policy.json');
+function rateBalanceRegistry() {
+    try {
+        const doc = JSON.parse(fs.readFileSync(RATE_BALANCE_REGISTRY_FILE, 'utf8').replace(/^\uFEFF/, ''));
+        return doc && !Array.isArray(doc) && typeof doc === 'object' ? doc : {};
+    } catch { return {}; }
+}
+function providerRateMeta(provider) {
+    const row = rateBalanceRegistry()[provider];
+    if (!row || Array.isArray(row) || typeof row !== 'object') return null;
+    const port = Number(row.port);
+    return {
+        provider,
+        name: String(row.name || provider),
+        port: Number.isInteger(port) && port > 0 ? port : null,
+        configFile: provider === 'freegg'
+            ? LEGACY_FG_RATE_CONFIG_FILE
+            : path.join(os.homedir(), '.claude', `${provider}-rate-policy.json`),
+    };
+}
+function providerRateConfig(provider) {
+    const meta = providerRateMeta(provider);
+    if (!meta) return { enabled: false, scope: 'off' };
+    try {
+        const doc = JSON.parse(fs.readFileSync(meta.configFile, 'utf8').replace(/^\uFEFF/, ''));
+        const enabled = !Array.isArray(doc) && doc && typeof doc === 'object' && doc.enabled === true;
+        return { enabled, scope: enabled ? 'account' : 'off' };
+    } catch { return { enabled: false, scope: 'off' }; }
+}
+function providerRateSave(provider, enabled) {
+    const meta = providerRateMeta(provider);
+    if (!meta) throw new Error('rate balancing для provider не зарегистрирован');
+    durableWriteJson(meta.configFile, {
+        enabled: !!enabled,
+        scope: enabled ? 'account' : 'off',
+        updatedAt: new Date().toISOString(),
+    });
+    return providerRateConfig(provider);
+}
+function providerRateRestore(provider, cfg) {
+    const meta = providerRateMeta(provider);
+    if (!meta) return;
+    if (cfg && cfg.exists) {
+        durableWriteJson(meta.configFile, {
+            enabled: cfg.enabled === true,
+            scope: cfg.enabled === true ? 'account' : 'off',
+            updatedAt: new Date().toISOString(),
+        });
+        return;
+    }
+    try { fs.unlinkSync(meta.configFile); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+}
+function rateBalanceEnv(provider) {
+    const meta = providerRateMeta(provider);
+    const cfg = providerRateConfig(provider);
+    if (!meta) return {};
+    return {
+        RATE_BALANCE: cfg.enabled ? '1' : '0',
+        RATE_BALANCE_SCOPE: cfg.enabled ? 'account' : 'off',
+        RATE_BALANCE_COOLDOWN_MS: process.env[`${provider.toUpperCase()}_RATE_COOLDOWN_MS`] || '60000',
+        RATE_BALANCE_JITTER_MS: process.env[`${provider.toUpperCase()}_RATE_JITTER_MS`] || '1000',
+        RATE_BALANCE_MAX_FALLBACKS: process.env[`${provider.toUpperCase()}_RATE_MAX_FALLBACKS`] || '1',
+        RATE_BALANCE_BUDGET_MS: process.env[`${provider.toUpperCase()}_RATE_BUDGET_MS`] || '120000',
+    };
+}
+function providerRateSpawnEnv(provider, sessionsFile) {
+    const meta = providerRateMeta(provider);
+    if (!meta || !sessionsFile) return {};
+    return {
+        CUSTOM_PROVIDER_ID: provider,
+        CUSTOM_PROVIDER_NAME: meta.name,
+        SESSIONS_FILE: sessionsFile,
+        ...rateBalanceEnv(provider),
+    };
+}
+const FG_RATE_CONFIG_FILE = LEGACY_FG_RATE_CONFIG_FILE;
+function fgRateConfig() {
+    const persisted = providerRateConfig('freegg');
+    const legacyEnabled = process.env.FG_RATE_BALANCE === '1';
+    const legacyScope = String(process.env.FG_RATE_SCOPE || 'account').toLowerCase();
+    const enabled = fs.existsSync(FG_RATE_CONFIG_FILE) ? persisted.enabled : (legacyEnabled && legacyScope !== 'off');
+    return { enabled, scope: enabled ? 'account' : 'off' };
+}
+function fgRateSave(enabled) { return providerRateSave('freegg', enabled); }
+function fgRateRestore(cfg) { return providerRateRestore('freegg', cfg); }
 // Конвертер Anthropic → Responses. Порт отдельный от keepalive: иначе они подрались бы
 // за один порт, а роль у них разная (один держит паузы, другой меняет протокол).
 const FG_CONVERTER_PORT = Number(process.env.FG_CONVERTER_PORT || 20185);
@@ -18210,6 +18325,7 @@ async function kkKeepaliveSpawn() {
                 UPSTREAM: KK_UPSTREAM,
                 KEY_FILE: KK_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: KK_SESSIONS_FILE,
+                ...(providerRateSpawnEnv('kktoken', KK_SESSIONS_FILE)),
                 MODELMAP_FILE: KK_MODELMAP_FILE,
                 ...(process.env.KK_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.KK_PRE_COMMIT_MS } : {}),
             },
@@ -18325,6 +18441,7 @@ async function fgConverterSpawn() {
 }
 async function fgKeepaliveSpawn() {
     try {
+        const rateCfg = fgRateConfig();
         // Конвертер поднимаем ВМЕСТЕ с keepalive: у freegg `/v1/messages` закрыт (410),
         // поэтому апстрим keepalive — свой конвертер, а не корень площадки. Поднятый
         // keepalive без конвертера форвардил бы в мёртвый порт.
@@ -18346,14 +18463,17 @@ async function fgKeepaliveSpawn() {
                 UPSTREAM: FG_CONVERTER_URL,
                 KEY_FILE: FG_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: FG_SESSIONS_FILE,
+                ...(providerRateSpawnEnv('freegg', FG_SESSIONS_FILE)),
                 MODELMAP_FILE: FG_MODELMAP_FILE,
                 LOCAL_EXACT_ADAPTER: '1',
                 ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
                 CUSTOM_PROVIDER_ID: 'freegg', CUSTOM_PROVIDER_NAME: 'FreeGG',
                 // Scope is supported only behind an explicit experimental flag. Rollback:
                 // FG_RATE_BALANCE=0 (default) restores the single selected-key path.
-                FREEGG_RATE_BALANCE: process.env.FG_RATE_BALANCE || '0',
-                FREEGG_RATE_SCOPE: process.env.FG_RATE_SCOPE || 'off',
+                // Legacy aliases remain the only rate vars when no preference exists.
+                ...(fs.existsSync(FG_RATE_CONFIG_FILE) ? rateBalanceEnv('freegg') : {}),
+                FREEGG_RATE_BALANCE: rateCfg.enabled ? '1' : '0',
+                FREEGG_RATE_SCOPE: rateCfg.enabled ? 'account' : 'off',
                 FREEGG_RATE_COOLDOWN_MS: process.env.FG_RATE_COOLDOWN_MS || '60000',
                 FREEGG_RATE_JITTER_MS: process.env.FG_RATE_JITTER_MS || '1000',
                 FREEGG_RATE_MAX_FALLBACKS: process.env.FG_RATE_MAX_FALLBACKS || '1',
@@ -18372,6 +18492,70 @@ async function fgKeepaliveSpawn() {
         logLine(`freegg keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
+}
+async function handleFgRatePolicy(req, res) {
+    try {
+        if (req.method === 'GET') {
+            const cfg = fgRateConfig();
+            return jsonRes(res, 200, { ok: true, ...cfg, port: FG_KEEPALIVE_PORT });
+        }
+        if (req.method !== 'POST') return jsonRes(res, 405, { error: 'GET или POST' });
+        if (!hubWriteGuard(req, res)) return;
+        const body = await readJsonBody(req);
+        if (typeof body.enabled !== 'boolean') return jsonRes(res, 400, { error: 'enabled должен быть boolean' });
+        const previous = { ...fgRateConfig(), exists: fs.existsSync(FG_RATE_CONFIG_FILE) };
+        const cfg = fgRateSave(body.enabled);
+        const started = await keepaliveBring(FG_KEEPALIVE_PORT, { force: true, waitMs: 8000 });
+        const runtimeEnabled = !!(started.ok && started.status && started.status.rateBalance && started.status.rateBalance.enabled);
+        if (!started.ok || runtimeEnabled !== cfg.enabled) {
+            fgRateRestore(previous);
+            const restored = await keepaliveBring(FG_KEEPALIVE_PORT, { force: true, waitMs: 8000 });
+            const rollbackError = restored.ok ? null : (restored.error || 'предыдущее состояние keepalive не поднялось');
+            return jsonRes(res, 502, {
+                ok: false,
+                error: started.error || (runtimeEnabled !== cfg.enabled ? 'FreeGG keepalive не применил rate policy' : 'FreeGG keepalive не поднялся'),
+                enabled: previous.enabled,
+                scope: previous.scope,
+                rolledBack: true,
+                ...(rollbackError ? { rollbackError } : {}),
+            });
+        }
+        logLine(`freegg rate balance: ${cfg.enabled ? 'ON account' : 'OFF'} (keepalive :${FG_KEEPALIVE_PORT} restarted)`);
+        return jsonRes(res, 200, { ok: true, ...cfg, port: FG_KEEPALIVE_PORT, restarted: true });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
+}
+async function handleProviderRatePolicy(req, res, provider) {
+    if (provider === 'freegg') return handleFgRatePolicy(req, res);
+    const meta = providerRateMeta(provider);
+    if (!meta || !meta.port) return jsonRes(res, 404, { error: 'rate balancing для provider не зарегистрирован' });
+    try {
+        if (req.method === 'GET') {
+            const cfg = providerRateConfig(provider);
+            return jsonRes(res, 200, { ok: true, provider, name: meta.name, ...cfg, port: meta.port });
+        }
+        if (req.method !== 'POST') return jsonRes(res, 405, { error: 'GET или POST' });
+        if (!hubWriteGuard(req, res)) return;
+        const body = await readJsonBody(req);
+        if (typeof body.enabled !== 'boolean') return jsonRes(res, 400, { error: 'enabled должен быть boolean' });
+        const previous = { ...providerRateConfig(provider), exists: fs.existsSync(meta.configFile) };
+        const cfg = providerRateSave(provider, body.enabled);
+        const started = await keepaliveBring(meta.port, { force: true, waitMs: 8000 });
+        const runtimeEnabled = !!(started.ok && started.status && started.status.rateBalance && started.status.rateBalance.enabled);
+        if (!started.ok || runtimeEnabled !== cfg.enabled) {
+            providerRateRestore(provider, previous);
+            const restored = await keepaliveBring(meta.port, { force: true, waitMs: 8000 });
+            return jsonRes(res, 502, {
+                ok: false,
+                error: started.error || (runtimeEnabled !== cfg.enabled ? `${meta.name} keepalive не применил rate policy` : `${meta.name} keepalive не поднялся`),
+                enabled: previous.enabled,
+                scope: previous.scope,
+                rolledBack: true,
+                ...(!restored.ok ? { rollbackError: restored.error || 'предыдущее состояние keepalive не поднялось' } : {}),
+            });
+        }
+        logLine(`${provider} rate balance: ${cfg.enabled ? 'ON account' : 'OFF'} (keepalive :${meta.port} restarted)`);
+        return jsonRes(res, 200, { ok: true, provider, name: meta.name, ...cfg, port: meta.port, restarted: true });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
 }
 async function axKeepaliveSpawn() {
     try {
@@ -36176,7 +36360,10 @@ function keepaliveInstances() {
 // повисший или недобитый прошлый процесс. Возвращает тело /status или null.
 async function probeStatus(port, statusPath) {
     try {
-        const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, { signal: AbortSignal.timeout(1500) });
+        const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, {
+            signal: AbortSignal.timeout(1500),
+            headers: customIdentityHeaders(),
+        });
         if (!r.ok) return null;
         return await r.json().catch(() => ({}));
     } catch { return null; }
@@ -39402,6 +39589,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/set-github') return handleGoSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-github') return handleKkSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/set-github') return handleFgSetGithub(req, res);
+    if ((req.method === 'GET' || req.method === 'POST') && req.url === '/__switch/api/fg/rate-policy') return handleFgRatePolicy(req, res);
+    {
+        const m = req.url.match(/^\/__switch\/api\/providers\/([a-z0-9-]+)\/rate-policy$/);
+        if (m && (req.method === 'GET' || req.method === 'POST')) return handleProviderRatePolicy(req, res, m[1]);
+    }
     if (req.method === 'POST' && req.url === '/__switch/api/kv/set-github') return handleKvSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/pm/set-github') return handlePmSetGithub(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/set-github') return handleCpSetGithub(req, res);

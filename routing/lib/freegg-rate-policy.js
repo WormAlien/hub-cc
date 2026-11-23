@@ -138,4 +138,4 @@ function createFreeggRatePolicy(options = {}) {
     return { enabled, scope, acquire, cooldown, nearestRetryMs, snapshot, reset, groupOf, errorInfo };
 }
 
-module.exports = { accountId, createFreeggRatePolicy, errorInfo, parseRetryAfter, retryMsFromBody };
+module.exports = { accountId, createRateBalancePolicy: createFreeggRatePolicy, createFreeggRatePolicy, errorInfo, parseRetryAfter, retryMsFromBody };

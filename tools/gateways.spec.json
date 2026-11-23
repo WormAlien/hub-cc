@@ -667,6 +667,26 @@
       "expect": "name === '%full%'"
     },
     {
+      "id": "2.5r",
+      "title": "Фронт: общий rate-balance mount",
+      "file": "frontend",
+      "kind": "must",
+      "expect": "providerRateBalanceMount('%p%','%full%','%NAME%')",
+      "when": [
+        "rateBalance"
+      ]
+    },
+    {
+      "id": "2.5s",
+      "title": "Бэкенд: rate-balance env для keepalive spawn",
+      "file": "backend",
+      "kind": "must",
+      "expect": "...(providerRateSpawnEnv('%full%', %P%_SESSIONS_FILE))",
+      "when": [
+        "rateBalance"
+      ]
+    },
+    {
       "id": "2.6",
       "title": "Фронт: KEEPALIVE_API",
       "file": "frontend",
@@ -837,8 +857,9 @@
       "id": "3.13b",
       "title": "Keepalive-конфиг: maxHedges 0",
       "file": "routing/keepalive-config-%PORT%.json",
-      "kind": "must",
-      "expect": "\"maxHedges\": 0",
+      "kind": "file",
+      "create": "default",
+      "text": "{\n  \"maxHedges\": 0\n}\n",
       "when": [
         "!hedgesTuned"
       ],
@@ -1139,6 +1160,15 @@
     },
     "2.4": {},
     "2.5": {},
+    "2.5r": {
+      "mode": "before-close",
+      "ref": "if (name === '%full%')",
+      "find": "if (name === '%full%')"
+    },
+    "2.5s": {
+      "mode": "spawn-env",
+      "ref": "async function %p%KeepaliveSpawn()"
+    },
     "2.6": {},
     "2.7": {},
     "2.7b": {},

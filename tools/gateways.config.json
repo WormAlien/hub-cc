@@ -29,7 +29,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": true,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "hcnsec": {
     "p": "hn",
@@ -51,7 +52,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "aipm": {
     "p": "ap",
@@ -73,7 +75,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "fluxnat": {
     "p": "fn",
@@ -95,7 +98,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "getunikey": {
     "p": "uk",
@@ -117,7 +121,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "bai": {
     "p": "bai",
@@ -139,7 +144,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "odyssey": {
     "p": "od",
@@ -161,7 +167,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "nova": {
     "p": "nv",
@@ -183,7 +190,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "budsin": {
     "p": "bd",
@@ -205,7 +213,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "lsapi": {
     "p": "ls",
@@ -227,7 +236,8 @@
     "autoreg": true,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "aikeysapi": {
     "p": "ak",
@@ -249,7 +259,8 @@
     "autoreg": true,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "fxqidian": {
     "p": "fx",
@@ -277,7 +288,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "artbloom": {
     "p": "ab",
@@ -299,7 +311,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "cleanapis": {
     "p": "cp",
@@ -321,7 +334,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "dacall": {
     "p": "dc",
@@ -343,7 +357,8 @@
     "autoreg": true,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "premier": {
     "p": "pm",
@@ -368,7 +383,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "vani": {
     "p": "vn",
@@ -391,7 +407,8 @@
     "autoreg": true,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "threerouter": {
     "p": "tr",
@@ -413,7 +430,8 @@
     "autoreg": true,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "kvotum": {
     "p": "kv",
@@ -435,7 +453,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": false,
-    "hedgesTuned": true
+    "hedgesTuned": true,
+    "rateBalance": false
   },
   "apinex": {
     "p": "ax",
@@ -457,7 +476,8 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": true,
-    "hedgesTuned": false
+    "hedgesTuned": false,
+    "rateBalance": false
   },
   "freegg": {
     "p": "fg",
@@ -486,7 +506,8 @@
     "autoreg": false,
     "customPanel": false,
     "paidHedge": false,
-    "hedgesTuned": false
+    "hedgesTuned": false,
+    "rateBalance": true
   },
   "xingchi": {
     "p": "xc",
@@ -508,6 +529,7 @@
     "autoreg": false,
     "customPanel": true,
     "paidHedge": true,
-    "hedgesTuned": false
+    "hedgesTuned": false,
+    "rateBalance": false
   }
 }

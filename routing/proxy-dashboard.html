@@ -7646,6 +7646,21 @@ window.finNavCount = async () => {
             <h2 class="text-sm font-semibold tracking-tight">⚡ Keepalive :20184 - дубли выключены по умолчанию</h2>
             <button onclick="fgLoadKeepalive()" class="text-xs px-2 py-1 bg-surface border border-line-soft rounded hover:border-line">↻</button>
           </div>
+          <div class="mb-4 rounded-[12px] bg-elevated/55 border border-line-soft px-4 py-3 flex items-center justify-between gap-4">
+            <div class="min-w-0">
+              <div class="text-[13px] font-semibold tracking-[-0.01em] text-ink">Распределять 429 между аккаунтами</div>
+              <div class="text-[11px] leading-relaxed text-muted mt-0.5">Least-inflight по проверенным аккаунтам; максимум один переход до начала ответа. Выключено = один выбранный ключ.</div>
+              <div id="fg-rate-balance-state" class="text-[10px] font-mono text-faint mt-1">загрузка…</div>
+            </div>
+            <button id="fg-rate-balance-toggle" type="button" role="switch" aria-checked="false"
+                    aria-label="Распределять 429 между аккаунтами FreeGG" onclick="fgRateBalanceToggle()"
+                    title="Включить распределение token rate limit между аккаунтами FreeGG"
+                    class="shrink-0 relative w-[51px] h-[44px] rounded-full disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-sky/50">
+              <span id="fg-rate-balance-track" class="absolute left-0 top-[6px] w-[51px] h-[31px] rounded-full border border-line-soft bg-elevated transition-colors duration-200">
+                <span id="fg-rate-balance-knob" class="absolute top-[2px] left-[2px] size-[25px] rounded-full bg-white shadow-md transition-all duration-200"></span>
+              </span>
+            </button>
+          </div>
           <div class="flex gap-2 items-end flex-wrap" id="fg-keepalive-sel">
             <label class="flex flex-col gap-1 w-32">
               <span class="text-[10px] text-faint leading-tight">мульти-запрос через (сек) · 0 = выкл</span>
@@ -12325,7 +12340,7 @@ function showTab(name) {
   if (name === 'truesota') { if (!state.loaded.truesota) { state.loaded.truesota = true; loadTsSessions(false); } tsLoadKeepalive(); }
   if (name === 'kktoken') { if (!state.loaded.kktoken) { state.loaded.kktoken = true; loadKkSessions(false); } kkLoadKeepalive(); }
   if (name === 'xingchi') { if (!state.loaded.xingchi) { state.loaded.xingchi = true; loadXcSessions(false); } xcLoadKeepalive(); }
-  if (name === 'freegg') { if (!state.loaded.freegg) { state.loaded.freegg = true; loadFgSessions(false); } fgLoadKeepalive(); }
+  if (name === 'freegg') { if (!state.loaded.freegg) { state.loaded.freegg = true; loadFgSessions(false); } fgLoadKeepalive(); fgRateBalanceLoad(); providerRateBalanceMount('fg','freegg','FreeGG'); }
   if (name === 'apinex') { if (!state.loaded.apinex) { state.loaded.apinex = true; loadAxSessions(false); } axLoadKeepalive(); }
   if (name === 'kvotum') { if (!state.loaded.kvotum) { state.loaded.kvotum = true; loadKvSessions(false); } kvLoadKeepalive(); }
   if (name === 'threerouter') { if (!state.loaded.threerouter) { state.loaded.threerouter = true; loadTrSessions(false); } trLoadKeepalive(); }
@@ -17421,6 +17436,100 @@ const skApplyKeepalive  = () => applyKeepaliveCard('sk', KEEPALIVE_API.sk);
 const kkLoadKeepalive   = () => loadKeepaliveCard('kk', KEEPALIVE_API.kk);
 const xcLoadKeepalive   = () => loadKeepaliveCard('xc', KEEPALIVE_API.xc);
 const fgLoadKeepalive   = () => loadKeepaliveCard('fg', KEEPALIVE_API.fg);
+let FG_RATE_BALANCE_ON = false;
+const PROVIDER_RATE_BALANCE = new Map();
+function providerRateBalanceHtml(pfx, name) {
+  return `<div class="mb-4 rounded-[12px] bg-elevated/55 border border-line-soft px-4 py-3 flex items-center justify-between gap-4">
+    <div class="min-w-0"><div class="text-[13px] font-semibold tracking-[-0.01em] text-ink">Распределять 429 между аккаунтами</div>
+    <div class="text-[11px] leading-relaxed text-muted mt-0.5">Least-inflight; максимум один переход до ответа. Выключено = выбранный ключ.</div>
+    <div id="${pfx}-rate-balance-state" class="text-[10px] font-mono text-faint mt-1">загрузка…</div></div>
+    <button id="${pfx}-rate-balance-toggle" type="button" role="switch" aria-checked="false" aria-label="Распределять 429 между аккаунтами"
+      onclick="providerRateBalanceToggle('${pfx}')" class="shrink-0 relative w-[51px] h-[44px] rounded-full disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-sky/50">
+      <span id="${pfx}-rate-balance-track" class="absolute left-0 top-[6px] w-[51px] h-[31px] rounded-full border border-line-soft bg-elevated transition-colors duration-200"><span id="${pfx}-rate-balance-knob" class="absolute top-[2px] left-[2px] size-[25px] rounded-full bg-white shadow-md transition-all duration-200"></span></span>
+    </button></div>`;
+}
+function providerRateBalanceMount(pfx, provider, name) {
+  if (provider === 'freegg') return fgRateBalanceLoad();
+  const keepalive = $(pfx + '-keepalive');
+  if (!keepalive) return;
+  let host = $(pfx + '-rate-balance-host');
+  if (!host) {
+    host = document.createElement('div'); host.id = pfx + '-rate-balance-host';
+    keepalive.parentElement.insertBefore(host, keepalive);
+    host.innerHTML = providerRateBalanceHtml(pfx, name);
+  }
+  PROVIDER_RATE_BALANCE.set(pfx, { provider, name, enabled: false });
+  providerRateBalanceLoad(pfx);
+}
+function providerRateBalancePaint(pfx, enabled, busy, port) {
+  const state = PROVIDER_RATE_BALANCE.get(pfx); if (state) state.enabled = !!enabled;
+  const btn=$(pfx+'-rate-balance-toggle'), track=$(pfx+'-rate-balance-track'), knob=$(pfx+'-rate-balance-knob'), label=$(pfx+'-rate-balance-state');
+  if (!btn || !track || !knob || !label) return;
+  btn.disabled=!!busy; btn.setAttribute('aria-checked', enabled?'true':'false');
+  track.className='absolute left-0 top-[6px] w-[51px] h-[31px] rounded-full border transition-colors duration-200 '+(enabled?'bg-[#34c759] border-[#34c759]':'bg-elevated border-line-soft');
+  knob.className='absolute top-[2px] size-[25px] rounded-full bg-white shadow-md transition-all duration-200 '+(enabled?'left-[23px]':'left-[2px]');
+  label.textContent=busy?`применяю и перезапускаю :${port||'…'}…`:enabled?'включено · account scope · fallback ≤ 1':'выключено · выбранный ключ';
+  label.className='text-[10px] font-mono mt-1 '+(enabled?'text-[#34c759]':'text-faint');
+}
+async function providerRateBalanceLoad(pfx) {
+  const state=PROVIDER_RATE_BALANCE.get(pfx); if(!state)return;
+  try { const r=await fetch(`/__switch/api/providers/${state.provider}/rate-policy`); const d=await r.json(); if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`); state.port=d.port; providerRateBalancePaint(pfx,!!d.enabled,false,d.port); }
+  catch(e){ const label=$(pfx+'-rate-balance-state'); if(label){label.textContent='ошибка чтения: '+e.message;label.className='text-[10px] font-mono text-crimson mt-1';} }
+}
+async function providerRateBalanceToggle(pfx) {
+  const state=PROVIDER_RATE_BALANCE.get(pfx); if(!state)return; const previous=state.enabled,next=!previous;
+  providerRateBalancePaint(pfx,next,true,state.port);
+  try { const r=await fetch(`/__switch/api/providers/${state.provider}/rate-policy`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:next})}); const d=await r.json(); if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`); providerRateBalancePaint(pfx,!!d.enabled,false,d.port); toast(`${state.name}: распределение 429 ${d.enabled?'включено':'выключено'}`,'success',3500); await loadKeepaliveCard(pfx,KEEPALIVE_API[pfx]); }
+  catch(e){providerRateBalancePaint(pfx,previous,false,state.port);toast(state.name+' rate balance: '+e.message,'error',5000);}
+}
+function fgRateBalancePaint(enabled, busy) {
+  FG_RATE_BALANCE_ON = !!enabled;
+  const btn = $('fg-rate-balance-toggle'), track = $('fg-rate-balance-track'), knob = $('fg-rate-balance-knob'), label = $('fg-rate-balance-state');
+  if (!btn || !track || !knob || !label) return;
+  btn.disabled = !!busy;
+  btn.setAttribute('aria-checked', enabled ? 'true' : 'false');
+  btn.className = 'shrink-0 relative w-[51px] h-[44px] rounded-full disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-sky/50';
+  track.className = 'absolute left-0 top-[6px] w-[51px] h-[31px] rounded-full border transition-colors duration-200 '
+    + (enabled ? 'bg-[#34c759] border-[#34c759]' : 'bg-elevated border-line-soft');
+  knob.className = 'absolute top-[2px] size-[25px] rounded-full bg-white shadow-md transition-all duration-200 '
+    + (enabled ? 'left-[23px]' : 'left-[2px]');
+  label.textContent = busy ? 'применяю и перезапускаю :20184…'
+    : enabled ? 'включено · account scope · fallback ≤ 1' : 'выключено · запросы идут через выбранный ключ';
+  label.className = 'text-[10px] font-mono mt-1 ' + (enabled ? 'text-[#34c759]' : 'text-faint');
+}
+async function fgRateBalanceLoad() {
+  try {
+    const r = await fetch('/__switch/api/fg/rate-policy');
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d) throw new Error((d && d.error) || `HTTP ${r.status}`);
+    fgRateBalancePaint(!!d.enabled, false);
+  } catch (e) {
+    const label = $('fg-rate-balance-state');
+    if (label) { label.textContent = 'ошибка чтения: ' + e.message; label.className = 'text-[10px] font-mono text-crimson mt-1'; }
+  }
+}
+async function fgRateBalanceToggle() {
+  const previous = FG_RATE_BALANCE_ON, next = !previous;
+  fgRateBalancePaint(next, true);
+  try {
+    const r = await fetch('/__switch/api/fg/rate-policy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: next }),
+    });
+    const d = await r.json().catch(() => null);
+    if (!r.ok || !d || !d.ok) {
+      const error = new Error((d && d.error) || `HTTP ${r.status}`);
+      if (d && typeof d.enabled === 'boolean') error.ratePolicy = d;
+      throw error;
+    }
+    fgRateBalancePaint(!!d.enabled, false);
+    toast(d.enabled ? '✓ FreeGG: распределение 429 включено (account)' : 'FreeGG: распределение 429 выключено', 'success', 3500);
+    await fgLoadKeepalive();
+  } catch (e) {
+    const serverEnabled = e && e.ratePolicy && typeof e.ratePolicy.enabled === 'boolean' ? e.ratePolicy.enabled : previous;
+    fgRateBalancePaint(serverEnabled, false);
+    toast('FreeGG rate balance: ' + e.message, 'error', 5000);
+  }
+}
 const axLoadKeepalive   = () => loadKeepaliveCard('ax', KEEPALIVE_API.ax);
 const kvLoadKeepalive   = () => loadKeepaliveCard('kv', KEEPALIVE_API.kv);
 const trLoadKeepalive   = () => loadKeepaliveCard('tr', KEEPALIVE_API.tr);

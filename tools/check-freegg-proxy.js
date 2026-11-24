@@ -56,7 +56,7 @@ async function freePort() {
     });
     async function ask(body = requestBody(), headers = { 'x-api-key': 'fixture-client-key' }, endpoint = '/v1/messages') {
         const res = await fetch(base + endpoint, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(3000) });
-        return { status: res.status, text: await res.text() };
+        return { status: res.status, headers: Object.fromEntries(res.headers.entries()), text: await res.text() };
     }
     async function test(name, fn) {
         if (process.argv[2] && !name.includes(process.argv[2])) return;
@@ -255,6 +255,108 @@ async function freePort() {
                 assert.equal(result.status, expected); assert.equal(JSON.parse(result.text).type, 'error');
                 assert.equal(calls.length - before, 1);
             }
+        });
+        await test('rate-limit errors preserve upstream code and Retry-After metadata', async () => {
+            respond = (_req, res) => {
+                res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '17' });
+                res.end(JSON.stringify({ error: { code: 'rate_limit_exceeded', message: 'fixture token rate limit' } }));
+            };
+            for (const stream of [false, true]) {
+                const result = await ask(requestBody({ stream }));
+                assert.equal(result.status, 429);
+                assert.equal(result.headers['retry-after'], '17');
+                const error = JSON.parse(result.text).error;
+                assert.equal(error.code, 'rate_limit_exceeded');
+                assert.equal(error.retry_after_ms, 17000);
+            }
+            const date = new Date(Date.now() + 30000).toUTCString();
+            respond = (_req, res) => {
+                res.writeHead(429, { 'content-type': 'application/json', 'retry-after': date });
+                res.end(JSON.stringify({ error: { code: 'rate_limit_exceeded', message: 'fixture token rate limit' } }));
+            };
+            const dated = await ask();
+            const datedError = JSON.parse(dated.text).error;
+            assert.ok(datedError.retry_after_ms > 0 && datedError.retry_after_ms <= 31000);
+        });
+        await test('SSE rate limit and HTTP 429 expose the same normalized policy metadata', async () => {
+            respond = streamReply([{ type: 'response.failed', response: { error: {
+                code: 'rate_limit_exceeded', message: 'fixture token rate limit', retry_after: 23,
+            } } }]);
+            const result = await ask(requestBody({ stream: true }));
+            assert.equal(result.status, 429);
+            assert.equal(result.headers['retry-after'], '23');
+            assert.deepEqual(JSON.parse(result.text).error, {
+                type: 'rate_limit_error', code: 'rate_limit_exceeded', message: 'fixture token rate limit', retry_after_ms: 23000,
+            });
+        });
+        await test('HTTP and SSE reset timestamps become retry metadata', async () => {
+            for (const stream of [false, true]) {
+                const resetAt = new Date(Date.now() + 30000).toISOString();
+                respond = (_req, res) => {
+                    res.writeHead(429, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { code: 'rate_limit_exceeded', message: 'fixture token rate limit', reset_at: resetAt } }));
+                };
+                const result = await ask(requestBody({ stream }));
+                const error = JSON.parse(result.text).error;
+                assert.equal(result.status, 429);
+                assert.ok(error.retry_after_ms > 0 && error.retry_after_ms <= 31000);
+                assert.ok(Number(result.headers['retry-after']) > 0 && Number(result.headers['retry-after']) <= 31);
+            }
+            const resetAt = new Date(Date.now() + 30000).toISOString();
+            respond = streamReply([{ type: 'response.failed', response: { error: {
+                code: 'rate_limit_exceeded', message: 'fixture token rate limit', reset_at: resetAt,
+            } } }]);
+            const streamed = await ask(requestBody({ stream: true }));
+            const streamedError = JSON.parse(streamed.text).error;
+            assert.equal(streamed.status, 429);
+            assert.ok(streamedError.retry_after_ms > 0 && streamedError.retry_after_ms <= 31000);
+            assert.ok(Number(streamed.headers['retry-after']) > 0 && Number(streamed.headers['retry-after']) <= 31);
+        });
+        await test('server_error is not classified as account token throttling', async () => {
+            respond = streamReply([{ type: 'response.failed', response: { error: { code: 'server_error', message: 'fixture server failure' } } }]);
+            const result = await ask(requestBody({ stream: true }));
+            assert.equal(result.status, 502);
+            assert.equal(JSON.parse(result.text).error.code, 'server_error');
+            assert.equal(result.headers['retry-after'], undefined);
+        });
+        await test('HTTP 429 server_error type stays api_error in both response modes', async () => {
+            for (const stream of [false, true]) {
+                respond = (_req, res) => {
+                    res.writeHead(429, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: { type: 'server_error', message: 'rate limit service unavailable' } }));
+                };
+                const result = await ask(requestBody({ stream }));
+                const error = JSON.parse(result.text).error;
+                assert.equal(result.status, 429);
+                assert.equal(error.type, 'api_error');
+                assert.equal(error.code, 'server_error');
+                assert.equal(result.headers['retry-after'], undefined);
+            }
+        });
+        await test('null or empty HTTP retry metadata stays absent in both response modes', async () => {
+            for (const stream of [false, true]) {
+                respond = (_req, res) => {
+                    res.writeHead(429, { 'content-type': 'application/json' });
+                    res.end(JSON.stringify({ error: {
+                        type: 'rate_limit_error', message: 'token rate limit', retry_after_ms: null, retry_after: '',
+                    } }));
+                };
+                const result = await ask(requestBody({ stream }));
+                const error = JSON.parse(result.text).error;
+                assert.equal(result.status, 429);
+                assert.equal(error.retry_after_ms, undefined);
+                assert.equal(result.headers['retry-after'], undefined);
+            }
+        });
+        await test('null or empty SSE retry metadata stays absent', async () => {
+            respond = streamReply([{ type: 'response.failed', response: { error: {
+                code: 'rate_limit_exceeded', message: 'token rate limit', retry_after_ms: null, retry_after: '',
+            } } }]);
+            const result = await ask(requestBody({ stream: true }));
+            const error = JSON.parse(result.text).error;
+            assert.equal(result.status, 429);
+            assert.equal(error.retry_after_ms, undefined);
+            assert.equal(result.headers['retry-after'], undefined);
         });
         await test('aborted committed stream is error with no success terminal', async () => {
             respond = (_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(frame(textEvent('partial'))); setTimeout(() => res.destroy(), 30); };

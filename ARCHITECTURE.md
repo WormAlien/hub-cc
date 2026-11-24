@@ -155,6 +155,13 @@ CAPTCHA/device checks требуют человека, 429 останавлив�
 reuse/reveal принят без дублей. Full unattended OAuth и production rollout ещё не приняты.
 Канон и ограничения: Obsidian `FreeGG - вкладка и GitHub onboarding`.
 
+Без persisted выбора rate-limit routing остаётся opt-in через env aliases:
+`FG_RATE_BALANCE=1` и `FG_RATE_SCOPE=account|key|shared`. Existing persisted
+FreeGG object имеет приоритет; его откат описан выше. Account/key scope допускает
+один pre-content fallback с `Retry-After`; shared никогда не перебирает пул,
+HTTP/SSE `server_error` не доказывает лимит. Естественная paired-429 проба всё ещё
+не принята; опубликованный код не меняет включённый владельцем persisted state.
+
 Журнал живого dashboard показал корень first-run сбоя: первый процесс завершался с
 `referral_not_saved`, второй заход по той же рефке проходил. Общий runtime теперь делает один
 ограниченный повтор bootstrap. FreeGG явно включён в manager `autoOnboarding`, а `fg/session/open`

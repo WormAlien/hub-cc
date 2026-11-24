@@ -61,16 +61,37 @@ const SAFE = (() => {
     return !(process.env.TERM || process.env.TERM_PROGRAM);
 })();
 
+// ── VT в старом conhost ──────────────────────────────────────────────────────
+// Conhost умеет ANSI, но только когда у него включён ENABLE_VIRTUAL_TERMINAL_PROCESSING
+// (0x0004); Node сам этого не делает, поэтому ESC печатался видимым значком. Флаг живёт
+// на общем экранном буфере консоли, поэтому включаем его один раз из PowerShell - и
+// цвета, курсор и очистка строки начинают работать как в нормальном терминале.
+// Возвращает false, если включить не удалось: тогда остаётся линейный текст без ESC.
+function enableVirtualTerminal() {
+    if (!L.IS_WIN || !process.stdout.isTTY) return false;
+    const script = `Add-Type -Namespace HubVT -Name Api -MemberDefinition '[DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int n); [DllImport("kernel32.dll")] public static extern bool GetConsoleMode(IntPtr h, out uint m); [DllImport("kernel32.dll")] public static extern bool SetConsoleMode(IntPtr h, uint m);'
+$h = [HubVT.Api]::GetStdHandle(-11)
+$m = [uint32]0
+if (-not [HubVT.Api]::GetConsoleMode($h, [ref]$m)) { exit 1 }
+if (-not [HubVT.Api]::SetConsoleMode($h, $m -bor 4)) { exit 1 }
+exit 0`;
+    try {
+        const r = spawnSync('powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+            // windowsHide НЕ ставим: с ним libuv даёт процессу CREATE_NO_WINDOW, то есть
+            // отдельную консоль, и SetConsoleMode включил бы VT не тому буферу. Без флага
+            // PowerShell наследует нашу консоль - новых окон не появляется.
+            { stdio: 'ignore', timeout: 5000 });
+        return r.status === 0;
+    } catch { return false; }
+}
+
 // ── ANSI ─────────────────────────────────────────────────────────────────────
 // В не-TTY (кнопка перезапуска в дашборде, перенаправление в файл, CI) все
 // украшения обязаны исчезнуть: иначе в логе оказывается каша из escape-кодов, а
 // «пришли скриншот окна» превращается в «пришли скриншот мусора».
-//
-// 🪤 Старый conhost — тоже «нет ANSI», хотя isTTY там true. VT-обработки у него
-// нет, и ESC печатается видимым значком: друг видел `␛[92m√␛[0m` вместо галочки
-// (25.11). SAFE уже означает ровно этот терминал, поэтому escape-коды гасим по
-// нему, а не по TTY. TTY остаётся для ввода и для решения «рисовать ли экран».
-const ANSI = TTY && !SAFE;
+const VT = !SAFE || enableVirtualTerminal();
+const ANSI = TTY && VT;
 const e = (code, s) => (ANSI ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const bold = s => e(1, s);
 const dim = s => e(2, s);

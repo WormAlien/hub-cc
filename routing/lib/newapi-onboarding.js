@@ -192,12 +192,12 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     // нет - share-код несёт снимок входа, и панель уже залогинена. Требовать ghId значило
     // бы отказывать в окне ровно тому сценарию, ради которого share и делался (25.11).
     const shared = !target.ghId && target.shared === true;
-    // Ручной аккаунт: ключ вписали, GitHub-записи нет. Для окна это то же самое - панель
-    // уже создана, а добивать вход через GitHub-онбординг нечем и незачем. Раньше такой
-    // аккаунт получал github_binding_missing на первой же кнопке 🌐 (живой случай 25.11).
-    const manual = !target.ghId && !shared && /^sk-/.test(String(target.api_key || ''));
-    const bindless = shared || manual;
-    if (!target.ghId && !bindless) throw safeFailure('github_binding_missing');
+    // Аккаунт без GitHub-привязки: заведён вручную (или приехал share-кодом). Для окна
+    // это одно и то же - запись уже есть, а добивать вход через GitHub-онбординг нечем.
+    // Раньше такой аккаунт получал github_binding_missing на первой же кнопке 🌐, даже
+    // когда человек просто хотел открыть окно и войти руками (живой случай 25.11).
+    const manual = !target.ghId && !shared;
+    const bindless = shared || manual;      // = аккаунт без ghId
     account ||= target.ghId
         ? readJson(path.join(root, 'routing', 'github-accounts.json')).find(row => row.id === target.ghId)
         : null;

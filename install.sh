@@ -182,6 +182,27 @@ else
   fi
 fi
 
+# ── 5в. Windows Terminal ────────────────────────────────────────────────────
+# Хаб при старте переносит себя в Windows Terminal (moveToWindowsTerminal): только
+# там есть брайлевы глифы шапки, нормальные шрифты и анимация. Без него окно
+# остаётся в старом conhost и выглядит "примитивным" на любом коде.
+step "5в. Windows Terminal (шапка и анимации)"
+find_wt() { where.exe wt.exe >/dev/null 2>&1 || [ -L "$LOCALAPPDATA/Microsoft/WindowsApps/wt.exe" ]; }
+if find_wt; then
+  ok "Windows Terminal на месте"
+else
+  warn "Windows Terminal не найден - хаб останется в старом conhost без анимаций."
+  if have winget && ask "Поставить Windows Terminal сейчас?" Y; then
+    winget install -e --id Microsoft.WindowsTerminal \
+      --accept-source-agreements --accept-package-agreements || warn "winget не смог поставить Windows Terminal"
+  fi
+  if find_wt; then
+    ok "Windows Terminal установлен"
+  else
+    warn "Windows Terminal не поставился - поставь из Microsoft Store и перезапусти хаб."
+  fi
+fi
+
 # ── 6. Claude Code ──────────────────────────────────────────────────────────
 # Раньше здесь был жёсткий пин 2.1.153 с npm uninstall: считалось, что версии новее
 # ломают apiKeyHelper. Это не подтвердилось — ротация ключей на лету работает на всех

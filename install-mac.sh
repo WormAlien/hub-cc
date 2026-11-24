@@ -13,11 +13,21 @@ set -u
 # и проверка в Bootstrap уводит в клонирование репо.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SELF_DIR="$PWD"
 
-b()   { printf '\033[1m%s\033[0m\n' "$*"; }
-ok()  { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }
-warn(){ printf '\033[33m  ! %s\033[0m\n' "$*"; }
-err() { printf '\033[31m  ✗ %s\033[0m\n' "$*"; }
-step(){ printf '\n\033[36m── %s\033[0m\n' "$*"; }
+# Цвета только там, где их понимают: NO_COLOR (так зовёт хаб из старого conhost),
+# TERM=dumb и pipe/файл печатают без escape-кодов.
+if [ -n "${NO_COLOR:-}" ] || [ "${TERM:-}" = "dumb" ] || [ ! -t 1 ]; then
+  b()   { printf '%s\n' "$*"; }
+  ok()  { printf '  ✓ %s\n' "$*"; }
+  warn(){ printf '  ! %s\n' "$*"; }
+  err() { printf '  ✗ %s\n' "$*"; }
+  step(){ printf '\n-- %s\n' "$*"; }
+else
+  b()   { printf '\033[1m%s\033[0m\n' "$*"; }
+  ok()  { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }
+  warn(){ printf '\033[33m  ! %s\033[0m\n' "$*"; }
+  err() { printf '\033[31m  ✗ %s\033[0m\n' "$*"; }
+  step(){ printf '\n\033[36m── %s\033[0m\n' "$*"; }
+fi
 have(){ command -v "$1" >/dev/null 2>&1; }
 
 # Авто-режим. Контракт тот же, что у install.sh и install-lib.sh: AUTO=1 значит

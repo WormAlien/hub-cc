@@ -65,7 +65,13 @@ const SAFE = (() => {
 // В не-TTY (кнопка перезапуска в дашборде, перенаправление в файл, CI) все
 // украшения обязаны исчезнуть: иначе в логе оказывается каша из escape-кодов, а
 // «пришли скриншот окна» превращается в «пришли скриншот мусора».
-const e = (code, s) => (TTY ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+//
+// 🪤 Старый conhost — тоже «нет ANSI», хотя isTTY там true. VT-обработки у него
+// нет, и ESC печатается видимым значком: друг видел `␛[92m√␛[0m` вместо галочки
+// (25.11). SAFE уже означает ровно этот терминал, поэтому escape-коды гасим по
+// нему, а не по TTY. TTY остаётся для ввода и для решения «рисовать ли экран».
+const ANSI = TTY && !SAFE;
+const e = (code, s) => (ANSI ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const bold = s => e(1, s);
 const dim = s => e(2, s);
 const red = s => e(91, s);
@@ -80,11 +86,11 @@ const out = s => process.stdout.write(s);
 // нельзя — состав кадра меняется от размера окна и числа пунктов.
 let printedLines = 0;
 const line = (s = '') => { printedLines++; out(s + '\n'); };
-const clearScreen = () => TTY && out('\x1b[2J\x1b[H');
-const hideCursor = () => TTY && out('\x1b[?25l');
-const showCursor = () => TTY && out('\x1b[?25h');
-const up = n => TTY && out(`\x1b[${n}A`);
-const eraseLine = () => TTY && out('\x1b[2K\r');
+const clearScreen = () => ANSI && out('\x1b[2J\x1b[H');
+const hideCursor = () => ANSI && out('\x1b[?25l');
+const showCursor = () => ANSI && out('\x1b[?25h');
+const up = n => ANSI && out(`\x1b[${n}A`);
+const eraseLine = () => ANSI && out('\x1b[2K\r');
 const sleep = L.sleep;
 
 // ── Шапка ────────────────────────────────────────────────────────────────────
@@ -112,7 +118,7 @@ const art = () => readArt(ART_FILE);
 // Гиперссылка терминала (OSC 8). Windows Terminal её понимает и делает адрес
 // кликабельным; в старом conhost и в не-TTY остаётся обычный текст.
 function link(url, text = url) {
-    return TTY ? `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\` : text;
+    return ANSI ? `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\` : text;
 }
 
 // Крупные цифры для суммы в шапке. Только цифры и пробел: буквы в блочном шрифте я
@@ -478,7 +484,7 @@ let focusHook = null;
 // Здесь же живёт мерцание суммы: таймер один на оба эффекта, иначе они разошлись бы
 // по фазе и делили курсор через два независимых ESC 7 / ESC 8.
 function startDrip(A, linesBelow, headerRows, digitsAt = null) {
-    if (!TTY || !A.length || process.env.HUB_NO_DRIP) return;
+    if (!ANSI || !A.length || process.env.HUB_NO_DRIP) return;
     // 🪤 Капель в безопасном наборе не заводится, а мерцание суммы — заводится, и это
     // не половинчатость. Капель ЧИТАЕТ картинку как битмап (`art-anim.js`: код символа
     // минус 0x2800) и дописывает в ячейку точки — на полублочной картинке она печатала
@@ -575,7 +581,7 @@ class Spin {
         this.label = label;
         this.i = 0;
         this.timer = null;
-        if (!TTY) return;
+        if (!ANSI) return;
         this.timer = setInterval(() => {
             eraseLine();
             out(`  ${cyan(FRAMES[this.i++ % FRAMES.length])} ${this.label}`);
@@ -1178,7 +1184,7 @@ async function doDictationFix() {
         const move = dir => {
             const prev = sel;
             sel = (sel + dir + acts.length) % acts.length;
-            if (!TTY) return;
+            if (!ANSI) return;
             for (const i of [prev, sel]) {
                 const upBy = acts.length - i + 1;       // +1 — строка подсказки
                 out(`\x1b[${upBy}A`);
@@ -1311,7 +1317,7 @@ async function doVersions() {
         if (!items.length) return;
         const prev = sel;
         sel = (sel + dir + items.length) % items.length;
-        if (!TTY) return;
+        if (!ANSI) return;
         for (const i of [prev, sel]) {
             const upBy = items.length - i + below;
             out(`\x1b[${upBy}A`);
@@ -1562,7 +1568,9 @@ async function doPostUpdate({ interactive }) {
         cwd: L.ROOT,
         stdio: 'inherit',
         // This process owns the single restart after dependencies are complete.
-        env: { ...process.env, AUTO: '1', HUB_SKIP_START: '1' },
+        // NO_COLOR - для старого conhost: установщик печатает ESC-коды напрямую, и без
+        // этого человек видел `[92m` вместо галочек (25.11). В WT и mintty цвет остаётся.
+        env: { ...process.env, AUTO: '1', HUB_SKIP_START: '1', ...(SAFE ? { NO_COLOR: '1' } : {}) },
     });
     if (r.status !== 0) {
         line();
@@ -1734,7 +1742,7 @@ function safeHint() {
 
 async function menu() {
     hideCursor();
-    process.on('exit', () => { showCursor(); keysRelease(); if (TTY) out(FOCUS_OFF); });
+    process.on('exit', () => { showCursor(); keysRelease(); if (ANSI) out(FOCUS_OFF); });
     let sel = 0;
     const items = menuItems();
 
@@ -1779,7 +1787,7 @@ async function menu() {
         const move = dir => {
             const prev = sel;
             sel = (sel + dir + items.length) % items.length;
-            if (!TTY) return;
+            if (!ANSI) return;
             for (const i of [prev, sel]) {
                 const upBy = items.length - i + below;   // строки под меню: подсказка (+ упрощение)
                 out(`\x1b[${upBy}A`);

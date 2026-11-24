@@ -36,15 +36,44 @@ if [ "$IS_MAC" = "1" ]; then
 else
   SQLITE_LINK="$LOCALAPPDATA/Microsoft/WinGet/Links/sqlite3.exe"
   SQLITE_HOMEBIN="$HOME/bin/sqlite3.exe"
-  if [ -n "${SQLITE3:-}" ] && [ -f "$SQLITE3" ]; then
-    ok "sqlite3: $SQLITE3 (env SQLITE3)"
-  elif [ -f "$SQLITE_LINK" ]; then
-    ok "sqlite3: $SQLITE_LINK"
-  elif [ -f "$SQLITE_HOMEBIN" ]; then
-    ok "sqlite3: $SQLITE_HOMEBIN"
+  # Winget не всегда создаёт ссылку в Links: пакет может лечь в Program Files, а Links
+  # остаться пустым. Старый чек «нет ссылки - ставим снова» из-за этого гонял установку
+  # на каждом обновлении (живой случай 25.11). Ищем бинарь там, где он реально бывает.
+  sqlite_exe() {
+    if [ -n "${SQLITE3:-}" ] && [ -f "$SQLITE3" ]; then echo "$SQLITE3"; return 0; fi
+    if have sqlite3; then command -v sqlite3; return 0; fi
+    for p in "$SQLITE_LINK" "$SQLITE_HOMEBIN" \
+             "/c/Program Files/SQLite/sqlite3.exe" \
+             "/c/Program Files (x86)/SQLite/sqlite3.exe" \
+             "$LOCALAPPDATA/Programs/SQLite/sqlite3.exe" \
+             "/c/ProgramData/chocolatey/bin/sqlite3.exe"; do
+      [ -f "$p" ] && { echo "$p"; return 0; }
+    done
+    return 1
+  }
+  # Хаб ищет бинарь только в WinGet Links и ~/bin. Если sqlite3 нашёлся в Program Files,
+  # кладём копию в ~/bin: иначе установщик говорит «стоит», а хаб его не видит.
+  sqlite_detect() {
+    local found
+    found="$(sqlite_exe || true)"
+    [ -n "$found" ] || return 1
+    if [ "$found" != "$SQLITE_LINK" ] && [ "$found" != "$SQLITE_HOMEBIN" ]; then
+      mkdir -p "$HOME/bin"
+      cp -f "$found" "$SQLITE_HOMEBIN" 2>/dev/null && found="$SQLITE_HOMEBIN"
+    fi
+    echo "$found"
+  }
+  SQLITE_FOUND="$(sqlite_detect || true)"
+  if [ -n "$SQLITE_FOUND" ]; then
+    ok "sqlite3: $SQLITE_FOUND"
   elif have winget && ask "sqlite3.exe не найден — поставить через winget? (нужен TG-пулу)" Y; then
     winget install -e --id SQLite.SQLite
-    [ -f "$SQLITE_LINK" ] && ok "sqlite3 установлен" || warn "sqlite3 не появился в $SQLITE_LINK — проверь winget и перезапусти git-bash"
+    SQLITE_FOUND="$(sqlite_detect || true)"
+    if [ -n "$SQLITE_FOUND" ]; then
+      ok "sqlite3: $SQLITE_FOUND"
+    else
+      warn "sqlite3 не появился ни в WinGet Links, ни в Program Files — проверь winget и перезапусти git-bash"
+    fi
   else
     warn "winget нет — качаю sqlite-tools с sqlite.org в ~/bin"
     SQLITE_TMP="$(mktemp -d)"

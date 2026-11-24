@@ -188,12 +188,26 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     const id = label.slice(5);
     const target = readPool().find(row => row.id === id);
     if (!target) throw safeFailure('pool_target_missing');
-    if (!target.ghId) throw safeFailure('github_binding_missing');
-    account ||= readJson(path.join(root, 'routing', 'github-accounts.json')).find(row => row.id === target.ghId);
-    if (!account || !account.login) throw safeFailure('github_account_missing');
+    // Импортированный (share) аккаунт: запись в пуле есть, а записи GitHub в менеджере
+    // нет - share-код несёт снимок входа, и панель уже залогинена. Требовать ghId значило
+    // бы отказывать в окне ровно тому сценарию, ради которого share и делался (25.11).
+    const shared = !target.ghId && target.shared === true;
+    // Ручной аккаунт: ключ вписали, GitHub-записи нет. Для окна это то же самое - панель
+    // уже создана, а добивать вход через GitHub-онбординг нечем и незачем. Раньше такой
+    // аккаунт получал github_binding_missing на первой же кнопке 🌐 (живой случай 25.11).
+    const manual = !target.ghId && !shared && /^sk-/.test(String(target.api_key || ''));
+    const bindless = shared || manual;
+    if (!target.ghId && !bindless) throw safeFailure('github_binding_missing');
+    account ||= target.ghId
+        ? readJson(path.join(root, 'routing', 'github-accounts.json')).find(row => row.id === target.ghId)
+        : null;
+    if (!bindless && (!account || !account.login)) throw safeFailure('github_account_missing');
     const origin = `https://${config.HOST}`;
-    const referral = config.ref ? require('./ref-codes').url(provider) : origin + '/sign-in';
-    if (new URL(referral).origin !== origin || config.ref && !new URL(referral).searchParams.get('aff')) throw safeFailure('referral_not_configured');
+    // Привязанному к GitHub аккаунту реф-ссылка не нужна: он уже создан, открываем консоль.
+    const referral = bindless ? origin + config.onboarding.consolePath
+        : config.ref ? require('./ref-codes').url(provider) : origin + '/sign-in';
+    if (new URL(referral).origin !== origin
+        || (!bindless && config.ref && !new URL(referral).searchParams.get('aff'))) throw safeFailure('referral_not_configured');
     for (const route of [config.onboarding.consolePath, config.onboarding.callbackPath]) {
         if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//') || new URL(route, origin).origin !== origin) {
             throw safeFailure('onboarding_route_invalid');
@@ -248,8 +262,8 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
                 }
             }
         }
-        log(`GitHub ${account.login}: открываю страницу входа ${provider}`);
-        if (config.ref) await persistReferral(page, referral);
+        log(`${bindless ? (shared ? 'Импортированный аккаунт' : 'Ручной аккаунт') : 'GitHub ' + account.login}: открываю ${provider}`);
+        if (!bindless && config.ref) await persistReferral(page, referral);
         else {
             await page.goto(referral, { waitUntil: 'domcontentloaded' });
             await page.waitForTimeout(1200);
@@ -268,6 +282,17 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
             return r.status === 200 && r.json?.success === true && Number(r.json.data?.id) > 0 ? r.json.data : null;
         };
         me = await probeSelf();
+        // У импортированного аккаунта нет ни пароля, ни GitHub-записи: если снимок входа
+        // протух, добить вход нечем - говорим прямо, а не ведём в GitHub-цикл.
+        if (!me && shared) throw safeFailure('shared_session_expired');
+        // Ручной аккаунт: окно и есть весь смысл кнопки. Вход - тот GitHub, с которого
+        // аккаунт создавали; держим браузер открытым, пока человек не закроет его сам.
+        if (!me && manual) {
+            log(`${provider}: сессия не подтверждена - открыл ${origin}/sign-in, войди вручную`);
+            await page.goto(origin + '/sign-in', { waitUntil: 'domcontentloaded' }).catch(() => {});
+            await new Promise(resolve => context.once('close', resolve));
+            return { ok: true, manual: true };
+        }
         if (!me) {
             const button = page.locator('button').filter({ hasText: /github/i }).first();
             await button.waitFor({ state: 'visible', timeout: 15000 });
@@ -327,8 +352,10 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
             }
         }
         if (!me) throw safeFailure('panel_login_unconfirmed');
-        await verifyGithubIdentity(context, account.login);
-        verifyPanelIdentity(me, account, auth.user);
+        if (!bindless) {
+            await verifyGithubIdentity(context, account.login);
+            verifyPanelIdentity(me, account, auth.user);
+        }
         const client = createPanelClient({ origin, bearer: auth.bearer, userId: me.id, request: browserRequest });
         const existing = readPool().find(row => row.id === id);
         if (!existing) throw safeFailure('pool_target_missing');

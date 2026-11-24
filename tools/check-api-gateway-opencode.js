@@ -216,7 +216,7 @@ function runCrashFixture(fixture, hookStep, exitCode = 71) {
     });
 }
 
-test('exports the exact OpenCode service methods and requires three injected targets', () => {
+test('exports the exact OpenCode service methods and requires User + Hub targets', () => {
     const moduleApi = load();
     assert.deepEqual(Object.keys(moduleApi), ['createOpenCodeService']);
     const { createOpenCodeService } = moduleApi;
@@ -240,8 +240,9 @@ test('exports the exact OpenCode service methods and requires three injected tar
     for (const method of ['recover', 'status', 'preview', 'sync']) {
         assert.equal(typeof service[method], 'function', method);
     }
+    // Wiki-цель опциональна: на машине без вики целей две. Одна цель - уже ошибка.
     assert.throws(
-        () => createOpenCodeService({ targets: f.targets.slice(0, 2), journalPath: f.journalPath }),
+        () => createOpenCodeService({ targets: f.targets.slice(0, 1), journalPath: f.journalPath }),
         error => error && error.code === 'api_gateway_opencode_invalid_options',
     );
 });

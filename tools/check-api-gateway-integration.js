@@ -490,19 +490,21 @@ test('check-hub mechanics use dynamic IPv4 loopback ports and exact owned PID te
     assert.match(spawn, /L\.stopLaunched\(listenerPid\)/);
 });
 
-test('Windows production defaults keep the approved wiki target without an owner-name hardcode', () => {
+test('Windows production defaults do not invent an owner wiki path', () => {
     const targets = load().defaultOpenCodeTargets({
         platform: 'win32',
         home: 'C:\\Temp\\Profile',
         repoRoot: 'C:\\Temp\\Hub',
         xdgConfigHome: '',
     });
+    // Wiki-цель добавляется только при явно заданном корне (или если папка владельца
+    // реально есть): на чужой машине Sync не должен создавать D:\WORMALIENAIGIGANT.
     assert.deepEqual(targets, [
         { label: 'User config', path: 'C:\\Temp\\Profile\\.config\\opencode\\opencode.json' },
-        { label: 'Wiki config', path: 'D:\\WORMALIENAIGIGANT\\opencode.json' },
         { label: 'Hub config', path: 'C:\\Temp\\Hub\\opencode.json' },
     ]);
     assert.equal(JSON.stringify(targets).includes('WormAlien'), false);
+    assert.equal(JSON.stringify(targets).includes('WORMALIENAIGIGANT'), false);
 });
 
 test('Hermes probes include PATH executable lookup candidates on Windows and macOS', () => {

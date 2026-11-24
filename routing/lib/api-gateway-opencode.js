@@ -247,7 +247,8 @@ function isSafeLabel(label) {
 }
 
 function validateOptions(targets, journalPath, durableImpl) {
-    if (!Array.isArray(targets) || targets.length !== 3
+    // User + Hub обязательны; Wiki - только если у машины есть вики-корень.
+    if (!Array.isArray(targets) || targets.length < 2 || targets.length > 3
         || typeof journalPath !== 'string' || !path.isAbsolute(journalPath)) {
         fail('api_gateway_opencode_invalid_options');
     }
@@ -326,7 +327,7 @@ function validateJournal(journal, targets) {
     if (!hasExactKeys(journal, ['version', 'kind', 'phase', 'targets'])
         || journal.version !== 1 || journal.kind !== JOURNAL_KIND
         || !PHASES.has(journal.phase) || !Array.isArray(journal.targets)
-        || journal.targets.length !== 3) {
+        || journal.targets.length !== targets.length) {
         fail('api_gateway_opencode_recovery_conflict');
     }
     for (let index = 0; index < targets.length; index += 1) {

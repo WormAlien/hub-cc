@@ -47,6 +47,17 @@ function platformPath(platform) {
     return platform === 'win32' ? path.win32 : path.posix;
 }
 
+// Путь к вики владельца. На его машине папка есть; на чужой её быть не должно,
+// поэтому отсутствие корня означает «вики-цели нет», а НЕ «создать по этому пути»
+// (25.11: Sync создавал D:\WORMALIENAIGIGANT на машине друга).
+function defaultWikiRoot({ platform = process.platform, repoRoot = path.resolve(__dirname, '..', '..') } = {}) {
+    const paths = platformPath(platform);
+    const candidate = platform === 'win32'
+        ? 'D:\\WORMALIENAIGIGANT'
+        : paths.resolve(repoRoot, '..', '..', 'WORMALIENAIGIGANT');
+    try { return fs.existsSync(candidate) ? candidate : undefined; } catch { return undefined; }
+}
+
 function defaultOpenCodeTargets({
     platform = process.platform,
     home = os.homedir(),
@@ -56,15 +67,14 @@ function defaultOpenCodeTargets({
 } = {}) {
     const paths = platformPath(platform);
     const configRoot = xdgConfigHome || paths.join(home, '.config');
-    const resolvedWikiRoot = wikiRoot || process.env.API_GATEWAY_WIKI_ROOT
-        || (platform === 'win32'
-            ? 'D:\\WORMALIENAIGIGANT'
-            : paths.resolve(repoRoot, '..', '..', 'WORMALIENAIGIGANT'));
-    return [
+    const targets = [
         { label: 'User config', path: paths.join(configRoot, 'opencode', 'opencode.json') },
-        { label: 'Wiki config', path: paths.join(resolvedWikiRoot, 'opencode.json') },
-        { label: 'Hub config', path: paths.join(repoRoot, 'opencode.json') },
     ];
+    // Wiki config - только когда корень задан явно (или нашёлся у владельца). Иначе
+    // на чистой машине синк заводил рабочую папку владельца из воздуха.
+    if (wikiRoot) targets.push({ label: 'Wiki config', path: paths.join(wikiRoot, 'opencode.json') });
+    targets.push({ label: 'Hub config', path: paths.join(repoRoot, 'opencode.json') });
+    return targets;
 }
 
 function defaultHermesInstallationProbes({
@@ -288,7 +298,9 @@ function createProductionApiGateway(options = {}) {
     const repoRoot = options.repoRoot || path.resolve(__dirname, '..', '..');
     const routingRoot = path.join(repoRoot, 'routing');
     const home = options.home || os.homedir();
-    const wikiRoot = options.wikiRoot || process.env.API_GATEWAY_WIKI_ROOT || undefined;
+    // Явный корень (env/опция) уважаем всегда; путь по умолчанию - только если папка
+    // реально существует. Иначе Wiki-цель просто не создаётся.
+    const wikiRoot = options.wikiRoot || process.env.API_GATEWAY_WIKI_ROOT || defaultWikiRoot({ repoRoot });
     const manifestApi = options.manifestApi || manifestDefault;
     const resolveModelCandidates = options.resolveModelCandidates || routesCatalogDefault.resolveModelCandidates;
     const openCodeFactory = options.openCodeFactory || openCodeDefault.createOpenCodeService;

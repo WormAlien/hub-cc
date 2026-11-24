@@ -564,13 +564,24 @@ gauge_from_balance_cache() {
     pool_balance_total=""
     active_account_label=""
 
-    key=""; read -r key < "$active_key_file" 2>/dev/null || true
+    key=""
+    # Файла может не быть вовсе (ключ не активировали) - не шумим в stderr:
+    # statusline вызывается на каждый промпт, лишняя строка в баре не нужна.
+    [ -f "$active_key_file" ] && { read -r key < "$active_key_file" 2>/dev/null || true; }
     key="${key//[$' \t\r\n']/}"
-    [ -n "$key" ] || return 0
 
-    # весь файл в память, вырезаем объект активного ключа между соседними {…}
+    # весь файл в память, вырезаем объект ключа между соседними {…}
     raw="$(<"$sessions_file")"
-    [[ "$raw" == *"$key"* ]] || return 0
+    # Модель выбрана через пикер по префиксу шлюза (`xingchi/...`): запрос уходит в пул
+    # по routeByModel, а активного ключа в ~/.claude может не быть вовсе - файл пишет
+    # только кнопка «Активировать». Тогда баланс провайдера не показывался (25.11).
+    # Берём первый ключ пула: для одного аккаунта это он и есть, для нескольких - цифра
+    # первого, что честнее пустого места и совпадает с порядком пула в дашборде.
+    if [ -z "$key" ] || [[ "$raw" != *"$key"* ]]; then
+        key="$(printf '%s' "$raw" | grep -oE '"api_key"[[:space:]]*:[[:space:]]*"[^"]+"' \
+            | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
+    fi
+    [ -n "$key" ] || return 0
     after="${raw#*"$key"}"        # хвост от ключа
     before="${raw%%"$key"*}"      # голова до ключа
     head_obj="${before##*\{}"     # от последней { перед ключом
@@ -814,6 +825,8 @@ elif [ "$provider" = "uncensoredlabs" ] && [ -f "$ROUTING/uncensoredlabs-session
     gauge_from_balance_cache "$ROUTING/uncensoredlabs-sessions.json" "$PROF/.claude/uncensoredlabs-active-key.txt" "uc/balance" 90
 elif [ "$provider" = "xingchi" ] && [ -f "$ROUTING/xingchi-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/xingchi-sessions.json" "$PROF/.claude/xingchi-active-key.txt" "xc/balance" 90
+elif [ "$provider" = "fxqidian" ] && [ -f "$ROUTING/fxqidian-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/fxqidian-sessions.json" "$PROF/.claude/fxqidian-active-key.txt" "fx/balance" 90
 elif [ "$provider" = "freegg" ] && [ -f "$ROUTING/freegg-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/freegg-sessions.json" "$PROF/.claude/freegg-active-key.txt" "fg/balance" 90
 elif [ "$provider" = "apinex" ] && [ -f "$ROUTING/apinex-sessions.json" ]; then

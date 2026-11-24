@@ -1,5 +1,7 @@
 'use strict';
 
+const { isDeepStrictEqual } = require('node:util');
+
 const BLOCKED_DTO_KEYS = /^(?:api[_-]?key|key|token|access[_-]?token|refresh[_-]?token|password|secret|cookie|authorization|headers?|credentials?|email|path|configPath|fullConfig|config|root|body|raw|content|diff|before|after)$/i;
 const MODEL_INPUT_FIELDS = Object.freeze([
     'expectedRevision',
@@ -21,6 +23,18 @@ const DEFAULT_OUTPUT_TOKENS = 32000;
 // behaveAs без решения владельца: пикер Claude Code должен получить осмысленный «сорт» модели,
 // иначе строка не отрисуется. Opus 5 - класс, под который у нас настроены лимиты и thinking.
 const DEFAULT_CLAUDE_BEHAVES_AS = 'claude-opus-5';
+const OPENCODE_ERROR_CODES = new Set([
+    'api_gateway_opencode_invalid_options',
+    'api_gateway_opencode_invalid_manifest',
+    'api_gateway_opencode_target_invalid',
+    'api_gateway_opencode_source_conflict',
+    'api_gateway_opencode_transaction_failed',
+    'api_gateway_opencode_recovery_conflict',
+    'api_gateway_opencode_busy',
+    'api_gateway_opencode_unavailable',
+    'api_gateway_opencode_sync_failed',
+    'api_gateway_opencode_readback_failed',
+]);
 
 class ApiGatewayDashboardError extends Error {
     constructor(code, message, status = 400) {
@@ -299,6 +313,25 @@ function validateUpdateInput(input) {
     return input;
 }
 
+function validatePublicationInput(input) {
+    if (!isPlainObject(input)) invalidInput();
+    const fields = ['expectedRevision', 'id', 'published'];
+    const keys = Reflect.ownKeys(input);
+    if (keys.length !== fields.length || keys.some(key => !fields.includes(key))
+        || !isPositiveSafeInteger(input.expectedRevision)
+        || !splitCanonicalId(input.id)
+        || typeof input.published !== 'boolean') invalidInput();
+    return input;
+}
+
+function hasSyncedThreeTargets(value) {
+    return isPlainObject(value) && value.status === 'synced'
+        && Array.isArray(value.targets) && value.targets.length === 3
+        && value.targets.every(row => isPlainObject(row) && isNonemptyString(row.label)
+            && row.status === 'synced' && row.synced === true)
+        && new Set(value.targets.map(row => row.label)).size === 3;
+}
+
 function cloneModels(models) {
     const result = {};
     for (const [id, metadata] of Object.entries(isPlainObject(models) ? models : {})) {
@@ -322,6 +355,8 @@ function createApiGatewayDashboardService(options = {}) {
     const manifestApi = isPlainObject(options.manifest) ? options.manifest : {};
     const readManifest = dependency(options, ['readPublishedManifest'], manifestApi.read);
     const saveManifest = dependency(options, ['saveManifestAndPicker'], manifestApi.save);
+    const readProviders = dependency(options, ['readCanonicalProviders'], manifestApi.readCanonicalProviders);
+    const validatePublication = dependency(options, ['validatePublication']);
     if (typeof readManifest !== 'function' || typeof saveManifest !== 'function') {
         throw new ApiGatewayDashboardError(
             'api_gateway_dashboard_invalid_options',
@@ -419,10 +454,14 @@ function createApiGatewayDashboardService(options = {}) {
     // опубликованных 1M-моделей для вкладки a6api.
     async function state() {
         const manifest = await readCurrentManifest();
+        const providers = typeof readProviders === 'function'
+            ? [...await readProviders(filePaths.backendsPath)].sort(compareText)
+            : null;
         return {
             ok: true,
             public: publicUrls,
             manifest: manifestDto(manifest),
+            providers,
             models: publishedRows(manifest),
             candidatesLoaded: false,
         };
@@ -478,10 +517,18 @@ function createApiGatewayDashboardService(options = {}) {
 
     async function updateModel(rawInput) {
         const input = validateUpdateInput(rawInput);
+        return serializeMutation(() => applyModel(input));
+    }
+
+    async function applyModel(input) {
         const current = await readCurrentManifest();
+        if (current.revision !== input.expectedRevision) {
+            throw new ApiGatewayDashboardError('api_gateway_revision_conflict', 'API Gateway manifest revision conflict.', 409);
+        }
         const models = cloneModels(current.models);
         if (input.published) {
             const previous = isPlainObject(models[input.id]) ? models[input.id] : null;
+            if (!previous && validatePublication) await validatePublication({ id: input.id, published: true });
             models[input.id] = {
                 displayName: input.displayName,
                 claudeBehavesAs: input.claudeBehavesAs,
@@ -505,6 +552,122 @@ function createApiGatewayDashboardService(options = {}) {
         return safeDto(result);
     }
 
+    // Serialize dashboard writers across Sync/readback; disk transactions retain their own locks.
+    let mutationTail = Promise.resolve();
+
+    function serializeMutation(operation) {
+        const pending = mutationTail.then(operation);
+        mutationTail = pending.catch(() => {});
+        return pending;
+    }
+
+    async function setPublication(rawInput) {
+        const input = { ...validatePublicationInput(rawInput) };
+        return serializeMutation(() => applyPublication(input));
+    }
+
+    async function applyPublication(input) {
+        const current = await readCurrentManifest();
+        if (current.revision !== input.expectedRevision) {
+            throw new ApiGatewayDashboardError('api_gateway_revision_conflict', 'API Gateway manifest revision conflict.', 409);
+        }
+        if (typeof readProviders === 'function') {
+            const providers = await readProviders(filePaths.backendsPath);
+            if (!providers.has(splitCanonicalId(input.id).provider)) {
+                throw new ApiGatewayDashboardError('api_gateway_unknown_provider', 'Unknown API Gateway provider.', 404);
+            }
+        }
+        const models = cloneModels(current.models);
+        if (input.published) {
+            if (validatePublication) await validatePublication({ id: input.id, published: true });
+            if (!Object.hasOwn(models, input.id)) {
+                const { provider, model } = splitCanonicalId(input.id);
+                models[input.id] = {
+                    displayName: `${provider} / ${model}`,
+                    claudeBehavesAs: DEFAULT_CLAUDE_BEHAVES_AS,
+                    contextTokens: DEFAULT_CONTEXT_TOKENS,
+                    outputTokens: DEFAULT_OUTPUT_TOKENS,
+                    publishedAt: new Date(normalizeNow(options.now)).toISOString(),
+                };
+            }
+        } else {
+            delete models[input.id];
+        }
+        const result = await saveManifest({
+            ...filePaths,
+            expectedRevision: input.expectedRevision,
+            draft: { enabled: current.enabled, models },
+        });
+        let latest;
+        try { latest = await readCurrentManifest(); }
+        catch {
+            throw new ApiGatewayDashboardError(
+                'api_gateway_publication_readback_failed', 'Publication readback failed.', 409,
+            );
+        }
+        const expected = {
+            version: current.version,
+            revision: input.expectedRevision + 1,
+            enabled: current.enabled,
+            models,
+        };
+        if (!result || result.ok !== true || result.revision !== expected.revision
+            || !isDeepStrictEqual(latest, expected)) {
+            throw new ApiGatewayDashboardError(
+                'api_gateway_publication_readback_failed', 'Publication readback failed.', 409,
+            );
+        }
+        let opencode = await syncPublication(latest);
+        let observed;
+        try { observed = await readCurrentManifest(); }
+        catch {
+            // The commit is known, but the current state is not. Never invent a revision or switch state.
+            return {
+                ok: true,
+                manifest: null,
+                model: { id: input.id, published: null },
+                opencode: { ok: false, code: 'api_gateway_publication_readback_failed' },
+            };
+        }
+        if (!isDeepStrictEqual(observed, latest)) {
+            opencode = { ok: false, code: 'api_gateway_publication_changed' };
+        }
+        return {
+            ok: true,
+            manifest: manifestDto(observed),
+            model: { id: input.id, published: Object.hasOwn(observed.models, input.id) },
+            opencode,
+        };
+    }
+
+    async function syncPublication(manifest) {
+        try {
+            if (typeof openCode.sync !== 'function') {
+                throw new ApiGatewayDashboardError('api_gateway_opencode_unavailable', 'OpenCode service is unavailable.', 503);
+            }
+            const synced = await openCode.sync(manifest);
+            if (!hasSyncedThreeTargets(synced) || synced.ok !== true) {
+                throw new ApiGatewayDashboardError(
+                    'api_gateway_opencode_sync_failed', 'OpenCode sync did not complete.', 409,
+                );
+            }
+            const readback = typeof openCode.status === 'function' ? await openCode.status(manifest) : null;
+            if (!hasSyncedThreeTargets(readback)
+                || readback.targets.some(row => !synced.targets.some(target => target.label === row.label))) {
+                throw new ApiGatewayDashboardError(
+                    'api_gateway_opencode_readback_failed', 'OpenCode readback failed.', 409,
+                );
+            }
+            return safeDto(synced);
+        } catch (error) {
+            return {
+                ok: false,
+                code: OPENCODE_ERROR_CODES.has(error && error.code)
+                    ? error.code : 'api_gateway_opencode_transaction_failed',
+            };
+        }
+    }
+
     async function openCodePreview() {
         if (typeof openCode.preview !== 'function') {
             throw new ApiGatewayDashboardError('api_gateway_opencode_unavailable', 'OpenCode service is unavailable.', 503);
@@ -516,7 +679,7 @@ function createApiGatewayDashboardService(options = {}) {
         if (typeof openCode.sync !== 'function') {
             throw new ApiGatewayDashboardError('api_gateway_opencode_unavailable', 'OpenCode service is unavailable.', 503);
         }
-        return safeDto(await openCode.sync(await readCurrentManifest()));
+        return serializeMutation(async () => safeDto(await openCode.sync(await readCurrentManifest())));
     }
 
     async function hermesSync() {
@@ -530,6 +693,7 @@ function createApiGatewayDashboardService(options = {}) {
         state,
         candidates,
         updateModel,
+        setPublication,
         sidecarStatus,
         clientsStatus,
         openCodePreview,

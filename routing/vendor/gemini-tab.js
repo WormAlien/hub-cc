@@ -221,8 +221,11 @@
 
       <div class="gm-panel-title gm-mt">Каталог моделей — клик делает модель главной</div>
       <div class="gm-models">
-        ${S.models.map(id => `<button class="gm-tag gm-mono${S.activeModel === id ? ' gm-tag-on' : ''}"
-            title="сделать главной моделью вкладки (она же уезжает в тир opus)" onclick="GEMINI.setModel('${esc(id)}')">${esc(id)}</button>`).join('')}
+        ${S.models.map(id => {
+          const chip = `<button class="gm-tag gm-mono${S.activeModel === id ? ' gm-tag-on' : ''}"
+            title="сделать главной моделью вкладки (она же уезжает в тир opus)" onclick="GEMINI.setModel('${esc(id)}')">${esc(id)}</button>`;
+          return typeof window.modelPublicationChip === 'function' ? window.modelPublicationChip('gemini', id, chip) : chip;
+        }).join('')}
       </div>
       <div class="gm-map-foot">
         <span class="gm-dim gm-small">главная модель: <span class="gm-mono">${esc(S.activeModel || 'не выбрана')}</span>

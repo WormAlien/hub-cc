@@ -14,7 +14,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createEmail, openInbox, extractCode, clickExactButton, dismissCookie } = require('./freemodel/lib/emailnator');
+const { createEmail, openInbox, extractCode, clickExactButton, dismissCookie } = require('../../freemodel/lib/emailnator');
 
 const SITE = 'https://api.rumeng-ai.com';
 const OUT = path.join(os.tmpdir(), 'rumeng-recon');

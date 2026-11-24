@@ -156,14 +156,61 @@ function estimateTokens(claudeReq) {
 // перестанет разбирать сводку. Гейт - по фразам инструкции, снятым из бинаря CC.
 const COMPACT_PROMPT_RE = /detailed summary of the conversation|<analysis> tags to organize your thoughts/i;
 const SCAFFOLD_TAG_RE = /<\/?(?:analysis|summary)>/i;
-function stripSummaryScaffold(text) {
+// 23.11: канал a6api отдаёт рассуждение deepseek в `content` (в прямой пробе
+// `content` побайтово равен `reasoning_content`), а модель оборачивает мысли в
+// `<thinking>`. Конвертер пересылал это обычным текстом - теги лезли в чат.
+// Клиент и так получает рассуждение отдельным thinking-блоком, поэтому обёртку снимаем.
+const THINKING_TAG_RE = /<\/?thinking>/i;
+function stripThinkingScaffold(text) {
     const s = String(text);
+    if (!THINKING_TAG_RE.test(s)) return s;
+    return s
+        .replace(/<thinking>[\s\S]*?<\/thinking>\s*/gi, '')
+        .replace(/<thinking>[\s\S]*$/gi, '')
+        .replace(/<\/?thinking>/gi, '')
+        .trim();
+}
+// Стрим режет тег на границе чанков, поэтому держим короткий хвост: символы
+// отдаются сразу, кроме потенциального начала `<thinking>`.
+function createThinkingStreamFilter() {
+    let pending = '';
+    let inside = false;
+    return {
+        push(text) {
+            let out = '';
+            for (const ch of text) {
+                if (!inside) {
+                    pending += ch;
+                    if ('<thinking>'.startsWith(pending)) {
+                        if (pending === '<thinking>') { pending = ''; inside = true; }
+                    } else {
+                        out += pending;
+                        pending = '';
+                    }
+                } else {
+                    pending += ch;
+                    if (pending.endsWith('</thinking>')) { pending = ''; inside = false; }
+                    else if (pending.length > 12) pending = pending.slice(-12);
+                }
+            }
+            return out;
+        },
+        flush() {
+            if (inside) { pending = ''; return ''; }
+            const rest = pending;
+            pending = '';
+            return rest;
+        },
+    };
+}
+function stripSummaryScaffold(text) {
+    const s = stripThinkingScaffold(text);
     // Тела без тегов не трогаем вовсе: trim и склейка переводов меняли бы обычные
     // сообщения на каждом запросе, а это правка не по делу.
     if (!SCAFFOLD_TAG_RE.test(s)) return s;
     return s
-        .replace(/<analysis>[\s\S]*?<\/analysis>/gi, '')
-        .replace(/<summary>([\s\S]*?)<\/summary>/gi, '$1')
+        .replace(/[\s\S]*?<\/analysis>/gi, '')
+        .replace(/([\s\S]*?)<\/summary>/gi, '$1')
         .replace(/<\/?(?:analysis|summary)>/gi, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
@@ -291,7 +338,8 @@ function convertOpenAIToClaude(openaiResp, claudeReq) {
     if (reasoning && (STRICT_TOOLS_VISION || (process.env.REASONING_AS || 'thinking').toLowerCase() !== 'drop')) {
         content.push({ type: 'thinking', thinking: reasoning });
     }
-    if (msg.content) content.push({ type: 'text', text: msg.content });
+    const answerText = stripThinkingScaffold(msg.content || '');
+    if (answerText) content.push({ type: 'text', text: answerText });
     for (const tc of msg.tool_calls || []) {
         let input = {};
         if (STRICT_TOOLS_VISION) {
@@ -412,6 +460,7 @@ function handleStreaming(clientRes, upstreamRes, claudeReq, exactMode = false) {
     // REASONING_AS=text — аварийный режим, если клиент не понимает thinking:
     // тогда рассуждение уходит обычным текстом, лишь бы не пропало.
     const REASONING_AS = STRICT_TOOLS_VISION ? 'thinking' : (process.env.REASONING_AS || 'thinking').toLowerCase();
+    const thinkingFilter = STRICT_TOOLS_VISION ? createThinkingStreamFilter() : null;
     function ensureThinkBlock() {
         if (thinkBlockIndex !== null) return thinkBlockIndex;
         thinkBlockIndex = nextBlockIndex++;
@@ -457,10 +506,13 @@ function handleStreaming(clientRes, upstreamRes, claudeReq, exactMode = false) {
         // текстовый блок раньше значило бы отдать мысли как ответ.
         if (delta.reasoning_content) emitReasoning(delta.reasoning_content);
         if (delta.content) {
-            closeThinkBlock();
-            streamedChars += delta.content.length;
-            const idx = ensureTextBlock();
-            sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text: delta.content } });
+            const text = thinkingFilter ? thinkingFilter.push(delta.content) : delta.content;
+            if (text) {
+                closeThinkBlock();
+                streamedChars += text.length;
+                const idx = ensureTextBlock();
+                sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text } });
+            }
         }
         for (const tc of delta.tool_calls || []) {
             if (STRICT_TOOLS_VISION) {
@@ -513,6 +565,15 @@ function handleStreaming(clientRes, upstreamRes, claudeReq, exactMode = false) {
             }
             // Tool identity may arrive after arguments. Buffer tools until the stream is
             // complete, so the first Anthropic block carries the real ID and full name.
+            if (thinkingFilter) {
+                const tail = thinkingFilter.flush();
+                if (tail) {
+                    closeThinkBlock();
+                    const idx = ensureTextBlock();
+                    sseWrite(clientRes, 'content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text: tail } });
+                    streamedChars += tail.length;
+                }
+            }
             closeThinkBlock(); closeTextBlock();
             for (const [, tb] of [...toolBlocks.entries()].sort((a, b) => a[0] - b[0])) {
                 tb.claudeIndex = nextBlockIndex++; tb.started = true;

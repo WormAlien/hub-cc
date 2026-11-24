@@ -668,7 +668,9 @@ t('пункт меню и вердикт в «Проверке» на месте
     // needFull; на стрелку меняются ровно две строки. Пока весь кадр перерисовывался
     // на каждое нажатие, логотип и состояние мигали (владелец 25.08: «на стрелочке
     // жмёшь, обновляется опять текст»).
-    const sub = src.slice(src.indexOf('async function doDictationFix'));
+    // CRLF не содержит LF-only границу ниже: indexOf вернёт -1 и захватит
+    // clearScreen соседних экранов. Нормализуем только извлекаемый текст.
+    const sub = src.slice(src.indexOf('async function doDictationFix')).split(String.fromCharCode(13, 10)).join('\n');
     const body = sub.slice(0, sub.indexOf('\n}\n'));
     if (!/name === 'up' \|\| name === 'k'/.test(body)) return 'в подменю нет стрелок';
     if (!/const move = dir =>[\s\S]{0,400}acts\.length/.test(body)) return 'в подменю нет точечной перерисовки';
@@ -964,7 +966,7 @@ t('вкладки не зовут функций, которых нет: све�
     // `switchTab` зовёт такую функцию первой — открытие вкладки падает ReferenceError и
     // не доходит до конца, то есть пустая вкладка вместо содержимого.
     const src = read('routing/proxy-dashboard.html');
-    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|xc|fg|ax|kv|tr|pm|vn|dc|cp|ab|fx|ls|od|uk|bai|nv|bd|hn|ol)';
+    const PREF = '(?:ar|go|tb|xp|jw|sk|ts|kk|uc|xc|fg|ax|kv|tr|pm|vn|dc|cp|ab|fx|ls|od|uk|bai|nv|bd|hn|ol)';
     const called = new Set([...src.matchAll(new RegExp('\\b(' + PREF + '[A-Z][A-Za-z0-9]*)\\s*\\(', 'g'))].map(m => m[1]));
     const defined = new Set();
     for (const re of [
@@ -1018,7 +1020,7 @@ t('дефолтный набор вкладок дашборда — как на
     // добавленные 23.10: 'seekai' (шлюз SeekAi) и 'a6api' (пульт Claude Code поверх
     // маркетплейса a6api, сразу за 'custom'). Обе настроены и живым рестартом принимались
     // отдельно - расхождение было в тесте, а не в наборе.
-    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'xingchi', 'freegg', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
+    const want = ['fin', 'league', 'github', 'outlook', 'google', 'gemini', 'agentrouter', 'gorouter', 'justwoker', 'kktoken', 'uncensoredlabs', 'xingchi', 'freegg', 'apinex', 'kvotum', 'threerouter', 'premier', 'vani', 'dacall', 'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'odyssey', 'bai', 'getunikey', 'aipm', 'hcnsec', 'aikeysapi', 'rumeng', 'tabi', 'seekai', 'custom', 'a6api', 'media', 'plugins', 'health', 'models', 'api-gateway', 'routes', 'settings'];
     if (tabs.join(',') !== want.join(',')) return `набор разъехался: ${tabs.join(',')}`;
     return true;
 });
@@ -1369,21 +1371,29 @@ function macReady() {
     // они упоминаются постоянно (и уже дважды ломали этот тест ложным провалом).
     const guilty = [];
     for (const [f, src] of [['hub.js', hub], ['routing/lifecycle.js', life]]) {
-        const lines = src.split('\n');
+        const lines = src.split('\n').map(l => /^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l);
+        // Приватный snapshot helper безопасен только пока КАЖДАЯ ссылка на него
+        // остаётся прямым вызовом в Win32-ветке. Новый вызов или экспорт снимает
+        // эту границу; комментарий IS_WIN не является платформенной проверкой.
+        const snapshotStart = f === 'routing/lifecycle.js'
+            ? lines.findIndex(l => /^function createProcessTable\(\) \{\s*$/.test(l)) : -1;
+        const snapshotEnd = lines.findIndex((l, i) => i > snapshotStart && /^}\s*$/.test(l));
+        const snapshotReferences = lines.filter((l, i) => i !== snapshotStart && /\bcreateProcessTable\b/.test(l));
+        const guardedSnapshot = snapshotStart >= 0 && snapshotEnd > snapshotStart && snapshotReferences.length > 0
+            && snapshotReferences.every(l => /^\s*const table = process\.platform === 'win32' \? createProcessTable\(\) : null;\s*$/.test(l));
         for (let i = 0; i < lines.length; i++) {
             const l = lines[i];
-            if (/^\s*(\/\/|\*|\/\*)/.test(l)) continue;
             if (!/taskkill|tasklist|wt\.exe|'powershell'|'netstat'|'cmd'|LOCALAPPDATA/.test(l)) continue;
-            // Гейт может стоять на этой же строке или выше в теле функции — смотрим
-            // окно назад до начала функции. 25 строк: в relaunchElevated между
-            // `if (!L.IS_WIN) return false` и вызовом powershell лежат 16 строк сборки
-            // команды, и окно поменьше давало ложный провал.
+            // Прямые вызовы сохраняют локальную проверку (25 строк), а вызовы
+            // внутри snapshot используют подтверждённую границу всех callsites.
             const back = lines.slice(Math.max(0, i - 25), i + 1).join('\n');
-            if (!/IS_WIN|platform === 'win32'/.test(back)) guilty.push(`${f}:${i + 1}`);
+            const locallyGuarded = /if\s*\(\s*(?:!?(?:L\.)?IS_WIN\b|(?:process\.)?platform === 'win32')|(?:L\.)?IS_WIN\s*(?:&&|\?)|(?:process\.)?platform === 'win32'\s*\?/.test(back);
+            const inGuardedSnapshot = guardedSnapshot && i > snapshotStart && i < snapshotEnd;
+            if (!locallyGuarded && !inGuardedSnapshot) guilty.push(`${f}:${i + 1}`);
         }
     }
     guilty.length === 0 ? ok('вызовов Windows-утилит вне гейта IS_WIN нет')
-        : bad('Windows-утилиты вне гейта', guilty.join(', ') + ' — на маке это ENOENT');
+        : bad('Windows-утилиты вне гейта', guilty.join(', ') + ' — нет подтверждённой Win32-границы');
 
     // Браузер и установщик — развилки, без которых на маке ломается «Открыть» и «Обновить».
     /'open', \[url\]|'open'/.test(hub) && /xdg-open/.test(hub)

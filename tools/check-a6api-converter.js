@@ -394,6 +394,34 @@ async function freePort() {
             assert.match(sent[0].content, /<analysis>/, 'историю не чистим, когда это запрос сжатия');
             assert.match(sent[sent.length - 1].content, /<analysis> tags/, 'инструкция сжатия доходит целиком');
         });
+        await test('strict stream strips <thinking> wrapper split across chunks', async () => {
+            respond = (_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(
+                data(delta({ content: '<thin' })) + data(delta({ content: 'king>скрыто</thinking>При' })) + data(delta({ content: 'вет' })) + data(finish('stop'))); };
+            const r = await ask(strict, baseRequest({ stream: true }));
+            const blocks = collectContent(parseEvents(r.text));
+            const texts = blocks.filter(b => b.type === 'text').map(b => b.text).join('');
+            assert.equal(texts, 'Привет');
+            assert.ok(!r.text.includes('скрыто'), 'содержимое thinking не утекло в текст');
+        });
+        await test('strict non-stream drops <thinking> wrapper from content', async () => {
+            respond = (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ id: 'chatcmpl_x', choices: [{ message: { role: 'assistant', content: '<thinking>скрыто</thinking>Ответ' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } })); };
+            const r = await ask(strict, baseRequest());
+            const blocks = JSON.parse(r.text).content;
+            const text = blocks.filter(b => b.type === 'text').map(b => b.text).join('');
+            assert.equal(text, 'Ответ');
+            assert.ok(!r.text.includes('скрыто'));
+        });
+        await test('strict history drops <thinking> wrapper from assistant turns', async () => {
+            respond = normal;
+            await ask(strict, baseRequest({ messages: [
+                { role: 'user', content: 'вопрос' },
+                { role: 'assistant', content: '<thinking>внутри</thinking>ответ' },
+                { role: 'user', content: 'ещё' },
+            ] }));
+            const sent = calls.at(-1).body.messages;
+            const assistant = sent.find(m => m.role === 'assistant');
+            assert.equal(assistant.content, 'ответ');
+        });
         await test('legacy stream retains zero-usage fallback and permissive completion', async () => {
             respond = (_req, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(data(delta({ content: 'ok' })) + data({ choices: [], usage: { prompt_tokens: 0, completion_tokens: 0 } }) + data(finish('stop'))); };
             const r = await ask(legacy, baseRequest({ stream: true })), events = parseEvents(r.text);

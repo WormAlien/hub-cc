@@ -253,7 +253,7 @@
   function readRow(row) {
     const get = (name) => row.querySelector(`[data-field="${name}"]`);
     return {
-      expectedRevision: S.data.manifest.revision,
+      expectedRevision: Number(row.dataset.editRevision || S.data.manifest.revision),
       id: row.dataset.modelId,
       published: get('published').checked,
       displayName: get('displayName').value.trim(),
@@ -295,6 +295,14 @@
         publishedBadge.className = `ag-badge ag-badge--${body.published ? 'published' : 'hidden'}`;
       }
       notify('Модель сохранена', 'success');
+      if (window.MODEL_PUBLICATION) {
+        try {
+          await requestJson(`${API}/opencode/sync`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        } catch {
+          notify('Метаданные сохранены, но OpenCode не обновлён. Повторите Sync в настройке клиентов.', 'warn');
+        }
+        await window.MODEL_PUBLICATION.refresh(true);
+      }
     } catch (error) {
       setRowMessage(row, error.message, 'error');
       notify(error.message, 'error');
@@ -306,12 +314,12 @@
   function renderModel(model) {
     const disabled = !S.data.canWrite;
     const editing = S.editing.has(model.id);
-    const published = input('published', '', 'checkbox', {
-      class: 'ag-toggle',
-      checked: Boolean(model.published),
-      disabled,
-      'aria-label': `${model.published ? 'Скрыть' : 'Опубликовать'} ${model.id}`,
-    });
+    const published = window.MODEL_PUBLICATION
+      ? element('span', { dataset: { publicationSlot: model.id } })
+      : input('published', '', 'checkbox', {
+        class: 'ag-toggle', checked: Boolean(model.published), disabled,
+        'aria-label': `${model.published ? 'Скрыть' : 'Опубликовать'} ${model.id}`,
+      });
     const save = element('button', {
       type: 'button',
       class: 'ag-button ag-button--primary ag-save',
@@ -328,6 +336,7 @@
       class: 'ag-model',
       dataset: {
         modelId: model.id,
+        editRevision: String(S.data.manifest.revision),
         published: String(Boolean(model.published)),
         health: text(model.health?.state, 'unknown'),
       },
@@ -715,6 +724,22 @@
     }
     load();
   }
+
+  document.addEventListener('abuse-hub:model-publications', event => {
+    const data = event.detail;
+    if (!S.data || !data?.manifest || !Array.isArray(data.models)) return;
+    const published = new Map(data.models.filter(model => model.published).map(model => [model.id, model]));
+    const models = (S.data.models || []).map(model => {
+      const next = published.get(model.id);
+      published.delete(model.id);
+      return next || { ...model, published: false, publishedAt: null };
+    });
+    S.data = { ...S.data, ...data, models: models.concat([...published.values()]) };
+    writeCache(); setNavCount();
+    // An open metadata draft keeps its inputs and original revision. Saving
+    // after another writer changed the list fails honestly instead of losing it.
+    if (!S.editing.size) render();
+  });
 
   const restoredAtBoot = restoreCache();
   if (restoredAtBoot) render();

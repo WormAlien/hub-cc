@@ -810,6 +810,8 @@ elif [ "$provider" = "truesota" ] && [ -f "$ROUTING/truesota-sessions.json" ]; t
     gauge_from_balance_cache "$ROUTING/truesota-sessions.json" "$PROF/.claude/truesota-active-key.txt" "ts/balance" 90
 elif [ "$provider" = "kktoken" ] && [ -f "$ROUTING/kktoken-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/kktoken-sessions.json" "$PROF/.claude/kktoken-active-key.txt" "kk/balance" 90
+elif [ "$provider" = "uncensoredlabs" ] && [ -f "$ROUTING/uncensoredlabs-sessions.json" ]; then
+    gauge_from_balance_cache "$ROUTING/uncensoredlabs-sessions.json" "$PROF/.claude/uncensoredlabs-active-key.txt" "uc/balance" 90
 elif [ "$provider" = "xingchi" ] && [ -f "$ROUTING/xingchi-sessions.json" ]; then
     gauge_from_balance_cache "$ROUTING/xingchi-sessions.json" "$PROF/.claude/xingchi-active-key.txt" "xc/balance" 90
 elif [ "$provider" = "freegg" ] && [ -f "$ROUTING/freegg-sessions.json" ]; then
@@ -830,160 +832,12 @@ elif [ "$provider" = "wisdomsatan" ] && [ -f "$ROUTING/wisdomsatan-sessions.json
     gauge_from_balance_cache "$ROUTING/wisdomsatan-sessions.json" "$PROF/.claude/wisdomsatan-active-key.txt" "ws/balance" 90
 fi
 
-# ---- пул наливки: молчать про него = врать ---------------------------------
-# 🪤 Реактивный фолбэк НЕ виден в тир-карте. Когда пул кончился, карта остаётся на
-# `claude-opus-5`, а keepalive на КАЖДЫЙ запрос ловит 402 и повторяет фолбэком.
-# Бар, читающий только карту, показывал `agentrouter/claude-opus-5[1m]` — то есть
-# нормальную модель, — а ответ приходил с deepseek. Владелец 16.09 проработал так
-# полночи, узнав об этом только из логов. Источник правды о пуле — файл состояния
-# квоты, тот же, что кормит часы в дашборде (`~/.claude/ar-quota-state.json`).
-pool_dry=0
-pool_fb=""
-if [ "${map_prefix:-}" = "ar" ]; then
-    # Полоса — по модели, которую ЗАПРОСИЛИ, а не по той, что уедет: когда карта уже
-    # подменяет цель на беспуловую (deepseek/glm), по цели полосу не определить вовсе —
-    # а вопрос «пул пуст?» относится ровно к запрошенному тиру. Цель смотрим первой лишь
-    # потому, что она и есть фактический адрес, когда она пуловая.
-    pool_pfx=""
-    case "${mm_val:-${model_id%\[1m\]}}" in
-        claude[-_]*) pool_pfx="opus" ;;
-        gpt[-_]*)    pool_pfx="gpt" ;;
-    esac
-    if [ -z "$pool_pfx" ]; then
-        case "${mm_tier:-}" in
-            opus|sonnet|haiku) pool_pfx="opus" ;;
-            gpt)               pool_pfx="gpt" ;;
-            *)
-                case "${model_id%\[1m\]}" in
-                    claude[-_]*) pool_pfx="opus" ;;
-                    gpt[-_]*)    pool_pfx="gpt" ;;
-                esac ;;
-        esac
-    fi
-    if [ -n "$pool_pfx" ] && [ -r "$HOME/.claude/ar-quota-state.json" ]; then
-        q_raw="$(<"$HOME/.claude/ar-quota-state.json")"
-        q_state=""
-        # Полосы лежат словарём: {"opus":{"state":…},"gpt":{…}}. Формат v1 (плоская
-        # запись без ключей полос) читается как opus — он лежит на диске у всех, кто
-        # обновляется, и «после апдейта пул исчез» выглядело бы поломкой часов.
-        if [[ "$q_raw" =~ \"$pool_pfx\"[[:space:]]*:[[:space:]]*\{[^}]*\"state\"[[:space:]]*:[[:space:]]*\"([a-z]+)\" ]]; then
-            q_state="${BASH_REMATCH[1]}"
-        elif [ "$pool_pfx" = "opus" ] && [[ "$q_raw" =~ ^[[:space:]]*\{[^}]*\"state\"[[:space:]]*:[[:space:]]*\"([a-z]+)\" ]]; then
-            q_state="${BASH_REMATCH[1]}"
-        fi
-        # Свежесть — по ПАРТИИ, а не по TTL: запись прошлой партии мертва, и «пул пуст»
-        # по ней врал бы ровно наоборот (после налива пул как раз полон). Границу партии
-        # берём из того же расписания, что дашборд и проба (`ar-quota-schedule.json`), а НЕ
-        # по 8-часовой сетке: с 18.09 расписание файловое (Asia/Shanghai 10:00/19:00 =
-        # 02:00/11:00Z, промежутки 9 ч и 15 ч), а `% 28800000` давало 00:00Z — запись об
-        # истощении отвергалась как «прошлая партия», и «⛔ пул пуст» молчал на пустом пуле
-        # (баг 18.09–19.09). git-bash без tzdata (named-zone TZ игнорит), поэтому смещение
-        # зоны берём таблицей, а не `date`; незнакомую зону добираем ручкой расписания.
-        if [ "$q_state" = "exhausted" ]; then
-            q_drop_ms=0
-            q_drop_iso=""
-            if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"dropAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-                q_drop_iso="${BASH_REMATCH[1]}"
-                q_drop_ms=$(( $(date -d "$q_drop_iso" +%s 2>/dev/null || echo 0) * 1000 ))
-            fi
-            q_now_ms=$(( $(date +%s) * 1000 ))
-            q_sched_raw=""
-            [ -r "$HOME/.claude/ar-quota-schedule.json" ] && q_sched_raw="$(<"$HOME/.claude/ar-quota-schedule.json")"
-            q_tz=""
-            [[ "$q_sched_raw" =~ \"tz\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]] && q_tz="${BASH_REMATCH[1]}"
-            case "$q_tz" in
-                Asia/Shanghai) q_off=480 ;;
-                Europe/Moscow) q_off=180 ;;
-                UTC|"")        q_off=0 ;;
-                *)             q_off="" ;;   # зоны нет в таблице — добор ручкой ниже
-            esac
-            q_cur_ms=0
-            if [ -n "$q_off" ] && [ -n "$q_sched_raw" ]; then
-                # локальное HH:MM → минута дня UTC (может уйти в ±сутки — перебираем -1/0/+1)
-                q_day0=$(( q_now_ms / 1000 - (q_now_ms / 1000) % 86400 ))
-                # Extract quoted HH:MM values in-process. Spawning grep|tr here added about
-                # a second to every exhausted-pool render under Git Bash on Windows.
-                q_times="$q_sched_raw"
-                while [[ "$q_times" =~ \"([0-9][0-9]:[0-9][0-9])\" ]]; do
-                    q_t="${BASH_REMATCH[1]}"
-                    q_times="${q_times#*\"$q_t\"}"
-                    [ -n "$q_t" ] || continue
-                    q_hh=${q_t%%:*}; q_mm=${q_t#*:}
-                    q_um=$(( 10#$q_hh * 60 + 10#$q_mm - q_off ))
-                    for q_d in -1 0 1; do
-                        q_b=$(( (q_day0 + q_d * 86400 + q_um * 60) * 1000 ))
-                        [ "$q_b" -le "$q_now_ms" ] && [ "$q_b" -gt "$q_cur_ms" ] && q_cur_ms=$q_b
-                    done
-                done
-            else
-                # Зоны нет в таблице (или файла нет): спросим сервер. Ветка редкая — пул уже
-                # пуст, и один короткий curl тут дешевле, чем молчащая метка.
-                q_last="$(curl -s -m 1 "http://localhost:8200/__switch/api/ar/quota-schedule" 2>/dev/null \
-                    | grep -oE '"last"[[:space:]]*:[[:space:]]*"[^"]+"' | grep -oE '[0-9T:.Z-]{20,}')"
-                [ -n "$q_last" ] && q_cur_ms=$(( $(date -d "$q_last" +%s 2>/dev/null || echo 0) * 1000 ))
-            fi
-            [ "$q_drop_ms" != "0" ] && [ "$q_drop_ms" = "$q_cur_ms" ] && pool_dry=1
-
-            # `exhausted` — снимок одной неудачной пробы, а token-usage.jsonl содержит
-            # только успешные 2xx-ответы. Более свежий успех ТОЙ ЖЕ реальной полосы
-            # опровергает снимок. Смотрим `am` (actual model), а не `m`: при fallback
-            # клиент всё ещё просил GPT/Claude, но реально отвечал deepseek/glm, и такой
-            # успех не означает, что пул ожил. Проверяем только уже-красную текущую партию,
-            # поэтому обычный рендер бара файл журнала вообще не читает.
-            if [ "$pool_dry" = "1" ] && [ -r "$ROUTING/token-usage.jsonl" ]; then
-                q_checked_iso=""
-                if [[ "$q_raw" =~ \"${pool_pfx}\"[^}]*\"checkedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-                    q_checked_iso="${BASH_REMATCH[1]}"
-                elif [ "$pool_pfx" = "opus" ] && [[ "$q_raw" =~ ^[[:space:]]*\{[^}]*\"checkedAt\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-                    q_checked_iso="${BASH_REMATCH[1]}"
-                fi
-                # All writers use canonical UTC ISO timestamps. One bounded Node read parses
-                # the journal tail; doing this row-by-row in bash took minutes on Windows.
-                q_after_iso="$q_checked_iso"
-                [ -n "$q_drop_iso" ] && { [ -z "$q_after_iso" ] || [[ "$q_drop_iso" > "$q_after_iso" ]]; } && q_after_iso="$q_drop_iso"
-                if [ -n "$q_after_iso" ] && [ -f "$ROUTING/statusline-pool-success.js" ]; then
-                    q_pool_live="$(node "$ROUTING/statusline-pool-success.js" \
-                        "$ROUTING/token-usage.jsonl" "$pool_pfx" "$q_after_iso" 2>/dev/null)"
-                    [ "$q_pool_live" = "1" ] && pool_dry=0
-                fi
-            fi
-        fi
-        # Куда уедет при пустом пуле. «⛔ пул пуст» без адреса бесполезно: владелец
-        # 16.09 видел пометку и всё равно не понимал, на чём работает. Берём ту же
-        # настройку, что читает keepalive (`poolFallbackModel`), а если конфига нет —
-        # цель из маркера пул-дропа.
-        if [ "$pool_dry" = "1" ]; then
-            for f in "$ROUTING/keepalive-config-20133.json" "$ROUTING/ar-pooldrop.json"; do
-                [ -r "$f" ] || continue
-                if [[ "$(<"$f")" =~ \"(poolFallbackModel|fallback)\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-                    pool_fb="${BASH_REMATCH[2]}"
-                    break
-                fi
-            done
-        fi
-    fi
-fi
-
 # ---- render ----------------------------------------------------------------
 RESET=$'\033[0m'
 DIM=$'\033[2m'
 MODEL_COL=$'\033[38;5;180m'
 SEP=$'\033[38;5;240m'
 MONEY=$'\033[38;5;42m'
-# Пул пуст — факт про то, ЧТО ОТВЕЧАЕТ, а не про карту тиров. Стоит сразу после модели
-# и заметным красным: иначе бар выглядит совершенно нормально ровно в тот момент,
-# когда модель подменили под ногами.
-POOL_MARK=""
-if [ "$pool_dry" = "1" ]; then
-    # Адрес пишем только если бар ещё его не показал: когда карта уже подменяет цель,
-    # стрелка →фолбэк стоит слева, и второй раз то же слово было бы шумом.
-    if [ -n "$pool_fb" ] && [ "$map_target" != "$pool_fb" ]; then
-        POOL_MARK=$' \033[1;38;2;255;107;128m⛔ пул пуст → '"$pool_fb"$'\033[0m'
-    else
-        POOL_MARK=$' \033[1;38;2;255;107;128m⛔ пул пуст\033[0m'
-    fi
-fi
-
 if [ -n "$map_target" ]; then
     MAP_ARROW=$'\033[38;5;243m'
     MAP_VAL=$'\033[38;5;114m'
@@ -992,16 +846,16 @@ if [ -n "$map_target" ]; then
     # которого владелец не делал. Поэтому здесь `agentrouter→opus-5[1m]`: слева шлюз,
     # справа во что развернётся, ровно один раз каждое.
     if [ "$route_bare" = "1" ]; then
-        printf '%s%s%s%s→%s%s%s%s' "$MODEL_COL" "$provider" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET" "$POOL_MARK"
+        printf '%s%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
     else
-        printf '%s%s/%s%s%s→%s%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET" "$POOL_MARK"
+        printf '%s%s/%s%s%s→%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$MAP_ARROW" "$RESET" "$MAP_VAL" "$map_target" "$RESET"
     fi
 elif [ "$route_nomap" = "1" ]; then
     # Цель не задана → front-door ответит 400, запрос наверх не уйдёт. Красным, а не
     # тускло: это отказ, а не «просто нет стрелки».
-    printf '%s%s%s→%s%s?%s%s' "$MODEL_COL" "$provider" $'\033[38;5;243m' "$RESET" $'\033[1;38;2;255;107;128m' "$RESET" "$POOL_MARK"
+    printf '%s%s%s→%s%s?%s' "$MODEL_COL" "$provider" $'\033[38;5;243m' "$RESET" $'\033[1;38;2;255;107;128m' "$RESET"
 else
-    printf '%s%s/%s%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET" "$POOL_MARK"
+    printf '%s%s/%s%s' "$MODEL_COL" "$provider" "$model_id" "$RESET"
 fi
 
 # ---- /effort: тем же цветом, каким уровень подсвечен в самом Claude Code -----

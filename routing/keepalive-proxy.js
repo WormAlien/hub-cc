@@ -117,6 +117,46 @@ const AR_ACTIVE_KEY_FILE = process.env.KEY_FILE
 // Имя файла пула приходит env'ом от того, кто запускает прокси (spawn в transparent-proxy).
 const SESSIONS_FILE = process.env.SESSIONS_FILE || '';
 const activeKeyLib = require('./lib/active-key');
+const { createRateBalancePolicy, errorInfo: rateBalanceErrorInfo } = require('./lib/rate-balance-policy');
+const hasGenericRateBalance = process.env.RATE_BALANCE != null
+    && !(process.env.CUSTOM_PROVIDER_ID === 'freegg' && process.env.FREEGG_RATE_BALANCE === '1');
+let RATE_BALANCE_ENABLED = hasGenericRateBalance
+    ? process.env.RATE_BALANCE === '1'
+    : process.env.FREEGG_RATE_BALANCE === '1';
+let RATE_BALANCE_SCOPE = String(hasGenericRateBalance
+    ? (process.env.RATE_BALANCE_SCOPE || 'off')
+    : (process.env.FREEGG_RATE_SCOPE || 'off')).toLowerCase();
+// An older dashboard may respawn FreeGG without the new environment. Its persisted
+// switch is authoritative for FreeGG only; a missing file retains exact env aliases.
+// Invalid/unreadable existing config fails closed and never changes another provider.
+// Pure selftests must never consult the owner's persisted preference.
+if (!IS_SELFTEST && process.env.CUSTOM_PROVIDER_ID === 'freegg') {
+    const freeggRateConfigFile = process.env.FREEGG_RATE_CONFIG_FILE
+        || path.join(require('node:os').homedir(), '.claude', 'freegg-rate-policy.json');
+    try {
+        const persisted = JSON.parse(fs.readFileSync(freeggRateConfigFile, 'utf8').replace(/^\uFEFF/, ''));
+        RATE_BALANCE_ENABLED = !!persisted && typeof persisted === 'object'
+            && !Array.isArray(persisted) && persisted.enabled === true;
+        RATE_BALANCE_SCOPE = RATE_BALANCE_ENABLED ? 'account' : 'off';
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            RATE_BALANCE_ENABLED = false;
+            RATE_BALANCE_SCOPE = 'off';
+        }
+    }
+}
+const RATE_BALANCE_TEST_CONTROL = process.env.RATE_BALANCE_TEST_CONTROL === '1' || process.env.FREEGG_RATE_TEST_CONTROL === '1';
+const rateFallbackRaw = Number(process.env.RATE_BALANCE_MAX_FALLBACKS || process.env.FREEGG_RATE_MAX_FALLBACKS || 1);
+const RATE_BALANCE_MAX_FALLBACKS = Number.isFinite(rateFallbackRaw) ? Math.max(0, Math.min(1, Math.round(rateFallbackRaw))) : 1;
+const rateBudgetRaw = Number(process.env.RATE_BALANCE_BUDGET_MS || process.env.FREEGG_RATE_BUDGET_MS || 120000);
+const RATE_BALANCE_BUDGET_MS = Number.isFinite(rateBudgetRaw) ? Math.max(1000, rateBudgetRaw) : 120000;
+const rateBalance = createRateBalancePolicy({
+    enabled: RATE_BALANCE_ENABLED && !!process.env.CUSTOM_PROVIDER_ID,
+    scope: RATE_BALANCE_SCOPE,
+    sessionsFile: SESSIONS_FILE,
+    defaultCooldownMs: Number(process.env.RATE_BALANCE_COOLDOWN_MS || process.env.FREEGG_RATE_COOLDOWN_MS || 60000),
+    jitterMs: Number(process.env.RATE_BALANCE_JITTER_MS || process.env.FREEGG_RATE_JITTER_MS || 1000),
+});
 
 let poolKeyLogged = '';                       // чтобы «взял из пула» не сыпалось в лог каждый запрос
 // Свободный ключ того же пула для ОДНОГО субагентского запроса. Активный файл не трогаем.
@@ -208,10 +248,10 @@ const CC_FALLBACK_HEADERS = {
 // на каждый запрос. Та же правка, что во front-door (`mapCache`, frontdoor-proxy.js:261).
 const modelMapCache = new Map();          // путь → { data, mtime }
 const EMPTY_TIERS = { default: '', opus: '', sonnet: '', haiku: '', gpt: '' };
-// ── Память о мёртвой ПУЛОВОЙ модели (2026-09-15) ─────────────────────────────
-// Пул наливки agentrouter кончается посреди дня, и каждая попытка сходить в пуловую
-// модель стоит 0.4-1с на 402. Помним модель → время, и последующие запросы идут мимо
-// неё сразу (см. poolFallbackFor и его вызов из tierTargetFor).
+// ── Legacy quota memory for providers still using pool fallback ────────────
+// AgentRouter is unconditionally excluded by provider policy, not by model name,
+// AUTOROTATE, or a mutable config knob. Other providers retain model → time memory
+// and preemptive fallback (poolFallbackFor / tierTargetFor).
 // 🪤 Почему именно ПАМЯТЬ, а не «один раз реактивно отреагировали»: тир-карту на диске
 // переписывает дашборд, а он может быть и не поднят. Память — страховка на этот случай.
 // 🔁 И почему память СБРАСЫВАЕТСЯ сменой mtime карты (см. readModelMap): как только
@@ -229,10 +269,12 @@ function poolDeadKey(id) {
   return String(id || '').replace(/\s*\[[^\]]*\]\s*$/, '');
 }
 function markPoolDead(id) {
+  if (AGENTROUTER_QUOTA_RETIRED) return;
   const key = poolDeadKey(id);
   if (key) poolDead.set(key, Date.now());
 }
 function poolDeadActive(id) {
+  if (AGENTROUTER_QUOTA_RETIRED) return false;
   if (!(cfg.poolDeadMs > 0)) return false;   // 0 = не помнить вовсе
   const key = poolDeadKey(id);
   const ts = poolDead.get(key);
@@ -703,6 +745,12 @@ const LOCAL_EXACT_ADAPTER_HEADER = 'x-abuse-hub-local-exact';
 // определению, поэтому для этого апстрима режим включаем сами. Граница безопасности
 // не меняется: `isLocalExactAdapterTransport` всё равно требует http + 127.0.0.1.
 const AGENTROUTER_UPSTREAM = /(^|\.)agentrouter\.org$/i.test(upstream.hostname);
+// AgentRouter retired pool fallback for every model. Recognize both upstreams and
+// explicit local-adapter provider aliases; do not change adapter/account-rotation policy.
+// No saved config, environment override, API patch, or rotation switch can opt back in.
+const AGENTROUTER_QUOTA_RETIRED = AGENTROUTER_UPSTREAM
+    || upstream.hostname === 'ps.air-outer.com'
+    || /^(?:ar|agentrouter)$/i.test(String(process.env.ROTATE_PROVIDER || ''));
 const LOCAL_EXACT_ADAPTER = process.env.LOCAL_EXACT_ADAPTER === '1'
     || (AGENTROUTER_UPSTREAM && process.env.LOCAL_EXACT_ADAPTER !== '0');
 const CUSTOM_PROVIDER_ID = String(process.env.CUSTOM_PROVIDER_ID || '');
@@ -1103,9 +1151,9 @@ function log(msg) {
 // 20с/2 идут одинаково (20.4с против 19.3с — шум), но дублей на запрос ≈0.99 против
 // ≈0.50. Дубль стоит НЕ денег (замер 21.08: убитый на 20-й секунде списал 0.3% цены
 // полного запроса — биллинг идёт по факту завершения генерации), а полосы шлюза,
-// пачек для WAF и TLS-рукопожатий через туннель. Отсюда дефолт **20с / 3 попытки /
-// не больше 1 дубля / пре-коммит 10с**: дубль летит только на реально молчащем
-// шлюзе и ровно один, а бюджет попыток остаётся на ретрай транзиентной 500.
+// пачек для WAF и TLS-рукопожатий через туннель. Дубли теперь только по явному opt-in:
+// дефолт 0 дублей; hedgeMs 20с, бюджет 3 попытки и пре-коммит 10с не меняются.
+// Сохранённый явный maxHedges имеет приоритет, кроме независимых paid guards.
 // Менять — в дашборде (POST /__config, без рестарта), файл
 // keepalive-config-<PORT>.json переживает рестарт и имеет приоритет над этими
 // дефолтами. 0 = выключить.
@@ -1122,14 +1170,14 @@ const CONFIG_FILE = process.env.CONFIG_FILE
 //   hedgeMs 20000    — 75-й перцентиль ответа ≈20с, то есть дубль летит только в
 //                      худшую четверть запросов; на 20с побеждают 67% дублей
 //                      против 47% на 12с
-//   maxHedges 1      — второй параллельный дубль скорости не добавлял, только полосы
-//   maxAttempts 3    — 1 запрос + 1 мульти-запрос + 1 ретрай на транзиентную 500 (无可用渠道)
+//   maxHedges 0      - параллельные дубли выключены по умолчанию, включаются явно
+//   maxAttempts 3    - прежний бюджет попыток, теперь по умолчанию только последовательных
 //   preCommitMs 10000 — шлюз молчит >10с на 46% запросов, а клиент при нуле байт
 //                      сдаётся сам на ~18-20с; 10с оставляют запас на пинги
 const DEFAULT_CFG = {
   hedgeMs: 20000,
   maxAttempts: 3,
-  maxHedges: 1,
+  maxHedges: 0,
   preCommitMs: 10000,
   // Vision-мост: image-блоки уходят в AgentRouter (deepseek) за описанием. Дефолт - ВЫКЛ.
   visionBridge: false,
@@ -1222,23 +1270,13 @@ const DEFAULT_CFG = {
   // 180с — тот же запас, что у пустого потока: живой thinking такие паузы не делает.
   // 0 = выключить.
   stallMs: 180000,
-  // ── Фолбэк при исчерпании ПУЛА наливки (2026-09-15) ─────────────────────────
-  // Куда уходить, когда шлюз отвечает `402 Budget pool quota has been exhausted`.
-  // Владелец выбрал `deepseek-v4-flash` — это БЕСПУЛОВАЯ модель (см. POOL_MODEL_RE),
-  // поэтому она работает, когда пул сух, и её же он поставил руками в 04:53.
-  // 🪤 **Пустая строка выключает фичу ЦЕЛИКОМ** — и это осознанная ручка отката, а не
-  // «пустое значение по недосмотру»: если шлюз начнёт отдавать 402 на что-то другое,
-  // лечение надо снять одним движением, без рестарта процесса и без правки кода.
-  // Поэтому здесь НЕ пустая строка, а рабочее значение, а выключение — явное.
-  poolFallbackModel: 'deepseek-v4-flash',
-  // Сколько помнить, что модель пула мертва. Память процесса (`poolDead`) сбрасывается
-  // сменой mtime тир-карты: ручной свич владельца или возврат карты из бэкапа гасят её
-  // сразу, и она не спорит с тем, что лежит на диске. Этот TTL — страховка ровно на
-  // случай, когда дашборд лежал и записать карту не удалось: тогда через 15 минут
-  // запросы снова пойдут в пуловую модель, и если пул уже налили — попадут в цель.
-  // Меньше 15 минут брать нельзя: проба пула ходит по кнопке, и слишком короткая память
-  // вернула бы нас в тот же 402 на следующем же запросе. `0` = не помнить вовсе.
-  poolDeadMs: 900000,
+  // Legacy fallback on canonical budget-pool 402; retained only for other providers.
+  // AgentRouter recommendations and effective cfg always disable it, even if stale
+  // saved/env/API values try to opt in. Empty remains the ordinary non-AR off switch.
+  poolFallbackModel: AGENTROUTER_QUOTA_RETIRED ? '' : 'deepseek-v4-flash',
+  // Other providers keep their existing TTL/mtime invalidation. AgentRouter records
+  // no quota-dead models and never suppresses the next request using this memory.
+  poolDeadMs: AGENTROUTER_QUOTA_RETIRED ? 0 : 900000,
 };
 // Шлюзы с ПЛОСКИМ тарифом за запрос — там мульти-запрос выключен из коробки.
 // Замер 21.08: tabitoken списывает 50¢, gorouter 20¢ — одинаково за полный ответ на
@@ -1312,11 +1350,10 @@ function patchNum(v, min, max, allowZero) {
   if (allowZero && n === 0) return 0;
   return Math.min(max, Math.max(min, Math.round(n)));
 }
-// Версия набора дефолтов. **Поднимать при каждой смене DEFAULT_CFG.** Конфиг с прошлой
-// версией не читается вовсе: он архивируется рядом и переписывается новыми дефолтами.
-// Иначе новая цифра не доедет до тех, кто однажды нажал «Применить» — json приоритетнее
-// кода, и они навсегда останутся на настройках того дня. А это ровно те люди, которые
-// потом жгут баланс дублями на плоском тарифе и приходят с «у меня деньги текут».
+// Версия схемы и явных reset-migrations. Несовпадение архивирует и сбрасывает ВЕСЬ
+// конфиг, а не одну ручку. Default-only maxHedges=0 намеренно остаётся на v8: явные
+// сохранённые overrides и остальные настройки должны пережить эту смену дефолта.
+// Поднимать версию только при намеренном полном сбросе, не для default-only правки.
 // v3 (2026-08-25): в DEFAULT_CFG добавлен upstreamTimeoutMs (150с вместо константы
 // 600с). Версию поднимаем ровно по правилу выше — иначе у того, кто однажды нажал
 // «Применить», в json нет этого поля, cfg остался бы на дефолте кода, а вот прежние
@@ -1355,6 +1392,14 @@ function clampSingleKey() {
     emptyStreamMs: 0, catalogTtlMs: 0, poolFallbackModel: '', poolDeadMs: 0, visionBridge: false };
   const changed = Object.entries(limits).some(([k, v]) => cfg[k] !== v);
   Object.assign(cfg, limits);
+  return changed;
+}
+function clampRetiredAgentRouterQuota() {
+  if (!AGENTROUTER_QUOTA_RETIRED) return false;
+  const changed = cfg.poolFallbackModel !== '' || cfg.poolDeadMs !== 0;
+  cfg.poolFallbackModel = '';
+  cfg.poolDeadMs = 0;
+  poolDead.clear();
   return changed;
 }
 function loadConfig() {
@@ -1408,6 +1453,7 @@ function loadConfig() {
   if (typeof c.visionModel === 'string' && c.visionModel.trim()) cfg.visionModel = c.visionModel.trim();
 }
 function saveConfig() {
+  clampRetiredAgentRouterQuota();
   try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({ v: CFG_VERSION }, cfg), null, 2)); } catch (e) { log(`config save error: ${e.message}`); }
 }
 function applyPatch(p) {
@@ -1467,8 +1513,9 @@ function applyPatch(p) {
   if ('visionModel' in p && typeof p.visionModel === 'string') {
     cfg.visionModel = p.visionModel.trim() || 'deepseek-v4-flash';
   }
+  const quotaClamped = clampRetiredAgentRouterQuota();
   const singleClamped = clampSingleKey();
-  const clamped = clampPaidHedge('патч конфига') || singleClamped;
+  const clamped = clampPaidHedge('патч конфига') || singleClamped || quotaClamped;
   saveConfig();
   log(`config updated: мульти-запрос ${hedgeOff(cfg) ? 'выкл' : `${cfg.hedgeMs}ms`}, копий максимум ${cfg.maxHedges}, попыток на запрос ${cfg.maxAttempts}, пре-коммит ${cfg.preCommitMs ? `${cfg.preCommitMs}ms` : 'выкл'}, таймаут апстрима ${cfg.upstreamTimeoutMs}ms, удержание ${cfg.holdMs ? `${cfg.holdMs}ms` : 'выкл'}, пустой поток ${cfg.emptyStreamMs ? `${cfg.emptyStreamMs}ms` : 'выкл'}, каталог ${cfg.catalogTtlMs ? `${cfg.catalogTtlMs}ms` : 'выкл'}, JSON-удержание ${cfg.jsonHoldMs ? `${cfg.jsonHoldMs}ms` : 'выкл'}, вставший поток ${cfg.stallMs ? `${cfg.stallMs}ms` : 'выкл'}, фолбэк пула ${cfg.poolFallbackModel ? `${cfg.poolFallbackModel} (память ${cfg.poolDeadMs ? `${cfg.poolDeadMs}ms` : 'выкл'})` : 'выкл'}`);
   return clamped;
@@ -1489,6 +1536,8 @@ function publicState() {
     // Авторотация: включена ли и в какой пул звоним. Без этого в панели невозможно
     // отличить «тумблер выключен» от «прокси не знает этот шлюз».
     rotate: { on: ROTATE_ON, provider: ROTATE_PROVIDER || null, maxPerRequest: MAX_ROTATIONS },
+    rateBalance: rateBalance.snapshot(),
+    freeggRate: CUSTOM_PROVIDER_ID === 'freegg' ? rateBalance.snapshot() : undefined,
     stats: Object.assign({}, stats),
     // Время последнего ответа — в /__state, чтобы панель показывала цифру тем же
     // поллингом, что и счётчики, не дёргая график.
@@ -1606,6 +1655,8 @@ function handleControl(req, res, reqPath, presentedRouteAuth) {
         retries: cfg.maxAttempts,
         hedge_ms: cfg.hedgeMs,
         max_hedges: cfg.maxHedges,
+        rateBalance: rateBalance.snapshot(),
+        freeggRate: CUSTOM_PROVIDER_ID === 'freegg' ? rateBalance.snapshot() : undefined,
       } : {}),
     };
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -1615,6 +1666,13 @@ function handleControl(req, res, reqPath, presentedRouteAuth) {
   if (req.method === 'GET' && reqPath === '/__state') {
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify(publicState()));
+    return;
+  }
+  if (RATE_BALANCE_TEST_CONTROL && req.method === 'POST'
+      && (reqPath === '/__rate-balance/reset' || reqPath === '/__freegg-rate/reset')) {
+    rateBalance.reset();
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    res.end('{"ok":true}');
     return;
   }
   // GET /__latency?window=<сек> — история времени ответа для графика в панели.
@@ -1828,8 +1886,9 @@ const POOL_MODEL_RE = /^(claude|gpt)[-_]/i;
 // этом `claude-opus-5` тут же отвечал 402. Каталог годится только как ОТРИЦАТЕЛЬНЫЙ
 // фильтр («модели, которой у шлюза точно нет, не подставляем») — см. poolFallbackFor.
 
-// ── Единая точка решения: подставлять ли фолбэк вместо этой цели ─────────────
+// ── Shared legacy fallback decision, with unconditional AgentRouter refusal ──
 // Возвращает модель-фолбэк или null («подставлять нечего, работаем как раньше»).
+// AgentRouter always returns null before any legacy model/catalog/memory checks.
 // Все четыре условия обязательны, и каждое закрывает свой способ ошибиться:
 //   1. фолбэк задан — пустая строка выключает фичу целиком (ручка отката);
 //   2. цель ПУЛОВАЯ — беспуловые `glm-*`/`deepseek-*` пулу не подчинены, их не трогаем
@@ -1850,6 +1909,7 @@ const POOL_MODEL_RE = /^(claude|gpt)[-_]/i;
 // потому был зелёным. Поймано только прогоном боевого файла (`tools/check-pool-fallback.js`).
 // Для упреждающего пути (`tierTargetFor`) память обязательна — там доказательства нет.
 function poolFallbackFor(target, reactive) {
+  if (AGENTROUTER_QUOTA_RETIRED) return null;
   const fb = String(cfg.poolFallbackModel || '');
   if (!fb) return null;
   if (!POOL_MODEL_RE.test(String(target || ''))) return null;
@@ -1984,7 +2044,7 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
 // была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
 // обычный «too many requests» по-прежнему аккаунт не меняет.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|daily free limit(?:\s*\([^)]*\))?\s+is\s+used\s+up|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|exceeds your available credit|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|daily free limit(?:\s*\([^)]*\))?\s+is\s+used\s+up|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -2041,6 +2101,7 @@ const GW_BY_HOST = {
   'seekai.cc': 'sk',
   'true-sota.com': 'ts',
   'kktoken.cc': 'kk',
+  'uncensoredlabs.dev': 'uc',
   'api.xingchiapi.com': 'xc',
   'freegg.app': 'fg',
   'api.apinex.bond': 'ax',
@@ -2124,6 +2185,8 @@ function askRotate(payload) {
   });
 }
 
+// Legacy non-AgentRouter request to rewrite a tier map on pool exhaustion.
+// AgentRouter refuses locally before any dashboard request or map side effect.
 // Просьба к дашборду переписать тир-карту на беспуловый фолбэк: пул наливки кончился,
 // и следующий запрос должен уехать уже по новому маппингу — в том числе после рестарта
 // процесса, когда память о мёртвой модели обнулится.
@@ -2134,6 +2197,9 @@ function askRotate(payload) {
 // С AUTOROTATE=0 подстановка обязана работать ровно так же — иначе фича, которая держит
 // сессию живой, отключалась бы тумблером, который про другое.
 function askPoolDrop(deadModel, fallback) {
+  if (AGENTROUTER_QUOTA_RETIRED) {
+    return Promise.resolve({ ok: false, error: 'AgentRouter quota fallback retired' });
+  }
   return new Promise((resolve) => {
     // Провайдера берём так же, как askRotate: ROTATE_PROVIDER (env-перебивка + вывод из
     // хоста апстрима), а если он пуст — смотрим таблицу хостов напрямую. Для
@@ -2434,6 +2500,15 @@ const server = http.createServer((req, res) => {
   let keyOverride = '';
   let keyFallbacks = 0;
   const triedKeys = new Set();
+  const triedRateBalanceGroups = new Set();
+  // Ownership belongs to an upstream attempt, not to the client request: retries
+  // and hedges may overlap and must release exactly their own account lease.
+  const releaseAttemptLease = (attemptReq) => {
+    if (!attemptReq || !attemptReq.__rateBalanceLease) return;
+    const lease = attemptReq.__rateBalanceLease;
+    attemptReq.__rateBalanceLease = null;
+    lease.release();
+  };
   let rotating = false;           // ждём ответа дашборда — новых попыток не пускаем
   // Удержание запроса, пока лежит путь до шлюза (см. DEFAULT_CFG.holdMs). Бюджет свой,
   // отдельно и от maxAttempts, и от ротации: он мерит не «сколько раз спросили», а
@@ -2805,7 +2880,7 @@ const server = http.createServer((req, res) => {
   // ПОСЛЕ model-echo к исходящим SSE-байтам. Гейт EMPTY_TEXT_FIX — только odyssey.
   const emptyTextFilter = EMPTY_TEXT_FIX ? makeEmptyTextFilter() : null;
 
-  const forward = (status, headers, stream) => {
+  const forward = (status, headers, stream, attemptReq) => {
     const isSSE = /text\/event-stream/i.test(String(headers['content-type'] || ''));
     stats.byStatus[status] = (stats.byStatus[status] || 0) + 1;
     try {
@@ -2832,7 +2907,7 @@ const server = http.createServer((req, res) => {
           const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
           if (!out.length) return;           // всё удержано фильтром пустого text-блока
           if (!contentSent) { contentSent = true; clearEmptyGuard(); }
-          armStall(stream);
+          armStall(stream, attemptReq);
           sentBytes += out.length;
           res.write(out);
           noteStop(out);
@@ -2840,6 +2915,7 @@ const server = http.createServer((req, res) => {
           armTimer();
         });
         stream.on('end', () => {
+          releaseAttemptLease(attemptReq);
           const rest = flushSseEcho();
           if (rest) {
             const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
@@ -2855,9 +2931,11 @@ const server = http.createServer((req, res) => {
           if (!res.writableEnded) res.end();
         });
         stream.on('error', (err) => {
+          const retried = retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream);
+          releaseAttemptLease(attemptReq);
           // Обрыв ДО первого байта содержимого — не поломка ответа, а неудавшаяся
           // попытка: клиент видел только пинги, значит запрос можно переиграть.
-          if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
+          if (retried) return;
           stopTimer();
           ev.note('abort');
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
@@ -3039,7 +3117,7 @@ const server = http.createServer((req, res) => {
       const out = emptyTextFilter ? emptyTextFilter.feed(patched) : patched;
       if (!out.length) return;             // всё удержано фильтром пустого text-блока
       if (!contentSent) { contentSent = true; clearEmptyGuard(); }
-      armStall(stream);
+      armStall(stream, attemptReq);
       sentBytes += out.length;
       res.write(out);
       noteStop(out);
@@ -3047,6 +3125,7 @@ const server = http.createServer((req, res) => {
       armTimer();
     });
     stream.on('end', () => {
+      releaseAttemptLease(attemptReq);
       const rest = flushSseEcho();
       if (rest) {
         const o = emptyTextFilter ? emptyTextFilter.feed(rest) : rest;
@@ -3061,7 +3140,9 @@ const server = http.createServer((req, res) => {
       if (!truncated) res.end();
     });
     stream.on('error', (err) => {
-      if (retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream)) return;
+      const retried = retryEmptyStream(`обрыв до первого байта содержимого (${err.message})`, stream);
+      releaseAttemptLease(attemptReq);
+      if (retried) return;
       stopTimer();
       ev.note('abort');
       log(`${req.method} ${reqPath} upstream stream error: ${err.message}`);
@@ -3069,7 +3150,8 @@ const server = http.createServer((req, res) => {
     });
   };
 
-  const settle = (r) => {
+  const settle = (r, releaseLease = true) => {
+    if (releaseLease) releaseAttemptLease(r);
     winner = r;
     finished = true;
     for (const x of activeSet) {
@@ -3092,6 +3174,7 @@ const server = http.createServer((req, res) => {
     log(`${req.method} ${reqPath} winner: ${wKind} (попытка #${r.__attempt || 1} из ${launched}) за ${took}ms`);
   };
   const giveUp = (why) => {
+    for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
     finished = true;
     stats.errors += 1;
     for (const x of activeSet) {
@@ -3170,12 +3253,14 @@ const server = http.createServer((req, res) => {
   };
   const retryEmptyStream = (why, stream) => {
     clearEmptyGuard();
-    if (exactMode) return false;
+    if (exactMode || rateBalance.enabled) return false;
     if (contentSent || aborted || cfg.emptyStreamMs <= 0) return false;
     if (emptyRetries >= EMPTY_MAX_RETRIES) return false;
     emptyRetries += 1;
+    const replacedAttempts = [...activeSet];
+    for (const attemptReq of replacedAttempts) releaseAttemptLease(attemptReq);
     try { if (stream && !stream.destroyed) stream.destroy(); } catch (e) { /* уже мёртв */ }
-    for (const x of activeSet) { try { x.destroy(); } catch (e) { /* уже мёртв */ } }
+    for (const x of activeSet) { x.__retired = true; try { x.destroy(); } catch (e) { /* уже мёртв */ } }
     activeSet.clear();
     finished = false;          // победителя не было: то, что пришло, содержимого не несёт
     winner = null;
@@ -3189,7 +3274,7 @@ const server = http.createServer((req, res) => {
   // Поток встал посреди ответа: переиграть нельзя, но висеть вечно — хуже, чем ошибка.
   // Взводится и перевзводится на КАЖДОМ байте содержимого, поэтому живой поток его не
   // видит вообще.
-  const armStall = (stream) => {
+  const armStall = (stream, attemptReq) => {
     if (cfg.stallMs <= 0) return;
     if (stallTimer !== null) clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
@@ -3197,6 +3282,7 @@ const server = http.createServer((req, res) => {
       if (aborted || res.writableEnded) return;
       stopTimer();
       ev.note('stall');
+      releaseAttemptLease(attemptReq);
       if (exactMode) {
         const error = new Error(`exact route upstream stream stalled ${cfg.stallMs}ms mid-response`);
         log(`${req.method} ${reqPath} exact route: поток встал на ${cfg.stallMs}мс, рву upstream/downstream без синтетического события`);
@@ -3231,8 +3317,10 @@ const server = http.createServer((req, res) => {
     }, cfg.emptyStreamMs);
   };
   const attemptDone = (r, why, delayMs) => {
+    releaseAttemptLease(r);
     activeSet.delete(r);
     if (finished || aborted) return;
+    if (rateBalance.enabled) { giveUp(why); return; }
     // Бюджет ВРЕМЕНИ на повторы — см. DEFAULT_CFG.retryBudgetMs. Повтор после дорогого
     // отказа клиент уже не дождётся: `524` приходит через ~100 с, три попытки давали
     // 381 с при нуле содержимого.
@@ -3313,7 +3401,7 @@ const server = http.createServer((req, res) => {
   // Дублей не больше cfg.maxHedges: своим счётчиком, а не бюджетом maxAttempts, иначе
   // мульти-запросы выедали попытки и на транзиентную 500 ретраить было уже нечем.
   const scheduleHedge = () => {
-    if (exactMode) return;
+    if (rateBalance.enabled || exactMode) return;
     if (cfg.hedgeMs <= 0 || cfg.maxHedges <= 0 || finished || aborted || hedgeTimer !== null) return;
     if (launched >= cfg.maxAttempts) return;
     if (hedgesLaunched >= cfg.maxHedges) return;
@@ -3383,8 +3471,35 @@ const server = http.createServer((req, res) => {
     // 🎯 Файла нет (шлюз не активирован) - ключ берётся из пула аккаунтов: без этого
     // уходил клиентский токен чужого шлюза и приходил `401 This API key is not valid`.
     let sentKey = '';
+    let attemptLease = null;
     {
-      const arKey = keyOverride || spreadKey(triedKeys) || activeKeyNow();
+      const preferredKey = activeKeyNow();
+      attemptLease = rateBalance.enabled ? rateBalance.acquire(triedRateBalanceGroups, preferredKey) : null;
+      if (rateBalance.enabled && !attemptLease) {
+        finished = true;
+        stats.errors += 1;
+        stopTimer();
+        const retryMs = rateBalance.nearestRetryMs();
+        const error = { type: 'rate_limit_error', code: 'rate_limit_exceeded',
+          message: 'All provider accounts are temporarily cooling down.' };
+        const responseHeaders = { 'content-type': 'application/json; charset=utf-8' };
+        if (retryMs != null) {
+          error.retry_after_ms = Math.max(0, Math.round(retryMs));
+          responseHeaders['retry-after'] = String(Math.max(0, Math.ceil(retryMs / 1000)));
+        }
+        const responseBody = Buffer.from(JSON.stringify({ type: 'error', error }));
+        responseHeaders['content-length'] = String(responseBody.length);
+        if (!res.headersSent) {
+          res.writeHead(429, responseHeaders);
+          res.end(responseBody);
+        } else if (clientSSE) {
+          inbandError(429, responseBody);
+        } else if (!res.writableEnded) {
+          res.destroy();
+        }
+        return;
+      }
+      const arKey = (attemptLease && attemptLease.key) || keyOverride || spreadKey(triedKeys) || preferredKey;
       if (arKey) {
         sentKey = arKey;
         triedKeys.add(arKey);
@@ -3450,10 +3565,11 @@ const server = http.createServer((req, res) => {
         upRes.on('error', () => onEnd());
       };
       const forwardBuffered = (buf, hdrs) => {
+        releaseAttemptLease(upReq);
         const pt = new PassThrough();
         pt.end(buf);
         settle(upReq);
-        forward(status, hdrs, pt);
+        forward(status, hdrs, pt, upReq);
       };
 
       // 200 на не-stream /v1/messages: апстрим отдаёт JSON как text/plain, иногда
@@ -3489,8 +3605,50 @@ const server = http.createServer((req, res) => {
 
       if (shouldRetryStatus(status)) {
         drain(() => {
-          if (finished || aborted) return;
+          if (finished || aborted) {
+            releaseAttemptLease(upReq);
+            return;
+          }
           const buf = Buffer.concat(chunks, size);
+          const rateInfo = rateBalanceErrorInfo(status, headers, buf);
+          if (rateBalance.enabled && rateInfo.tokenRateLimit && upReq.__rateBalanceLease) {
+            const failed = upReq.__rateBalanceLease;
+            upReq.__rateBalanceLease = null;
+            failed.release();
+            triedRateBalanceGroups.add(failed.group);
+            rateBalance.cooldown(failed, rateInfo.retryMs);
+            activeSet.delete(upReq);
+            if (rateBalance.scope !== 'shared' && keyFallbacks < RATE_BALANCE_MAX_FALLBACKS
+                && Date.now() - started < RATE_BALANCE_BUDGET_MS) {
+              const next = rateBalance.acquire(triedRateBalanceGroups, '');
+              if (next) {
+                next.release();
+                keyFallbacks += 1;
+                bonusAttempts += 1;
+                stats.keyFallbacks += 1;
+                log(`${req.method} ${reqPath} provider token rate limit: account cooldown, fallback #${keyFallbacks}`);
+                makeUpstream('provider account fallback');
+                return;
+              }
+            }
+            const retryMs = rateBalance.nearestRetryMs();
+            const out = (() => {
+              try {
+                const parsed = JSON.parse(buf.toString('utf8') || '{}');
+                parsed.type = parsed.type || 'error';
+                parsed.error = parsed.error || {};
+                parsed.error.type = parsed.error.type || 'rate_limit_error';
+                parsed.error.code = parsed.error.code || rateInfo.code || 'rate_limit_exceeded';
+                if (retryMs != null) parsed.error.retry_after_ms = Math.max(0, Math.round(retryMs));
+                return Buffer.from(JSON.stringify(parsed));
+              } catch { return buf; }
+            })();
+            const outHeaders = { ...headers };
+            delete outHeaders['content-length'];
+            if (retryMs != null) outHeaders['retry-after'] = String(Math.max(0, Math.ceil(retryMs / 1000)));
+            forwardBuffered(out, outHeaders);
+            return;
+          }
           // Отказ по деньгам или мёртвый ключ — это не ошибка запроса, а конец
           // аккаунта. Ретрай тем же ключом бессмыслен (проверено: три попытки в
           // пустой аккаунт и 502), отдать клиенту тоже нельзя, пока в пуле есть
@@ -3723,12 +3881,13 @@ const server = http.createServer((req, res) => {
         return;
       }
 
-      settle(upReq);
-      forward(status, headers, upRes);
+      settle(upReq, !isSSE);
+      forward(status, headers, upRes, upReq);
     });
 
     ctrace = traceConn(upReq, t.requester);
     activeSet.add(upReq);
+    upReq.__rateBalanceLease = attemptLease;
     upReq.__attempt = attempt;
     upReq.__kind = kindLabel;
     upReq.on('timeout', () => {
@@ -3743,7 +3902,8 @@ const server = http.createServer((req, res) => {
       upReq.destroy(new Error('upstream timeout'));
     });
     upReq.on('error', (err) => {
-      if (finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
+      releaseAttemptLease(upReq);
+      if (upReq.__retired || finished || aborted || res.destroyed) { activeSet.delete(upReq); return; }
       // Обрыв на сокете ИЗ ПУЛА — подпись отмершего keep-alive соединения: апстрим закрыл
       // его молча, пока мы простаивали, и узнали мы об этом только записью в трубу.
       log(`${req.method} ${reqPath} upstream error (attempt ${attempt}): ${err.message}`
@@ -3935,11 +4095,12 @@ const server = http.createServer((req, res) => {
     scheduleHedge();
   });
 
-  req.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
-  res.on('error', () => { aborted = true; stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
+  req.on('error', () => { aborted = true; for (const attemptReq of activeSet) releaseAttemptLease(attemptReq); stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
+  res.on('error', () => { aborted = true; for (const attemptReq of activeSet) releaseAttemptLease(attemptReq); stopTimer(); for (const x of activeSet) { try { x.destroy(); } catch (e) {} } activeSet.clear(); if (hedgeTimer !== null) { clearTimeout(hedgeTimer); hedgeTimer = null; } });
   res.on('close', () => {
     if (!res.writableEnded) {
       aborted = true;
+      for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
       ev.note('clientgone');
       // 🪤 Без этой строки уход клиента приходилось восстанавливать по front-door и
       // цепочкам пингов: 05.09 на разбор одного такого случая ушло десять минут, а ответ
@@ -3957,6 +4118,7 @@ const server = http.createServer((req, res) => {
   req.on('close', () => {
     if (!req.complete) {
       aborted = true;
+      for (const attemptReq of activeSet) releaseAttemptLease(attemptReq);
       stopTimer();
       for (const x of activeSet) { try { x.destroy(); } catch (e) {} }
       activeSet.clear();
@@ -4530,11 +4692,8 @@ if (process.argv[2] === 'selftest') {
   assert.ok(/if \(!exactMode && catalogStale\(\)\) refreshCatalog\(false\)/.test(routeSrc),
     'в обычном пути каталог освежается в фоне и запрос не блокирует');
 
-  // ── Пул наливки кончился: 402 → беспуловая модель (2026-09-15) ───────────────
-  // Живой случай: 15.09 04:52 МСК сессия Claude Code встала на `402 Budget pool quota
-  // has been exhausted`. Шлюз agentrouter выдаёт claude- и gpt-модели только во время
-  // наливки; владелец руками переписал карту на `deepseek-v4-flash` — здесь та же
-  // логика автоматикой. Сцену с живым шлюзом гоняет tools/check-pool-fallback.js.
+  // Quota policy: AgentRouter refuses substitution; other providers keep legacy behavior.
+  // Real subprocess HTTP acceptance lives in tools/check-ar-sol-keepalive.js.
   const QUOTA_BODY = '{"error":{"type":"bad_response_status_code","message":"Budget pool quota has been exhausted. Please ask an administrator to increase the limit or select another budget pool. (request id: 2026)"}}';
   assert.strictEqual(POOL_QUOTA_RE.test(QUOTA_BODY), true, 'каноническая формулировка пустого пула ловится');
   assert.strictEqual(POOL_QUOTA_RE.test(EN_OOB), false,
@@ -4543,17 +4702,46 @@ if (process.argv[2] === 'selftest') {
   // Пуловые модели — `claude-*` и `gpt-*`; `deepseek-*` и `glm-*` пулу не подчинены
   // вовсе. Отсюда же следует, что haiku→glm-5.3 (см. выше) в правке не участвует.
   assert.strictEqual(POOL_MODEL_RE.test('claude-opus-5'), true, 'claude-opus-5 — модель пула наливки');
-  assert.strictEqual(POOL_MODEL_RE.test('gpt-5.6-sol'), true, 'gpt-5.6-sol — модель пула наливки');
+  assert.strictEqual(POOL_MODEL_RE.test('gpt-5.6-sol'), true,
+    'legacy family regex is unchanged; AgentRouter policy precedes it for every model');
   assert.strictEqual(POOL_MODEL_RE.test('claude-opus-5[1m]'), true, 'суффикс окна не мешает классификации');
   assert.strictEqual(POOL_MODEL_RE.test('deepseek-v4-flash'), false, 'deepseek-* пулу не подчинён');
   assert.strictEqual(POOL_MODEL_RE.test('glm-5.3'), false, 'glm-5.3 пулу не подчинён');
-  assert.strictEqual(DEFAULT_CFG.poolFallbackModel, 'deepseek-v4-flash',
-    'поставочный фолбэк — беспуловая модель, которой пул не управляет');
-  assert.strictEqual(DEFAULT_CFG.poolDeadMs, 900000, 'поставочная память о мёртвой модели — 15 минут');
+  assert.strictEqual(DEFAULT_CFG.poolFallbackModel, AGENTROUTER_QUOTA_RETIRED ? '' : 'deepseek-v4-flash',
+    'AgentRouter quota fallback retired; other providers keep their existing recommendation');
+  assert.strictEqual(DEFAULT_CFG.poolDeadMs, AGENTROUTER_QUOTA_RETIRED ? 0 : 900000,
+    'AgentRouter dead-model tracking retired; other providers keep their existing TTL');
 
   const cfgFbSaved = cfg.poolFallbackModel;
   const cfgDeadSaved = cfg.poolDeadMs;
   const catIdsSaved = catalog.ids;
+  let retiredPoolDropCheck = null;
+  if (AGENTROUTER_QUOTA_RETIRED) {
+    // Even direct stale in-memory values cannot bypass provider policy.
+    cfg.poolFallbackModel = 'deepseek-v4-flash';
+    cfg.poolDeadMs = 900000;
+    poolDead.clear();
+    for (const model of ['gpt-6.1-sol', 'gpt-5.6-sol', 'ar/gpt-6.1-sol[1m]', 'agentrouter/gpt-5.6-sol[200k]', 'claude-opus-5']) {
+      markPoolDead(model);
+      assert.strictEqual(poolDead.size, 0, 'AgentRouter must not record quota-dead models');
+      assert.strictEqual(poolFallbackFor(model, true), null, 'reactive AgentRouter quota substitution always disabled');
+      assert.strictEqual(poolFallbackFor(model), null, 'preemptive AgentRouter quota substitution always disabled');
+    }
+    poolDead.set('gpt-6.1-sol', Date.now());
+    assert.strictEqual(poolDeadActive('gpt-6.1-sol'), false, 'even stale dead-memory entries cannot suppress AgentRouter requests');
+    poolDead.clear();
+    const unrelated = Object.fromEntries(Object.entries(cfg).filter(([key]) => !['poolFallbackModel', 'poolDeadMs'].includes(key)));
+    applyPatch({ poolFallbackModel: 'glm-5.3', poolDeadMs: 3600000 });
+    assert.strictEqual(cfg.poolFallbackModel, '', 'runtime AgentRouter fallback opt-in rejected');
+    assert.strictEqual(cfg.poolDeadMs, 0, 'runtime AgentRouter dead-memory opt-in rejected');
+    for (const [key, value] of Object.entries(unrelated)) assert.strictEqual(cfg[key], value, 'quota policy preserves ' + key);
+    const persistedQuota = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    assert.strictEqual(persistedQuota.v, CFG_VERSION);
+    assert.strictEqual(persistedQuota.poolFallbackModel, '');
+    assert.strictEqual(persistedQuota.poolDeadMs, 0);
+    retiredPoolDropCheck = askPoolDrop('gpt-6.1-sol', 'deepseek-v4-flash');
+  } else {
+  // Historical quota behavior is still supported for non-AgentRouter providers.
   cfg.poolFallbackModel = 'deepseek-v4-flash';
   cfg.poolDeadMs = 900000;
   catalog.ids = new Set(['claude-opus-5', 'deepseek-v4-flash', 'glm-5.3']);
@@ -4684,9 +4872,11 @@ if (process.argv[2] === 'selftest') {
   assert.strictEqual(cfg.poolDeadMs, 0, '0 = не помнить мёртвых моделей вовсе');
   applyPatch({ poolDeadMs: DEFAULT_CFG.poolDeadMs });
   assert.strictEqual(cfg.poolDeadMs, 900000, 'поставочная память вернулась');
+  }
 
-  // Инварианты ветки 402 — по исходнику: сцену с живым шлюзом гоняет
-  // tools/check-pool-fallback.js, а здесь фиксируем то, что нельзя нарушить правкой.
+  // Shared 402 branch invariants (balance rotation and non-AR legacy fallback).
+  // Real HTTP acceptance: tools/check-ar-sol-keepalive.js; historical AR fallback
+  // assertions in tools/check-pool-fallback.js no longer describe AgentRouter policy.
   assert.ok(evStore.EVENTS.includes('pooldrop'),
     'событие зарегистрировано в закрытом списке event-store — иначе ev.note молча ничего не пишет');
   assert.ok(/if \(status === 402 && !exactMode\) \{/.test(holdSrc),
@@ -4724,7 +4914,7 @@ if (process.argv[2] === 'selftest') {
   // ── Пустой поток: заголовки есть, содержимого нет (2026-09-03, 21:13 kktoken) ──
   // Инварианты переигровки: только пока содержимого не было, с потолком, и со снятием
   // «победителя» — иначе makeUpstream упрётся в finished и повтор не стартует.
-  assert.ok(/if \(exactMode\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
+  assert.ok(/if \(exactMode \|\| rateBalance\.enabled\) return false;\s*if \(contentSent \|\| aborted \|\| cfg\.emptyStreamMs <= 0\) return false;/.test(holdSrc),
     'переигрываем пустой поток только пока клиенту не ушло содержимое');
   assert.ok(/if \(emptyRetries >= EMPTY_MAX_RETRIES\) return false;/.test(holdSrc),
     'у переигровки пустого потока есть потолок');
@@ -4793,9 +4983,9 @@ if (process.argv[2] === 'selftest') {
   applyPatch({ stallMs: 0 });
   assert.strictEqual(cfg.stallMs, 0, '0 выключает страховку от вставшего потока');
   assert.strictEqual(DEFAULT_CFG.stallMs, 180000, 'поставочные 180с');
-  assert.strictEqual((holdSrc.match(/armStall\(stream\);/g) || []).length, 2,
+  assert.strictEqual((holdSrc.match(/armStall\(stream, attemptReq\);/g) || []).length, 2,
     'страховка перевзводится на обеих SSE-ветках, то есть на каждом байте содержимого');
-  assert.ok(/armStall = \(stream\) => \{[\s\S]*?event: error[\s\S]*?res\.end\(\);/.test(holdSrc),
+  assert.ok(/armStall = \(stream, attemptReq\) => \{[\s\S]*?event: error[\s\S]*?res\.end\(\);/.test(holdSrc),
     'вставший поток получает явный overloaded_error вместо бесконечного ожидания');
 
   // 🪤 Наш таймаут сокета в этой сцене бесполезен: после заголовков стоит finished, а
@@ -4892,12 +5082,23 @@ if (process.argv[2] === 'selftest') {
     fs.writeFileSync(CONFIG_FILE, savedCfg); // вернули то, что было до прогона
   }
 
-  try { fs.rmSync(LOCAL_HOP_SELFTEST_FILE, { force: true }); } catch (e) { /* absent */ }
-  console.log('selftest OK');
-  process.exit(0);
-}
-
+  const finishSelftest = () => {
+    try { fs.rmSync(LOCAL_HOP_SELFTEST_FILE, { force: true }); } catch (e) { /* absent */ }
+    console.log('selftest OK');
+    process.exit(0);
+  };
+  if (retiredPoolDropCheck) {
+    retiredPoolDropCheck.then(result => {
+      assert.deepStrictEqual(result, { ok: false, error: 'AgentRouter quota fallback retired' },
+        'direct AgentRouter pool-drop must return locally without contacting the dashboard');
+      finishSelftest();
+    }).catch(error => { console.error(error); process.exit(1); });
+  } else finishSelftest();
+} else {
+// Keep asynchronous selftest checks isolated from the normal listening/catalog path.
 loadConfig();
+// Retire only effective quota fields; do not migrate or rewrite an owner's saved config.
+clampRetiredAgentRouterQuota();
 if (clampSingleKey()) saveConfig();
 // Гвоздь после чтения конфига: даже если в json лежит maxHedges от прошлых
 // экспериментов (или его вписали руками), на плоскотарифном шлюзе дубли не поедут.
@@ -4920,3 +5121,4 @@ server.listen(PORT, '127.0.0.1', () => {
   // уедет уже подменённым, без круга через 503.
   refreshCatalog(true);
 });
+}

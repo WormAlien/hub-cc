@@ -1,0 +1,15 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const modulePath = path.join(__dirname, '../routing/vendor/xingchi-model-test.js');
+assert.ok(fs.existsSync(modulePath), 'Xingchi independent UI control must exist');
+const html = fs.readFileSync(path.join(__dirname, '../routing/proxy-dashboard.html'), 'utf8');
+assert.ok(html.includes('/vendor/xingchi-model-test.js'));
+assert.ok(html.includes('XingchiModelTest.attach'));
+const context = { window: {}, document: { addEventListener() {}, createElement() { return {}; }, head: { append() {} } }, setInterval() {}, Map, Date };
+vm.runInNewContext(fs.readFileSync(modulePath, 'utf8'), context);
+assert.equal(typeof context.window.XingchiModelTest.attach, 'function');
+assert.equal(typeof context.window.XingchiModelTest.button, 'function');
+console.log('PASS Xingchi UI module and production wiring');

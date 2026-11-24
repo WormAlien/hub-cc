@@ -33,24 +33,8 @@ const latencyStore = require('./latency-store.js');
 // (инцидент 13.09, дважды за день). Обязана грузиться В ШАПКЕ: `*Save` живут выше
 // блока с outlook-pool, и `const` в TDZ уронил бы первую же запись.
 const { writeJsonSync: durableWriteJson, assertNotZeroed } = require('./lib/durable-write');
-const { AR_QUOTA_BODY, AR_QUOTA_POOLS, AR_QUOTA_DEFAULT_POOL, arQuotaPoolForModel,
-        arQuotaBodyFor, arQuotaReadPools,
-        classifyArQuotaProbe, buildArQuotaCache, isArQuotaCacheFresh,
-        // Расписание партий: список времён в зоне шлюза, читается с диска. У шлюза это
-        // ТРЕТЬЯ схема за девять дней (03/11/19 → 05/14), поэтому константой больше не
-        // живёт — см. `lib/ar-quota-probe.js` § «Расписание партий».
-        arQuotaSchedule, arQuotaPoolSchedule, arQuotaBatches, arQuotaScheduleSave,
-        // 🪤 `arQuotaDropAt` в этом списке пропустили 16.09, когда заводили автопроверку по
-        // таймингу наливки, - и `arQuotaAutoTickNow` падал `ReferenceError` на КАЖДОМ тике
-        // (739 записей `uncaughtException` в логе за одни сутки 17.09). Молча: обработчик
-        // uncaughtException пишет в лог и живёт дальше, поэтому фича «карта возвращается сама
-        // после налива» не работала ни разу, а выглядело это как «пул ещё не налили».
-        arQuotaDropAt,
-        arQuotaKeyTail } = require('./lib/ar-quota-probe');
-// Пул-дроп: тир-карта на фолбэк при `402 Budget pool quota has been exhausted` и
-// возврат из бэкапа, когда пул нальют. Чистая логика над путями живёт в lib (регресс
-// гоняет её на временных файлах); сюда приходят только две ручки и общая функция
-// возврата. `tierMapFile`/`writeTierMap` передаются инъекцией — см. `poolDropTiers`.
+// Shared pool-drop/restore remains for other providers. AgentRouter Sol-only
+// rejects both actions before resolving files; legacy quota probes are retired.
 const poolDropLib = require('./lib/pooldrop');
 // Чистая логика «какая нода у приёмника» — см. ее шапку и tools/check-league-instance-verdict.js
 const leagueInstance = require('./lib/league-instance');
@@ -254,6 +238,18 @@ const BACKENDS = {
         // Активация через handleKkActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
         // ключ живёт в kktoken-active-key.txt и инжектится прокси на каждый запрос.
         // 🪤 Через keepalive обязательно: у kktoken каждый четвёртый ответ — пустой 403,
+        // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
+    },
+    uncensoredlabs: {
+        label: 'UncensoredLabs',
+        base_url: 'http://localhost:20193',
+        api_key: 'dummy',           // real key keepalive reads from uncensoredlabs-active-key.txt
+        model: null,
+        clear_helper: true,
+        // SSE keepalive-прокси (keepalive-proxy.js :20193) → uncensoredlabs.dev (БЕЗ /v1).
+        // Активация через handleUcActivate (пишет ANTHROPIC_AUTH_TOKEN='dummy'),
+        // ключ живёт в uncensoredlabs-active-key.txt и инжектится прокси на каждый запрос.
+        // 🪤 Через keepalive обязательно: у uncensoredlabs каждый четвёртый ответ — пустой 403,
         // ретраи моста это гасят, прямой baseUrl отдал бы отказ Claude Code в лицо.
     },
     xingchi: {
@@ -704,6 +700,7 @@ const CC_MODEL_PREFIX = {
     seekai: 'seekai',
     truesota: 'truesota',
     kktoken: 'kktoken',
+    uncensoredlabs: 'uncensoredlabs',
     xingchi: 'xingchi',
     freegg: 'freegg',
     apinex: 'apinex',
@@ -999,7 +996,7 @@ const BACKENDS_REGISTRY_FILE = path.join(os.homedir(), '.claude', 'backends.json
 const BACKEND_ALIASES = {
     a6: 'a6api',
     ar: 'agentrouter', go: 'gorouter', tb: 'tabi', xp: 'xpeach', jw: 'justwoker',
-    sk: 'seekai', ts: 'truesota', kk: 'kktoken', xc: 'xingchi', fg: 'freegg', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
+    sk: 'seekai', ts: 'truesota', kk: 'kktoken', uc: 'uncensoredlabs', xc: 'xingchi', fg: 'freegg', ax: 'apinex', kv: 'kvotum', tr: 'threerouter', pm: 'premier', vn: 'vani', dc: 'dacall', cp: 'cleanapis', ab: 'artbloom', fx: 'fxqidian', ls: 'lsapi', bd: 'budsin', nv: 'nova', od: 'odyssey', bai: 'bai', uk: 'getunikey', hn: 'hcnsec', ap: 'aipm',
     ak: 'aikeysapi',
     gm: 'gemini',
     rm: 'rumeng',
@@ -1178,7 +1175,7 @@ const ROUTE_TIERS = ['default', 'opus', 'sonnet', 'haiku', 'gpt'];
 // (CC_MODEL_PREFIX.gorouter='gorouter'), а эндпоинт — `/go/models`. Держим обе карты.
 const ROUTE_EP = {
     a6api: 'a6api',
-    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', xingchi: 'xc', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
+    agentrouter: 'ar', gorouter: 'go', kktoken: 'kk', uncensoredlabs: 'uc', xingchi: 'xc', freegg: 'fg', apinex: 'ax', kvotum: 'kv', threerouter: 'tr', premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab', fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', odyssey: 'od', bai: 'bai', getunikey: 'uk', aipm: 'ap', hcnsec: 'hn',
     aikeysapi: 'ak',
     rumeng: 'rm',
     tabi: 'tb', xpeach: 'xp', justwoker: 'jw', seekai: 'sk', truesota: 'ts',
@@ -1441,7 +1438,9 @@ function resolveProviderKey(name) {
 
 function poolDropState(provider) {
     try {
-        const files = poolDropLib.poolDropFiles({ provider: resolveProviderKey(provider), tierMapFile });
+        provider = resolveProviderKey(provider);
+        if (provider === 'agentrouter') return null;
+        const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
         if (files.error) return null;
         const m = poolDropLib.readMarker(files.markerFile);
         if (!m) return null;
@@ -1457,22 +1456,12 @@ function poolDropTiers(provider, deadModel, fallback) {
     // Префикс ('ar') приходит от keepalive, имя ('agentrouter') — из вкладки «Маршруты».
     // Принимаем оба, см. resolveProviderKey.
     provider = resolveProviderKey(provider);
+    if (provider === 'agentrouter') {
+        return { ok: false, disabled: true, code: 'agentrouter_quota_retired', provider,
+                 error: 'AgentRouter pool-drop is retired (Sol-only)' };
+    }
     const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
     if (files.error) return { ok: false, error: files.error };
-
-    // ── Состояние квоты пишем ДО раннего выхода ──────────────────────────────
-    // 🪤 Пока это стояло ниже, связка «прокси поймал 402 → бар узнал» была разорвана:
-    // при живом маркере функция выходила раньше и состояние НЕ писалось. Именно поэтому
-    // владелец 16.09 сидел на дипсике и не знал: маркер от прошлого дропа висел, каждый
-    // новый 402 упирался в «already: true», а файл состояния заполнял только ручной клик.
-    // Теперь любой пойманный 402 обновляет состояние, даже когда карта уже опущена.
-    const qPool = arQuotaPoolForModel(deadModel || '');
-    if (qPool) {
-        let qKey = '';
-        try { qKey = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch { /* ключа нет — хвост будет пустым */ }
-        arQuotaPut(qPool, { ...buildArQuotaCache({ state: 'exhausted' }, qKey, Date.now(), qPool), source: 'drop' });
-        logLine(`квота ${qPool}: помечена исчерпанной при фолбэке (${deadModel})`);
-    }
 
     // Идемпотентность: маркер — источник истины. Уже опущено → карту не трогаем.
     // Иначе повторный 402 (keepalive ретраит, кнопку нажали дважды) переписал бы бэкап
@@ -1549,15 +1538,18 @@ function poolDropTiers(provider, deadModel, fallback) {
     return out;
 }
 
-// Возврат тир-карт из бэкапов. Функция ОДНА на оба входа: ручку
-// `POST /__switch/api/routes/pool-restore` и автоматический возврат в
-// `handleArQuotaCheck`, когда проба показала «пул налит».
+// Manual pool-restore remains available to other providers only.
+// AgentRouter legacy markers/backups must never restore an owner map.
 //
 // 🪤 Возврат идёт ТОЛЬКО при живом маркере. Без него восстанавливать нечего и, что
 // важнее, НЕЛЬЗЯ: бэкап мог остаться от прошлого дропа, а карта с тех пор правилась
 // владельцем руками — затирание её старым бэкапом было бы потерей работы.
 function poolRestoreTiers(provider) {
     provider = resolveProviderKey(provider);
+    if (provider === 'agentrouter') {
+        return { ok: false, disabled: true, code: 'agentrouter_quota_retired', provider,
+                 error: 'AgentRouter pool-restore is retired (Sol-only)' };
+    }
     const files = poolDropLib.poolDropFiles({ provider, tierMapFile });
     if (files.error) return { ok: false, error: files.error };
 
@@ -1679,6 +1671,9 @@ async function routesCandidateModelsForKey(provider, key) {
     const ep = ROUTE_EP[provider];
     if (!ep || !key) return [];
     const data = await routesCatalogJson(`/__switch/api/${ep}/models?api_key=${encodeURIComponent(key)}`, 4000);
+    // AR returns cached diagnostic rows on a failed refresh. They are not a
+    // successful live/account catalog and must not acquire that source label.
+    if (provider === 'agentrouter' && (!data || data.ok !== true || data.stale)) return [];
     const raw = data && Array.isArray(data.models) ? data.models : [];
     return routesCatalogLib.textOnly(raw.map(model => typeof model === 'string' ? { id: model } : model));
 }
@@ -1958,7 +1953,20 @@ function saveState(target) {
 }
 
 function a6ReadMap(routes) {
-    return routeTierMap('a6api', routes) || {};
+    try {
+        const raw = fs.readFileSync(tierMapFile('a6api', routes), 'utf8');
+        const map = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        return map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+    } catch { return {}; }
+}
+function a6WriteMap(patch, routes) {
+    if (!routes && Object.keys(patch).length === 1 && Object.hasOwn(patch, 'default')) {
+        // A native-default edit does not own or reconcile the independent Routes tiers.
+        const next = { ...a6ReadMap(false), default: String(patch.default ?? '').trim() };
+        durableWriteJson(tierMapFile('a6api', false), next);
+        return next;
+    }
+    return writeTierMap(tierMapFile('a6api', routes), patch, '');
 }
 function a6CommitActivation(model) {
     const settings = readSettings();
@@ -1986,7 +1994,7 @@ function a6SyncMainModel(model) {
 }
 a6Gateway.setHub({
     readMap: a6ReadMap,
-    writeMap: (patch, routes) => writeTierMap(tierMapFile('a6api', routes), patch, ''),
+    writeMap: a6WriteMap,
     isActive: () => currentTarget() === 'a6api',
     publish: () => writeBackendsRegistry(),
     ensure: () => a6Gateway.spawn(),
@@ -2307,6 +2315,7 @@ const keepaliveJw = makeKeepaliveHandlers(Number(process.env.JW_KEEPALIVE_PORT |
 const keepaliveSk = makeKeepaliveHandlers(Number(process.env.SK_KEEPALIVE_PORT || 20159));
 const keepaliveTs = makeKeepaliveHandlers(Number(process.env.TS_KEEPALIVE_PORT || 20160));
 const keepaliveKk = makeKeepaliveHandlers(Number(process.env.KK_KEEPALIVE_PORT || 20161));
+const keepaliveUc = makeKeepaliveHandlers(Number(process.env.UC_KEEPALIVE_PORT || 20193));
 const keepaliveXc = makeKeepaliveHandlers(Number(process.env.XC_KEEPALIVE_PORT || 20186));
 const keepaliveFg = makeKeepaliveHandlers(Number(process.env.FG_KEEPALIVE_PORT || 20184));
 const keepaliveAx = makeKeepaliveHandlers(Number(process.env.AX_KEEPALIVE_PORT || 20190));
@@ -5405,6 +5414,7 @@ async function handleHealth(res) {
         { name: 'Keepalive SeekAi',   port: Number(process.env.SK_KEEPALIVE_PORT || 20159), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive TrueSOTA', port: Number(process.env.TS_KEEPALIVE_PORT || 20160), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive KKtoken',  port: Number(process.env.KK_KEEPALIVE_PORT || 20161), path: '/__keepalive/api/status', keepalive: true },
+        { name: 'Keepalive UncensoredLabs',  port: Number(process.env.UC_KEEPALIVE_PORT || 20193), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Keepalive Xingchi',  port: Number(process.env.XC_KEEPALIVE_PORT || 20186), path: '/__keepalive/api/status', keepalive: true },
         { name: 'Xingchi конвертер',  port: Number(process.env.XC_CONVERTER_PORT || 20187), path: '/health' },
         { name: 'Keepalive FreeGG',  port: Number(process.env.FG_KEEPALIVE_PORT || 20184), path: '/__keepalive/api/status', keepalive: true },
@@ -6314,6 +6324,12 @@ async function cunFetchModelIds(apiKey) {
             id: m.id,
             owned_by: m.owned_by,
             supported_endpoint_types: m.supported_endpoint_types || [],
+            // Цена и резерв допуска: uc резервирует input + max_tokens перед ответом,
+            // при нехватке — 402 insufficient_credit (замер 23.11 на kimi-k3.1-pro:
+            // фиксированный резерв ~$0.26 даже на 'hi'). Фронт метит чипы, которые
+            // не влезают в текущий запас пула, чтобы владелец не тратил попытки.
+            pricing: m.pricing || null,
+            context_length: m.context_length || null,
         }));
         CUN_MODELS_CACHE.data = models;
         CUN_MODELS_CACHE.ts = Date.now();
@@ -9317,7 +9333,7 @@ function isRealKey(k) {
     const s = String(k || '').trim();
     // sk- покрывает и новый формат Premier sk-premier-… (31.10): у владельца в кабинете
     // только такие; prm_ - формат аккаунтов, регистрируемых после 22.10.
-    return /^sk-/.test(s) || /^vani_[A-Za-z0-9]{40,}$/.test(s) || /^prm_[A-Za-z0-9_-]{40,}$/.test(s);
+    return /^sk-/.test(s) || /^vani_[A-Za-z0-9]{40,}$/.test(s) || /^prm_[A-Za-z0-9_-]{40,}$/.test(s) || /^ul_[0-9a-f]{64}$/.test(s);
 }
 function makeNoKeyStub() {
     return 'no-key-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -9330,10 +9346,6 @@ function makeNoKeyStub() {
 const AR_SESSIONS_FILE = path.join(__dirname, 'agentrouter-sessions.json');
 const AR_MODELMAP_FILE = path.join(__dirname, 'ar-modelmap.json');
 const AR_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'ar-active-key.txt');
-// Кеш последней ручной проверки квоты Opus. Рядом с активным ключом, а не в state/:
-// файл читает и статуслайн, и любое окно дашборда — один источник правды на машину.
-// Живёт до следующего налива партии (03/11/19 МСК), инвалидация в lib/ar-quota-probe.
-const AR_QUOTA_STATE_FILE = path.join(os.homedir(), '.claude', 'ar-quota-state.json');
 const AR_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'ar-active-model.txt');
 const AR_BASE_URL = 'https://agentrouter.org';
 // Баланс ключа берётся точно из /api/user/self (см. newapiBalance). Константы ниже —
@@ -9631,6 +9643,7 @@ const NEWAPI_PROFILE_DIRS = {
     'true-sota.com':   path.join(__dirname, '..', 'truesota', 'profiles'),
     // KKtoken: панель и API на одном `kktoken.cc`, поддомена нет.
     'kktoken.cc':      path.join(__dirname, '..', 'kktoken', 'profiles'),
+    'uncensoredlabs.dev':      path.join(__dirname, '..', 'uncensoredlabs', 'profiles'),
     // Xingchi (2026-11-21). 🪤 У этой площадки панель и API — РАЗНЫЕ хосты:
     // кабинет/рефка/куки входа живут на `xingchiapi.com`, а `api.xingchiapi.com` —
     // только шлюз `/v1`. Поэтому в карте ДВЕ строки на один каталог профилей:
@@ -9801,7 +9814,7 @@ function newapiLkBusy(profileLabel) {
     if (!label) return false;
     // Живость pid'а — один общий предикат, а не `<prefix>PidAlive`: у части пулов своей
     // функции нет (aipm зовёт kkPidAlive), и разнобой имён здесь уже стоил детекта.
-    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, xcLkPids, fgLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
+    const pools = [arLkPids, goLkPids, tbLkPids, jwLkPids, kkLkPids, ucLkPids, xcLkPids, fgLkPids, axLkPids, kvLkPids, trLkPids, pmLkPids, vnLkPids, dcLkPids, cpLkPids, abLkPids, fxLkPids, lsLkPids, bdLkPids, nvLkPids, odLkPids, baiLkPids, ukLkPids, apLkPids, hnLkPids, akLkPids, rmLkPids, skLkPids, tsLkPids, xpLkPids];
     for (const pids of pools) {
         if (!pids || typeof pids.get !== 'function') continue;
         const pid = pids.get(label);
@@ -11479,16 +11492,6 @@ const LEAGUE_PEERS_FILE = path.join(__dirname, 'league-peers.json');
 // чтобы у людей, независимо от последних обновлений, график менялся, когда они общаются с
 // сервером»). Кэш рядом с соседями, в git не едет - это состояние, а не код.
 const LEAGUE_CHART_FILE = path.join(__dirname, 'league-chart.json');
-// Что мы последний раз ВЗЯЛИ с ноды по расписанию. Сравнивать с локальным файлом нельзя:
-// владелец правит расписание из панели, и каждые 10 минут его правку затирало бы значением
-// с сервера (нашёл разбор 23.09.2026). Пока сервер не изменил значение, локальное - чьё угодно.
-const LEAGUE_SCHED_FILE = path.join(__dirname, 'league-sched.json');
-function leagueSchedApplied() {
-    try {
-        const d = JSON.parse(fs.readFileSync(LEAGUE_SCHED_FILE, 'utf8'));
-        return (d && d.tz && Array.isArray(d.times)) ? d : null;
-    } catch { return null; }
-}
 function leagueChart() {
     try {
         const doc = JSON.parse(fs.readFileSync(LEAGUE_CHART_FILE, 'utf8'));
@@ -11833,34 +11836,6 @@ async function leagueSync() {
         const tmp = LEAGUE_PEERS_FILE + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({ updated: doc.updated || new Date().toISOString(), peers }));
         fs.renameSync(tmp, LEAGUE_PEERS_FILE);
-        // Расписание наливки с ноды (владелец 23.09.2026: «часы наливки должны лежать на
-        // сервере, а не приезжать обновлением»). Пишем в КАНОНИЧЕСКИЙ локальный файл
-        // (`arQuotaScheduleSave`), поэтому его подхватывают ВСЕ читатели сразу - проба квоты,
-        // планировщик партии, статуслайн и вкладка. Обновлять их не нужно вовсе, а плохое
-        // значение от приёмника функция просто не примет и оставит прежнее.
-        const sch = await leagueReq(c, '/schedule', 'GET').catch(() => null);
-        if (sch && sch.status === 200) {
-            try {
-                const sc = (JSON.parse(sch.body) || {}).schedule;
-                if (sc && sc.tz && Array.isArray(sc.times) && sc.times.length) {
-                    const applied = leagueSchedApplied();
-                    const same = !!(applied && applied.tz === sc.tz && String(applied.times) === String(sc.times));
-                    if (!same) {
-                        const w = arQuotaScheduleSave({ tz: sc.tz, times: sc.times, note: 'с ноды' });
-                        if (w.ok) {
-                            try {
-                                fs.writeFileSync(LEAGUE_SCHED_FILE + '.tmp',
-                                    JSON.stringify({ at: new Date().toISOString(), tz: sc.tz, times: sc.times }));
-                                fs.renameSync(LEAGUE_SCHED_FILE + '.tmp', LEAGUE_SCHED_FILE);
-                            } catch { /* не записалось - применим ещё раз на следующем тике */ }
-                        }
-                        logLine(w.ok
-                            ? `расписание наливки с ноды: ${sc.tz} ${sc.times.join(', ')}`
-                            : `расписание наливки с ноды не принято: ${w.error}`);
-                    }
-                }
-            } catch { /* мусор от приёмника - не повод ронять обмен */ }
-        }
         // Настройки графика с ноды. Отдельным запросом и НЕ критично: приёмник старой сборки
         // ручки не знает - тогда остаются прежние значения с диска, обмен не страдает.
         const cf = await leagueReq(c, '/config', 'GET').catch(() => null);
@@ -12354,6 +12329,30 @@ function leagueWriteGuard(req, res) {
     const hasBody = Number(h['content-length']) > 0 || !!h['transfer-encoding'];
     if (hasBody && !/^application\/json\b/i.test(String(h['content-type'] || ''))) {
         jsonRes(res, 415, { error: 'тело лиговой записи принимается только как application/json' });
+        return false;
+    }
+    return true;
+}
+// JSON writes to the LAN dashboard must not accept cross-site/simple browser POSTs.
+function hubWriteGuard(req, res) {
+    const h = (req && req.headers) || {};
+    const site = String(h['sec-fetch-site'] || '').toLowerCase();
+    if (site && site !== 'same-origin') {
+        jsonRes(res, 403, { error: `запись разрешена только со страницы самого хаба (Sec-Fetch-Site: ${site})` });
+        return false;
+    }
+    const origin = String(h.origin || '');
+    if (!site && origin) {
+        const host = String(h.host || '').toLowerCase();
+        const oHost = origin.toLowerCase().replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+        if (!host || oHost !== host) {
+            jsonRes(res, 403, { error: 'запись разрешена только со страницы самого хаба (чужой Origin)' });
+            return false;
+        }
+    }
+    const hasBody = Number(h['content-length']) > 0 || !!h['transfer-encoding'];
+    if (hasBody && !/^application\/json\b/i.test(String(h['content-type'] || ''))) {
+        jsonRes(res, 415, { error: 'тело записи принимается только как application/json' });
         return false;
     }
     return true;
@@ -13318,203 +13317,30 @@ async function handleFinanceHistory(req, res) {
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 
-// ── Состояние квоты на диске, по полосам ────────────────────────────────────
-// Читается и пишется ТОЛЬКО здесь и в `poolDropTiers` — второе место разбора
-// формата разъехалось бы с первым.
-function arQuotaDoc() {
-    try { return arQuotaReadPools(fs.readFileSync(AR_QUOTA_STATE_FILE, 'utf8')); } catch { return {}; }
-}
-function arQuotaPut(pool, entry) {
-    const doc = arQuotaDoc();
-    if (entry) doc[pool] = entry; else delete doc[pool];
-    try {
-        fs.mkdirSync(path.dirname(AR_QUOTA_STATE_FILE), { recursive: true });
-        fs.writeFileSync(AR_QUOTA_STATE_FILE, JSON.stringify(doc, null, 2) + '\n');
-    } catch (e) { logLine(`ar-quota-state: запись не удалась: ${e.message}`); }
-    return doc;
-}
-
+// AgentRouter Sol-only: legacy quota endpoints cannot activate old control state.
 async function handleArQuotaCheck(req, res) {
-    // Полоса: `?pool=` в URL или `{pool}` в теле, по умолчанию opus. Неизвестная —
-    // отказ, а не молчаливый opus: иначе кнопка GPT показывала бы состояние Opus.
-    const url = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
-    let pool = String(url.searchParams.get('pool') || '').trim().toLowerCase();
-    if (!pool) {
-        pool = await new Promise((resolve) => {
-            let b = '';
-            req.on('data', (c) => { b += c; });
-            req.on('end', () => { try { resolve(String(JSON.parse(b || '{}').pool || '')); } catch { resolve(''); } });
-        });
-    }
-    pool = String(pool || '').trim().toLowerCase() || AR_QUOTA_DEFAULT_POOL;
-    if (!AR_QUOTA_POOLS[pool]) {
-        return jsonRes(res, 400, { ok: false, state: 'error', error: `неизвестная полоса квоты: ${pool}` });
-    }
-
-    let key = '';
-    try { key = fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim(); } catch {}
-    if (!key.startsWith('sk-')) return jsonRes(res, 400, { state: 'error', error: 'нет активного ключа AgentRouter' });
-
-    const payload = JSON.stringify(arQuotaBodyFor(pool));
-    const target = new URL(agentRouterBase());
-    const result = await new Promise((resolve) => {
-        const probe = https.request({
-            hostname: target.hostname,
-            port: target.port || 443,
-            method: 'POST',
-            path: '/v1/messages',
-            headers: {
-                'content-type': 'application/json',
-                'content-length': Buffer.byteLength(payload),
-                'anthropic-version': '2023-06-01',
-                'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
-                'anthropic-dangerous-direct-browser-access': 'true',
-                'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
-                'x-app': 'cli',
-                'authorization': `Bearer ${key}`,
-                'x-api-key': key,
-            },
-            timeout: 60000,
-        }, (up) => {
-            const chunks = [];
-            up.on('data', c => chunks.push(c));
-            up.on('end', () => resolve(classifyArQuotaProbe(up.statusCode, Buffer.concat(chunks).toString('utf8'))));
-        });
-        probe.on('timeout', () => probe.destroy(new Error('таймаут проверки')));
-        probe.on('error', e => resolve({ state: 'error', error: e.message }));
-        probe.end(payload);
+    // Legacy clients get an explicit retirement response before reading a key,
+    // probing a provider, writing quota state, or restoring an owner tier map.
+    return jsonRes(res, 410, {
+        ok: false, disabled: true, code: 'agentrouter_quota_retired',
+        state: null, pools: {}, error: 'AgentRouter quota control is retired (Sol-only)',
     });
-    logLine(`agentrouter quota-check ${pool} (${AR_QUOTA_POOLS[pool]}) -> ${result.state}`);
-    // Пул налили — возвращаем тир-карту, если она лежала опущенной (`poolDropTiers`).
-    // Отдельного фонового опроса пула нет намеренно (канон 11.09: «автотиков и фоновых
-    // проб нет») — возврат висит ровно на этой существующей проверке.
-    //
-    // 🪤 Флап возможен и принят владельцем осознанно: проба 15.09 в 03:08 дала
-    // `available`, а в 04:52 пул был сух. Цена ошибки — один лишний 402 и мгновенный
-    // возврат в фолбэк в памяти процесса, клиент этого не видит.
-    let poolReturn = null;
-    if (result.state === 'available') {
-        // Возвращать карту имеет право только та полоса, из-за которой её опустили.
-        // 🪤 До появления отдельной полосы (21.10) это сходило с рук: партии были общие,
-        // и любая проба `available` означала, что налили всем. У `claude-opus-5-5` своя
-        // партия в 04:00 МСК, и проба 5-5 не доказывает, что ожил `claude-opus-5`.
-        const pd = poolDropState('ar');
-        const dropPool = pd && pd.deadModel ? arQuotaPoolForModel(pd.deadModel) : null;
-        if (!dropPool || dropPool === pool) {
-            const pr = poolRestoreTiers('ar');
-            if (pr.ok && pr.restored) {
-                poolReturn = pr;
-                logLine('пул AgentRouter налит - тир-карта возвращена');
-            }
-        } else {
-            logLine(`пул ${pool} налит, но карта опущена по ${pd.deadModel} (${dropPool}) - возврат не делаю`);
-        }
-    }
-    // Кешируем только доказанное состояние квоты: `error` — факт про сеть в тот
-    // момент, а не про квоту, и завтра он бессмыслен. Ошибка записи некритична:
-    // проверка уже состоялась, кеш — удобство, а не результат.
-    const cached = buildArQuotaCache(result, key, Date.now(), pool);
-    // `source` — кто поставил состояние. Панель подписывает разницу словами:
-    // «по проверке» против «при фолбэке», и это разные факты.
-    const pools = arQuotaPut(pool, cached ? { ...cached, source: 'probe' } : null);
-    return jsonRes(res, 200, { ...result, ...(cached || {}), pool, model: AR_QUOTA_POOLS[pool], pools,
-                               checkedAt: (cached && cached.checkedAt) || new Date().toISOString(),
-                               // Возврат карты — факт этой же проверки, а не отдельного
-                               // события: клиенту нужно знать, что тиры снова боевые.
-                               ...(poolReturn ? {
-                                   restored: true,
-                                   restoredTiers: poolReturn.tiers,
-                                   restoredRoutesTiers: poolReturn.routesTiers,
-                                   restoredDroppedAt: poolReturn.droppedAt,
-                               } : {}) });
 }
 
-// GET /__switch/api/ar/quota-state → состояние всех полос на текущую партию.
-// Устаревшую отдаём как `state: null`, а не молча свежей: иначе после налива
-// дашборд красил бы часы вчерашним «квота закончилась». Полосы стареют порознь —
-// их конец может наступить в разные минуты.
+// A read-only compatibility response, not a projection of obsolete disk markers.
 function handleArQuotaState(req, res) {
-    let keyTail = '';
-    try { keyTail = arQuotaKeyTail(fs.readFileSync(AR_ACTIVE_KEY_FILE, 'utf8').trim()); } catch {}
-    const doc = arQuotaDoc();
-    const pools = {};
-    for (const p of Object.keys(AR_QUOTA_POOLS)) {
-        const e = doc[p];
-        pools[p] = (e && isArQuotaCacheFresh(e, Date.now(), keyTail, p))
-            ? { ...e, stale: false }
-            : { state: null, stale: true };
-    }
-    return jsonRes(res, 200, { pools, keyTail });
+    return jsonRes(res, 200, {
+        ok: true, disabled: true, code: 'agentrouter_quota_retired', state: null, pools: {},
+    });
 }
 
-// ── Расписание партий AgentRouter ────────────────────────────────────────────
-// Владелец 18.09: «нам надо починить часы под вот это и добавить куда-то в настройках
-// возможность настройки custom-timezone, то есть чтобы там было 2, 3 точки наливки,
-// потому что у сервера агент-роутер постоянно время наливки меняется». Отсюда два
-// требования к формату ответа: сырьё (зона + времена), чтобы панель показала и дала
-// править, и готовые моменты, чтобы часам не считать то же самое второй раз.
-//
-// Ручка отдаёт и то и другое ОДНИМ форматом на GET и POST: клиент не разбирает две
-// формы одного и того же, а после сохранения сразу получает пересчитанное.
-function arSchedulePayload(now) {
-    const s = arQuotaSchedule();
-    const b = arQuotaBatches(now, s);
-    // Полосы отдаём по отдельности: у opus55 с 21.10 своё расписание, и панель не
-    // должна выводить его из общего. `pools` — готовая форма для часов, `last/next`
-    // верхнего уровня оставлены для старой страницы, которая ещё не знает полос.
-    const pools = {};
-    for (const p of Object.keys(AR_QUOTA_POOLS)) {
-        const ps = arQuotaPoolSchedule(p);
-        const pb = arQuotaBatches(now, ps);
-        pools[p] = {
-            tz: ps.tz,
-            times: ps.times,
-            note: ps.note || '',
-            updated: ps.updated || '',
-            source: ps.source,
-            error: ps.error || null,
-            last: pb ? new Date(pb.last).toISOString() : null,
-            next: pb ? new Date(pb.next).toISOString() : null,
-        };
-    }
-    return {
-        ok: true,
-        tz: s.tz,
-        times: s.times,
-        note: s.note || '',
-        updated: s.updated || '',
-        source: s.source,             // 'file' — прочитано с диска, 'default' — поставка
-        error: s.error || null,       // файл битый: дефолт работает, но молчать нельзя
-        last: b ? new Date(b.last).toISOString() : null,   // партия, к которой относится проба
-        next: b ? new Date(b.next).toISOString() : null,
-        pools,
-    };
-}
-
+// Schedule compatibility is disabled too; never read or rewrite a legacy file.
 function handleArQuotaScheduleGet(req, res) {
-    return jsonRes(res, 200, arSchedulePayload(Date.now()));
+    return handleArQuotaCheck(req, res);
 }
 
-// POST /__switch/api/ar/quota-schedule {tz, times} → записать файл и вернуть то же.
-// Пишется `~/.claude/ar-quota-schedule.json`; часы и автопроверка читают его по mtime,
-// поэтому правка вступает в силу без рестарта — рестарт `:8200` рвёт живые сессии CC,
-// и платить им за смену расписания нельзя.
 async function handleArQuotaScheduleSet(req, res) {
-    let body = {};
-    try {
-        body = await readJsonBody(req, 4096);
-    } catch (e) {
-        return jsonRes(res, e.httpStatus || 400, { ok: false, error: `тело не разобрано: ${e.message}` });
-    }
-    const r = arQuotaScheduleSave(body);
-    if (!r.ok) {
-        // Отказ пишем в лог: панель могла и не открыться, а «расписание не сменилось»
-        // иначе выглядело бы как «кнопка не работает».
-        logLine(`agentrouter расписание: отказ — ${r.error}`);
-        return jsonRes(res, 400, { ok: false, error: r.error });
-    }
-    logLine(`agentrouter расписание: ${r.schedule.tz} — ${r.schedule.times.join(', ')}`);
-    return jsonRes(res, 200, arSchedulePayload(Date.now()));
+    return handleArQuotaCheck(req, res);
 }
 
 // GET /__switch/api/ar/ping?api_key=… → probe одного ключа и сохраняет статус.
@@ -13593,83 +13419,6 @@ setInterval(() => {
     if (!isAr) return;
     arBalanceMaybe(key);
 }, AR_BALANCE_TICK_MS).unref?.();
-
-// ── Автопроверка квоты по таймингу наливки ──────────────────────────────────
-// Заявка владельца 16.09: «квота должна проверяться по таймингу пополнения ±».
-// Партии 03/11/19 МСК (сетка 8 ч) — проба идёт через 2 и через 20 минут после границы:
-// «用完即止» относится к КОНЦУ партии, а налив может и подзадержаться, поэтому одним
-// замером ровно в 03:00 не обойтись.
-//
-// 🪤 Проверяем ТОЛЬКО когда есть маркер пул-дропа: смысл автопроверки — ВЕРНУТЬ карту,
-// а не будить платный шлюз ради любопытства. Нет дропа — нет и запросов.
-// 🪤 Идём петлёй через СВОЙ ЖЕ роут: он уже умеет всё (проба, возврат карты, кеш, лог),
-// и второй реализации этого пути не заводится — тот же приём, что у каталога моделей.
-const AR_QUOTA_AUTOTICK = process.env.AR_QUOTA_AUTOTICK !== '0';
-const AR_QUOTA_WINDOWS_MS = [2 * 60_000, 20 * 60_000];
-const arQuotaTicked = new Set();          // `партия:окно` — по разу, а не каждую минуту
-
-// Пора ли проверять — отдельной функцией: решение простое, но оно будит ПЛАТНЫЙ шлюз,
-// а таймер в 60 с с ним не разглядеть. Возвращает полосы к пробе; пусто = не пора.
-// 🪤 Маркер пул-дропа здесь больше НЕ спрашивается, и это исправление моей же ошибки:
-// гейт «проверяем, только если уже дропнуло» молчал ровно в том случае, ради которого
-// существует - когда никто ещё не поймал 402 и состояние просто неизвестно. Владелец
-// 16.09: «пока я вручную не кликну, хуй что мне скажет, что у нас уже дипсик».
-// Цена снятого гейта - 10 крошечных проб в сутки: opus и gpt по два окна на две
-// общие партии, плюс opus55 по два окна на свою партию 09:00 Пекина.
-function arQuotaAutoTickNow(now) {
-    if (!AR_QUOTA_AUTOTICK) return [];
-    const t = Number(now);
-    if (!Number.isFinite(t)) return [];
-    const due = [];
-    for (const pool of Object.keys(AR_QUOTA_POOLS)) {
-        // У каждой полосы своё расписание: opus55 наливают отдельно в 09:00 Пекина,
-        // и общий `dropAt` по 10:00/19:00 проверял бы его не в ту минуту.
-        const batch = arQuotaDropAt(t, arQuotaPoolSchedule(pool));
-        if (!Number.isFinite(batch)) continue;
-        const since = t - batch;
-        for (const w of AR_QUOTA_WINDOWS_MS) {
-            if (since < w || since > w + 60_000) continue;       // минутное окно вокруг отметки
-            const key = `${pool}:${batch}:${w}`;
-            if (arQuotaTicked.has(key)) break;                   // в этом окне уже проверяли
-            arQuotaTicked.add(key);
-            due.push(pool);
-            break;
-        }
-    }
-    return due;
-}
-
-// Одна проба полосы — петлёй через СВОЙ ЖЕ роут: он уже умеет всё (проба, возврат карты
-// из бэкапа, запись состояния, лог), и второй реализации этого пути не заводится.
-function arQuotaProbeAsync(pool) {
-    const q = http.request({
-        hostname: '127.0.0.1', port: LISTEN_PORT, method: 'POST',
-        path: `/__switch/api/ar/quota-check?pool=${encodeURIComponent(pool)}`,
-    }, (res) => {
-        const chunks = [];
-        res.on('data', (c) => chunks.push(c));
-        res.on('end', () => {
-            let j = null;
-            try { j = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* пусто */ }
-            logLine(`автопроверка квоты: ${pool} -> ${j ? j.state : 'нет ответа'}`
-                + `${j && j.restored ? ' (карта возвращена из бэкапа)' : ''}`);
-        });
-    });
-    q.on('error', (e) => logLine(`автопроверка квоты ${pool}: ${e.message}`));
-    q.end();
-}
-
-setInterval(() => {
-    for (const pool of arQuotaAutoTickNow(Date.now())) arQuotaProbeAsync(pool);
-}, 60_000).unref?.();
-
-// Замер на старте: после рестарта дашборда состояние должно быть известно СРАЗУ, а не с
-// ближайшей партии - иначе часы и бар молчат до первого налива по расписанию, и владелец
-// снова узнаёт о подмене последним. Задержка нужна, чтобы сервер успел начать слушать.
-setTimeout(() => {
-    if (!AR_QUOTA_AUTOTICK) return;
-    for (const pool of Object.keys(AR_QUOTA_POOLS)) arQuotaProbeAsync(pool);
-}, 10_000).unref?.();
 
 // Гвард для nudge-режима остальных провайдеров (GoRouter/Tabi/XPeach/JustWoker):
 // один пересчёт на ключ в полёте. У AgentRouter своя, более полная машинерия выше
@@ -16030,6 +15779,11 @@ async function handleArActivate(req, res) {
 
 // Модели: кэш 5 минут, к любому живому ключу (каталог общий, WAF не пустит без ключа).
 async function handleArModels(req, res) {
+    // Filter the provider's actual catalog, never manufacture availability or
+    // rewrite owner model/tier settings. Cached legacy catalogs need the same gate.
+    const solOnly = rows => (Array.isArray(rows) ? rows : []).filter(m => m
+        && (m.id === 'gpt-6.1-sol' || m.id === 'gpt-5.6-sol'));
+    let timeout = null;
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
         const api_key = url.searchParams.get('api_key');
@@ -16037,30 +15791,36 @@ async function handleArModels(req, res) {
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
 
         if (AR_MODELS_CACHE.data && Date.now() - AR_MODELS_CACHE.ts < AR_MODELS_CACHE.TTL && !force) {
-            return jsonRes(res, 200, { ok: true, models: AR_MODELS_CACHE.data, cached: true });
+            return jsonRes(res, 200, { ok: true, models: solOnly(AR_MODELS_CACHE.data),
+                                       cached: true, source: 'cache', stale: false });
         }
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 10000);
+        timeout = setTimeout(() => controller.abort(), 10000);
         const resp = await fetch(`${AR_BASE_URL}/v1/models`, {
             signal: controller.signal,
             headers: { ...AR_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
         });
-        clearTimeout(timeout);
         if (!resp.ok) {
-            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+            throw Object.assign(new Error(`HTTP ${resp.status}`), { status: resp.status });
         }
         const data = await resp.json();
-        const models = (data.data || []).map(m => ({
+        if (!data || !Array.isArray(data.data)) throw new Error('AgentRouter catalog response is not a model list');
+        const models = solOnly(data.data).map(m => ({
             id: m.id,
             owned_by: m.owned_by,
             supported_endpoint_types: m.supported_endpoint_types || [],
         }));
         AR_MODELS_CACHE.data = models;
         AR_MODELS_CACHE.ts = Date.now();
-        jsonRes(res, 200, { ok: true, models, cached: false });
+        jsonRes(res, 200, { ok: true, models, cached: false, source: 'live', stale: false });
     } catch (e) {
-        if (AR_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: AR_MODELS_CACHE.data, cached: true, note: e.message });
-        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+        const cached = Array.isArray(AR_MODELS_CACHE.data);
+        jsonRes(res, 502, { ok: false, models: cached ? solOnly(AR_MODELS_CACHE.data) : [],
+                           cached, stale: cached, source: cached ? 'cache' : 'none',
+                           status: Number(e.status) || null, error: e.message,
+                           ...(cached ? { note: 'Stale cached catalog; refresh failed' } : {}) });
+    } finally {
+        if (timeout) clearTimeout(timeout);
     }
 }
 
@@ -16930,6 +16690,37 @@ const KK_GRANT_STEP = 5;
 const KK_DEFAULT_GRANT = 5;
 const KK_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
 
+const UC_SESSIONS_FILE = path.join(__dirname, 'uncensoredlabs-sessions.json');
+const UC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'uncensoredlabs-active-key.txt');
+const UC_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'uncensoredlabs-active-model.txt');
+const UC_BASE_URL = 'https://uncensoredlabs.dev/v1';
+// SSE keepalive proxy для uncensoredlabs (как у tabi :20155): форвардит напрямую в
+// uncensoredlabs.dev, режет [1m]-суффиксы и держит SSE-паузы thinking-моделей.
+// 🪤 Здесь keepalive нужен не только за паузы: у uncensoredlabs КАЖДЫЙ ЧЕТВЁРТЫЙ
+// `POST /v1/messages` отдаёт пустой 403 от кромки Cloudflare (замер 31.08: отказы на
+// позициях 4/8/12/16/20 из 20, пауза 6 с не помогает, параллельно 2 из 8). Ретрай
+// лечит это полностью — 12/12 с четырьмя лишними попытками, — а `shouldRetryStatus`
+// в keepalive-proxy.js уже включает 403. Без keepalive каждый четвёртый запрос CC
+// умирал бы в лицо.
+// UPSTREAM БЕЗ /v1 — keepalive сам добавляет /v1/messages к корню (см. keepalive-proxy.js:427).
+const UC_UPSTREAM = 'https://uncensoredlabs.dev';
+const UC_KEEPALIVE_PORT = 20193;
+const UC_KEEPALIVE_URL = `http://localhost:${UC_KEEPALIVE_PORT}`;
+// Конвертер Anthropic → OpenAI chat/completions (custom-openai-proxy.js). Порт отдельный
+// от keepalive: у площадки /v1/messages закрыт (404), поэтому апстрим keepalive — конвертер.
+const UC_CONVERTER_PORT = Number(process.env.UC_CONVERTER_PORT || 20194);
+const UC_CONVERTER_URL = `http://127.0.0.1:${UC_CONVERTER_PORT}`;
+const UC_CONVERTER_CONFIG = path.join(os.homedir(), '.claude', 'uncensoredlabs-openai-proxy.json');
+const UC_MODELMAP_FILE = path.join(__dirname, 'uncensoredlabs-modelmap.json');
+// Резерв «угадать грант» (см. newapiBalance). У uncensoredlabs гранта НЕТ: панель платная,
+// бонуса при регистрации не заявлено, деньги вносит владелец. Поэтому резерв просто
+// округляет расход вверх до $5 и честно светится бейджем `~` — врать про $70, как
+// это делают шлюзы с грантом, здесь нельзя: авторотация предпочла бы такой аккаунт
+// живому. Точная цифра приходит из /api/user/self куками профиля.
+const UC_GRANT_STEP = 5;
+const UC_DEFAULT_GRANT = 5;
+const UC_MODELS_CACHE = { data: null, ts: 0, TTL: 300_000 };
+
 const XC_SESSIONS_FILE = path.join(__dirname, 'xingchi-sessions.json');
 const XC_ACTIVE_KEY_FILE = path.join(os.homedir(), '.claude', 'xingchi-active-key.txt');
 const XC_ACTIVE_MODEL_FILE = path.join(os.homedir(), '.claude', 'xingchi-active-model.txt');
@@ -17001,6 +16792,92 @@ const FG_UPSTREAM = 'https://freegg.app';
 const FG_KEEPALIVE_PORT = Number(process.env.FG_KEEPALIVE_PORT || 20184);
 const FG_KEEPALIVE_URL = `http://localhost:${FG_KEEPALIVE_PORT}`;
 const FG_MODELMAP_FILE = path.join(__dirname, 'freegg-modelmap.json');
+const RATE_BALANCE_REGISTRY_FILE = path.join(__dirname, 'rate-balance-providers.json');
+const LEGACY_FG_RATE_CONFIG_FILE = path.join(os.homedir(), '.claude', 'freegg-rate-policy.json');
+function rateBalanceRegistry() {
+    try {
+        const doc = JSON.parse(fs.readFileSync(RATE_BALANCE_REGISTRY_FILE, 'utf8').replace(/^\uFEFF/, ''));
+        return doc && !Array.isArray(doc) && typeof doc === 'object' ? doc : {};
+    } catch { return {}; }
+}
+function providerRateMeta(provider) {
+    const row = rateBalanceRegistry()[provider];
+    if (!row || Array.isArray(row) || typeof row !== 'object') return null;
+    const port = Number(row.port);
+    return {
+        provider,
+        name: String(row.name || provider),
+        port: Number.isInteger(port) && port > 0 ? port : null,
+        configFile: provider === 'freegg'
+            ? LEGACY_FG_RATE_CONFIG_FILE
+            : path.join(os.homedir(), '.claude', `${provider}-rate-policy.json`),
+    };
+}
+function providerRateConfig(provider) {
+    const meta = providerRateMeta(provider);
+    if (!meta) return { enabled: false, scope: 'off' };
+    try {
+        const doc = JSON.parse(fs.readFileSync(meta.configFile, 'utf8').replace(/^\uFEFF/, ''));
+        const enabled = !Array.isArray(doc) && doc && typeof doc === 'object' && doc.enabled === true;
+        return { enabled, scope: enabled ? 'account' : 'off' };
+    } catch { return { enabled: false, scope: 'off' }; }
+}
+function providerRateSave(provider, enabled) {
+    const meta = providerRateMeta(provider);
+    if (!meta) throw new Error('rate balancing для provider не зарегистрирован');
+    durableWriteJson(meta.configFile, {
+        enabled: !!enabled,
+        scope: enabled ? 'account' : 'off',
+        updatedAt: new Date().toISOString(),
+    });
+    return providerRateConfig(provider);
+}
+function providerRateRestore(provider, cfg) {
+    const meta = providerRateMeta(provider);
+    if (!meta) return;
+    if (cfg && cfg.exists) {
+        durableWriteJson(meta.configFile, {
+            enabled: cfg.enabled === true,
+            scope: cfg.enabled === true ? 'account' : 'off',
+            updatedAt: new Date().toISOString(),
+        });
+        return;
+    }
+    try { fs.unlinkSync(meta.configFile); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+}
+function rateBalanceEnv(provider) {
+    const meta = providerRateMeta(provider);
+    const cfg = providerRateConfig(provider);
+    if (!meta) return {};
+    return {
+        RATE_BALANCE: cfg.enabled ? '1' : '0',
+        RATE_BALANCE_SCOPE: cfg.enabled ? 'account' : 'off',
+        RATE_BALANCE_COOLDOWN_MS: process.env[`${provider.toUpperCase()}_RATE_COOLDOWN_MS`] || '60000',
+        RATE_BALANCE_JITTER_MS: process.env[`${provider.toUpperCase()}_RATE_JITTER_MS`] || '1000',
+        RATE_BALANCE_MAX_FALLBACKS: process.env[`${provider.toUpperCase()}_RATE_MAX_FALLBACKS`] || '1',
+        RATE_BALANCE_BUDGET_MS: process.env[`${provider.toUpperCase()}_RATE_BUDGET_MS`] || '120000',
+    };
+}
+function providerRateSpawnEnv(provider, sessionsFile) {
+    const meta = providerRateMeta(provider);
+    if (!meta || !sessionsFile) return {};
+    return {
+        CUSTOM_PROVIDER_ID: provider,
+        CUSTOM_PROVIDER_NAME: meta.name,
+        SESSIONS_FILE: sessionsFile,
+        ...rateBalanceEnv(provider),
+    };
+}
+const FG_RATE_CONFIG_FILE = LEGACY_FG_RATE_CONFIG_FILE;
+function fgRateConfig() {
+    const persisted = providerRateConfig('freegg');
+    const legacyEnabled = process.env.FG_RATE_BALANCE === '1';
+    const legacyScope = String(process.env.FG_RATE_SCOPE || 'account').toLowerCase();
+    const enabled = fs.existsSync(FG_RATE_CONFIG_FILE) ? persisted.enabled : (legacyEnabled && legacyScope !== 'off');
+    return { enabled, scope: enabled ? 'account' : 'off' };
+}
+function fgRateSave(enabled) { return providerRateSave('freegg', enabled); }
+function fgRateRestore(cfg) { return providerRateRestore('freegg', cfg); }
 // Конвертер Anthropic → Responses. Порт отдельный от keepalive: иначе они подрались бы
 // за один порт, а роль у них разная (один держит паузы, другой меняет протокол).
 const FG_CONVERTER_PORT = Number(process.env.FG_CONVERTER_PORT || 20185);
@@ -17391,6 +17268,13 @@ const KK_CC_HEADERS = {
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
 };
+const UC_CC_HEADERS = {
+    'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24,redact-thinking-2026-02-12',
+    'anthropic-dangerous-direct-browser-access': 'true',
+    'x-app': 'cli',
+};
 const XC_CC_HEADERS = {
     'user-agent': 'claude-cli/2.1.158 (external, sdk-cli)',
     'anthropic-version': '2023-06-01',
@@ -17595,6 +17479,32 @@ function kkLoad() {
         if (newapiMigrateAnchors(arr)) changed = true;
         if (changed) {
             try { kkSave(arr); } catch {}
+        }
+        return arr;
+    } catch { return []; }
+}
+function ucLoad() {
+    try {
+        const raw = fs.readFileSync(UC_SESSIONS_FILE, 'utf8');
+        assertNotZeroed(raw, 'UncensoredLabs');
+        const arr = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+        if (!Array.isArray(arr)) return [];
+        // id-миграция: старые аккаунты жили только по api_key. Присваиваем стабильный id
+        // (email может повторяться, ключ может меняться). Дублируем id — не трогаем, первый побеждает.
+        let changed = false;
+        const seen = new Set();
+        arr.forEach((s, i) => {
+            if (!s.id || seen.has(s.id)) {
+                const base = 'uc_' + Date.now() + '_' + i;
+                s.id = base + '_' + Math.random().toString(36).slice(2, 6);
+                changed = true;
+            }
+            seen.add(s.id);
+        });
+        // Разовый перенос ручных grantManual/bonus/referral в анкер (см. newapiMigrateAnchors).
+        if (newapiMigrateAnchors(arr)) changed = true;
+        if (changed) {
+            try { ucSave(arr); } catch {}
         }
         return arr;
     } catch { return []; }
@@ -18005,6 +17915,9 @@ function baiLoad() {
 function kkSave(arr) {
     durableWriteJson(KK_SESSIONS_FILE, arr);
 }
+function ucSave(arr) {
+    durableWriteJson(UC_SESSIONS_FILE, arr);
+}
 function xcSave(arr) {
     durableWriteJson(XC_SESSIONS_FILE, arr);
 }
@@ -18055,6 +17968,10 @@ function baiSave(arr) {
 }
 function kkReadActiveModel() {
     try { return fs.readFileSync(KK_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function ucReadActiveModel() {
+    try { return fs.readFileSync(UC_ACTIVE_MODEL_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function xcReadActiveModel() {
@@ -18123,6 +18040,10 @@ function baiReadActiveModel() {
 }
 function kkReadActiveKey() {
     try { return fs.readFileSync(KK_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
+    catch { return null; }
+}
+function ucReadActiveKey() {
+    try { return fs.readFileSync(UC_ACTIVE_KEY_FILE, 'utf8').trim() || null; }
     catch { return null; }
 }
 function xcReadActiveKey() {
@@ -18220,6 +18141,84 @@ async function kkKeepaliveSpawn() {
         return { ok: true, pid: child.pid };
     } catch (e) {
         logLine(`kktoken keepalive proxy spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function ucConverterSpawn() {
+    // 🔴 Площадка говорит ТОЛЬКО OpenAI Chat Completions: POST /v1/messages → 404
+    // «Endpoint is not supported» (замер 23.11.2026), а Claude Code и keepalive шлют
+    // Anthropic-формат. Апстримом keepalive служит СВОЙ конвертер custom-openai-proxy.js
+    // (:20194), который переводит Anthropic → chat/completions → uncensoredlabs.dev/v1.
+    // Прецедент — kvotum (:20183) и xingchi (:20187); поднятый keepalive без конвертера
+    // форвардил бы в мёртвый порт и выглядел бы как «вкладка есть, а ответов нет».
+    try {
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(UC_CONVERTER_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        fs.writeFileSync(UC_CONVERTER_CONFIG, JSON.stringify({
+            port: UC_CONVERTER_PORT,
+            upstream: UC_BASE_URL,
+            keyFile: UC_ACTIVE_KEY_FILE,
+            modelMap: ucReadModelMap(),
+            providerId: 'uncensoredlabs',
+            providerName: 'UncensoredLabs',
+            localHopSecretPath: LOCAL_HOP_SECRET_FILE,
+        }, null, 2), 'utf8');
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, 'custom-openai-proxy.js'), UC_CONVERTER_CONFIG], {
+            detached: true, stdio: 'ignore', env: { ...process.env },
+        });
+        watchChildExit(child, 'конвертер UncensoredLabs', UC_CONVERTER_PORT);
+        child.unref();
+        logLine(`uncensoredlabs конвертер spawn: :${UC_CONVERTER_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`uncensoredlabs конвертер spawn FAILED: ${e.message}`);
+        return { ok: false, error: e.message };
+    }
+}
+async function ucKeepaliveSpawn() {
+    try {
+        // Конвертер поднимаем ВМЕСТЕ с keepalive (прецедент kvotum/odyssey): без него
+        // /v1/messages уехал бы апстриму нативным путём, а площадка отвечает на него 404.
+        await ucConverterSpawn();
+        const net = require('net');
+        const free = await new Promise(resolve => {
+            const sock = net.createServer();
+            sock.once('error', () => resolve(false));
+            sock.listen(UC_KEEPALIVE_PORT, '127.0.0.1', () => { sock.close(); resolve(true); });
+        });
+        if (!free) return { ok: true, already: true };
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, [path.join(__dirname, KEEPALIVE_PROXY_FILE)], {
+            detached: true, stdio: 'ignore', env: {
+                ...process.env,
+                PORT: String(UC_KEEPALIVE_PORT),
+                // Апстрим — СВОЙ конвертер: `/v1/messages` у площадки 404, Anthropic-формат
+                // переводит custom-openai-proxy :20194. Без hop-авторизации конвертер отвечает 403.
+                UPSTREAM: UC_CONVERTER_URL,
+                KEY_FILE: UC_ACTIVE_KEY_FILE,
+                SESSIONS_FILE: UC_SESSIONS_FILE,
+                MODELMAP_FILE: UC_MODELMAP_FILE,
+                LOCAL_EXACT_ADAPTER: '1',
+                ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
+                CUSTOM_PROVIDER_ID: 'uncensoredlabs', CUSTOM_PROVIDER_NAME: 'UncensoredLabs',
+                GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
+                HAIKU_GPT_PROXY: UC_CONVERTER_URL,
+                MAX_HEDGES: '0',
+                ...(process.env.UC_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.UC_PRE_COMMIT_MS } : {}),
+            },
+        });
+        watchChildExit(child, 'keepalive UncensoredLabs', UC_KEEPALIVE_PORT);
+        child.unref();
+        logLine(`uncensoredlabs keepalive proxy spawn: :${UC_KEEPALIVE_PORT} (pid ${child.pid})`);
+        return { ok: true, pid: child.pid };
+    } catch (e) {
+        logLine(`uncensoredlabs keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
 }
@@ -18325,6 +18324,7 @@ async function fgConverterSpawn() {
 }
 async function fgKeepaliveSpawn() {
     try {
+        const rateCfg = fgRateConfig();
         // Конвертер поднимаем ВМЕСТЕ с keepalive: у freegg `/v1/messages` закрыт (410),
         // поэтому апстрим keepalive — свой конвертер, а не корень площадки. Поднятый
         // keepalive без конвертера форвардил бы в мёртвый порт.
@@ -18346,10 +18346,18 @@ async function fgKeepaliveSpawn() {
                 UPSTREAM: FG_CONVERTER_URL,
                 KEY_FILE: FG_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: FG_SESSIONS_FILE,
+                ...(providerRateSpawnEnv('freegg', FG_SESSIONS_FILE)),
                 MODELMAP_FILE: FG_MODELMAP_FILE,
                 LOCAL_EXACT_ADAPTER: '1',
                 ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
                 CUSTOM_PROVIDER_ID: 'freegg', CUSTOM_PROVIDER_NAME: 'FreeGG',
+                ...(fs.existsSync(FG_RATE_CONFIG_FILE) ? rateBalanceEnv('freegg') : {}),
+                FREEGG_RATE_BALANCE: rateCfg.enabled ? '1' : '0',
+                FREEGG_RATE_SCOPE: rateCfg.enabled ? 'account' : 'off',
+                FREEGG_RATE_COOLDOWN_MS: process.env.FG_RATE_COOLDOWN_MS || '60000',
+                FREEGG_RATE_JITTER_MS: process.env.FG_RATE_JITTER_MS || '1000',
+                FREEGG_RATE_MAX_FALLBACKS: process.env.FG_RATE_MAX_FALLBACKS || '1',
+                FREEGG_RATE_BUDGET_MS: process.env.FG_RATE_BUDGET_MS || '120000',
                 GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
                 HAIKU_GPT_PROXY: FG_CONVERTER_URL,
                 MAX_HEDGES: '0',
@@ -18364,6 +18372,37 @@ async function fgKeepaliveSpawn() {
         logLine(`freegg keepalive proxy spawn FAILED: ${e.message}`);
         return { ok: false, error: e.message };
     }
+}
+async function handleFgRatePolicy(req, res) {
+    try {
+        if (req.method === 'GET') {
+            const cfg = fgRateConfig();
+            return jsonRes(res, 200, { ok: true, ...cfg, port: FG_KEEPALIVE_PORT });
+        }
+        if (req.method !== 'POST') return jsonRes(res, 405, { error: 'GET или POST' });
+        if (!hubWriteGuard(req, res)) return;
+        const body = await readJsonBody(req);
+        if (typeof body.enabled !== 'boolean') return jsonRes(res, 400, { error: 'enabled должен быть boolean' });
+        const previous = { ...fgRateConfig(), exists: fs.existsSync(FG_RATE_CONFIG_FILE) };
+        const cfg = fgRateSave(body.enabled);
+        const started = await keepaliveBring(FG_KEEPALIVE_PORT, { force: true, waitMs: 8000 });
+        const runtimeEnabled = !!(started.ok && started.status && started.status.rateBalance && started.status.rateBalance.enabled);
+        if (!started.ok || runtimeEnabled !== cfg.enabled) {
+            fgRateRestore(previous);
+            const restored = await keepaliveBring(FG_KEEPALIVE_PORT, { force: true, waitMs: 8000 });
+            const rollbackError = restored.ok ? null : (restored.error || 'предыдущее состояние keepalive не поднялось');
+            return jsonRes(res, 502, {
+                ok: false,
+                error: started.error || (runtimeEnabled !== cfg.enabled ? 'FreeGG keepalive не применил rate policy' : 'FreeGG keepalive не поднялся'),
+                enabled: previous.enabled,
+                scope: previous.scope,
+                rolledBack: true,
+                ...(rollbackError ? { rollbackError } : {}),
+            });
+        }
+        logLine(`freegg rate balance: ${cfg.enabled ? 'ON account' : 'OFF'} (keepalive :${FG_KEEPALIVE_PORT} restarted)`);
+        return jsonRes(res, 200, { ok: true, ...cfg, port: FG_KEEPALIVE_PORT, restarted: true });
+    } catch (e) { return jsonRes(res, 500, { error: e.message }); }
 }
 async function axKeepaliveSpawn() {
     try {
@@ -18895,6 +18934,19 @@ async function kkProbe(apiKey) {
         return 'unknown';
     } catch { return 'unknown'; }
 }
+async function ucProbe(apiKey) {
+    if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
+    try {
+        const r = await fetch(`${UC_BASE_URL}/models`, {
+            method: 'GET',
+            headers: { ...UC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}` },
+            signal: AbortSignal.timeout(15000),
+        });
+        if (r.status === 200) return 'live';
+        if (r.status === 401 || r.status === 403) return 'dead';
+        return 'unknown';
+    } catch { return 'unknown'; }
+}
 async function xcProbe(apiKey) {
     if (!isRealKey(apiKey)) return 'no_key';   // заглушка вместо ключа — пинговать нечего
     try {
@@ -19117,6 +19169,17 @@ async function kkBalance(target, opts = {}) {
         usageUrl: 'https://kktoken.cc/v1/dashboard/billing/usage',
         subUrl: null,
         guessGrant: spent => Math.max(KK_DEFAULT_GRANT, Math.ceil(spent / KK_GRANT_STEP) * KK_GRANT_STEP),
+        force: !!opts.force,
+    });
+}
+async function ucBalance(target, opts = {}) {
+    return newapiBalance({
+        target: typeof target === 'string' ? { api_key: target } : (target || {}),
+        host: 'uncensoredlabs.dev',
+        ccHeaders: UC_CC_HEADERS,
+        usageUrl: 'https://uncensoredlabs.dev/v1/dashboard/billing/usage',
+        subUrl: null,
+        guessGrant: spent => Math.max(UC_DEFAULT_GRANT, Math.ceil(spent / UC_GRANT_STEP) * UC_GRANT_STEP),
         force: !!opts.force,
     });
 }
@@ -19727,6 +19790,7 @@ async function baiBalance(target, opts = {}) {
 }
 
 function kkApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'kktoken' }); }
+function ucApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'uncensoredlabs' }); }
 function xcApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'xingchi' }); }
 function fgApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'freegg' }); }
 function axApplyBalance(target, bal) { return newapiApplyBalance(target, bal, { provider: 'apinex' }); }
@@ -20060,6 +20124,29 @@ async function handleKkSessions(req, res) {
             kkSave(sessions);
         }
         jsonRes(res, 200, { sessions, activeModel: kkReadActiveModel() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+    finally { stopKeepalive(); }
+}
+async function handleUcSessions(req, res) {
+    const stopKeepalive = jsonKeepalive(res);
+    try {
+        const params = new URL(req.url, `http://localhost:${LISTEN_PORT}`).searchParams;
+        const probe = params.get('probe') === '1';
+        const balance = params.get('balance') === '1';
+        const sessions = ucLoad();
+        if (probe) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => { s.status = await ucProbe(s.api_key); }));
+            }
+            ucSave(sessions);
+        }
+        if (balance) {
+            for (let i = 0; i < sessions.length; i += 3) {
+                await Promise.all(sessions.slice(i, i + 3).map(async s => ucApplyBalance(s, await ucBalance(s))));
+            }
+            ucSave(sessions);
+        }
+        jsonRes(res, 200, { sessions, activeModel: ucReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
 }
@@ -20462,6 +20549,18 @@ async function handleKkPing(req, res) {
         jsonRes(res, 200, { status });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcPing(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const status = await ucProbe(api_key);
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.api_key === api_key);
+        if (target) { target.status = status; ucSave(sessions); }
+        jsonRes(res, 200, { status });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcPing(req, res) {
     try {
         const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
@@ -20671,6 +20770,28 @@ async function handleKkBalance(req, res) {
         // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
         if (q.searchParams.get('nudge') === '1') {
             const queued = nudgeBalanceOnce('kk:' + api_key, recalc);
+            return jsonRes(res, 200, { ok: true, queued });
+        }
+        // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
+        jsonRes(res, 200, await recalc(true));
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleUcBalance(req, res) {
+    try {
+        const q = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const api_key = q.searchParams.get('api_key');
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+        const recalc = async (force = false) => {
+            const sessions = ucLoad();
+            const target = sessions.find(s => s.api_key === api_key);
+            const bal = await ucBalance(target || { api_key }, { force });
+            if (target) { ucApplyBalance(target, bal); ucSave(sessions); }
+            return bal;
+        };
+        // nudge=1: отвечаем мгновенно, считаем в своём процессе. Статусбар живёт ~50мс,
+        // его фоновый curl не доживает до ответа медленного billing-эндпоинта.
+        if (q.searchParams.get('nudge') === '1') {
+            const queued = nudgeBalanceOnce('uc:' + api_key, recalc);
             return jsonRes(res, 200, { ok: true, queued });
         }
         // Клик по цифре — force: кеш мог быть снят до чек-ина на сайте.
@@ -21034,6 +21155,9 @@ async function handleBaiBalance(req, res) {
 function handleKkSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'kktoken', load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance });
 }
+function handleUcSetBalance(req, res) {
+    return newapiSetBalance(req, res, { tag: 'uncensoredlabs', load: ucLoad, save: ucSave, balanceFn: ucBalance, applyFn: ucApplyBalance });
+}
 function handleXcSetBalance(req, res) {
     return newapiSetBalance(req, res, { tag: 'xingchi', load: xcLoad, save: xcSave, balanceFn: xcBalance, applyFn: xcApplyBalance });
 }
@@ -21084,6 +21208,7 @@ function handleBaiSetBalance(req, res) {
 }
 
 const kkLkPids = new Map();
+const ucLkPids = new Map();
 const xcLkPids = new Map();
 const fgLkPids = new Map();
 const axLkPids = new Map();
@@ -21101,6 +21226,10 @@ const nvLkPids = new Map();
 const odLkPids = new Map();
 const baiLkPids = new Map();
 function kkPidAlive(pid) {
+    if (!pid) return false;
+    try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function ucPidAlive(pid) {
     if (!pid) return false;
     try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -21219,6 +21348,59 @@ async function handleKkSessionOpen(req, res) {
         }
         newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
         logLine(`kktoken session/open: ${label} mode=${mode} (pid ${proc.pid})`);
+        jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleUcSessionOpen(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ucLoad();
+        const idx = sessions.findIndex(s => s.id === id);
+        if (idx < 0) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const target = sessions[idx];
+        // Профиль браузера привязываем к СТАБИЛЬНОМУ id аккаунта, а не к name/email:
+        // переименование аккаунта не должно рвать привязку к сохранённому профилю.
+        const label = 'acct_' + id;
+
+        const prevPid = ucLkPids.get(label);
+        if (ucPidAlive(prevPid)) {
+            logLine(`uncensoredlabs session/open: ${label} — уже открыт (pid ${prevPid})`);
+            return jsonRes(res, 200, { ok: true, label, already: true, pid: prevPid });
+        }
+
+        const script = path.join(__dirname, '..', 'uncensoredlabs', 'open-session.js');
+        // Ротированные куки — в профиль, иначе браузер стартует с погашенной сессией.
+        newapiSyncProfile('uncensoredlabs.dev', label, 'перед ЛК');
+        // Ключа ещё нет → гоним на регистрацию по рефке; есть — сразу на баланс.
+        // `mode` из тела перебивает это правило: у безключевой записи, заселённой поверх
+        // предупреждения о засвете, аккаунт у провайдера скорее всего УЖЕ есть, и рефка
+        // ему не нужна — нужен вход. Регистрация вместо входа там отвечает «аккаунт уже
+        // создан», и выглядит это как поломка дашборда (разбор 2026-08-21).
+        const wantMode = String(body.mode || '').trim();
+        const mode = (wantMode === 'console' || wantMode === 'register') ? wantMode
+            : isRealKey(target.api_key) ? 'console' : 'register';
+        const proc = spawn(process.execPath, [script, label, mode], { detached: true, stdio: 'pipe' });
+        proc.stdout.on('data', d => logLine(`uncensoredlabs session/open [${label}]: ${String(d).trim()}`));
+        proc.stderr.on('data', d => logLine(`uncensoredlabs session/open ERR [${label}]: ${String(d).trim()}`));
+        proc.on('error', e => logLine(`uncensoredlabs session/open spawn error: ${e.message}`));
+        proc.on('exit', (code, sig) => {
+            ucLkPids.delete(label);
+            logLine(`uncensoredlabs session/open: ${label} — exited (code ${code}, sig ${sig})`);
+            // Замок с куки снят — точный баланс стал читаемым (см. newapiRecheckAfterLk).
+            newapiRecheckAfterLk('uc', id);
+        });
+        proc.unref();
+        ucLkPids.set(label, proc.pid);
+        const failed = await sessionOpenEarlyFailure(proc);
+        if (failed) {
+            ucLkPids.delete(label);
+            logLine(`uncensoredlabs session/open FAIL [${label}]: ${failed}`);
+            return jsonRes(res, 502, { error: failed });
+        }
+        newapiLkVisited(label);   // в ЛК могли пополнить/чекнуться — кеш точной цифры снят
+        logLine(`uncensoredlabs session/open: ${label} mode=${mode} (pid ${proc.pid})`);
         jsonRes(res, 200, { ok: true, label, pid: proc.pid, mode });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -22091,6 +22273,7 @@ const DC_SHARE_SCRIPT = path.join(__dirname, '..', 'dacall', 'share-session.js')
 const FX_SHARE_SCRIPT = path.join(__dirname, '..', 'fxqidian', 'share-session.js');
 const BAI_SHARE_SCRIPT = path.join(__dirname, '..', 'bai', 'share-session.js');
 const KK_SESSIONS_DIR = path.join(__dirname, '..', 'kktoken', 'sessions');
+const UC_SESSIONS_DIR = path.join(__dirname, '..', 'uncensoredlabs', 'sessions');
 const XC_SESSIONS_DIR = path.join(__dirname, '..', 'xingchi', 'sessions');
 const FG_SESSIONS_DIR = path.join(__dirname, '..', 'freegg', 'sessions');
 const AX_SESSIONS_DIR = path.join(__dirname, '..', 'apinex', 'sessions');
@@ -22112,6 +22295,13 @@ function kkB64UrlEncode(str) {
     return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 function kkB64UrlDecode(str) {
+    const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
+    return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
+}
+function ucB64UrlEncode(str) {
+    return Buffer.from(str, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function ucB64UrlDecode(str) {
     const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4));
     return Buffer.from(str.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64').toString('utf8');
 }
@@ -22476,6 +22666,47 @@ async function handleLsShare(req, res) {
         };
         const share = lsB64UrlEncode(JSON.stringify(payload));
         logLine(`lsapi share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
+        jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleUcShare(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        const label = 'acct_' + id;
+
+        const prevPid = ucLkPids.get(label);
+        if (ucPidAlive(prevPid)) {
+            return jsonRes(res, 409, { error: 'Браузер аккаунта открыт. Закрой его (Ctrl+C) и попробуй ещё раз.' });
+        }
+
+        // Снимок читаем С ДИСКА, а не снимаем headless-скриптом (как это делает kktoken
+        // через share-session.js): снимок состояния входа кладёт сам авторег —
+        // `writeProfileSession()` пишет `uncensoredlabs/sessions/acct_<id>.json` ровно с тем, что
+        // нужно для «открыть ЛК уже залогиненным». Отдельного скрипта у uc нет и не надо.
+        // 🪤 Файла может не быть (аккаунт заведён руками, авторег по нему не бегал) —
+        // тогда отдаём пустой снимок: сам аккаунт передаётся, теряется только вход без
+        // пароля, и это видно по `hasSession` в ответе. Падать тут не за что.
+        let session = { cookies: [], origins: [] };
+        try { session = JSON.parse(fs.readFileSync(path.join(UC_SESSIONS_DIR, label + '.json'), 'utf8')); } catch {}
+        const cookieCount = (session.cookies || []).length;
+        const originCount = (session.origins || []).length;
+
+        const payload = {
+            v: 1,
+            provider: 'uncensoredlabs',
+            email: target.email || '',
+            name: target.name || '',
+            api_key: target.api_key || '',
+            meta: sharePickMeta(target),
+            session,
+        };
+        const share = ucB64UrlEncode(JSON.stringify(payload));
+        logLine(`uncensoredlabs share [${label}]: ${target.email} (cookies ${cookieCount}, origins ${originCount}, len ${share.length})`);
         jsonRes(res, 200, { ok: true, share, hasSession: cookieCount > 0 || originCount > 0, cookieCount, originCount });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -23056,6 +23287,65 @@ async function handleKkImport(req, res) {
         } catch (e) { logLine(`kktoken import: не смогли сохранить сессию ${label}: ${e.message}`); }
 
         logLine(`kktoken import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
+        jsonRes(res, 200, {
+            ok: true,
+            id,
+            email: mail,
+            hasSession: session.cookies.length > 0 || session.origins.length > 0,
+            balance: typeof rec.balance === 'number' ? rec.balance : null,
+            grant: typeof rec.grant === 'number' ? rec.grant : null,
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleUcImport(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const share = String(body.share || '').trim();
+        if (!share) return jsonRes(res, 400, { error: 'share обязателен' });
+        let payload;
+        try { payload = JSON.parse(ucB64UrlDecode(share)); }
+        catch { return jsonRes(res, 400, { error: 'строка не похожа на share-код (не JSON)' }); }
+        if (payload.provider !== 'uncensoredlabs' || payload.v !== 1) {
+            return jsonRes(res, 400, { error: `не uncensoredlabs-аккаунт (provider=${payload.provider}, v=${payload.v})` });
+        }
+        const mail = String(payload.email || '').trim();
+        const key = String(payload.api_key || '').trim();
+        if (!mail || !key) return jsonRes(res, 400, { error: 'в share-коде нет email/api_key' });
+        const session = (payload.session && typeof payload.session === 'object')
+            ? { cookies: payload.session.cookies || [], origins: payload.session.origins || [] }
+            : { cookies: [], origins: [] };
+
+        const sessions = ucLoad();
+        const dupKey = sessions.find(s => s.api_key === key);
+        const dupEmail = sessions.find(s => (s.email || '').toLowerCase() === mail.toLowerCase());
+        if (dupKey) return jsonRes(res, 409, { error: `такой API-ключ уже есть (${dupKey.email || dupKey.name})` });
+        if (dupEmail) return jsonRes(res, 409, { error: `такой email уже есть (${dupEmail.email})` });
+
+        const id = 'uc_' + Date.now() + '_' + sessions.length;
+        const label = 'acct_' + id;
+        // Цифры (выдача/бонус/потрачено/баланс/статус) приезжают в payload.meta —
+        // аккаунт появляется у получателя ровно таким же, как у автора кода.
+        const rec = shareApplyMeta({
+            id,
+            email: mail,
+            name: String(payload.name || '').trim() || mail.split('@')[0],
+            api_key: key,
+            active: false,
+            status: 'unknown',
+            created: new Date().toISOString(),
+            shared: true,
+            importedAt: new Date().toISOString(),
+        }, payload.meta);
+        sessions.push(rec);
+        ucSave(sessions);
+
+        // «Живую» сессию кладём туда, где её подхватит open-session.js при первом открытии.
+        try {
+            fs.mkdirSync(UC_SESSIONS_DIR, { recursive: true });
+            fs.writeFileSync(path.join(UC_SESSIONS_DIR, label + '.json'), JSON.stringify(session, null, 2), 'utf8');
+        } catch (e) { logLine(`uncensoredlabs import: не смогли сохранить сессию ${label}: ${e.message}`); }
+
+        logLine(`uncensoredlabs import: ${mail} (***${key.slice(-6)}${session.cookies.length ? ', cookies ' + session.cookies.length : ''}${typeof rec.balance === 'number' ? ', balance $' + rec.balance : ''})`);
         jsonRes(res, 200, {
             ok: true,
             id,
@@ -24037,6 +24327,36 @@ async function handleKkAdd(req, res) {
         jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcAdd(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const { email, api_key, name } = body;
+        const mail = String(email || '').trim();
+        if (!mail) return jsonRes(res, 400, { error: 'email обязателен' });
+        // Ключ можно не давать: свежий аккаунт получит его только после регистрации.
+        const key = String(api_key || '').trim() || makeNoKeyStub();
+        const noKey = !isRealKey(key);
+        const sessions = ucLoad();
+        if (!noKey && sessions.some(s => s.api_key === key)) return jsonRes(res, 400, { error: 'такой ключ уже есть' });
+        const id = 'uc_' + Date.now() + '_' + sessions.length;
+        const nick = String(name || '').trim() || mail.split('@')[0];
+        const link = ghLinkForNew(body, mail, nick);
+        sessions.push({
+            id,
+            email: mail,
+            name: nick,
+            api_key: key,
+            active: false,
+            status: noKey ? 'no_key' : 'unknown',
+            created: new Date().toISOString(),
+            ...(link.ghId ? { ghId: link.ghId } : {}),
+        });
+        ucSave(sessions);
+        logLine(`uncensoredlabs add: ${mail} (${noKey ? 'без ключа — регистрация по рефке' : '***' + key.slice(-6)})`
+            + (link.how ? ` · ${link.how}` : ''));
+        jsonRes(res, 200, { ok: true, id, noKey, ghId: link.ghId || null });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcAdd(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -24644,6 +24964,30 @@ async function handleKkSetKey(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, wasActive });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcSetKey(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        const newKey = String(body.api_key || '').trim();
+        if (!id || !newKey) return jsonRes(res, 400, { error: 'id и api_key обязательны' });
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (sessions.some(s => s.api_key === newKey && s.id !== id)) {
+            return jsonRes(res, 400, { error: 'такой ключ уже занят другим аккаунтом' });
+        }
+        const wasActive = !!target.active;
+        target.api_key = newKey;
+        // Был аккаунт-заглушка, вписали настоящий ключ → снимаем 'no_key'.
+        if (target.status === 'no_key' && isRealKey(newKey)) target.status = 'unknown';
+        if (wasActive) {
+            fs.writeFileSync(UC_ACTIVE_KEY_FILE, newKey, { encoding: 'utf-8', flag: 'w' });
+        }
+        ucSave(sessions);
+        logLine(`uncensoredlabs set-key: ${target.email} → ***${newKey.slice(-6)}${wasActive ? ' (был активен, обновили активный ключ)' : ''}`);
+        jsonRes(res, 200, { ok: true, email: target.email, wasActive });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcSetKey(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -25060,6 +25404,29 @@ async function handleKkRename(req, res) {
         jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcRename(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.id === id);
+        if (!target) return jsonRes(res, 404, { error: 'аккаунт не найден' });
+        if (body.name !== undefined && body.name !== null) {
+            const n = String(body.name).trim();
+            if (!n) return jsonRes(res, 400, { error: 'name не может быть пустым' });
+            target.name = n;
+        }
+        if (body.email !== undefined && body.email !== null) {
+            const e = String(body.email).trim();
+            if (!e) return jsonRes(res, 400, { error: 'email не может быть пустым' });
+            target.email = e;
+        }
+        ucSave(sessions);
+        logLine(`uncensoredlabs rename: ${target.email} (${target.name})`);
+        jsonRes(res, 200, { ok: true, email: target.email, name: target.name });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcRename(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -25452,6 +25819,22 @@ async function handleKkDelete(req, res) {
         jsonRes(res, 200, { ok: true });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcDelete(req, res) {
+    try {
+        const { id } = await readJsonBody(req);
+        const idKey = String(id || '').trim();
+        if (!idKey) return jsonRes(res, 400, { error: 'id обязателен' });
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.id === idKey);
+        ucSave(sessions.filter(s => s.id !== idKey));
+        if (target && target.api_key === ucReadActiveKey()) {
+            try { fs.rmSync(UC_ACTIVE_KEY_FILE, { force: true }); } catch {}
+            try { fs.rmSync(UC_ACTIVE_MODEL_FILE, { force: true }); } catch {}
+        }
+        logLine(`uncensoredlabs delete: ${target ? target.email : '?'}`);
+        jsonRes(res, 200, { ok: true });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcDelete(req, res) {
     try {
         const { id } = await readJsonBody(req);
@@ -25762,6 +26145,59 @@ async function handleKkActivate(req, res) {
         jsonRes(res, 200, {
             ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
             keepalive: { up: kkKa.ok, port: KK_KEEPALIVE_PORT, error: kkKa.ok ? null : (kkKa.error || null) },
+        });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+async function handleUcActivate(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const key = String(body.api_key || '').trim();
+        if (!key) return jsonRes(res, 400, { error: 'api_key обязателен' });
+        // Заглушка вместо ключа: активировать нечего (иначе уедет в uncensoredlabs-active-key.txt).
+        if (!isRealKey(key)) return jsonRes(res, 400, { error: 'у аккаунта ещё нет ключа — зарегистрируйся (🌐) и вставь ключ кнопкой 🔑' });
+        const sessions = ucLoad();
+        const target = sessions.find(s => s.api_key === key);
+        if (!target) return jsonRes(res, 404, { error: 'ключ не найден' });
+
+        fs.writeFileSync(UC_ACTIVE_KEY_FILE, key, { encoding: 'utf-8', flag: 'w' });
+        sessions.forEach(s => { s.active = s.api_key === key; });
+        ucSave(sessions);
+
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-uc');
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = UC_KEEPALIVE_URL;   // keepalive :20193 → uncensoredlabs.dev напрямую
+            delete settings.apiKeyHelper;
+            // Модель НЕ удаляем, если есть выбранная: delete = дефолт Claude Code, а он
+            // без [1m] → окно 200k. Источник правды — uncensoredlabs-active-model.txt (образец —
+            // handleArActivate). Суффикс дотянет writeSettings(). Если модель не выбрана,
+            // пинить claude-opus-5 нельзя: в каталоге шлюза её может не быть.
+            const ucCurModel = ucReadActiveModel() || '';
+            if (ucCurModel) settings.model = ucCurModel;
+            else { delete settings.model; logLine('uncensoredlabs activate: активной модели нет → settings.model снят, Claude Code поедет на 200k'); }
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';   // реальный ключ берёт keepalive из uncensoredlabs-active-key.txt
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`uncensoredlabs activate: settings.json FAILED: ${e.message}`);
+        }
+        // Ждём, что keepalive РЕАЛЬНО ответил. Раньше здесь был голый спавн: он
+        // возвращал ok сразу и считал занятый зомби-порт живым прокси, поэтому
+        // активация «успешно» завершалась на мёртвом :20193, а Claude Code получал 502
+        // на каждый запрос, пока человек не нажмёт «перезапустить» в Health.
+        const ucKa = await keepaliveBring(UC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!ucKa.ok) logLine(`uncensoredlabs activate: keepalive :${UC_KEEPALIVE_PORT} НЕ поднялся — ${ucKa.error || '?'}`);
+        if (target.ghId) ghReviveIfNeeded(target.ghId);
+        logLine(`uncensoredlabs activate: ${target.email} → ***${key.slice(-6)} (token dummy, base ${UC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, {
+            ok: true, email: target.email, mask: '***' + key.slice(-6), settingsUpdated: settingsOk, viaProxy: true,
+            keepalive: { up: ucKa.ok, port: UC_KEEPALIVE_PORT, error: ucKa.ok ? null : (ucKa.error || null) },
         });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
@@ -26131,6 +26567,162 @@ function trMergeProxyLines(fresh, old) {
         if (out.length >= TR_PROXY_CAP) break;
     }
     return out;
+}
+// ── UncensoredLabs авторега: uc_farm_full.py (signup→key→verify→claim=$0.10) ──
+// Прецедент — threerouter: python-скрипт фермы, PID-файл, статус-опрос, стоп по PID.
+// 🔴 Почта обязательна: триал $0.10 начисляется только после verify-email → claim
+// (замер 23.11: без claim баланс 0). Скрипт делает это сам — почта mail.tm.
+const UC_AUTOREG_PID = path.join(__dirname, '..', 'routing', 'uncensoredlabs-autoreg.pid');
+const UC_FARM_SCRIPT = path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'cache', 'scratch', 'uc-labs-autoreg', 'uc_farm_full.py');
+const UC_FARM_PROXIES = path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'cache', 'scratch', 'uc-labs-autoreg', 'socks-alive.txt');
+const ucAutoreg = { proc: null, pid: null, running: false, startedAt: null, count: 0,
+                    stdout: [], stderr: [], exitCode: null, stage: null };
+function ucAutoregPublic() {
+    return { running: ucAutoreg.running, pid: ucAutoreg.pid, startedAt: ucAutoreg.startedAt,
+             count: ucAutoreg.count, stdout: ucAutoreg.stdout.slice(-40), stderr: ucAutoreg.stderr.slice(-20),
+             exitCode: ucAutoreg.exitCode, stage: ucAutoreg.stage };
+}
+async function handleUcAutoregStart(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        const perIp = Math.max(1, Math.min(5, parseInt(body.perIp, 10) || 1));
+        // rounds — сколько прогонов по списку прокси: всего ≈ per_ip × rounds × len(прокси).
+        // Ограничение 5/IP/24ч соблюдается самим скриптом (per_ip ≤ 5).
+        const rounds = Math.max(1, Math.min(20, parseInt(body.rounds, 10) || 1));
+        if (ucAutoreg.running && ucAutoreg.proc) {
+            return jsonRes(res, 409, { error: 'авторега UncensoredLabs уже идёт', ...ucAutoregPublic() });
+        }
+        if (!fs.existsSync(UC_FARM_SCRIPT)) return jsonRes(res, 404, { error: 'uc_farm_full.py не найден: ' + UC_FARM_SCRIPT });
+        const py = process.env.PYTHON || 'python';
+        const proc = spawn(py, ['-u', UC_FARM_SCRIPT, '--per-ip', String(perIp), '--rounds', String(rounds), '--proxies', UC_FARM_PROXIES], {
+            cwd: path.dirname(UC_FARM_SCRIPT),
+            windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8', UL_BANK: path.join(path.dirname(UC_FARM_SCRIPT), 'bank.jsonl') },
+        });
+        fs.writeFileSync(UC_AUTOREG_PID, String(proc.pid));
+        Object.assign(ucAutoreg, { proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),
+                                   count: perIp * rounds, perIp, rounds, stdout: [], stderr: [], exitCode: null, stage: 'запуск' });
+        const push = (which, chunk) => {
+            for (const line of String(chunk).split(/\r?\n/).filter(Boolean)) {
+                const arr = which === 'out' ? ucAutoreg.stdout : ucAutoreg.stderr;
+                arr.push(line);
+                if (arr.length > 200) arr.shift();
+                const m = /^\[(\d+)\] (signup|login|KEY ok|verify-email|claim|DONE)/.exec(line);
+                if (m) ucAutoreg.stage = m[2] + ' #' + m[1];
+            }
+        };
+        proc.stdout.on('data', c => push('out', c));
+        proc.stderr.on('data', c => push('err', c));
+        proc.on('exit', (code, sig) => {
+            ucAutoreg.running = false; ucAutoreg.exitCode = code;
+            ucAutoreg.stage = `завершён code=${code}${sig ? ' sig=' + sig : ''}`;
+            try { fs.unlinkSync(UC_AUTOREG_PID); } catch {}
+        });
+        logLine(`uncensoredlabs autoreg launched: per-ip=${perIp} rounds=${rounds} pid=${proc.pid}`);
+        jsonRes(res, 200, { ok: true, ...ucAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+function handleUcAutoregStatus(req, res) {
+    jsonRes(res, 200, ucAutoregPublic());
+}
+async function handleUcAutoregStop(req, res) {
+    try {
+        if (ucAutoreg.proc && ucAutoreg.running) {
+            ucAutoreg.proc.kill();
+            logLine(`uncensoredlabs autoreg stop requested: pid=${ucAutoreg.pid}`);
+        }
+        try { const pid = Number(fs.readFileSync(UC_AUTOREG_PID, 'utf8').trim()); if (pid) process.kill(pid); } catch {}
+        jsonRes(res, 200, { ok: true, stopped: true, ...ucAutoregPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
+
+// ── Живая доступность моделей UncensoredLabs ──────────────────────────────────
+// Зачем не формула. Площадка резервирует input+max_tokens ДО ответа и по-разному для
+// каждой модели, поэтому расчёт «резерв = prefix*in + max_out*out» врал: он показывал
+// 💸 всем 10 моделям, хотя замер 24.11 дал 402 только на kimi-k3.1-pro. Единственный
+// честный источник — фактический ответ площадки: шлём 16-токенный запрос на каждую
+// модель активным ключом и запоминаем код (200 = работает, 402 = не влезает в баланс,
+// 401/403 = ключ мёртв). Результат кешируется в файл, чтобы панель не долбила площадку.
+const UC_AVAILABILITY_FILE = path.join(__dirname, 'uncensoredlabs-availability.json');
+const UC_AVAILABILITY_TTL = 6 * 60 * 60 * 1000;   // 6ч: баланс меняется медленно
+let ucAvailabilityRunning = false;
+
+function ucAvailabilityLoad() {
+    try {
+        const doc = JSON.parse(fs.readFileSync(UC_AVAILABILITY_FILE, 'utf8'));
+        return doc && typeof doc === 'object' && doc.models ? doc : { ts: 0, models: {} };
+    } catch { return { ts: 0, models: {} }; }
+}
+function ucAvailabilitySave(doc) {
+    try { fs.writeFileSync(UC_AVAILABILITY_FILE, JSON.stringify(doc, null, 1) + '\n'); } catch {}
+}
+function ucAvailabilityPublic() {
+    const doc = ucAvailabilityLoad();
+    return { ts: doc.ts || 0, ageMs: doc.ts ? Date.now() - doc.ts : null, stale: !doc.ts || Date.now() - doc.ts > UC_AVAILABILITY_TTL, models: doc.models, probing: ucAvailabilityRunning };
+}
+
+// Один фактический запрос: 16 токенов, минимальный промпт. Кода 200 достаточно — нам нужен
+// именно допуск по балансу, а не качество ответа.
+async function ucProbeModelAvailability(apiKey, modelId) {
+    try {
+        const r = await fetch(`${UC_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: { ...UC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: modelId, max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }),
+            signal: AbortSignal.timeout(120000),
+        });
+        const text = await r.text().catch(() => '');
+        if (r.status === 200) return { state: 'ok', http: 200 };
+        if (r.status === 402) return { state: 'no_balance', http: 402, note: (text.match(/"message"\s*:\s*"([^"]{0,160})/) || [])[1] || 'insufficient credit' };
+        if (r.status === 401 || r.status === 403) return { state: 'key_dead', http: r.status };
+        if (r.status === 429) return { state: 'rate_limited', http: 429 };
+        return { state: 'error', http: r.status, note: (text.match(/"message"\s*:\s*"([^"]{0,160})/) || [])[1] || '' };
+    } catch (e) { return { state: 'error', http: 0, note: e.message }; }
+}
+
+async function ucAvailabilityProbeAll() {
+    if (ucAvailabilityRunning) return ucAvailabilityPublic();
+    ucAvailabilityRunning = true;
+    try {
+        const sessions = ucLoad();
+        const live = sessions.filter(s => isRealKey(s.api_key) && s.status !== 'dead' && !s.banned);
+        if (!live.length) return ucAvailabilityPublic();
+        // Каталог берём у площадки; если он не пришёл — пробовать нечего.
+        let catalog = [];
+        try {
+            const r = await fetch(`${UC_BASE_URL}/models`, { headers: { ...UC_CC_HEADERS, 'Authorization': `Bearer ${live[0].api_key}` }, signal: AbortSignal.timeout(20000) });
+            if (r.ok) catalog = (await r.json()).data || [];
+        } catch {}
+        if (!catalog.length) return ucAvailabilityPublic();
+        // Пробуем САМЫМ БОГАТЫМ ключом: если он не может — другим тем более нечего сказать,
+        // а 402 у всех одинаково (резерв считается на аккаунт, не на пул).
+        const rich = live.slice().sort((a, b) => (Number(b.balance) || 0) - (Number(a.balance) || 0))[0];
+        const models = {};
+        for (const m of catalog) {
+            const verdict = await ucProbeModelAvailability(rich.api_key, m.id);
+            models[m.id] = { ...verdict, checkedAt: new Date().toISOString(), keyTail: String(rich.api_key).slice(-6) };
+            logLine(`uc availability: ${m.id} → ${verdict.state}${verdict.http ? ' (HTTP ' + verdict.http + ')' : ''}`);
+        }
+        const doc = { ts: Date.now(), keyTail: String(rich.api_key).slice(-6), models };
+        ucAvailabilitySave(doc);
+        return { ts: doc.ts, ageMs: 0, stale: false, models: doc.models, probing: false };
+    } finally { ucAvailabilityRunning = false; }
+}
+
+function handleUcAvailability(req, res) {
+    jsonRes(res, 200, { ok: true, ...ucAvailabilityPublic() });
+}
+async function handleUcAvailabilityProbe(req, res) {
+    try {
+        const body = await readJsonBody(req).catch(() => ({}));
+        if (body.force === true || body.force === 1) {
+            const doc = ucAvailabilityLoad(); doc.ts = 0; ucAvailabilitySave(doc);
+        }
+        if (ucAvailabilityRunning) return jsonRes(res, 409, { error: 'опрос уже идёт', ...ucAvailabilityPublic() });
+        // Отвечаем сразу, опрос идёт в фоне: 10 моделей × до 120с не должны держать HTTP.
+        ucAvailabilityProbeAll().catch(e => logLine(`uc availability probe failed: ${e.message}`));
+        jsonRes(res, 202, { ok: true, started: true, ...ucAvailabilityPublic() });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
 async function handleTrFindProxyStart(req, res) {
     try {
@@ -26898,6 +27490,67 @@ async function handleKkModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+async function handleUcModels(req, res) {
+    try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const api_key = url.searchParams.get('api_key');
+        const force = url.searchParams.get('force') === '1';
+        if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
+
+        if (UC_MODELS_CACHE.data && Date.now() - UC_MODELS_CACHE.ts < UC_MODELS_CACHE.TTL && !force) {
+            return jsonRes(res, 200, { ok: true, models: UC_MODELS_CACHE.data, cached: true });
+        }
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        const resp = await fetch(`${UC_BASE_URL}/models`, {
+            signal: controller.signal,
+            headers: { ...UC_CC_HEADERS, 'Authorization': `Bearer ${api_key}` },
+        });
+        clearTimeout(timeout);
+        if (!resp.ok) {
+            return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
+        }
+        const data = await resp.json();
+        const models = (data.data || []).map(m => ({
+            id: m.id,
+            owned_by: m.owned_by,
+            supported_endpoint_types: m.supported_endpoint_types || [],
+            // Цена нужна фронту, чтобы помечать модели, чей резерв не влезает в запас пула
+            // (uc резервирует input + max_tokens до ответа → 402 insufficient_credit).
+            pricing: m.pricing || null,
+            context_length: m.context_length || null,
+        }));
+        UC_MODELS_CACHE.data = models;
+        UC_MODELS_CACHE.ts = Date.now();
+        jsonRes(res, 200, { ok: true, models, cached: false });
+    } catch (e) {
+        if (UC_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: UC_MODELS_CACHE.data, cached: true, note: e.message });
+        else jsonRes(res, 200, { ok: true, models: [], note: e.message });
+    }
+}
+const xcModelTests = require('./lib/xingchi-model-test.js').createXingchiModelTest({
+    accounts: xcLoad,
+    cacheFile: path.join(__dirname, 'xingchi-model-tests-cache.json'),
+    baseUrl: XC_BASE_URL,
+    headers: XC_CC_HEADERS,
+});
+async function handleXcModelTests(req, res) {
+    if (req.method === 'POST' && (!a6Routes.canWrite(req)
+        || !/^application\/json(?:;|$)/i.test(String(req.headers['content-type'] || '')))) {
+        return jsonRes(res, 403, { ok: false, error: 'Тест доступен через localhost с JSON body' });
+    }
+    const stop = req.method === 'POST' ? jsonKeepalive(res) : () => {};
+    try {
+        if (req.method === 'GET') {
+            const url = new URL(req.url, 'http://localhost');
+            return jsonRes(res, 200, { ok: true, ...xcModelTests.read(url.searchParams.get('accountId')) });
+        }
+        const body = await readJsonBody(req, 4096);
+        const result = await xcModelTests.test(body.accountId, body.model);
+        return jsonRes(res, 200, { ok: true, accountId: body.accountId, model: body.model, result });
+    } catch (e) { return jsonRes(res, e.httpStatus || 400, { ok: false, error: e.message }); }
+    finally { stop(); }
+}
 async function handleXcModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -27476,6 +28129,38 @@ async function handleKkSetModel(req, res) {
         jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: KK_ACTIVE_MODEL_FILE, base: KK_KEEPALIVE_URL, needRestart: true, keepalive: { up: kkKaM.ok, port: KK_KEEPALIVE_PORT, error: kkKaM.ok ? null : (kkKaM.error || null) } });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcSetModel(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const m = String(body.model || '').trim();
+        if (!m) return jsonRes(res, 400, { error: 'model обязателен' });
+        const settingsModel = /^claude-(opus|sonnet)-/.test(m) && !m.includes('[') ? `${m}[1m]` : m;
+        fs.writeFileSync(UC_ACTIVE_MODEL_FILE, m + '\n', { encoding: 'utf-8', flag: 'w' });
+        let settingsOk = false;
+        try {
+            const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+            const settings = JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+            makeSettingsBackup('settings-uc-model');
+            const mm = (body.modelMap || {});
+            settings.model = mm[m] || settingsModel;
+            settings.env = settings.env || {};
+            settings.env.ANTHROPIC_BASE_URL = UC_KEEPALIVE_URL;
+            delete settings.apiKeyHelper;
+            delete settings.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
+            delete settings.env.ANTHROPIC_API_KEY;
+            clearOtEnv(settings);
+            settings.env.ANTHROPIC_AUTH_TOKEN = 'dummy';
+            writeSettings(settings);
+            settingsOk = true;
+        } catch (e) {
+            logLine(`uncensoredlabs set-model: settings.json FAILED: ${e.message}`);
+        }
+        const ucKaM = await keepaliveBring(UC_KEEPALIVE_PORT, { waitMs: 8000 });
+        if (!ucKaM.ok) logLine(`uncensoredlabs set-model: keepalive :${UC_KEEPALIVE_PORT} НЕ поднялся — ${ucKaM.error || '?'}`);
+        logLine(`uncensoredlabs set-model: ${m} (base ${UC_KEEPALIVE_URL})`);
+        jsonRes(res, 200, { ok: true, model: m, settingsModel, settingsUpdated: settingsOk, modelFile: UC_ACTIVE_MODEL_FILE, base: UC_KEEPALIVE_URL, needRestart: true, keepalive: { up: ucKaM.ok, port: UC_KEEPALIVE_PORT, error: ucKaM.ok ? null : (ucKaM.error || null) } });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcSetModel(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -28003,6 +28688,18 @@ async function handleKkModelMap(req, res) {
         jsonRes(res, 200, { ok: true, modelMap: mm });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
 }
+async function handleUcModelMap(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        // 🪤 Слияние, а не перезапись: ручка управляет тремя тирами, а в файле
+        // может лежать `gpt` из вкладки «Маршруты» — полная перезапись стирала его молча.
+        const mm = writeTierMap(UC_MODELMAP_FILE, {
+            opus: body.opus, sonnet: body.sonnet, haiku: body.haiku,
+        }, null);
+        logLine(`uncensoredlabs modelmap: opus→${mm.opus || '-'} sonnet→${mm.sonnet || '-'} haiku→${mm.haiku || '-'}${mm.gpt ? ` gpt→${mm.gpt} (сохранён)` : ''}`);
+        jsonRes(res, 200, { ok: true, modelMap: mm });
+    } catch (e) { jsonRes(res, 500, { error: e.message }); }
+}
 async function handleXcModelMap(req, res) {
     try {
         const body = await readJsonBody(req);
@@ -28199,6 +28896,12 @@ async function handleBaiModelMap(req, res) {
 function kkReadModelMap() {
     try {
         const raw = fs.readFileSync(KK_MODELMAP_FILE, 'utf8');
+        return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
+    } catch { return {}; }
+}
+function ucReadModelMap() {
+    try {
+        const raw = fs.readFileSync(UC_MODELMAP_FILE, 'utf8');
         return JSON.parse(raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw);
     } catch { return {}; }
 }
@@ -36129,6 +36832,7 @@ function keepaliveInstances() {
         [SK_KEEPALIVE_PORT]: { name: 'SeekAi', spawn: skKeepaliveSpawn },
         [TS_KEEPALIVE_PORT]: { name: 'TrueSOTA', spawn: tsKeepaliveSpawn },
         [KK_KEEPALIVE_PORT]: { name: 'KKtoken', spawn: kkKeepaliveSpawn },
+        [UC_KEEPALIVE_PORT]: { name: 'UncensoredLabs', spawn: ucKeepaliveSpawn },
         [XC_KEEPALIVE_PORT]: { name: 'Xingchi', spawn: xcKeepaliveSpawn },
         [XC_CONVERTER_PORT]: { name: 'Xingchi конвертер', spawn: xcConverterSpawn, statusPath: '/health' },
         [FG_KEEPALIVE_PORT]: { name: 'FreeGG', spawn: fgKeepaliveSpawn },
@@ -36168,7 +36872,9 @@ function keepaliveInstances() {
 // повисший или недобитый прошлый процесс. Возвращает тело /status или null.
 async function probeStatus(port, statusPath) {
     try {
-        const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, { signal: AbortSignal.timeout(1500) });
+        const r = await fetch(`http://127.0.0.1:${port}${statusPath}`, {
+            signal: AbortSignal.timeout(1500), headers: customIdentityHeaders(),
+        });
         if (!r.ok) return null;
         return await r.json().catch(() => ({}));
     } catch { return null; }
@@ -36337,6 +37043,9 @@ async function bootSweepStaleChildren() {
     const keep = new Set([AR_KEEPALIVE_PORT, frontdoorPort(), active, GEMINI_ENGINE_PORT]);   // эти пересоздаём отдельно
     const swept = [];
     if (active === A6_KEEPALIVE_PORT) keep.add(A6_CONVERTER_PORT);
+    // FreeGG, как A6/Xingchi, активен только парой keepalive+Responses-конвертер.
+    // Без этого boot сохранял :20184, но тут же убивал его обязательный :20185.
+    if (active === FG_KEEPALIVE_PORT) keep.add(FG_CONVERTER_PORT);
     // Xingchi — пара keepalive+конвертер как A6/FreeGG: активная вкладка держит оба.
     if (active === XC_KEEPALIVE_PORT) keep.add(XC_CONVERTER_PORT);
     for (const [p, inst] of Object.entries(keepaliveInstances())) {
@@ -37584,6 +38293,7 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
+    uc: { tag: 'uncensoredlabs',     label: 'UncensoredLabs',     host: 'uncensoredlabs.dev',     keyFile: UC_ACTIVE_KEY_FILE, load: ucLoad, save: ucSave, balanceFn: ucBalance, applyFn: ucApplyBalance },
     xc: { tag: 'xingchi',     label: 'Xingchi',     host: 'api.xingchiapi.com',     keyFile: XC_ACTIVE_KEY_FILE, load: xcLoad, save: xcSave, balanceFn: xcBalance, applyFn: xcApplyBalance },
     fg: { tag: 'freegg',     label: 'FreeGG',     host: 'freegg.app',     keyFile: FG_ACTIVE_KEY_FILE, load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance },
     ax: { tag: 'apinex',     label: 'APINEX',     host: 'api.apinex.bond',     keyFile: AX_ACTIVE_KEY_FILE, load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance },
@@ -38368,6 +39078,7 @@ const apiGatewayProduction = createProductionApiGateway({
     platform: process.platform,
     opencodeJournalPath: process.env.API_GATEWAY_OPENCODE_JOURNAL || undefined,
     canWrite: a6Routes.canWrite,
+    validatePublication: input => a6Gateway.validatePublication(input),
     candidateOptions: {
         providers: [],
         getLiveModels: routesCandidateLiveModels,
@@ -38507,16 +39218,14 @@ const server = http.createServer((req, res) => {
             try {
                 const j = JSON.parse(body || '{}');
                 const r = poolDropTiers(String(j.provider || ''), String(j.model || j.deadModel || ''), j.fallback);
-                jsonRes(res, r.ok ? 200 : 400, r);
+                jsonRes(res, r.disabled ? 410 : r.ok ? 200 : 400, r);
             } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
         });
         return;
     }
 
-    // POST /__switch/api/routes/pool-restore {provider} — вернуть тир-карты из бэкапов.
-    // Отдельной кнопки в UI нет намеренно: штатный путь возврата — «Проверить квоту»
-    // (см. `handleArQuotaCheck`), она делает ровно это, когда проба показала «пул налит».
-    // Ручка нужна для возврата руками, если дашборд лежал в момент наливки.
+    // POST /__switch/api/routes/pool-restore {provider}: manual restore for other
+    // providers. AgentRouter aliases return 410 without inspecting old files.
     if (req.method === 'POST' && req.url === '/__switch/api/routes/pool-restore') {
         let body = '';
         req.on('data', c => body += c);
@@ -38524,7 +39233,7 @@ const server = http.createServer((req, res) => {
             try {
                 const j = JSON.parse(body || '{}');
                 const r = poolRestoreTiers(String(j.provider || ''));
-                jsonRes(res, r.ok ? 200 : 400, r);
+                jsonRes(res, r.disabled ? 410 : r.ok ? 200 : 400, r);
             } catch (e) { jsonRes(res, 400, { ok: false, error: e.message }); }
         });
         return;
@@ -39447,6 +40156,7 @@ const server = http.createServer((req, res) => {
     if (req.url.startsWith(LEAGUE_API_BASE + '/') && leagueApiRoute(req, res)) return;
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/league')) return handleLeague(req, res);
 
+    if ((req.method === 'GET' || req.method === 'POST') && req.url === '/__switch/api/fg/rate-policy') return handleFgRatePolicy(req, res);
     // Keepalive-мост (хедж-конфиг :20133/:20155/:20156/:20157/:20158) — реальное время без рестарта.
     if (req.method === 'GET'  && req.url === '/__switch/api/keepalive/state')  return keepaliveAr.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/keepalive/config') return keepaliveAr.config(req, res);
@@ -39455,6 +40165,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/go/keepalive/state')  return keepaliveGo.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/go/keepalive/config') return keepaliveGo.config(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/keepalive/state')  return keepaliveKk.state(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/uc/keepalive/state')  return keepaliveUc.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/xc/keepalive/state')  return keepaliveXc.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/keepalive/state')  return keepaliveFg.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/keepalive/state')  return keepaliveAx.state(req, res);
@@ -39474,6 +40185,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/keepalive/state')  return keepaliveUk.state(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/ap/keepalive/state')  return keepaliveAp.state(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/keepalive/config') return keepaliveKk.config(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/keepalive/config') return keepaliveUc.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/keepalive/config') return keepaliveXc.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/keepalive/config') return keepaliveFg.config(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/keepalive/config') return keepaliveAx.config(req, res);
@@ -39511,6 +40223,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/tb/keepalive/latency')) return keepaliveTb.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/go/keepalive/latency')) return keepaliveGo.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/keepalive/latency')) return keepaliveKk.latency(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uc/keepalive/latency')) return keepaliveUc.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/keepalive/latency')) return keepaliveXc.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/keepalive/latency')) return keepaliveFg.latency(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/keepalive/latency')) return keepaliveAx.latency(req, res);
@@ -39574,6 +40287,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/go/import')   return handleGoImport(req, res);
     // ── KKtoken (восьмая вкладка) — те же 22 роута, что у go ───────────────
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/sessions')) return handleKkSessions(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uc/sessions')) return handleUcSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/sessions')) return handleXcSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/sessions')) return handleFgSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/sessions')) return handleAxSessions(req, res);
@@ -39592,6 +40306,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/sessions')) return handleBaiSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/sessions')) return handleUkSessions(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/ping'))     return handleKkPing(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uc/ping'))     return handleUcPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/ping'))     return handleXcPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/ping'))     return handleFgPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/ping'))     return handleAxPing(req, res);
@@ -39610,6 +40325,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/ping'))     return handleBaiPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/ping'))     return handleUkPing(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/balance'))  return handleKkBalance(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uc/balance'))  return handleUcBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/balance'))  return handleXcBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/balance'))  return handleFgBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/balance'))  return handleAxBalance(req, res);
@@ -39628,6 +40344,8 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/balance'))  return handleBaiBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/balance'))  return handleUkBalance(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/kk/models'))   return handleKkModels(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uc/models'))   return handleUcModels(req, res);
+    if (['GET', 'POST'].includes(req.method) && req.url.split('?')[0] === '/__switch/api/xc/model-tests') return handleXcModelTests(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/models'))   return handleXcModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/fg/models'))   return handleFgModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/ax/models'))   return handleAxModels(req, res);
@@ -39646,6 +40364,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/bai/models'))   return handleBaiModels(req, res);
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/uk/models'))   return handleUkModels(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/active-model') return jsonRes(res, 200, { model: kkReadActiveModel() || null });
+    if (req.method === 'GET'  && req.url === '/__switch/api/uc/active-model') return jsonRes(res, 200, { model: ucReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/xc/active-model') return jsonRes(res, 200, { model: xcReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/active-model') return jsonRes(res, 200, { model: fgReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/active-model') return jsonRes(res, 200, { model: axReadActiveModel() || null });
@@ -39664,6 +40383,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/active-model') return jsonRes(res, 200, { model: baiReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/active-model') return jsonRes(res, 200, { model: ukReadActiveModel() || null });
     if (req.method === 'GET'  && req.url === '/__switch/api/kk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: kkReadModelMap() });
+    if (req.method === 'GET'  && req.url === '/__switch/api/uc/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ucReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/xc/modelmap') return jsonRes(res, 200, { ok: true, modelMap: xcReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/fg/modelmap') return jsonRes(res, 200, { ok: true, modelMap: fgReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/ax/modelmap') return jsonRes(res, 200, { ok: true, modelMap: axReadModelMap() });
@@ -39683,6 +40403,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/bai/modelmap') return jsonRes(res, 200, { ok: true, modelMap: baiReadModelMap() });
     if (req.method === 'GET'  && req.url === '/__switch/api/uk/modelmap') return jsonRes(res, 200, { ok: true, modelMap: ukReadModelMap() });
     if (req.method === 'POST' && req.url === '/__switch/api/kk/add')       return handleKkAdd(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/add')       return handleUcAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/add')       return handleXcAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/add')       return handleFgAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/add')       return handleAxAdd(req, res);
@@ -39701,6 +40422,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/add')       return handleBaiAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/add')       return handleUkAdd(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/key')       return handleKkSetKey(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/key')       return handleUcSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/key')       return handleXcSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/key')       return handleFgSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/key')       return handleAxSetKey(req, res);
@@ -39720,6 +40442,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/key')       return handleBaiSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/key')       return handleUkSetKey(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/rename')    return handleKkRename(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/rename')    return handleUcRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/rename')    return handleXcRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/rename')    return handleFgRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/rename')    return handleAxRename(req, res);
@@ -39738,6 +40461,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/rename')    return handleBaiRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/rename')    return handleUkRename(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/delete')    return handleKkDelete(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/delete')    return handleUcDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/delete')    return handleXcDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/delete')    return handleFgDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/delete')    return handleAxDelete(req, res);
@@ -39756,6 +40480,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/delete')    return handleBaiDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/delete')    return handleUkDelete(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/activate')  return handleKkActivate(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/activate')  return handleUcActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/activate')  return handleXcActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/activate')  return handleFgActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/activate')  return handleAxActivate(req, res);
@@ -39774,6 +40499,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/activate')  return handleBaiActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/activate')  return handleUkActivate(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-model') return handleKkSetModel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/set-model') return handleUcSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/set-model') return handleXcSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/set-model') return handleFgSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-model') return handleAxSetModel(req, res);
@@ -39792,6 +40518,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/set-model') return handleBaiSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/set-model') return handleUkSetModel(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/set-balance') return handleKkSetBalance(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/set-balance') return handleUcSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/set-balance') return handleXcSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/set-balance') return handleFgSetBalance(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/set-balance') return handleAxSetBalance(req, res);
@@ -39819,6 +40546,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bd/map-profiles') return handleBdMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/nv/map-profiles') return handleNvMapProfiles(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/modelmap')  return handleKkModelMap(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/modelmap')  return handleUcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/modelmap')  return handleXcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/modelmap')  return handleFgModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/modelmap')  return handleAxModelMap(req, res);
@@ -39829,6 +40557,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/dc/modelmap')  return handleDcModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/cp/modelmap')  return handleCpModelMap(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/session/open') return handleKkSessionOpen(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/session/open') return handleUcSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/session/open') return handleXcSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/session/open') return handleFgSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/session/open') return handleAxSessionOpen(req, res);
@@ -39851,6 +40580,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/session/open') return handleBaiSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/session/open') return handleUkSessionOpen(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/share')    return handleKkShare(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/share')    return handleUcShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/share')    return handleXcShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/share')    return handleFgShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/share')    return handleAxShare(req, res);
@@ -39869,6 +40599,7 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/bai/share')    return handleBaiShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/uk/share')    return handleUkShare(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/kk/import')   return handleKkImport(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/import')   return handleUcImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/xc/import')   return handleXcImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/fg/import')   return handleFgImport(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ax/import')   return handleAxImport(req, res);
@@ -39877,6 +40608,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'POST' && req.url === '/__switch/api/tr/autoreg/start')   return handleTrAutoregStart(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/autoreg/status')  return handleTrAutoregStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/autoreg/stop')    return handleTrAutoregStop(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/autoreg/start')  return handleUcAutoregStart(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/uc/autoreg/status') return handleUcAutoregStatus(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/autoreg/stop')   return handleUcAutoregStop(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/uc/availability')   return handleUcAvailability(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/uc/availability/probe') return handleUcAvailabilityProbe(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/autoreg/find-proxy')      return handleTrFindProxyStart(req, res);
     if (req.method === 'GET'  && req.url === '/__switch/api/tr/autoreg/find-proxy')      return handleTrFindProxyStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/tr/autoreg/find-proxy/stop') return handleTrFindProxyStop(req, res);
@@ -40286,7 +41022,7 @@ if (req.method === 'POST' && req.url === '/__switch/api/custom/scan')           
     // в этой строке (nova - с 17.09). Добавлены обе; класс закрыт утверждением в
     // `tools/check-autorotate.js` §18, которое сверяет ВЕСЬ реестр, а не одну `od`.
     {
-        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|xc|fg|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
+        const m = /^\/__switch\/api\/(ar|go|tb|xp|jw|sk|ts|kk|uc|xc|fg|kv|tr|pm|vn|dc|cp|ab|fx|ls|nv|ap|hn|ak|rm|od|bd)\/(rotate|auto\/status|auto\/start|auto\/stop)$/.exec(req.url || '');
         if (m) {
             const [, p, what] = m;
             if (what === 'rotate') {

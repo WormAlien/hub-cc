@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
+const { isDeepStrictEqual } = require('node:util');
 const durable = require('./durable-write');
 const { createLocalHopAuth } = require('./local-hop-auth');
 const { createClient, SECRET_DIR, ApiError, MODEL, idOf, modelOf, modelList } = require('./a6api-api');
@@ -63,10 +64,11 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
             return legacy.split(/\r?\n/).some(line => line.trim() && !line.trim().startsWith('#'));
         } catch { return false; }
     }
-    function emptyState({ configured = hasSavedConfig(), setupError = null } = {}) {
+    function emptyState({ configured = hasSavedConfig(), setupError = null, selection = null,
+        keyStatus = 'a6api_key_not_selected' } = {}) {
         return {
             configured, connected: false, setupError, account: { balanceUsd: null, spentUsd: null },
-            tokens: [], models: [], selectedTokenId: null, prepared: false, active: !!hub.isActive?.(),
+            tokens: [], models: [], selectedTokenId: selection ? selection.tokenId : null, prepared: false, keyStatus, active: !!hub.isActive?.(),
             modelMap: readMap(), routesMap: readMap(true),
         };
     }
@@ -110,8 +112,8 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
         const [t, catalog] = await Promise.all([api.ownToken(idOf(tokenId)), api.models()]);
         validateToken(t); return permitted(t, catalog);
     }
-    function validateMaps(allowed, provider = readMap()) {
-        for (const tier of TIERS) {
+    function validateMaps(allowed, provider = readMap(), tiers = TIERS) {
+        for (const tier of tiers) {
             const model = String(provider[tier] || '').trim();
             if (!model || !allowed.includes(model)) problem('model_unavailable', `Модель ${model || '(' + tier + ' не задан)'} не разрешена выбранному ключу. Настройте модели или кабинет a6api.`);
         }
@@ -120,6 +122,30 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
         const s = readSelection();
         if (!s || s.tokenId !== idOf(tokenId) || !prepared(s)) problem('key_not_selected', 'Сначала выберите и сохраните этот ключ a6api');
         return s;
+    }
+    // Exact picker publication is independent of the optional native CC tier maps.
+    async function validatePublication({ id, published } = {}) {
+        if (published !== true || typeof id !== 'string' || !id.startsWith('a6api/')) return;
+        let s;
+        try { s = readSelection(); }
+        catch { problem('a6api_key_not_selected', 'Сначала выберите и подготовьте ключ a6api кнопкой «Использовать ключ».'); }
+        if (!s || !prepared(s)) problem('a6api_key_not_selected', 'Сначала выберите и подготовьте ключ a6api кнопкой «Использовать ключ».');
+        let allowed;
+        try { allowed = await models(s.tokenId); }
+        catch (e) {
+            if (e?.code === 'token_expired') problem('a6api_token_expired', 'Срок выбранного ключа a6api истёк. Измените срок в кабинете или используйте другой ключ.');
+            if (e?.code === 'token_disabled') problem('a6api_token_disabled', 'Выбранный ключ a6api выключен или недоступен. Используйте рабочий ключ.');
+            if (e?.code === 'token_quota') problem('a6api_token_quota', 'Лимит выбранного ключа a6api исчерпан. Измените лимит в кабинете или используйте другой ключ.');
+            if (e?.code === 'token_not_owned') problem('a6api_token_missing', 'Выбранный ключ a6api больше не найден в кабинете. Используйте другой ключ.');
+            problem('a6api_catalog_unavailable', 'Не удалось проверить разрешённый каталог a6api. Публикации сохранены; повторите позже.', 503);
+        }
+        let current;
+        try { current = selected(s.tokenId); }
+        catch { problem('a6api_key_not_selected', 'Сначала выберите и подготовьте ключ a6api кнопкой «Использовать ключ».'); }
+        if (current.keyHash !== s.keyHash) problem('a6api_key_not_selected', 'Сначала выберите и подготовьте ключ a6api кнопкой «Использовать ключ».');
+        if (!allowed.includes(id.slice('a6api/'.length))) {
+            problem('a6api_model_unavailable', 'Эта exact модель не разрешена выбранному ключу a6api или отсутствует в текстовом каталоге.');
+        }
     }
     async function exclusive(fn) {
         if (busy) problem('gateway_busy', 'Другая настройка a6api ещё сохраняется');
@@ -132,17 +158,22 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
             if (['panel_token_missing', 'panel_config_missing', 'panel_config_invalid'].includes(e?.code)) return emptyState({ configured: false });
             if (hasSavedConfig()) {
                 const rejected = e?.status === 401 || e?.upstreamStatus === 401;
-                return emptyState({ configured: true,
+                return emptyState({ configured: true, selection: s, keyStatus: s ? 'a6api_catalog_unavailable' : 'a6api_key_not_selected',
                     setupError: rejected ? 'Системный токен или ID пользователя не приняты a6api.' : 'Не удалось проверить сохранённый аккаунт a6api. Повторите позже или измените данные.' });
             }
             throw e;
         }
         cacheBalance(p);
         const t = s && p.tokens.find(t => Number(t.id) === s.tokenId);
-        const usable = t && Number(t.status) === 1 && !(Number(t.expires) > 0 && t.expires <= Date.now() / 1000);
+        const keyStatus = !s ? 'a6api_key_not_selected'
+            : !t ? 'a6api_token_missing'
+            : Number(t.status) !== 1 ? 'a6api_token_disabled'
+            : Number(t.expires) > 0 && Number(t.expires) <= Date.now() / 1000 ? 'a6api_token_expired'
+            : t.unlimited === false && Number(t.remainingUsd) <= 0 ? 'a6api_token_quota'
+            : !prepared(s) ? 'a6api_key_unprepared' : 'a6api_key_ready';
         const allowed = t ? textOnly(p.models).filter(m => !t.restricted || t.models.includes(m)) : [];
         return { ...p, configured: true, connected: true, setupError: null, models: allowed, selectedTokenId: s ? s.tokenId : null,
-            prepared: !!usable && prepared(s), active: !!hub.isActive?.(), modelMap: readMap(), routesMap: readMap(true) };
+            prepared: keyStatus === 'a6api_key_ready', keyStatus, active: !!hub.isActive?.(), modelMap: readMap(), routesMap: readMap(true) };
     }
     async function connect({ panelToken, userId } = {}) {
         return exclusive(async () => {
@@ -202,12 +233,16 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
             selected(tokenId);
             if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(k => !TIERS.includes(k))) problem('invalid_models', 'Допустимы только модели окна, Opus, Sonnet и Haiku', 400);
             const clean = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, modelOf(v)]));
-            const next = { ...readMap(), ...clean };
-            validateMaps(await models(tokenId), next);
+            validateMaps(await models(tokenId), clean, Object.keys(clean));
             if (!hub.writeMap) problem('hub_not_ready', 'Запись моделей ещё не подключена к хабу', 503);
+            const defaultOnly = Object.keys(clean).length === 1 && Object.hasOwn(clean, 'default');
+            const before = defaultOnly ? { provider: readMap(), routes: readMap(true) } : null;
             hub.writeMap(clean, false);
             const after = readMap(), routes = readMap(true);
             if (Object.entries(clean).some(([k, v]) => after[k] !== v) || ['opus', 'sonnet', 'haiku'].some(k => k in clean && routes[k] !== clean[k])) problem('model_readback', 'Проверка сохранённых моделей не совпала');
+            if (before && (!isDeepStrictEqual(after, { ...before.provider, ...clean }) || !isDeepStrictEqual(routes, before.routes))) {
+                problem('model_readback', 'Проверка сохранённых моделей не совпала');
+            }
             if (hub.isActive?.() && 'default' in clean) await hub.syncModel?.(after.default);
             hub.publish?.(); return { ok: true, modelMap: after, routesMap: routes };
         });
@@ -298,7 +333,7 @@ function createGateway({ api = createClient(), clientFactory = createClient, sec
         }
         return spawnGateway();
     }
-    return { state, balance, models, connect, selectKey, saveModels, saveRouteTier, activate, selected, prepared, readSelection, setHub, spawn: spawnGateway, restart: restartGateway, runtime };
+    return { state, balance, models, connect, selectKey, saveModels, saveRouteTier, activate, selected, prepared, readSelection, validatePublication, setHub, spawn: spawnGateway, restart: restartGateway, runtime };
 }
 module.exports = { createGateway, buildRuntimeConfig, PORT, CONVERTER_PORT, TIERS, DEFAULT_MAP };
 

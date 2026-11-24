@@ -8,7 +8,7 @@
 
 const { chromium } = require('playwright');
 const fs = require('fs');
-const { createEmail, openInbox } = require('./freemodel/lib/emailnator');
+const { createEmail, openInbox } = require('../../freemodel/lib/emailnator');
 
 const SITE = 'https://api.rumeng-ai.com';
 const LOGFILE = '.owner-actions-tmp.log';

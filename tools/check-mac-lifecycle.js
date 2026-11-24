@@ -214,6 +214,145 @@ test('Custom cleanup receives the boundary-preserving platform identity adapters
     assert.equal(result.stuck.length, 0);
 });
 
+test('Windows utility gate recognizes the Win32-only process snapshot call boundary', () => {
+    assert.deepEqual(windowsUtilityGate(fs.readFileSync(SOURCE, 'utf8')), []);
+});
+
+test('Windows utility gate rejects unguarded snapshot calls, escaping references, and unrelated utilities', () => {
+    const life = fs.readFileSync(SOURCE, 'utf8');
+    const boundary = "const table = process.platform === 'win32' ? createProcessTable() : null;";
+    assert.ok(life.includes(boundary), 'exercise the actual process snapshot callsite');
+    for (const unsafe of [
+        life.replace(boundary, 'const table = createProcessTable();'),
+        life + '\ncreateProcessTable().executable(123);\n',
+        life + '\nmodule.exports.snapshotFactory = createProcessTable;\n',
+        life + "\nspawnSync('powershell', ['-NoProfile']);\n",
+    ]) {
+        const failures = windowsUtilityGate(unsafe, '');
+        assert.equal(failures.length, 1);
+        assert.equal(failures[0].name, 'Windows-утилиты вне гейта');
+        assert.match(failures[0].why, /routing\/lifecycle\.js:\d+/);
+    }
+});
+
+test('Windows utility gate does not treat an IS_WIN comment as a platform boundary', () => {
+    const life = fs.readFileSync(SOURCE, 'utf8')
+        .replace("const table = process.platform === 'win32' ? createProcessTable() : null;", 'const table = createProcessTable();')
+        .replace('function createProcessTable() {', 'function createProcessTable() {\n    // IS_WIN is only a comment, not a guard.');
+    assert.equal(windowsUtilityGate(life, '').length, 1);
+});
+
+for (const platform of ['darwin', 'linux']) {
+    test(`${platform} verified status uses platform identity without invoking Windows utilities`, async () => {
+        const script = '/hub platform/own script.js';
+        const identities = new Map([
+            [701, { executable: '/usr/bin/node', argv: ['/usr/bin/node', script, 'extra arg', ''] }],
+            [702, { executable: '/usr/bin/node', argv: ['/usr/bin/node', '/foreign.js', script] }],
+            [703, { executable: '/hub platform/tool', argv: ['/hub platform/tool'] }],
+            [704, { executable: '/foreign/tool', argv: ['/foreign/tool'] }],
+        ]);
+        const calls = [];
+        const lifecycle = platformLifecycle(platform, (exe, args) => {
+            calls.push(exe);
+            if (exe === 'ps') return { status: 0, stdout: identities.get(Number(args[1])).executable };
+            if (platform === 'darwin' && exe === '/usr/bin/python3') {
+                return { status: 0, stdout: JSON.stringify(identities.get(Number(args.at(-1)))) };
+            }
+            if (platform === 'linux' && exe === 'readlink') {
+                return { status: 0, stdout: identities.get(Number(args[0].split('/')[2])).executable };
+            }
+            assert.fail(`unexpected platform executable: ${exe}`);
+        }, file => {
+            const match = String(file).match(/^\/proc\/(\d+)\/cmdline$/);
+            return match ? Buffer.from(identities.get(Number(match[1])).argv.join('\0') + '\0') : fs.readFileSync(file);
+        });
+        const services = [
+            { port: 45211, name: 'own Node', script },
+            { port: 45212, name: 'own executable', executable: '/hub platform/tool', imageName: 'tool' },
+            { port: 45213, name: 'foreign executable', executable: '/hub platform/tool', imageName: 'tool' },
+        ];
+        const rows = await lifecycle.statusVerified({
+            services, childItems: [{ port: 45214, name: 'foreign child', script }], customItems: [],
+            listeners: () => new Map([[45211, new Set([701])], [45212, new Set([703])],
+                [45213, new Set([704])], [45214, new Set([702])]]), activeUpstreamPort: () => 0,
+        });
+        assert.deepEqual(Array.from(rows, row => [row.name, row.up, row.foreign]), [
+            ['own Node', true, false], ['own executable', true, false],
+            ['foreign executable', false, true], ['foreign child', false, true],
+        ]);
+        assert.deepEqual(Array.from(lifecycle.pidArguments(701)), identities.get(701).argv);
+        assert.equal(lifecycle.pidExecutable(703), '/hub platform/tool');
+        assert.equal(calls.some(exe => /powershell|tasklist|taskkill|netstat/i.test(exe)), false);
+    });
+}
+
+test('Windows verified status caches one lazy snapshot per scope and preserves executable and command line identity', async () => {
+    const node = 'C:\\Program Files\\nodejs\\node.exe';
+    const script = 'C:\\hub platform\\own script.js';
+    const tool = 'C:\\hub platform\\tool.exe';
+    const commandLine = `"${node}" "${script}" "extra arg" ""`;
+    const records = [
+        { ProcessId: 701, ExecutablePath: node, CommandLine: commandLine },
+        { ProcessId: 702, ExecutablePath: node, CommandLine: `"${node}" "C:\\foreign.js" "${script}"` },
+        { ProcessId: 703, ExecutablePath: tool, CommandLine: `"${tool}"` },
+        { ProcessId: 704, ExecutablePath: 'C:\\foreign\\tool.exe', CommandLine: '"C:\\foreign\\tool.exe"' },
+    ];
+    const calls = [];
+    const windows = platformLifecycle('win32', (exe, args, options) => {
+        calls.push(exe);
+        assert.equal(exe, 'powershell');
+        assert.deepEqual(Array.from(args), ['-NoProfile', '-NonInteractive', '-Command',
+            'Get-CimInstance Win32_Process | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress']);
+        assert.equal(options.encoding, 'utf8');
+        assert.equal(options.windowsHide, true);
+        assert.equal(options.maxBuffer, 32 * 1024 * 1024);
+        return { status: 0, stdout: JSON.stringify(records) };
+    });
+    const map = new Map([[45211, new Set([701])], [45212, new Set([703])],
+        [45213, new Set([704])], [45214, new Set([702])]]);
+    const options = {
+        services: [{ port: 45211, name: 'own Node', script },
+            { port: 45212, name: 'own executable', executable: tool, imageName: 'tool.exe' },
+            { port: 45213, name: 'foreign executable', executable: tool, imageName: 'tool.exe' }],
+        childItems: [{ port: 45214, name: 'foreign child', script }], customItems: [],
+        listeners: () => map, activeUpstreamPort: () => 0,
+        verifyProcessOwnership: async (svc, pid, adapters) => {
+            const record = records.find(row => row.ProcessId === pid);
+            assert.equal(adapters.pidExecutable(pid), record.ExecutablePath);
+            assert.equal(adapters.pidArguments(pid), record.CommandLine);
+            return windows.verifyProcessOwnership(svc, pid, adapters);
+        },
+    };
+    assert.equal(calls.length, 0, 'snapshot creation is lazy');
+    assert.deepEqual(Array.from(await windows.statusVerified(options), row => [row.name, row.up, row.foreign]), [
+        ['own Node', true, false], ['own executable', true, false],
+        ['foreign executable', false, true], ['foreign child', false, true],
+    ]);
+    assert.deepEqual(calls, ['powershell'], 'all services and children share one snapshot');
+    records[0] = { ProcessId: 705, ExecutablePath: node, CommandLine: commandLine };
+    map.set(45211, new Set([705]));
+    assert.equal((await windows.statusVerified(options))[0].up, true, 'a later scope sees the new PID');
+    assert.deepEqual(calls, ['powershell', 'powershell']);
+    await windows.statusVerified({ ...options, listeners: () => new Map() });
+    assert.equal(calls.length, 2, 'an empty verification scope needs no snapshot');
+});
+
+function windowsUtilityGate(life, hub = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8')) {
+    const gatePath = path.join(ROOT, 'tools', 'check-hub.js');
+    const source = fs.readFileSync(gatePath, 'utf8');
+    const start = source.indexOf('    const guilty = [];', source.indexOf('function macReady() {'));
+    const end = source.indexOf('    // Браузер и установщик', start);
+    assert.ok(start >= 0 && end > start, 'the actual Windows utility gate must be present');
+    const failures = [];
+    let passed = 0;
+    vm.runInNewContext(source.slice(start, end), {
+        life, hub, ok: () => { passed++; },
+        bad: (name, why) => failures.push({ name, why }),
+    }, { filename: gatePath });
+    assert.equal(passed + failures.length, 1, 'the actual gate must return one verdict');
+    return failures;
+}
+
 // Run real platform branches with only the unavailable OS seam replaced.
 function platformLifecycle(platform, run, read = fs.readFileSync, customCleanup = null) {
     const source = fs.readFileSync(SOURCE, 'utf8');
@@ -222,7 +361,7 @@ function platformLifecycle(platform, run, read = fs.readFileSync, customCleanup 
         process: { ...process, platform }, console, setTimeout, clearTimeout,
         require: name => name === 'child_process' ? { ...require(name), spawnSync: run }
             : name === 'fs' ? { ...fs, readFileSync: read }
-            : name === 'path' ? path.posix
+            : name === 'path' ? (platform === 'win32' ? path.win32 : path.posix)
             : name === './lib/custom-process-ownership' && customCleanup ? { ...require(path.resolve(path.dirname(SOURCE), name)), cleanupCustomProcess: customCleanup }
             : name.startsWith('./') ? require(path.resolve(path.dirname(SOURCE), name)) : require(name),
     };

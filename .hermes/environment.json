@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "recipe": {
+    "name": "ABUSE HUB - isolated model publication and keepalive",
+    "kind": "node",
+    "bootstrap": [
+      "node -e \"require.resolve('playwright'); console.log('Local test dependency available; no installation or production startup');\""
+    ],
+    "build": [
+      "node --check routing/keepalive-proxy.js && node --check routing/lib/api-gateway-dashboard.js && node --check routing/lib/api-gateway-integration.js && node --check routing/vendor/model-publication.js && node --check routing/vendor/api-gateway-tab.js && node --check routing/vendor/a6api-tab.js && node --check routing/vendor/gemini-tab.js && node --check tools/model-publication-preview.js && node --check tools/check-model-publication-http-ui.js",
+      "node -e \"const fs=require('node:fs'),vm=require('node:vm');const html=fs.readFileSync('routing/proxy-dashboard.html','utf8');let count=0;for(const match of html.matchAll(/<script\\b[^>]*>([\\s\\S]*?)<\\/script>/g)){if(match[1].trim()){new vm.Script(match[1]);count++;}}if(!count)throw new Error('No dashboard scripts found');console.log('Dashboard inline scripts compiled:',count);\""
+    ],
+    "test": [
+      "node --test --test-reporter=spec tools/check-api-gateway-publication.js tools/check-api-gateway-dashboard.js tools/check-api-gateway-integration.js tools/check-api-gateway-manifest.js tools/check-api-gateway-opencode.js tools/check-api-gateway-sync.js tools/check-keepalive-defaults.js tools/check-model-publication-surface.js",
+      "node tools/check-model-publication-ui.js",
+      "node tools/check-model-publication-http-ui.js",
+      "node tools/check-api-gateway-ui-browser.js",
+      "node tools/check-api-gateway-frontdoor.js"
+    ],
+    "start": "node -e \"process.env.PUBLICATION_PREVIEW_PORT='58796';const p=require('./tools/model-publication-preview.js');setTimeout(()=>{p.server.closeAllConnections();p.server.close(()=>process.exit(0));},5000);\"",
+    "port": 58796,
+    "readinessPath": "/__publication-preview/ready",
+    "evidence": [
+      "Scoped recipe: model publication, keepalive defaults, dashboard assets and affected Gateway transactions only.",
+      "Uses disposable homes, Claude/OpenCode targets and loopback fixture servers; no provider inference, live hub startup or dependency installation.",
+      "npm run check-hub and npm run check-deps are separate repository-wide gates; their unrelated failures are reported separately, not silently counted as passing here.",
+      "Set TMPDIR, TEMP and TMP to Hermes scratch before running so legacy tests also write only disposable artifacts there.",
+      "Readiness fixture expires after five seconds: native Windows shell teardown must not leave a child holding stdout open."
+    ]
+  }
+}

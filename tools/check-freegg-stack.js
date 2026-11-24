@@ -330,7 +330,7 @@ for (const name of ['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile'
             try {
                 const response = await request(frontdoor, '/v1/messages', bodyOf({ stream }));
                 assertGeneration(before);
-                const expectedStatus = errorMode.startsWith('http-') ? Number(errorMode.slice(5)) : errorMode === 'content-failed' ? 429 : 502;
+                const expectedStatus = errorMode.startsWith('http-') ? Number(errorMode.slice(5)) : 502;
                 assert.equal(response.status, expectedStatus, response.text);
                 const error = JSON.parse(response.text); assert.equal(error.type, 'error'); assert.ok(error.error.message);
                 assert.ok(!response.text.includes('"type":"message_stop"'), 'fabricated success terminal');

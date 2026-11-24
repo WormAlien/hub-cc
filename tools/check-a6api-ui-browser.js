@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Actual tab registration, theme and local assets. Every request is fulfilled here or blocked.
+// Account/setup and optional native compatibility. Explicit fixtures or blocked requests.
 // The live dashboard, provider, secrets and converter are never contacted.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -19,11 +19,12 @@ const tabMarkup = html.match(/<div data-tab-content="a6api"[^>]*><div id="a6api-
 const baseStyles = html.match(/<style type="text\/tailwindcss">[\s\S]*?<\/style>/)?.[0];
 const uiScript = html.match(/<script src="[^\"]*\/a6api-tab\.js"><\/script>/)?.[0];
 const uiStyle = html.match(/<link rel="stylesheet" href="[^\"]*\/a6api-tab\.css">/)?.[0];
+const publicationWrapper = html.match(/function modelPublicationChip\([^]*?\n\}/)?.[0];
 assert.ok(theme && tabMarkup && baseStyles && uiScript && uiStyle, 'actual dashboard tab registration missing');
 const fixture = `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="/vendor/tailwindcss-browser-4.js"></script><link rel="stylesheet" href="/vendor/fonts.css">${uiStyle}${baseStyles}${theme}
+<script src="/vendor/tailwindcss-browser-4.js"></script><link rel="stylesheet" href="/vendor/fonts.css"><link rel="stylesheet" href="/vendor/model-publication.css">${uiStyle}${baseStyles}${theme}
 <style>body{margin:0;background:var(--color-bg);font-family:var(--font-sans)} [data-tab-content]{display:block}</style>
-</head><body>${tabMarkup}<div id="routes-box" hidden></div>${uiScript}</body></html>`;
+</head><body>${tabMarkup}<div id="routes-box" hidden></div><script>const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));${publicationWrapper}</script>${uiScript}<script src="/vendor/model-publication.js"></script></body></html>`;
 const token = { id: 9, name: 'Основной', mask: 'hidden-9', status: 1, unlimited: true, spentUsd: .000012, expires: -1, restricted: true, models: [model, alternate] };
 const state = { ok: true, configured: true, connected: true, setupError: null, canWrite: true, account: { balanceUsd: 5.58, spentUsd: .42 }, tokens: [token,
     { ...token, id: 10, name: 'Дополнительный <img src=x>', mask: 'hidden-10', models: [other], unlimited: false, remainingUsd: 1 }],
@@ -43,7 +44,7 @@ let scenarios = 0, layouts = 0;
             if (u.pathname === '/') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: fixture });
             if (u.pathname.startsWith('/vendor/')) {
                 const name = path.basename(u.pathname), p = path.join(routing, 'vendor', u.pathname.slice('/vendor/'.length));
-                const allowed = ['tailwindcss-browser-4.js', 'a6api-tab.js', 'a6api-tab.css', 'fonts.css'].includes(name) || /^[\w.-]+\.woff2?$/.test(name);
+                const allowed = ['tailwindcss-browser-4.js', 'a6api-tab.js', 'a6api-tab.css', 'model-publication.js', 'model-publication.css', 'fonts.css'].includes(name) || /^[\w.-]+\.woff2?$/.test(name);
                 if (allowed && p.startsWith(path.join(routing, 'vendor') + path.sep) && fs.existsSync(p)) return route.fulfill({
                     contentType: name.endsWith('.js') ? 'application/javascript' : name.endsWith('.css') ? 'text/css' : 'font/woff2', body: fs.readFileSync(p) });
             }
@@ -51,7 +52,7 @@ let scenarios = 0, layouts = 0;
             // Это чтение локального состояния дашборда, не проба провайдера.
             if (u.pathname === '/__switch/api/api-gateway' && request.method() === 'GET') {
                 return route.fulfill({ contentType: 'application/json; charset=utf-8',
-                    body: JSON.stringify({ ok: true, models: [{ id: 'a6api/' + model, published: true, contextTokens: 1000000 }] }) });
+                    body: JSON.stringify({ ok: true, canWrite: state.canWrite, providers: ['a6api'], manifest: { revision: 7 }, models: [{ id: 'a6api/' + model, published: true, contextTokens: 1000000, outputTokens: 32000, displayName: model }] }) });
             }
             if (u.pathname.startsWith('/__switch/api/a6api/')) {
                 const name = u.pathname.split('/').pop();
@@ -75,7 +76,7 @@ let scenarios = 0, layouts = 0;
                     if (failSave) result = { ok: false, error: 'fixture-save-failed' };
                     else {
                         state.modelMap = { ...state.modelMap, ...call.body.modelMap };
-                        for (const slot of ['opus', 'sonnet', 'haiku']) state.routesMap[slot] = call.body.modelMap[slot];
+                        for (const slot of ['opus', 'sonnet', 'haiku']) if (slot in call.body.modelMap) state.routesMap[slot] = call.body.modelMap[slot];
                         result = { ok: true, modelMap: state.modelMap, routesMap: state.routesMap };
                     }
                 } else if (name === 'activate' && call.method === 'POST') { state.active = true; result = { ok: true, active: true }; }
@@ -141,33 +142,33 @@ let scenarios = 0, layouts = 0;
         assert.ok(!(await page.locator('body').innerText()).includes('fixture-panel-token'));
         requests.length = 0;
         scenarios++;
+        await page.locator('#a6-compatibility > summary').click();
         await page.locator('#a6-model-default').selectOption(alternate);
-        await page.locator('#a6-model-haiku').selectOption(alternate);
         await page.locator('#a6-refresh').click();
         await page.waitForFunction(() => !document.getElementById('a6-refresh').disabled);
         assert.equal(await page.locator('#a6-model-default').inputValue(), alternate);
-        assert.equal(await page.locator('#a6-model-haiku').inputValue(), alternate);
+        assert.equal(state.modelMap.haiku, model, 'default draft does not change Routes tiers');
         assert.match(await page.locator('#a6-draft-status').innerText(), /Не сохранено/);
         assert.ok(requests.every(r => r.method === 'GET')); scenarios++;
+        await page.locator('#a6-compatibility > summary').click();
         for (const themeId of ['zen', 'daylight']) {
             await page.evaluate(id => applyTheme(id, false), themeId);
             for (const width of [1365, 1024, 768, 390, 320]) {
                 await page.setViewportSize({ width, height: 900 });
                 const layout = await page.evaluate(() => {
-                    const main = document.getElementById('a6-model-default'), tier = document.getElementById('a6-model-opus');
+                    const main = document.querySelector('.a6-model-panel'), compatibility = document.getElementById('a6-compatibility');
                     return { overflow: document.documentElement.scrollWidth - innerWidth,
-                        panels: [...document.querySelectorAll('.a6-panel')].map(x => ({ right: x.getBoundingClientRect().right, left: x.getBoundingClientRect().left, overflow: x.scrollWidth - x.clientWidth })),
-                        mainHeight: main.getBoundingClientRect().height, tierHeight: tier.getBoundingClientRect().height,
-                        mainFont: parseFloat(getComputedStyle(main).fontSize), tierFont: parseFloat(getComputedStyle(tier).fontSize),
-                        mainBottom: main.getBoundingClientRect().bottom, tiersTop: document.querySelector('.a6-subagents').getBoundingClientRect().top,
+                        panels: [...document.querySelectorAll('.a6-panel')].filter(x => x.getClientRects().length).map(x => ({ right: x.getBoundingClientRect().right, left: x.getBoundingClientRect().left, overflow: x.scrollWidth - x.clientWidth })),
+                        mainBottom: main.getBoundingClientRect().bottom, compatibilityTop: compatibility.getBoundingClientRect().top, compatibilityOpen: compatibility.open,
+                        tierEditors: document.querySelectorAll('#a6-model-opus,#a6-model-sonnet,#a6-model-haiku').length,
                         scheme: document.documentElement.style.colorScheme,
                         panelBg: getComputedStyle(document.querySelector('.a6-panel')).backgroundColor,
                         totalHeight: document.getElementById('a6api-root').getBoundingClientRect().height };
                 });
                 assert.ok(layout.overflow <= 1, `${themeId}/${width}: page overflow ${layout.overflow}`);
                 assert.ok(layout.panels.every(p => p.left >= -1 && p.right <= width + 1 && p.overflow <= 1), `${themeId}/${width}: panel overflow`);
-                assert.ok(layout.mainHeight > layout.tierHeight && layout.mainFont > layout.tierFont, `${themeId}/${width}: main-window hierarchy missing`);
-                assert.ok(layout.mainBottom < layout.tiersTop, `${themeId}/${width}: subagents must be below main window`);
+                assert.ok(layout.mainBottom <= layout.compatibilityTop, `${themeId}/${width}: Models precede optional native compatibility`);
+                assert.equal(layout.compatibilityOpen, false); assert.equal(layout.tierEditors, 0, 'Routes owns tier editing');
                 assert.equal(layout.scheme, themeId === 'daylight' ? 'light' : 'dark'); assert.notEqual(layout.panelBg, 'rgba(0, 0, 0, 0)');
                 if (width === 1365) assert.ok(layout.totalHeight < 850, `${themeId}/${width}: desktop control surface is ${layout.totalHeight}px`);
                 if (width === 1365 || width === 390) await page.screenshot({ path: path.join(out, `${themeId}-${width}.png`), fullPage: true });
@@ -175,11 +176,12 @@ let scenarios = 0, layouts = 0;
             }
         }
         await page.setViewportSize({ width: 1365, height: 900 });
+        await page.locator('#a6-compatibility > summary').click();
         await page.locator('#a6-token').selectOption('10');
         await page.waitForFunction(() => !document.getElementById('a6-model-default').disabled);
         assert.equal(state.selectedTokenId, 9); assert.ok(requests.every(r => r.method === 'GET'));
         assert.deepEqual(await page.locator('#a6-model-default option:not([disabled])').evaluateAll(nodes => nodes.map(n => n.value).filter(Boolean)), [other]);
-        for (const slot of slots) await page.locator('#a6-model-' + slot).selectOption(other);
+        await page.locator('#a6-model-default').selectOption(other);
         assert.equal(await page.locator('#a6-save').isDisabled(), true); assert.equal(await page.locator('#a6-activate').isDisabled(), true);
         scenarios++;
         await page.locator('#a6-use-key').click();
@@ -196,16 +198,21 @@ let scenarios = 0, layouts = 0;
         failSave = false; blockSave = true; const saving = new Promise(resolve => { writeStarted = resolve; });
         await page.locator('#a6-save').click(); await saving;
         try {
-            for (const id of ['a6-token', ...slots.map(s => 'a6-model-' + s), 'a6-use-key', 'a6-save', 'a6-activate', 'a6-refresh']) assert.equal(await page.locator('#' + id).isDisabled(), true, id);
+            for (const id of ['a6-token', 'a6-model-default', 'a6-use-key', 'a6-save', 'a6-activate', 'a6-refresh']) assert.equal(await page.locator('#' + id).isDisabled(), true, id);
         } finally { releaseWrite(); }
         await page.waitForFunction(() => !document.getElementById('a6-token').disabled);
         const saved = requests.filter(r => r.name === 'modelmap').at(-1).body;
-        assert.deepEqual(saved, { tokenId: 10, modelMap: mapOf(other) });
+        assert.deepEqual(saved, { tokenId: 10, modelMap: { default: other } });
         assert.equal(state.modelMap.gpt, 'server-owned'); assert.equal(state.routesMap.default, 'independent-routes-default'); scenarios++;
+        assert.equal(await page.locator('#a6-activate').isDisabled(), true, 'native activation still requires valid tier assignments');
+        // Explicit external Routes-update fixture, not duplicate a6api tier editors.
+        for (const tier of ['opus', 'sonnet', 'haiku']) state.modelMap[tier] = state.routesMap[tier] = other;
+        await page.evaluate(() => window.A6API.load());
         await page.locator('#a6-activate').click();
         assert.equal(requests.filter(r => r.name === 'activate').length, 0);
         accept = true; await page.locator('#a6-activate').click();
-        await page.waitForFunction(() => document.getElementById('a6-connection').textContent.includes('Активен'));
+        await page.waitForFunction(() => !document.getElementById('a6-token').disabled);
+        assert.equal(await page.locator('#a6-connection').innerText(), 'Ключ подготовлен'); assert.equal(state.active, true);
         assert.equal(requests.filter(r => r.name === 'activate').length, 1); scenarios++;
         await page.locator('[data-a6="copy-command"]').click();
         assert.deepEqual(await page.evaluate(() => window.fixtureCopied), ['/model a6api[1m]']); scenarios++;
@@ -224,7 +231,7 @@ let scenarios = 0, layouts = 0;
         assert.equal(await page.locator('#a6-model-default').inputValue(), alternate); scenarios++;
         state.canWrite = false; const writesBefore = requests.filter(r => r.method === 'POST').length;
         await page.evaluate(() => window.A6API.load());
-        for (const id of ['a6-use-key', 'a6-save', 'a6-activate', ...slots.map(s => 'a6-model-' + s)]) assert.equal(await page.locator('#' + id).isDisabled(), true, id);
+        for (const id of ['a6-use-key', 'a6-save', 'a6-activate', 'a6-model-default']) assert.equal(await page.locator('#' + id).isDisabled(), true, id);
         assert.equal(await page.locator('#a6-local').isVisible(), true);
         assert.equal(requests.filter(r => r.method === 'POST').length, writesBefore); scenarios++;
         assert.deepEqual(unexpected, [], 'unexpected requests were blocked'); assert.deepEqual(browserErrors, []);

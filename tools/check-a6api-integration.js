@@ -20,17 +20,24 @@ test('gateway is registered in backend, prefixes, alias and routes catalog', () 
     assert.match(code, /const CC_MODEL_PREFIX = \{[^;]*a6api:\s*'a6api'/);
     assert.match(code, /const BACKEND_ALIASES = \{[^;]*a6:\s*'a6api'/);
     assert.match(code, /const ROUTE_EP = \{[^;]*a6api:\s*'a6api'/);
-    assert.match(fun('handleRoutesModels'), /provider === 'a6api'/);
+    assert.match(fun('handleRoutesModels'), /apiGatewayProduction\.resolveRouteCandidates\(\[provider\]\)/);
+    assert.match(fun('routesCandidateLiveModels'), /provider === 'a6api'/);
+    assert.match(fun('routesCandidateLiveModels'), /a6Gateway\.models\(selected\.tokenId\)/);
     assert.match(fun('applyTarget'), /target === 'a6api'/);
     const switchBlock = code.slice(code.indexOf("req.url === '/__switch/api/switch'"), code.indexOf("req.url === '/__switch/api/switch'") + 1300);
     assert.ok(switchBlock.includes("target === 'a6api'") && switchBlock.includes('a6Routes.canWrite(req)'), 'generic switch must not bypass a6api write guard');
 });
-test('both model maps are present with independent defaults and shared tiers', () => {
+test('both model maps are present and default paths are independently addressed', () => {
     const active = JSON.parse(fs.readFileSync(path.join(root, 'routing/a6api-modelmap.json'), 'utf8'));
     const routes = JSON.parse(fs.readFileSync(path.join(root, 'routing/a6api-routes-modelmap.json'), 'utf8'));
-    assert.equal(active.default, 'glm-5.3-flash');
-    assert.equal(routes.default, 'deepseek-v4.1-flash-1017');
-    assert.notEqual(active.default, routes.default);
+    // The owner may intentionally choose equal defaults. Independent ownership
+    // is a file-path contract, not an accidental inequality of saved model IDs.
+    for (const map of [active, routes]) assert.ok(typeof map.default === 'string' && map.default.trim());
+    const context = { path, __dirname: path.join(root, 'routing'), CC_MODEL_PREFIX: { a6api: 'a6api' } };
+    vm.runInNewContext(fun('tierMapFile'), context);
+    assert.equal(context.tierMapFile('a6api', false), path.join(root, 'routing/a6api-modelmap.json'));
+    assert.equal(context.tierMapFile('a6api', true), path.join(root, 'routing/a6api-routes-modelmap.json'));
+    assert.notEqual(context.tierMapFile('a6api', false), context.tierMapFile('a6api', true));
     for (const tier of ['opus', 'sonnet', 'haiku']) {
         assert.equal(active[tier], 'deepseek-v4.1-flash-1017');
         assert.equal(routes[tier], active[tier]);

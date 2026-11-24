@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Contract tests for the a6api Claude Code controls. No real network or credentials.
+// Account/key and optional native-default regressions. No network or real credentials.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -56,7 +56,7 @@ function fixture() {
                 d = { ok: true, selectedTokenId: state.selectedTokenId };
             } else if (name === 'modelmap') {
                 state.modelMap = { ...state.modelMap, ...call.body.modelMap };
-                for (const slot of ['opus', 'sonnet', 'haiku']) state.routesMap[slot] = call.body.modelMap[slot];
+                for (const slot of ['opus', 'sonnet', 'haiku']) if (slot in call.body.modelMap) state.routesMap[slot] = call.body.modelMap[slot];
                 d = { ok: true, modelMap: state.modelMap, routesMap: state.routesMap };
             } else if (name === 'activate') { state.active = true; d = { ok: true, active: true }; }
             else d = { ok: false, error: 'Unexpected fixture endpoint: ' + name };
@@ -66,7 +66,7 @@ function fixture() {
     const tab = window.A6API;
     const select = (id, value) => { el(id).value = value; return el(id).emit('change'); };
     const click = action => el('a6api-root').emit('click', { target: { closest: () => ({ disabled: false, dataset: { a6: action } }) } });
-    const setMap = async value => { for (const slot of slots) await select('a6-model-' + slot, value); };
+    const setMap = async value => select('a6-model-default', value);
     const writes = () => calls.filter(c => c.method !== 'GET');
     return { el, calls, handlers, state, catalogs, window, tab, select, click, setMap, writes, copied, tabs };
 }
@@ -124,9 +124,10 @@ function fixture() {
         await f.click('connect-account'); assert.equal(f.writes().length, 0);
         assert.equal(f.el('a6-connect').disabled, true); assert.equal(f.el('a6-local').hidden, false);
     });
-    await test('renders Claude Code controls instead of seller management', async () => {
+    await test('renders shared publications and optional native compatibility instead of seller management', async () => {
         const f = fixture(); await f.tab.load(); const html = f.el('a6api-root').innerHTML;
-        for (const text of ['Основное окно', 'Субагенты', 'Использовать ключ', 'Сохранить модели', 'Активировать для Claude Code', '/model a6api[1m]', 'Маршруты']) assert.ok(html.includes(text), text);
+        for (const text of ['Модели в API Gateway', 'Совместимость Claude Code', 'Использовать ключ', 'Сохранить default', 'Активировать native-путь', '/model a6api[1m]', 'Маршруты']) assert.ok(html.includes(text), text);
+        assert.ok(!/id="a6-model-(opus|sonnet|haiku)"/.test(html), 'Routes owns tier editing');
         assert.ok(!/a6-sellers|a6-reviews|a6-pool|a6-input-cap|a6-log-rows|enable-model|reveal/.test(html));
         assert.ok(!/авторег|авторотаци|чек-ин/i.test(html));
     });
@@ -157,12 +158,13 @@ function fixture() {
         assert.ok(!f.el('a6-model-default').innerHTML.includes(model));
         assert.equal(f.el('a6-save').disabled, true); assert.equal(f.el('a6-activate').disabled, true);
     });
-    await test('model choices stay local until Save models', async () => {
-        const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate); await f.select('a6-model-haiku', alternate);
+    await test('native default stays local until its explicit save', async () => {
+        const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate);
         assert.equal(f.writes().length, 0); assert.match(f.el('a6-draft-status').textContent, /Не сохранено/);
         await f.click('save');
         const writes = f.writes(); assert.equal(writes.length, 1); assert.equal(writes[0].name, 'modelmap');
-        assert.deepEqual(writes[0].body, { tokenId: 9, modelMap: { default: alternate, opus: model, sonnet: model, haiku: alternate } });
+        assert.deepEqual(writes[0].body, { tokenId: 9, modelMap: { default: alternate } });
+        for (const slot of ['opus', 'sonnet', 'haiku']) assert.equal(f.state.modelMap[slot], model, 'native save preserves tier assignments');
         assert.equal(f.state.routesMap.default, 'independent-routes-default'); assert.equal(f.state.modelMap.gpt, 'server-only-gpt');
         assert.equal(f.el('a6-save').disabled, true);
     });
@@ -190,15 +192,15 @@ function fixture() {
         await f.select('a6-token', '10'); await f.setMap(other); await f.tab.load();
         assert.equal(f.el('a6-token').value, '10'); assert.equal(f.el('a6-model-default').value, other);
         await f.select('a6-token', '9'); assert.equal(f.el('a6-model-default').value, alternate);
-        assert.equal(f.el('a6-model-opus').value, model); assert.equal(f.writes().length, 0);
+        assert.equal(f.state.modelMap.opus, model); assert.equal(f.writes().length, 0);
     });
-    await test('refresh imports clean mirrored tiers while preserving edited slots', async () => {
+    await test('refresh observes mirrored Routes tiers while preserving the edited native default', async () => {
         const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate);
         f.state.modelMap.opus = alternate; f.state.routesMap.opus = alternate; await f.tab.load();
-        assert.equal(f.el('a6-model-default').value, alternate); assert.equal(f.el('a6-model-opus').value, alternate);
+        assert.equal(f.el('a6-model-default').value, alternate); assert.equal(f.state.modelMap.opus, alternate);
         assert.match(f.el('a6api-root').innerHTML, /Opus, Sonnet и Haiku/);
-        assert.match(f.el('a6api-root').innerHTML, /Субагенты идут тирами Opus, Sonnet и Haiku/);
-        assert.match(f.el('a6api-root').innerHTML, /через \/model multi там же/);
+        assert.match(f.el('a6api-root').innerHTML, /настраиваются только во вкладке «Маршруты»/);
+        assert.ok(!/id="a6-model-opus"/.test(f.el('a6api-root').innerHTML));
         assert.equal(f.state.routesMap.default, 'independent-routes-default');
     });
     await test('latest token wins over an older models reply', async () => {
@@ -251,7 +253,7 @@ function fixture() {
         const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate); const pending = deferred();
         f.handlers.modelmap = () => pending.promise; const saving = f.click('save');
         try {
-            for (const id of ['a6-token', ...slots.map(s => 'a6-model-' + s), 'a6-save', 'a6-use-key', 'a6-activate', 'a6-refresh']) assert.equal(f.el(id).disabled, true, id);
+            for (const id of ['a6-token', 'a6-model-default', 'a6-save', 'a6-use-key', 'a6-activate', 'a6-refresh']) assert.equal(f.el(id).disabled, true, id);
             await f.select('a6-token', '10'); await f.select('a6-model-default', model); await f.tab.load(); await f.click('use-key');
             assert.equal(f.writes().length, 1); assert.equal(f.el('a6-token').value, '9');
         } finally { pending.resolve({ ok: true, modelMap: { ...mapOf(model), default: alternate }, routesMap: f.state.routesMap }); await saving; }
@@ -262,7 +264,8 @@ function fixture() {
         f.window.confirm = () => true; await f.select('a6-model-default', alternate); await f.click('activate'); assert.equal(f.writes().length, 0);
         await f.click('save'); await f.click('activate');
         assert.deepEqual(f.writes().map(c => c.name), ['modelmap', 'activate']);
-        assert.deepEqual(f.writes()[1].body, { tokenId: 9 }); assert.match(f.el('a6-connection').textContent, /Активен/);
+        assert.deepEqual(f.writes()[1].body, { tokenId: 9 }); assert.equal(f.state.active, true);
+        assert.equal(f.el('a6-connection').textContent, 'Ключ подготовлен');
     });
     await test('activation and key failures stay visible without automatic retries', async () => {
         const f = fixture(); await f.tab.load(); f.window.confirm = () => true;
@@ -297,7 +300,7 @@ function fixture() {
         // Проверяем ровно те ручки, которые в этой фикстуре обязаны быть живыми. «Использовать
         // ключ» и «Активировать» здесь выключены законно: ключ уже подготовлен и карта валидна,
         // а `busy`/`locked` к ним отношения не имеют.
-        for (const id of ['a6-refresh', 'a6-token', 'a6-model-default', 'a6-model-opus']) {
+        for (const id of ['a6-refresh', 'a6-token', 'a6-model-default']) {
             assert.equal(f.el(id).disabled, false, id + ' не должен гаснуть на фоне');
         }
     });
@@ -377,20 +380,17 @@ function fixture() {
     // 26.10: владелец попросил готовые строки под конкретную модель. Основное окно
     // адресуется явным именем, тир - формой в скобках. Форму `a6api/<тир>` не даём:
     // keepalive возвращает её эхом как `<тир>[1m]`, и [CC] рвёт поток.
-    await test('each model row offers its own copyable /model command', async () => {
+    await test('catalog models offer exact commands without duplicate tier aliases', async () => {
         const f = fixture(); await f.tab.load();
         const main = f.el('a6-cmd-default').innerHTML;
         assert.match(main, new RegExp('/model a6api/' + model), 'основное окно адресуется явным именем');
-        for (const slot of ['opus', 'sonnet', 'haiku']) {
-            const html = f.el('a6-cmd-' + slot).innerHTML;
-            assert.match(html, new RegExp('/model a6api\\[' + slot + '\\]'), slot + ' адресуется тиром');
-            assert.ok(!/a6api\/(opus|sonnet|haiku)/.test(html), slot + ': слэш с тиром не предлагаем');
-        }
+        assert.match(f.el('a6-publication-list').innerHTML, new RegExp('/model a6api/' + alternate));
+        assert.ok(!/a6api\/(opus|sonnet|haiku)/.test(main), 'slash-tier pseudo IDs are never offered');
         assert.equal(f.writes().length, 0, 'рисование команд ничего не пишет');
     });
     await test('clicking a model command copies exactly its own text', async () => {
         const f = fixture(); await f.tab.load();
-        const html = f.el('a6-cmd-sonnet').innerHTML;
+        const html = f.el('a6-cmd-default').innerHTML;
         const cmd = html.match(/data-cmd="([^"]+)"/)[1].replace(/&#39;/g, "'").replace(/&quot;/g, '"');
         await f.el('a6api-root').emit('click', { target: { closest: () => ({ disabled: false, dataset: { a6: 'copy-cmd', cmd } }) } });
         assert.deepEqual(f.copied, [cmd]);
@@ -452,9 +452,9 @@ function fixture() {
         assert.equal(f.el('a6-save').disabled, true); assert.equal(f.el('a6-activate').disabled, false);
         assert.doesNotMatch(f.el('a6-activation-note').textContent, /сохраните/);
     });
-    await test('saving new models verifies all returned mirrored tiers', async () => {
-        const f = fixture(); await f.tab.load(); await f.select('a6-model-opus', alternate);
-        f.handlers.modelmap = c => ({ ok: true, modelMap: c.body.modelMap, routesMap: f.state.routesMap });
+    await test('saving native default rejects unexpected returned tier mutations', async () => {
+        const f = fixture(); await f.tab.load(); await f.select('a6-model-default', alternate);
+        f.handlers.modelmap = c => ({ ok: true, modelMap: { ...f.state.modelMap, ...c.body.modelMap, opus: alternate }, routesMap: f.state.routesMap });
         await f.click('save'); assert.equal(f.el('a6-error').hidden, false);
         assert.match(f.el('a6-draft-status').textContent, /Не сохранено/);
     });

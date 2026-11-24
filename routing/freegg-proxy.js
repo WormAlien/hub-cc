@@ -298,7 +298,6 @@ function sseWrite(res, event, data) {
 }
 
 // Delay SSE headers until content, so pre-content failures retain an HTTP error status.
-const RESPONSES_TRANSIENT_CODES = new Set(['rate_limit_exceeded', 'too_many_requests', 'server_error', 'overloaded']);
 
 function responsesErrorInfo(ev) {
     const e = (ev && ev.type === 'response.failed' && ev.response && ev.response.error)
@@ -306,10 +305,18 @@ function responsesErrorInfo(ev) {
         || (ev && ev.type === 'error' && (ev.code || ev.message) ? ev : null)
         || null;
     if (!e) return null;
+    const resetAt = Date.parse(String(e.reset_at || e.resetAt || e.resets_at || e.resetsAt || ''));
+    const retryMs = e.retry_after_ms !== null && e.retry_after_ms !== undefined && String(e.retry_after_ms).trim() !== ''
+        && Number.isFinite(Number(e.retry_after_ms)) ? Number(e.retry_after_ms)
+        : e.retry_after !== null && e.retry_after !== undefined && String(e.retry_after).trim() !== ''
+            && Number.isFinite(Number(e.retry_after)) ? Number(e.retry_after) * 1000
+            : Number.isFinite(resetAt) ? Math.max(0, resetAt - Date.now()) : null;
     return {
         code: e.code || e.type || 'unknown',
         message: e.message || JSON.stringify(e).slice(0, 300),
-        transient: RESPONSES_TRANSIENT_CODES.has(e.code) || RESPONSES_TRANSIENT_CODES.has(e.type),
+        retryAfterMs: retryMs,
+        transient: ['rate_limit_exceeded', 'too_many_requests'].includes(e.code)
+            || ['rate_limit_exceeded', 'too_many_requests'].includes(e.type),
     };
 }
 
@@ -570,17 +577,69 @@ function writeJSON(res, code, obj) {
     res.end(JSON.stringify(obj));
 }
 
-function claudeError(res, code, message, errType) {
+function claudeError(res, code, message, errType, details = {}) {
     if (res.destroyed || res.writableEnded) return;
     stats.errors++;
     if (res.headersSent || res.writableEnded) {
+        const error = { type: errType || 'api_error', message };
+        if (details.code) error.code = details.code;
+        if (Number.isFinite(details.retryAfterMs)) error.retry_after_ms = Math.max(0, Math.round(details.retryAfterMs));
         try {
-            sseWrite(res, 'error', { type: 'error', error: { type: errType || 'api_error', message } });
+            sseWrite(res, 'error', { type: 'error', error });
         } catch {}
         try { res.end(); } catch {}
         return;
     }
-    writeJSON(res, code, { type: 'error', error: { type: errType || 'api_error', message } });
+    const error = { type: errType || 'api_error', message };
+    if (details.code) error.code = details.code;
+    if (Number.isFinite(details.retryAfterMs)) {
+        error.retry_after_ms = Math.max(0, Math.round(details.retryAfterMs));
+        res.setHeader('Retry-After', String(Math.max(0, Math.ceil(error.retry_after_ms / 1000))));
+    }
+    writeJSON(res, code, { type: 'error', error });
+}
+
+function parseRetryAfter(value, now = Date.now()) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return null;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+    const date = Date.parse(raw);
+    return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+function retryAfterFromBody(value, now = Date.now()) {
+    if (!value || typeof value !== 'object') return null;
+    for (const node of [value, value.error, value.response && value.response.error].filter(Boolean)) {
+        for (const field of ['retry_after_ms', 'retryAfterMs']) {
+            if (node[field] === null || node[field] === undefined || String(node[field]).trim() === '') continue;
+            const n = Number(node[field]);
+            if (Number.isFinite(n) && n >= 0) return Math.round(n);
+        }
+        for (const field of ['retry_after', 'retryAfter']) {
+            if (node[field] === null || node[field] === undefined || String(node[field]).trim() === '') continue;
+            const n = Number(node[field]);
+            if (Number.isFinite(n) && n >= 0) return Math.round(n * 1000);
+        }
+        for (const field of ['reset_at', 'resetAt', 'resets_at', 'resetsAt']) {
+            const t = Date.parse(String(node[field] || ''));
+            if (Number.isFinite(t)) return Math.max(0, t - now);
+        }
+    }
+    return null;
+}
+
+function normalizedHttpError(parsed, statusCode) {
+    const upstream = parsed && parsed.error && typeof parsed.error === 'object' ? parsed.error : parsed;
+    const code = String((upstream && (upstream.code || upstream.type)) || '').trim();
+    const explicitRate = ['rate_limit_exceeded', 'too_many_requests', 'rate_limit_error'].includes(code);
+    return {
+        code,
+        type: Number(statusCode) === 401 ? 'authentication_error'
+            : explicitRate ? 'rate_limit_error'
+                : Number(statusCode) >= 500 || code === 'server_error' || code === 'overloaded'
+                    ? 'api_error' : 'invalid_request_error',
+    };
 }
 
 function handleResponsesStreaming(clientRes, claudeReq, makeRequest) {
@@ -596,17 +655,17 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest) {
                 let errBody = '';
                 upRes.on('data', c => errBody += c);
                 upRes.on('end', () => {
-                    let message = errBody.slice(0, 500);
+                    let message = errBody.slice(0, 500), parsed = null;
                     try {
-                        const parsed = JSON.parse(errBody);
+                        parsed = JSON.parse(errBody);
                         message = (parsed.error && (parsed.error.message || parsed.error.type)) || parsed.message || message;
                     } catch {}
                     logLine(`responses upstream ${upRes.statusCode}: ${String(message).slice(0, 200)}`);
                     finished = true;
+                    const normalized = normalizedHttpError(parsed, upRes.statusCode);
                     claudeError(clientRes, upRes.statusCode, message,
-                        upRes.statusCode === 401 ? 'authentication_error'
-                            : upRes.statusCode === 429 ? 'rate_limit_error'
-                            : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error');
+                        normalized.type,
+                        { code: normalized.code, retryAfterMs: parseRetryAfter(upRes.headers['retry-after']) ?? retryAfterFromBody(parsed) });
                 });
                 return;
             }
@@ -616,12 +675,12 @@ function handleResponsesStreaming(clientRes, claudeReq, makeRequest) {
                 onTransientFail: (info) => {
                     finished = true;
                     logLine(`responses: отказ до контента (${info.code}) - отдаю 429, ретраит клиент`);
-                    claudeError(clientRes, 429, info.message, 'rate_limit_error');
+                    claudeError(clientRes, 429, info.message, 'rate_limit_error', info);
                 },
                 onHardFail: (info) => {
                     finished = true;
                     logLine(`responses: отказ до контента (${info.code}) - отдаю 502`);
-                    claudeError(clientRes, 502, info.message, 'api_error');
+                    claudeError(clientRes, 502, info.message, 'api_error', info);
                 },
             });
             upRes.on('data', (d) => stream.push(d));
@@ -679,21 +738,20 @@ function handleMessages(req, res, body) {
             let errBody = '';
             upRes.on('data', c => errBody += c);
             upRes.on('end', () => {
-                let message = errBody.slice(0, 500);
+                let message = errBody.slice(0, 500), parsed = null;
                 let code = '';
                 try {
-                    const parsed = JSON.parse(errBody);
+                    parsed = JSON.parse(errBody);
                     message = (parsed.error && (parsed.error.message || parsed.error.type)) || parsed.message || message;
-                    code = (parsed.error && parsed.error.code) || parsed.code || '';
+                    code = (parsed.error && (parsed.error.code || parsed.error.type)) || parsed.code || parsed.type || '';
                 } catch {}
                 logLine(`upstream ${upRes.statusCode}: ${String(message).slice(0, 200)}`);
-                const errType = upRes.statusCode === 401 ? 'authentication_error'
-                    : upRes.statusCode === 429 ? 'rate_limit_error'
-                    : upRes.statusCode >= 500 ? 'api_error' : 'invalid_request_error';
+                const normalized = normalizedHttpError(parsed, upRes.statusCode);
+                const errType = normalized.type;
                 const retired = code === 'endpoint_gone' || /endpoint_retired|endpoint_gone/.test(message);
                 claudeError(res, upRes.statusCode,
                     retired ? 'freegg отвечает 410 на этот путь: площадка обслуживает только /v1/responses' : message,
-                    errType);
+                    errType, { code: normalized.code || code, retryAfterMs: parseRetryAfter(upRes.headers['retry-after']) ?? retryAfterFromBody(parsed) });
             });
             return;
         }
@@ -708,7 +766,7 @@ function handleMessages(req, res, body) {
                     const info = responsesErrorInfo(parsed) || { code: 'failed', message: 'upstream вернул отказ', transient: false };
                     logLine(`responses (non-stream) отказ: ${info.code} — ${String(info.message).slice(0, 160)}`);
                     return claudeError(res, info.transient ? 429 : 502, info.message,
-                        info.transient ? 'rate_limit_error' : 'api_error');
+                        info.transient ? 'rate_limit_error' : 'api_error', info);
                 }
                 writeJSON(res, 200, convertResponsesToClaude(parsed, claudeReq));
             } catch (e) {

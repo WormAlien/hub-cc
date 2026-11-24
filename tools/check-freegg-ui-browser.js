@@ -11,14 +11,17 @@ const map = { opus: 'gpt-6.1-sol', sonnet: 'gpt-6.1-sol', haiku: 'gpt-6.1-sol' }
     const browser = await chromium.launch({ headless: true });
     try {
         for (const width of [1365, 390]) {
-            const errors = [], writes = [];
-            let added = false, opened = false;
+            const errors = [], writes = [], requests = [];
+            let added = false, opened = false, rateEnabled = false, rateEndpointAvailable = true;
             sessions.splice(1);
             sessions[0].api_key = 'no-key-fixture';
             const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
             await context.addInitScript(() => { localStorage.setItem('opencode_active_tab', 'freegg'); });
             await context.route('**/*', async route => {
                 const req = route.request(), url = new URL(req.url());
+                const headers = req.headers();
+                requests.push({ method: req.method(), path: url.pathname,
+                    contentType: headers['content-type'] || '', secFetchSite: headers['sec-fetch-site'] || '' });
                 if (url.origin !== 'http://freegg-ui.invalid') return route.abort();
                 if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: html });
                 const vendorAt = url.pathname.indexOf('/vendor/');
@@ -34,12 +37,19 @@ const map = { opus: 'gpt-6.1-sol', sonnet: 'gpt-6.1-sol', haiku: 'gpt-6.1-sol' }
                     inPool: false, hasSession: false, allSourcesBusy: false, usedHere: false }], building: false };
                 if (url.pathname.includes('/fg/')) {
                     if (req.method() === 'POST') writes.push(url.pathname);
-                    if (added && !sessions.some(row => row.id === 'fg_added')) sessions.push({ id: 'fg_added', email: 'alice', name: 'alice', api_key: 'no-key-fixture', status: 'no_key', ghId: 'gh_ui', active: false });
-                    if (opened) sessions.find(row => row.id === 'fg_added').api_key = 'sk-' + 'fixture-created-key';
+                    if (url.pathname.endsWith('/rate-policy')) {
+                        if (!rateEndpointAvailable) return route.fulfill({ status: 404, contentType: 'application/json',
+                            body: JSON.stringify({ error: 'fixture dashboard still uses old handlers' }) });
+                        if (req.method() === 'POST') rateEnabled = !!req.postDataJSON().enabled;
+                        result = { ok: true, enabled: rateEnabled, scope: rateEnabled ? 'account' : 'off', restarted: req.method() === 'POST' };
+                    }
+                    if (!url.pathname.endsWith('/rate-policy') && added && !sessions.some(row => row.id === 'fg_added')) sessions.push({ id: 'fg_added', email: 'alice', name: 'alice', api_key: 'no-key-fixture', status: 'no_key', ghId: 'gh_ui', active: false });
+                    if (opened && sessions.some(row => row.id === 'fg_added')) sessions.find(row => row.id === 'fg_added').api_key = 'sk-' + 'fixture-created-key';
                     if (url.pathname.endsWith('/sessions')) result = { sessions, activeModel: 'gpt-6.1-sol', modelMap: map };
                     else if (url.pathname.endsWith('/models')) result = { ok: true, data: [{ id: 'gpt-6.1-sol' }], models: [{ id: 'gpt-6.1-sol' }] };
                     else if (url.pathname.endsWith('/modelmap')) result = { ok: true, modelMap: map };
-                    else if (url.pathname.includes('/keepalive/state')) result = { ok: true, up: true, config: { hedgeMs: 0, maxHedges: 0, maxAttempts: 1 }, stats: {} };
+                    else if (url.pathname.includes('/keepalive/state')) result = { ok: true, up: true, cfg: { hedgeMs: 0, maxHedges: 0, maxAttempts: 1, preCommitMs: 10000 }, stats: {},
+                        rateBalance: { enabled: rateEnabled, scope: rateEnabled ? 'account' : 'off' } };
                     else if (url.pathname.endsWith('/add-github')) {
                         assert.equal(req.postDataJSON().ghId, 'gh_ui'); added = true;
                         result = { ok: true, id: 'fg_added', label: 'acct_fg_added', ghLogin: 'alice', deadSession: true };
@@ -59,6 +69,39 @@ const map = { opus: 'gpt-6.1-sol', sonnet: 'gpt-6.1-sol', haiku: 'gpt-6.1-sol' }
             await page.waitForTimeout(2200);
             const panel = page.locator('[data-tab-content="freegg"]');
             await assert.doesNotReject(panel.getByText('gpt-6.1-sol', { exact: false }).first().waitFor());
+            const rateToggle = panel.locator('#fg-rate-balance-toggle');
+            await rateToggle.waitFor({ state: 'visible' });
+            assert.equal(await rateToggle.getAttribute('role'), 'switch');
+            assert.equal(await rateToggle.getAttribute('aria-label'), 'Распределять 429 между аккаунтами FreeGG');
+            assert.equal(await rateToggle.getAttribute('aria-checked'), 'false');
+            const hitBox = await rateToggle.boundingBox();
+            assert.ok(hitBox && hitBox.height >= 44 && hitBox.width >= 44, 'mobile-sized hit target');
+            await rateToggle.click();
+            // aria-checked changes optimistically before the POST reply. Wait for the settled state.
+            await page.waitForFunction(() => {
+                const toggle = document.querySelector('#fg-rate-balance-toggle');
+                const label = document.querySelector('#fg-rate-balance-state');
+                return toggle?.getAttribute('aria-checked') === 'true' && !toggle.disabled
+                    && /включено.*account/.test(label?.textContent || '');
+            });
+            assert.match(await panel.locator('#fg-rate-balance-state').innerText(), /включено.*account/);
+            const rateWrite = requests.find(row => row.path === '/__switch/api/fg/rate-policy' && row.method === 'POST');
+            assert.equal(rateWrite && rateWrite.contentType, 'application/json');
+            assert.notEqual(rateWrite && rateWrite.secFetchSite, 'cross-site');
+            const overflow = await page.evaluate(() => ({ viewport: document.documentElement.clientWidth,
+                body: document.body.scrollWidth, root: document.documentElement.scrollWidth }));
+            assert.ok(overflow.body <= overflow.viewport && overflow.root <= overflow.viewport, JSON.stringify(overflow));
+            await panel.locator('#fg-keepalive').scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `freegg-${width}-rate-toggle.png`) });
+            rateEndpointAvailable = false;
+            await page.evaluate(() => { fgRateBalancePaint(false, false); });
+            await page.evaluate(() => fgRateBalanceLoad());
+            assert.equal(await rateToggle.getAttribute('aria-checked'), 'true', 'old dashboard must display actual live policy state');
+            assert.equal(await rateToggle.isDisabled(), true, 'old dashboard has no rate write handler');
+            assert.match(await panel.locator('#fg-rate-balance-state').innerText(), /управление после перезапуска dashboard/);
+            rateEndpointAvailable = true;
+            await page.evaluate(() => fgRateBalanceLoad());
+            assert.equal(await rateToggle.isDisabled(), false);
             await panel.locator('button').filter({ hasText: '➕ Добавить' }).click();
             await panel.locator('#fg-add-form').waitFor({ state: 'visible' });
             await panel.locator('#fg-add-email').fill('WormAlien');

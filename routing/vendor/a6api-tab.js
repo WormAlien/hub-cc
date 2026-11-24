@@ -1,9 +1,10 @@
-/* a6api: local Claude Code controls. Reading or selecting never activates a gateway. */
+/* a6api: account/key, shared picker publications and optional native compatibility. */
 (() => {
   'use strict';
   const API = '/__switch/api/a6api/';
   const COMMAND = '/model a6api[1m]';
-  const SLOTS = ['default', 'opus', 'sonnet', 'haiku'];
+  const SLOTS = ['default'];
+  const TIERS = ['opus', 'sonnet', 'haiku'];
   const byId = id => document.getElementById(id);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = v => v == null || !Number.isFinite(Number(v)) ? 'нет данных' : '$' + Number(v).toFixed(6).replace(/(\.\d*?[1-9])0+$|\.0+$/, '$1');
@@ -14,7 +15,8 @@
     return Number.isFinite(d.getTime()) ? d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'нет данных';
   };
   const S = { wired: false, loading: false, modelLoading: false, busy: false, setupEditing: false, sequence: 0,
-    state: null, tokenId: null, models: [], modelsReady: false, drafts: new Map(), routeObserver: null, routeTimer: null };
+    state: null, tokenId: null, models: [], modelsReady: false, publications: null, publicationsReady: false,
+    query: '', visibleModels: 18, drafts: new Map(), routeObserver: null, routeTimer: null };
   const token = () => S.state?.tokens.find(t => t.id === S.tokenId);
   // 🪤 В выпадашке только рабочие ключи. Выключенный (`status !== 1`) выбрать нельзя -
   // кнопка «Использовать ключ» на нём остаётся серой, - но сама строка в списке читается
@@ -38,7 +40,8 @@
   const editable = () => !!(S.state?.canWrite && !locked() && S.modelsReady && S.models.length && usableKey());
   const canUseKey = () => !!(S.state?.canWrite && !locked() && usableKey() && S.modelsReady && S.models.length && !prepared());
   const canSave = () => editable() && prepared() && dirty() && validMap();
-  const canActivate = () => !!(S.state?.canWrite && !locked() && usableKey() && prepared() && validMap() && !dirty());
+  const canActivate = () => !!(S.state?.canWrite && !locked() && usableKey() && prepared() && validMap() && !dirty() &&
+    TIERS.every(tier => S.models.includes(S.state.modelMap?.[tier])));
   async function api(name, body) {
     const r = await fetch(API + name, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
@@ -50,7 +53,7 @@
     if (S.wired) return;
     const root = byId('a6api-root'); if (!root) return;
     root.innerHTML = `
-      <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Claude Code на одном платном аккаунте</p></div>
+      <header class="a6-head"><div><h1>a6api</h1><p class="a6-muted">Модели для Claude Code, Hermes и OpenCode</p></div>
         <div class="a6-row"><span id="a6-setup-chip" class="a6-setup-chip"><span>Аккаунт подключён</span><button id="a6-change-account" class="a6-btn a6-small" data-a6="change-account">Изменить данные</button></span><button id="a6-refresh" class="a6-btn" data-a6="refresh">Обновить</button><a class="a6-btn" href="https://a6api.vip/?auth=register&amp;aff=9eKT" target="_blank" rel="noopener">Кабинет</a></div></header>
       <div id="a6-error" class="a6-notice a6-error" role="alert" hidden></div>
       <div id="a6-local" class="a6-notice" hidden>Только просмотр. Чтобы изменить настройки, откройте дашборд через localhost на основной машине.</div>
@@ -62,38 +65,52 @@
           <div class="a6-connect-actions"><button id="a6-connect" class="a6-btn a6-primary" type="button" data-a6="connect-account">Проверить и сохранить</button><button id="a6-cancel-connect" class="a6-btn" type="button" data-a6="cancel-connect">Отмена</button></div>
         </form>
       </section>
-      <div id="a6-controls">
-      <section class="a6-account" aria-label="Аккаунт a6api"><div><span class="a6-muted">Общий баланс</span><strong id="a6-balance" class="a6-balance a6-mono">нет данных</strong></div>
-        <div class="a6-account-spend"><span class="a6-muted">Расход аккаунта</span><span id="a6-account-spent" class="a6-mono">нет данных</span></div>
-        <span id="a6-connection" class="a6-status" role="status">Не подготовлен</span></section>
       <div class="a6-layout">
-        <section class="a6-panel a6-key-panel" aria-labelledby="a6-key-title"><h2 id="a6-key-title">Ключ для Claude Code</h2>
+        <div id="a6-controls" class="a6-provider-controls">
+        <section class="a6-account" aria-label="Аккаунт a6api"><div><span class="a6-muted">Общий баланс</span><strong id="a6-balance" class="a6-balance a6-mono">нет данных</strong></div>
+          <div class="a6-account-spend"><span class="a6-muted">Расход аккаунта</span><span id="a6-account-spent" class="a6-mono">нет данных</span></div></section>
+        <section class="a6-panel a6-key-panel" aria-labelledby="a6-key-title"><div class="a6-key-head"><h2 id="a6-key-title">Ключ a6api</h2><span id="a6-connection" class="a6-status" role="status">Не подготовлен</span></div>
           <p id="a6-active-key" class="a6-muted"></p>
           <label class="a6-field a6-key-select"><span>Ключ из кабинета</span><select id="a6-token" class="a6-select"></select></label>
           <div id="a6-key-info"></div><button id="a6-use-key" class="a6-btn" data-a6="use-key">Использовать ключ</button>
-          <p id="a6-key-note" class="a6-muted">Подготовит a6api локально, не переключая Claude Code.</p></section>
-        <section class="a6-panel a6-model-panel" aria-labelledby="a6-main-title">
-          <label class="a6-field a6-main-field"><span id="a6-main-title">Основное окно</span><select id="a6-model-default" class="a6-select a6-main-model a6-mono" aria-describedby="a6-model-note"></select></label>
-          <div id="a6-cmd-default" class="a6-cmd-row"></div>
-          <p id="a6-model-note" class="a6-muted"></p>
-          <div class="a6-subagents"><h2>Субагенты</h2><div class="a6-tier-grid">${['opus', 'sonnet', 'haiku'].map(slot => `<label class="a6-field"><span>${slot[0].toUpperCase() + slot.slice(1)}</span><select id="a6-model-${slot}" class="a6-select a6-mono"></select></label>`).join('')}</div><div id="a6-cmd-tiers" class="a6-cmd-row a6-cmd-tiers"></div></div>
-          <div class="a6-save-row"><span id="a6-draft-status" class="a6-muted" role="status"></span><button id="a6-save" class="a6-btn" data-a6="save">Сохранить модели</button></div>
-          <div class="a6-route-note"><p id="a6-routes-hint" class="a6-muted">Субагенты идут тирами Opus, Sonnet и Haiku; они общие с вкладкой «Маршруты». Субагенты другого провайдера - через /model multi там же. Основная модель для /model настраивается отдельно.</p><button class="a6-btn a6-small" data-a6="routes">Маршруты</button></div>
+          <p id="a6-key-note" class="a6-muted">Один ключ для всех запросов a6api. Модель выбирается в клиенте.</p></section>
+        </div>
+        <section class="a6-panel a6-model-panel" aria-labelledby="a6-models-title">
+          <div class="a6-models-head"><h2 id="a6-models-title">Модели в API Gateway</h2><span id="a6-published-count" class="a6-muted" role="status"></span></div>
+          <p class="a6-muted">Включите нужные модели. Они появятся в пикере клиента; текущая модель не изменится.</p>
+          <label class="a6-field a6-model-search"><span>Найти модель</span><input id="a6-model-search" class="a6-select" type="search" placeholder="Название или ID модели" autocomplete="off"></label>
+          <p id="a6-catalog-note" class="a6-muted" role="status"></p>
+          <div id="a6-publication-list" class="a6-model-list"></div>
+          <button id="a6-model-more" class="a6-btn a6-small" data-a6="more-models" hidden>Показать ещё</button>
+          <div class="a6-gateway-link"><span class="a6-muted">Названия и лимиты моделей</span><button class="a6-btn a6-small" data-a6="gateway">Настройки API Gateway</button></div>
         </section>
       </div>
-      <section class="a6-activation" aria-label="Подключение Claude Code"><div><button id="a6-activate" class="a6-btn a6-primary" data-a6="activate">Активировать для Claude Code</button><p id="a6-activation-note" class="a6-muted">Переключит текущий бэкенд Claude Code на a6api.</p></div>
-        <div class="a6-command"><span class="a6-muted">Для отдельного окна</span><button class="a6-btn a6-mono" data-a6="copy-command" aria-label="Скопировать /model a6api[1m]">/model a6api[1m]</button></div></section>
-      </div>`;
+      <details id="a6-compatibility" class="a6-compatibility a6-panel"><summary>Совместимость Claude Code <span class="a6-muted">необязательно</span></summary>
+        <p class="a6-muted">Для старого native-пути и команды /model a6api. Для выбора точной модели в общем пикере этот раздел не нужен.</p>
+        <div class="a6-compatibility-body">
+          <label class="a6-field"><span id="a6-main-title">Модель по умолчанию native-пути</span><select id="a6-model-default" class="a6-select a6-mono" aria-describedby="a6-model-note"></select></label>
+          <div id="a6-cmd-default" class="a6-cmd-row"></div>
+          <p id="a6-model-note" class="a6-muted"></p>
+          <div class="a6-save-row"><span id="a6-draft-status" class="a6-muted" role="status"></span><button id="a6-save" class="a6-btn" data-a6="save">Сохранить default</button></div>
+          <div class="a6-route-note"><p id="a6-routes-hint" class="a6-muted">Opus, Sonnet и Haiku настраиваются только во вкладке «Маршруты». Текущие назначения сохраняются.</p><button class="a6-btn a6-small" data-a6="routes">Маршруты</button></div>
+          <section class="a6-activation" aria-label="Native-подключение Claude Code"><div><button id="a6-activate" class="a6-btn" data-a6="activate">Активировать native-путь</button><p id="a6-activation-note" class="a6-muted"></p></div>
+            <div class="a6-command"><span class="a6-muted">Старый alias для отдельного окна</span><button class="a6-btn a6-mono" data-a6="copy-command" aria-label="Скопировать /model a6api[1m]">/model a6api[1m]</button></div></section>
+        </div>
+      </details>`;
     root.addEventListener('click', e => {
       const b = e.target.closest('[data-a6]'); if (!b || b.disabled) return;
       // Команда у конкретной модели: текст берём из её же data-cmd, чтобы бейдж и
       // буфер не могли разойтись.
       if (b.dataset.a6 === 'copy-cmd') return copyRendered(b);
-      const actions = { refresh: load, 'connect-account': connectAccount, 'change-account': changeAccount, 'cancel-connect': cancelConnect, 'use-key': useKey, save: saveModels, activate, routes: openRoutes, 'copy-command': copyCommand };
+      const actions = { refresh: load, 'connect-account': connectAccount, 'change-account': changeAccount, 'cancel-connect': cancelConnect, 'use-key': useKey, save: saveModels, activate, routes: openRoutes, gateway: openGateway, 'copy-command': copyCommand,
+        'more-models': () => { S.visibleModels += 18; renderCatalog(); } };
       return Promise.resolve(actions[b.dataset.a6]?.()).catch(e => error(e.message));
     });
     byId('a6-connect-form').addEventListener('submit', e => { e.preventDefault(); connectAccount(); });
     byId('a6-token').addEventListener('change', () => selectToken(Number(byId('a6-token').value)));
+    byId('a6-model-search').addEventListener('input', () => {
+      S.query = byId('a6-model-search').value; S.visibleModels = 18; renderCatalog();
+    });
     for (const slot of SLOTS) byId('a6-model-' + slot).addEventListener('change', () => selectModel(slot));
     S.wired = true;
   }
@@ -116,36 +133,35 @@
       }
     }
   }
-  // ── Команда /model под каждым селектором ──────────────────────────────────
-  // Владельцу нужна готовая строка для второго окна конкретной модели, а не общая
-  // `/model a6api[1m]`: тир называть обязательно, иначе то же окно получит `default`.
-  // Основное окно адресуется явным именем модели (`a6api/<модель>`) - эта форма уже
-  // проверена в бою и не требует правки `default`. Тир - формой `a6api[<тир>]`, её
-  // понимает front-door и подменяет по тир-карте.
-  // 🪤 Форму `a6api/<тир>` (слэш + имя тира) НЕ предлагаем: keepalive возвращает её
-  // эхом как `<тир>[1m]`, [CC] такого имени не знает и рвёт поток - живой отказ 26.10.
-  // 🪤 Окно клиента задаётся СУФФИКСОМ выбранного имени: без `[1m]` Claude Code верит
-  // в 200k. Список 1M-моделей берём из опубликованного манифеста API Gateway
-  // (`contextTokens >= 1M`) и кешируем; пока он не пришёл, строка собирается как раньше.
-  // Модель, которой в манифесте нет, суффикса не получает - её окно нам неизвестно.
+  // Exact-model commands work in a separate Claude window without native default changes.
+  // Offer [1m] only when the shared manifest declares that context; never slash-tier IDs.
   let oneMIds = new Set();
   let oneMSeq = 0;
+  function acceptPublications(data) {
+    if (!data || data.ok === false || !Array.isArray(data.models)) throw new Error('Не удалось прочитать публикации');
+    S.publications = data; S.publicationsReady = true;
+    oneMIds = new Set(data.models.filter(m => m?.published && Number(m.contextTokens) >= 1000000).map(m => m.id));
+    if (S.wired) { renderCatalog(); renderCmd('default', draft()?.values.default); }
+  }
   async function refreshOneM() {
     // 🪤 Ответы могут прийти вразнобой (bootstrap-запрос и запрос из load): применяем
     // только последний. Иначе поздний пустой ответ затирал уже полученный список, и
     // строка `/model` снова оставалась без `[1m]`.
     const seq = ++oneMSeq;
-    let next = new Set();
     try {
-      const r = await fetch('/__switch/api/api-gateway', { headers: { accept: 'application/json' } });
-      const d = await r.json();
-      next = new Set((d && d.models || [])
-        .filter(m => m && m.published && Number(m.contextTokens) >= 1000000)
-        .map(m => String(m.id)));
-    } catch { /* список остаётся прежним */ }
-    if (seq !== oneMSeq) return;
-    oneMIds = next;
-    if (S.modelsReady) renderModels();
+      let data;
+      if (window.MODEL_PUBLICATION?.refresh) data = await window.MODEL_PUBLICATION.refresh(true);
+      else {
+        const r = await fetch('/__switch/api/api-gateway', { headers: { accept: 'application/json' }, cache: 'no-store' });
+        if (!r.ok) throw new Error('publication_read_failed');
+        data = await r.json();
+      }
+      if (seq === oneMSeq) acceptPublications(data);
+    } catch {
+      if (seq !== oneMSeq) return;
+      S.publicationsReady = false;
+      if (S.wired) renderCatalog();
+    }
   }
 
   function commandFor(slot, model) {
@@ -155,10 +171,6 @@
     const suffixed = oneMIds.has('a6api/' + model) ? model + '[1m]' : model;
     return '/model a6api/' + suffixed;
   }
-  // 🪤 Команда нужна НЕ под каждым селектором: четыре строки подряд съедали высоту
-  // панели (замер 26.10: вкладка выходила за потолок 850 px при ширине 1365 на 11 px).
-  // Поэтому одна строка под ОСНОВНЫМ окном (адрес отдельного окна) и одна общая
-  // строка под тирами: `a6api[sonnet]` - самый ходовой, остальные в подсказке.
   function cmdChip(cmd) {
     return `<code class="a6-cmd" data-a6="copy-cmd" data-cmd="${esc(cmd)}"
         title="Клик = скопировать ${esc(cmd)}" role="button" tabindex="0">${esc(cmd)}</code>`;
@@ -168,13 +180,7 @@
     const cmd = commandFor(slot, model);
     box.innerHTML = cmd ? cmdChip(cmd) : '';
   }
-  function renderTierCmds() {
-    const box = byId('a6-cmd-tiers'); if (!box) return;
-    const d = draft(); if (!d) { box.innerHTML = ''; return; }
-    // Показываем только те тиры, что заполнены, одной строкой через пробел.
-    const cmds = ['sonnet', 'opus', 'haiku'].filter(t => d.values[t]).map(t => commandFor(t, d.values[t]));
-    box.innerHTML = cmds.length ? cmds.map(cmdChip).join('') : '';
-  }
+
   async function copyRendered(el) {
     const cmd = el?.dataset?.cmd;
     if (!cmd) return;
@@ -188,6 +194,7 @@
     byId('a6-connect-panel').hidden = connected && !editing;
     byId('a6-connect-form').hidden = !editing;
     byId('a6-controls').hidden = !connected;
+    byId('a6-compatibility').hidden = !connected;
     byId('a6-setup-chip').hidden = !connected || editing;
     byId('a6-cancel-connect').hidden = !connected;
     byId('a6-connect-status').textContent = connected ? 'Аккаунт подключён. Системный токен хранится только локально.' :
@@ -233,7 +240,6 @@
       select.value = value; select.disabled = !editable();
       renderCmd(slot, value);
     }
-    renderTierCmds();
     byId('a6-model-note').textContent = S.modelLoading || S.loading ? 'Загрузка разрешённых моделей...' : !S.tokenId ? 'Выберите ключ из кабинета.' :
       !S.modelsReady ? 'Модели недоступны. Обновите данные.' : !S.models.length ? 'У ключа нет разрешённых моделей. Настройте их в кабинете.' :
       SLOTS.some(slot => d?.values[slot] && !S.models.includes(d.values[slot])) ? 'В черновике есть недоступные модели. Выберите разрешённые.' : 'Только модели, разрешённые выбранному ключу.';
@@ -243,19 +249,65 @@
       'Перед активацией сохраните разрешённые модели.' : 'Переключит текущий бэкенд Claude Code на a6api.';
     byId('a6-save').disabled = !canSave();
     byId('a6-activate').disabled = !canActivate();
+    renderCatalog();
+  }
+  function renderCatalog() {
+    const list = byId('a6-publication-list'); if (!list) return;
+    const published = new Map((S.publications?.models || []).filter(row => row?.published && typeof row.id === 'string' && row.id.startsWith('a6api/')).map(row => [row.id.slice(6), row]));
+    const query = S.query.toLocaleLowerCase('ru-RU').trim();
+    const models = [...new Set([...S.models, ...published.keys()])].sort((a, b) =>
+      Number(published.has(b)) - Number(published.has(a)) || a.localeCompare(b, 'ru-RU'));
+    const filtered = models.filter(model => [model, 'a6api/' + model, published.get(model)?.displayName || ''].some(value => value.toLocaleLowerCase('ru-RU').includes(query)));
+    const shown = filtered.slice(0, S.visibleModels);
+    byId('a6-published-count').textContent = S.publicationsReady ? 'В пикере: ' + published.size : 'Публикации не прочитаны';
+    byId('a6-catalog-note').textContent = !S.publicationsReady ? 'Не удалось прочитать публикации. Обновите данные.' :
+      S.loading || S.modelLoading ? 'Загрузка разрешённых моделей...' : S.state?.connected !== true ? 'Подключите аккаунт, чтобы добавить модели. Опубликованные модели можно скрыть.' :
+      !S.tokenId ? 'Выберите ключ из кабинета.' : !S.modelsReady ? 'Каталог недоступен. Публикации сохранены; их можно скрыть.' :
+      !S.models.length ? 'У ключа нет разрешённых моделей. Публикации не удалены.' : !prepared() ? 'Нажмите «Использовать ключ», чтобы публиковать модели для этого ключа.' :
+      'Разрешённые модели выбранного ключа. Публикация сохраняется сразу.';
+    const unavailable = model => S.state?.connected !== true ? 'Аккаунт не подключён' :
+      !usableKey() ? 'Ключ недоступен: проверьте срок и лимит' : !S.modelsReady ? 'Каталог не прочитан' :
+      !S.models.includes(model) ? 'Модель не разрешена выбранному ключу' : !prepared() ? 'Сначала используйте выбранный ключ' : '';
+    const signature = JSON.stringify({ shown: shown.map(model => [model, published.get(model) || null, unavailable(model)]), ready: S.publicationsReady });
+    if (list.dataset.models !== signature) {
+      list.dataset.models = signature;
+      list.innerHTML = shown.map(model => {
+        const id = 'a6api/' + model, metadata = published.get(model), reason = unavailable(model);
+        const caption = !S.publicationsReady ? 'Статус не проверен' : metadata ? 'В пикере' : 'Не в пикере';
+        const number = value => Number(value).toLocaleString('en-US').replaceAll(',', ' ');
+        const limits = metadata ? 'Контекст: ' + number(metadata.contextTokens) + ' · Ответ: ' + number(metadata.outputTokens) : 'Лимиты задаются в API Gateway';
+        const content = `<div class="a6-model-main"><div class="a6-model-title"><strong>${esc(metadata?.displayName || model)}</strong><span class="a6-model-state" data-published="${S.publicationsReady && !!metadata}">${caption}</span></div><code class="a6-model-id a6-mono">${esc(id)}</code><span class="a6-model-limits a6-muted">${esc(limits)}</span>${reason ? `<span class="a6-model-unavailable">${esc(reason)}${metadata ? '. Можно скрыть.' : '.'}</span>` : ''}</div><div class="a6-model-copy"><button class="a6-btn a6-small" data-a6="copy-cmd" data-cmd="${esc(id)}" title="Скопировать точный ID">ID</button><button class="a6-btn a6-small a6-mono" data-a6="copy-cmd" data-cmd="${esc(commandFor('default', model))}" title="Скопировать команду Claude Code">/model</button></div>`;
+        const chip = typeof window.modelPublicationChip === 'function' ? window.modelPublicationChip('a6api', model, content)
+          .replace('data-publication-slot=', `data-publication-blocked="${esc(reason)}" data-publication-slot=`) : content;
+        return `<div class="a6-model-row" data-a6-model-id="${esc(id)}">${chip}</div>`;
+      }).join('') || `<div class="a6-model-empty a6-muted">${query ? 'Модели не найдены. Измените поиск.' : 'Нет моделей для публикации.'}</div>`;
+      window.MODEL_PUBLICATION?.enhance?.();
+    }
+    byId('a6-model-more').hidden = filtered.length <= shown.length;
+    byId('a6-model-more').textContent = 'Показать ещё (' + (filtered.length - shown.length) + ')';
   }
   function render() {
     renderSetup();
     byId('a6-local').hidden = !S.state || !!S.state.canWrite;
     byId('a6-refresh').disabled = S.busy || S.loading;
-    if (S.state?.connected !== true) return;
+    if (S.state?.connected !== true) { renderCatalog(); return; }
     byId('a6-balance').textContent = money(S.state?.account?.balanceUsd);
     byId('a6-account-spent').textContent = money(S.state?.account?.spentUsd);
     const connection = byId('a6-connection');
-    connection.textContent = S.state?.active ? 'Активен в Claude Code' : S.state?.prepared ? 'Подготовлен, не активен' : 'Не подготовлен';
-    connection.dataset.active = String(!!S.state?.active);
+    const keyStates = {
+      a6api_key_ready: ['Ключ подготовлен', 'Один ключ для всех запросов a6api. Модель выбирается в клиенте.'],
+      a6api_token_expired: ['Ключ истёк', 'Измените срок в кабинете или используйте другой ключ. Публикации сохранены.'],
+      a6api_token_disabled: ['Ключ выключен', 'Используйте рабочий ключ. Публикации сохранены.'],
+      a6api_token_quota: ['Лимит исчерпан', 'Измените лимит в кабинете или используйте другой ключ. Публикации сохранены.'],
+      a6api_token_missing: ['Ключ не найден', 'Выбранный ключ больше не найден в кабинете. Используйте другой ключ.'],
+      a6api_key_unprepared: ['Не подготовлен', 'Подготовьте выбранный ключ кнопкой «Использовать ключ».'],
+    };
+    const keyState = keyStates[S.state?.keyStatus] || keyStates[S.state?.prepared ? 'a6api_key_ready' : 'a6api_key_unprepared'];
+    connection.textContent = keyState[0];
+    connection.dataset.active = String(!!S.state?.prepared);
     const savedToken = S.state?.tokens.find(t => t.id === S.state.selectedTokenId);
-    byId('a6-active-key').textContent = savedToken ? 'Используется: ' + savedToken.name : 'Ключ ещё не выбран';
+    byId('a6-active-key').textContent = savedToken ? 'Используется: ' + savedToken.name :
+      S.state.selectedTokenId ? 'Выбранный ключ #' + S.state.selectedTokenId + ' не найден' : 'Ключ ещё не выбран';
     const shown = visibleTokens();
     byId('a6-token').innerHTML = shown.map(t => `<option value="${t.id}">${esc(t.name)} #${t.id}${t.status === 1 ? '' : ' - выключен'}</option>`).join('');
     byId('a6-token').value = S.tokenId ? String(S.tokenId) : '';
@@ -264,7 +316,7 @@
     byId('a6-key-info').innerHTML = t ? `<div class="a6-key-identity"><code class="a6-mono">${esc(t.mask || 'ключ скрыт')}</code><span class="a6-muted">${t.status === 1 ? 'Включён' : 'Выключен'}</span></div>
       <dl class="a6-key-facts"><div><dt>Расход ключа</dt><dd class="a6-mono">${money(t.spentUsd)}</dd></div><div><dt>Остаток лимита</dt><dd>${t.unlimited ? 'В пределах баланса' : money(t.remainingUsd)}</dd></div><div><dt>Действует до</dt><dd>${time(t.expires)}</dd></div></dl>` : '<p class="a6-muted">Ключей нет. Создайте ключ в кабинете a6api.</p>';
     byId('a6-use-key').disabled = !canUseKey();
-    byId('a6-key-note').textContent = prepared() ? 'Этот ключ подготовлен для a6api.' : 'Подготовит a6api локально, не переключая Claude Code.';
+    byId('a6-key-note').textContent = S.tokenId !== S.state.selectedTokenId ? 'Это другой ключ. «Использовать ключ» заменит ключ для всех запросов a6api, не переключая текущую модель клиента.' : keyState[1];
     renderModels();
   }
   function acceptModels(models) {
@@ -353,11 +405,17 @@
   async function saveModels() {
     if (!canSave()) return;
     const tokenId = S.tokenId, modelMap = { ...draft().values };
+    const expectedMap = { ...S.state.modelMap, ...modelMap }, expectedRoutes = { ...S.state.routesMap };
+    const sameMap = (actual, expected) => {
+      if (actual === expected) return true;
+      if (!actual || !expected || typeof actual !== 'object' || typeof expected !== 'object' || Array.isArray(actual) !== Array.isArray(expected)) return false;
+      return Object.keys(actual).length === Object.keys(expected).length &&
+        Object.keys(expected).every(key => Object.hasOwn(actual, key) && sameMap(actual[key], expected[key]));
+    };
     S.busy = true; error(''); render();
     try {
       const d = await api('modelmap', { tokenId, modelMap });
-      if (!d.modelMap || SLOTS.some(slot => d.modelMap[slot] !== modelMap[slot]) ||
-        !d.routesMap || ['opus', 'sonnet', 'haiku'].some(slot => d.routesMap[slot] !== modelMap[slot])) {
+      if (!sameMap(d.modelMap, expectedMap) || !sameMap(d.routesMap, expectedRoutes)) {
         throw new Error('Сервер не подтвердил модели. Черновик сохранён, обновите данные.');
       }
       S.state.modelMap = d.modelMap; S.state.routesMap = d.routesMap;
@@ -398,6 +456,11 @@
       S.routeTimer = setTimeout(() => S.routeObserver.disconnect(), 5000);
     }
   }
+  function openGateway() {
+    if (typeof window.showTab !== 'function') return error('Вкладка API Gateway недоступна');
+    window.showTab('api-gateway');
+  }
+  document.addEventListener('abuse-hub:model-publications', event => { acceptPublications(event.detail); });
   window.A6API = { load };
   // Манифест 1M-моделей читаем один раз на загрузку вкладки: строка `/model` должна
   // нести `[1m]` уже при первом отображении, иначе владелец скопирует 200k-вариант.

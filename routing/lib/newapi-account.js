@@ -243,6 +243,7 @@ const HOST_AUTH = {
     // и точный баланс тихо падает в «угадать грант». Проверить ПЕРВЫМ живым логином:
     // цифра обязана прийти из /api/user/self, а не из guessGrant.
     'kktoken.cc': 'jwt',
+    'uncensoredlabs.dev': 'jwt',
     // Xingchi: две строки — панель и API это разные хосты (см. NEWAPI_PROFILE_DIRS).
     // `jwt` — диалект New-API (cookie new_api_refresh), подтверждён на панели.
     'xingchiapi.com': 'jwt',

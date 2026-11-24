@@ -63,6 +63,8 @@ $perPort = @{
   # the gateway answers 404 on every request.
   20161 = @{ UPSTREAM = 'https://kktoken.cc'; KEY_FILE = "$profileDir\.claude\kktoken-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'kktoken-modelmap.json') }
+  20193 = @{ UPSTREAM = 'https://uncensoredlabs.dev'; KEY_FILE = "$profileDir\.claude\uncensoredlabs-active-key.txt";
+             MODELMAP_FILE = (Join-Path $dir 'uncensoredlabs-modelmap.json') }
   20186 = @{ UPSTREAM = 'https://api.xingchiapi.com'; KEY_FILE = "$profileDir\.claude\xingchi-active-key.txt";
              MODELMAP_FILE = (Join-Path $dir 'xingchi-modelmap.json') }
   20184 = @{ UPSTREAM = 'http://127.0.0.1:20185'; KEY_FILE = "$profileDir\.claude\freegg-active-key.txt";
@@ -129,9 +131,54 @@ Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinu
 Start-Sleep -Milliseconds 800
 
 foreach ($kv in $common.GetEnumerator())         { Set-Item "env:$($kv.Key)" $kv.Value }
-foreach ($kv in $perPort[$Port].GetEnumerator()) { Set-Item "env:$($kv.Key)" $kv.Value }
 $env:PORT = "$Port"
 $env:LOG_FILE = Join-Path $dir "keepalive-$Port.log"
+
+# Registered provider rate balancing is a persisted user choice, not transient env.
+# Missing, malformed, or non-boolean config is OFF - same fail-closed rule as dashboard.
+$rateRegistry = Join-Path $dir 'rate-balance-providers.json'
+try {
+  $registryText = Get-Content -LiteralPath $rateRegistry -Raw -ErrorAction Stop
+  # PowerShell 7 enumerates a singleton JSON array into its object. Validate the root first.
+  if (-not $registryText.TrimStart().StartsWith('{')) { throw 'rate registry must be a JSON object' }
+  $registry = $registryText | ConvertFrom-Json -ErrorAction Stop
+  if (-not ($registry -is [System.Array]) -and $registry -is [pscustomobject]) {
+    $entry = $registry.PSObject.Properties.Value | Where-Object { $_.port -eq $Port } | Select-Object -First 1
+    if ($entry -and $entry.pfx -and $entry.name) {
+      $providerProperty = $registry.PSObject.Properties | Where-Object { $_.Value -eq $entry } | Select-Object -First 1
+      $providerId = $providerProperty.Name
+      $perPort[$Port].CUSTOM_PROVIDER_ID = $providerId
+      $perPort[$Port].CUSTOM_PROVIDER_NAME = [string]$entry.name
+      if ([string]$entry.sessionsFile -match '^\$ROUTING/([A-Za-z0-9_-]+-sessions\.json)$') {
+        $perPort[$Port].SESSIONS_FILE = Join-Path $dir $Matches[1]
+      } elseif ([string]$entry.sessionsFile -match '^\$PROF/([.A-Za-z0-9_/-]+-sessions\.json)$' -and $Matches[1] -notmatch '(^|/)\.\.(/|$)') {
+        $perPort[$Port].SESSIONS_FILE = Join-Path $profileDir $Matches[1]
+      } else {
+        throw 'rate registry sessionsFile must be a safe $ROUTING or $PROF sessions path'
+      }
+      $env:RATE_BALANCE = '0'
+      $env:RATE_BALANCE_SCOPE = 'off'
+      $rateName = if ($providerId -eq 'freegg') { 'freegg-rate-policy.json' } else { "$providerId-rate-policy.json" }
+      $rateCfg = Join-Path $profileDir ".claude\$rateName"
+      try {
+        $rateText = Get-Content -LiteralPath $rateCfg -Raw -ErrorAction Stop
+        if (-not $rateText.TrimStart().StartsWith('{')) { throw 'rate policy must be a JSON object' }
+        $rate = $rateText | ConvertFrom-Json -ErrorAction Stop
+        if (-not ($rate -is [System.Array]) -and $rate -is [pscustomobject] -and $rate.enabled -is [bool] -and $rate.enabled) {
+          $env:RATE_BALANCE = '1'
+          $env:RATE_BALANCE_SCOPE = 'account'
+        }
+      } catch {}
+      if ($providerId -eq 'freegg') {
+        $env:FREEGG_RATE_BALANCE = $env:RATE_BALANCE
+        $env:FREEGG_RATE_SCOPE = $env:RATE_BALANCE_SCOPE
+      }
+    }
+  }
+} catch {}
+
+# Apply the final per-port map only after the optional rate registry enriched it.
+foreach ($kv in $perPort[$Port].GetEnumerator()) { Set-Item "env:$($kv.Key)" $kv.Value }
 
 # KVOTUM (:20182): make sure the Anthropic-to-OpenAI converter on :20183 is up before
 # starting the keepalive. Same job kvConverterSpawn does from the dashboard path.

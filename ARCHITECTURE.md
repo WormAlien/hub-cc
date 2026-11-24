@@ -119,6 +119,30 @@ Fxqidian now uses the shared `newapi-onboarding.js` wrapper and explicit `/keys`
 `freegg.app/v1/responses`. Messages/Chat на площадке дают 410; live Responses и tool
 cycle отвечали 200. Тиры указывают на `gpt-6.1-sol`; дубли выключены по умолчанию.
 
+23.11 owner-approved account spread включён в работающем keepalive. Общая
+`lib/rate-balance-policy.js` переиспользует `freegg-rate-policy.js`: verified panel
+identity grouping, least-inflight, attempt-owned SSE leases, cooldown token429 и
+не более одного pre-content fallback. Exact модель, safety refusals и начатый
+content/tool-call не replay'ятся; active key/model и pool не переписываются.
+Выбор в `~/.claude/freegg-rate-policy.json`: existing persisted object enabled:true
+главнее env, malformed/array/nonboolean OFF, missing сохраняет legacy aliases.
+FreeGG startup читает файл даже при старом dashboard spawn; selftest preference не читает.
+Откат - persisted enabled:false/scope:off и restart только20184.
+
+Live acceptance через Front Door: пять complete200 text/tool-loop/parallel responses,
+два одновременно занятых verified account groups. Перезапущена только20184/20185 пара;
+dashboard/Front Door/AgentRouter PID и keepalive cfg сохранены. Source тумблер
+при старом dashboard404 показывает actual state через `/fg/keepalive/state`, readonly
+до dashboard reload. Paired natural429 и vendor quota scope ещё не приняты.
+Checks: policy legacy/generic, config17+2selftests, rate converter7+existing32,
+stack30, toggle fixture, PS modes, whole UI1365/390; канон FreeGG в Obsidian.
+
+PowerShell restart проверяет object-root до `ConvertFrom-Json` для registry и policy:
+PowerShell7 иначе распаковывает singleton array в объект и обходил type guard.
+`check-freegg-restart-rate.ps1 -RegistryArray` и existing modes проходят на7/5.1,
+только extracted config-блок в scratch без запуска process lifecycle.
+Browser gate ждёт settled POST status вместо optimistic aria-checked.
+
 `tools/add-gateway.js` поддерживает явный `onboarding.kind:newapi-github` и генерирует
 wrapper `freegg/open-session.js` к общему `routing/lib/newapi-onboarding.js` вместо
 клона чужой формы. `provision freegg --id <existing-pool-id>` - сухой прогон;
@@ -575,12 +599,72 @@ Dashboard and clients:
 - `routing/lib/api-gateway-dashboard.js` joins published manifest rows with shared candidate, passive traffic and probe evidence. Publication and health remain independent;
 - `routing/vendor/api-gateway-tab.js` and `.css` render published rows globally first, candidates, independent evidence badges, sidecar/client cards, redacted OpenCode Preview/Sync and Hermes instructions;
 - `routing/lib/api-gateway-opencode.js` updates only `provider.abuse-hub` across three injected target configs through a recoverable all-or-nothing transaction. It preserves `model`, `small_model`, agents, MCP, permissions, commands, secrets and other providers;
+- Provider Models use a shared sibling `В API Gateway` switch (`modelPublicationChip`, `routing/vendor/model-publication.js/.css`). The strict `/__switch/api/api-gateway/publication` route reuses the existing manifest/Claude picker writer, preserves existing metadata, verifies the exact committed revision and automatically runs OpenCode Sync with three-target readback. Write conflicts, uncertain readback and committed-publication/failed-Sync are distinct. The switch never selects a model or activates a provider. Gateway metadata drafts keep their original revision across publication refresh; no second allowlist is introduced;
 - `routing/lib/api-gateway-hermes.js` detects installation without creating a root. Current Hermes uses its loopback API to upsert only endpoint `abuse-hub`, requires one currently published model, keeps `make_default:false`, and never edits offline YAML;
 - macOS uses XDG OpenCode paths and platform-specific Hermes instructions. Darwin amd64/arm64 artifacts have structural acceptance; live Mac execution was not claimed on the Windows host.
 
 Automated acceptance uses temp homes/configs, dynamic loopback ports and owned child PIDs. It includes real pinned Bifrost and real isolated OpenCode 1.19.4 text plus read-only tool-result loop. Tests do not read or mutate the real Claude/OpenCode/Hermes configs. Production activation/restart and explicit real client Sync are separate owner-controlled actions.
 
 Focused checks include `check-api-gateway-manifest.js`, `check-api-gateway-frontdoor.js`, `check-bifrost-stack.js`, `check-api-gateway-sync.js`, `check-api-gateway-candidates.js`, `check-api-gateway-dashboard.js`, `check-api-gateway-opencode.js`, `check-api-gateway-hermes.js`, `check-api-gateway-integration.js`, `check-api-gateway-ui-browser.js` and `check-api-gateway-opencode-real.js`.
+
+Model publication/default policy (23.11.2026): common keepalive `maxHedges=0`,
+unchanged attempts3/precommit10000; CFG_VERSION8 retains explicit saved overrides.
+Provider placeholders/recommendations agree with runtime defaults. New publication
+defaults are context1000000/output32000/opus behavior; exact IDs split once and
+existing published metadata remain intact. Hide only removes the exact allowlist
+entry and never changes current model/session. Tests include
+`check-keepalive-defaults.js`, `check-api-gateway-publication.js`,
+`check-model-publication-surface.js`, `check-model-publication-ui.js` and
+`check-model-publication-http-ui.js`. The latter exercises real HTTP and isolated
+Claude/native+legacy OpenCode file targets, on/off/F5, metadata drafts and409.
+The scoped `.hermes/environment.json` runs real build/tests and a bounded
+disposable preview HTTP readiness check; it neither starts production nor replaces
+repository-wide check-hub/check-deps gates. Canon: Obsidian's
+`ABUSE HUB - Model publication - Surface Canon`. Source/UI acceptance is not live
+deployment, which still requires a separate approved reload.
+
+Provider advanced UI (23.11.2026): UncensoredLabs/Xingchi/FreeGG/Fxqidian retain
+the full Models catalog/select/copy/publication. The existing tier compatibility
+selects/save now live in a default-closed details block below Models. Prefix-local
+drafts retain unsaved and out-of-catalog targets through refresh; successful
+HTTP saves acknowledge only submitted values, and F5 reads the saved map with
+details closed. This does not change runtime mappings, Bifrost or main selection;
+AgentRouter is the regression baseline and a6api is owned separately.
+Checks: `check-provider-advanced-ui.js`8 provider/viewport cases1440/393 plus2 AR
+regressions,190 assertions; prefix checks cover concurrent saves and HTTP failures.
+Catalog/save fixtures are intercepted; real publication HTTP/readback remains
+`check-model-publication-http-ui.js`. These are source checks, not live inference.
+
+Tabs Manager now partitions navigation into Visible/Hidden drag columns. Moving
+across columns changes sidebar visibility; moving inside Visible changes its
+order. The v1 localStorage key/schema/default whitelist, unknown saved IDs and
+separate Whoami/Memory `shown` sections remain intact. Successful drops commit;
+no-op/cancelled moves do not persist. SortableJS and native mouse/touch fallback
+support keyboard moves, empty targets, Escape and edge scrolling. The modal owns
+a temporary mobile viewport only while open and restores legacy scale on close
+and pagehide, so this does not restyle a6api or other tabs. No provider activation
+or lifecycle is added. Canon: Obsidian's `ABUSE HUB - Tab visibility - Surface Canon`;
+checks: `check-tabs-manager-state.js` and `check-tabs-manager-ui.js`.
+
+Repository gate closure (24.11.2026): `check-hub`122PASS/0FAIL and `check-deps`
+PASS. The dictation check normalizes only its extracted CRLF text;7focused
+behavior/mutation cases retain the real one-clear/arrow repaint invariant.
+The Windows utility checker follows every reference to the private snapshot
+factory's existing Win32-only callsite;21platform cases include Darwin/Linux
+without Windows utilities and one lazy Windows snapshot per status scope.
+Neither `hub.js` nor lifecycle runtime behavior changed for these checker fixes.
+Thirteen root artifacts were preserved: tracked historical scripts/handoff in
+`_sandbox/archived-root-probes`, local ignored data in
+`backups/root-cleanup-20261124-005056`. `install-mac.sh` has Git mode100755 with
+the original blob. Exact missing code dependencies were registered without
+committing, pushing, owner-config staging or changing a6api.
+The full saved isolated verification recipe was rerun successfully:8phases,
+171Node tests, real publication HTTP+readback, UI/Gateway/frontdoor and HTTP200
+readiness. Owned disposable listeners exited; production was not restarted.
+Fresh provider190assertions and tab114scenarios PASS. This does not constitute
+owner visual approval, live provider inference, every test in the repository,
+or Mac production acceptance. Exact receipt:
+`C:/Users/WormAlien/AppData/Local/hermes/cache/scratch/hub-finish-20261124-005056/acceptance-final.json`.
 
 
 ### Front-door `:20100` — переключение провайдера без рестарта Claude Code
@@ -811,12 +895,14 @@ front-door отдельно сохраняет суффикс по `preserveGpt5
 
 ---
 
-## a6api: пульт Claude Code
+## a6api: аккаунт, ключ и публикации моделей
 
 Один платный аккаунт, несколько ключей из кабинета и один выбранный активный ключ.
-Вкладка `a6api` показывает общий баланс, выбор ключа и четыре назначения: основное окно,
-Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить модели» и «Активировать» - разные
-явные операции. Управление продавцами и создание ключей остаются в кабинете a6api.
+Вкладка `a6api` показывает общий баланс, подготовленный ключ и открытый каталог моделей
+с поиском и shared publication switches. Текущая модель выбирается в Claude Code,
+Hermes или OpenCode, не в этой вкладке. Управление продавцами и создание ключей остаются
+в кабинете a6api. Optional native default/activation сохранены в закрытой по умолчанию
+«Совместимости Claude Code»; Opus/Sonnet/Haiku редактируются только в Routes.
 
 На свежей установке вкладка сама показывает ручное подключение аккаунта: системный токен
 кабинета и числовой user ID, без автоматизации браузера. Ссылка регистрации и входа ведёт
@@ -832,6 +918,20 @@ Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить
   подключены к HTTP вкладки.
 - `routing/lib/a6api-gateway.js`: локальная подготовка ключа, проверка разрешённых моделей,
   интеграция со штатными `writeSettings`, `writeTierMap`, `writeBackendsRegistry`.
+- `validatePublication` проверяет prepared selected key, status/expiry/quota и permitted
+  exact text model перед включением через общий API Gateway. Native tier/default maps
+  не prerequisite публикации. Выключение не требует рабочего ключа/каталога; смена ключа
+  не очищает manifest. Advanced edit существующей published metadata также не trapped
+  credential проверкой. Безопасные a6api ошибки отличаются от manifest409.
+- `routing/vendor/a6api-tab.js/.css`: один primary каталог из permitted моделей и уже
+  опубликованных exact ID; metadata читается из shared manifest. Недоступная публикация
+  остаётся видимой с причиной и removal switch. Search/copy не выбирают модель. Native
+  default-only save проверяет неизменность всего Routes map и provider tiers/gpt.
+- `a6ReadMap` возвращает complete map для readback, включая future JSON fields.
+  `a6WriteMap` durable-сохраняет default-only native patch без общего tier mirror;
+  untouched Routes bytes и разошедшиеся старые тиры остаются как были. Правка тира
+  в Routes/full-tier patch сохраняет штатное зеркало. Общий writer других providers
+  не менялся; nested map readback сравнивается по JSON value, не object identity.
 - `routing/lib/a6api-routes.js`: GET `/__switch/api/a6api/state` и `/models?tokenId=...`;
   POST `/connect`, `/key`, `/modelmap`, `/activate`. `/connect` принимает только системный
   токен кабинета + user ID, проверяет их до записи; все записи только loopback + Origin/JSON guard.
@@ -859,6 +959,12 @@ Opus, Sonnet, Haiku. «Использовать ключ», «Сохранить
 - Регрессы: `check-a6api`, `check-a6api-gateway`, `check-a6api-routes`,
   `check-a6api-integration`, `check-a6api-converter`, `check-a6api-stack`,
   `check-a6api-tab`, `check-a6api-ui-browser` в `tools/`.
+- Новая source-приёмка: `check-a6api-publication`, `check-a6api-models`,
+  `check-a6api-map-preservation`, `check-model-publication-policy`; disposable full-dashboard fixture
+  `a6api-models-preview` и owner-gated `check-a6api-models-http-ui --accept --visual-approved`.
+  По текущему checkpoint проверен read-only boot1440/390 и отдельные RED/GREEN критерии;
+  финальная whole-flow suite ещё не запускалась. Canon и pending acceptance - в
+  Obsidian `a6api - модели, маршрутизация и баланс`. Не runtime/deployment claim.
 
 ## ThreeRouter: автоматическая капча и пакетная авторега
 
@@ -1227,9 +1333,26 @@ front-door по харнессам (`opencode`, `curl`, `unknown`) с охват
 только изменившиеся файлы (~40 мс). Отказ по legacy-токенам не рушит срез, если канонический
 счётчик полный: legacy-числа остаются прежними (`legacyHeld`, потолок неделя, потом ребейз).
 
+Dashboard получает один готовый срез для Лиги и sidebar каждые30сек после settled
+fetch; hidden document не polling, возврат и первый вход force refresh.20сек abort
+освобождает single-flight lock. Канонический стрик0 остаётся0, отсутствие активности
+не подменяется legacy; старый участник вообще без ccStats сохраняет свой счётчик.
+Ошибка сохраняет last-good и draft/attachment/focus с явной подписью; nickname editor
+не закрывается polling. `tools/check-league-refresh-ui.js` проверяет actual dashboard
+desktop/mobile через isolated API и controlled clock. Backend5-минутный пересчёт
+не менялся; новая страница подхватывает HTML без restart, старой нужен F5.
+
 Тесты: `tools/check-league-cc-stats.js` (адаптер и кеш, синтетический fs),
 `tools/check-league-cc-receiver.js` (белый список и проверки приёмника),
 `tools/check-league-cc-ui.js` (витрина: прочерк вместо нуля, итог отдельно от ряда).
+
+Композер чата не измеряет высоту внутри скрытой `display:none` вкладки: фоновая загрузка
+лиц может построить оболочку до клика по Лиге. Существующий черновик перемеряется при
+видимом render до data/hash early return, при вводе и resize; базовая высота46px,
+предел120px, кнопки прижаты к низу. Регресс `node tools/check-league-composer-ui.js`
+поднимает настоящий dashboard с локальными assets и полностью isolated API fixtures,
+проходит desktop/mobile, возврат, перенос и отправку без live сообщений. Канон поверхности:
+`D:/WORMALIENAIGIGANT/wiki/projects/ABUSE HUB - League - Surface Canon.md`.
 
 ---
 
@@ -1392,6 +1515,27 @@ node -e "console.log(require('./freemodel/lib/tg-pool').stats().usable)"     # =
 ---
 
 ## AgentRouter (ar) — WAF, Cyrillic-bypass, gpt через прокси
+
+### Sol-only - 23.11.2026
+
+Текущая вкладка показывает только `gpt-6.1-sol` и `gpt-5.6-sol` из каталога. Большие/
+мини-часы, расписание партий, quota status и fallback selector удалены вместе с
+самостоятельным dial script. Пустой каталог и ошибка различаются; публикация модели
+по-прежнему принадлежит общему API Gateway, выбор и clipboard остаются отдельными.
+
+Баланс, аккаунты, check-in и журнал сохранены. Client tier map свёрнут в
+«Дополнительно», retired saved target не показывается и не превращается молча в
+пустой тир: перед сохранением нужен явный выбор Sol. Ретраи/дубли/precommit не меняются.
+Legacy quota probes, pool-drop/restore и saved fallback AgentRouter отключены в
+source: старые quota endpoints возвращают retired/disabled, timer и schedule sync сняты.
+Saved/env/API не включают fallback снова. Source принят isolated gates;
+live activation требует отдельного production restart.
+Старые карты/markers/backups не удаляются и не восстанавливаются автоматически.
+
+Gates: `tools/check-ar-sol-ui.js`, `tools/check-ar-sol-control.js`,
+`tools/check-ar-sol-keepalive.js`. Legacy quota/pooldrop/schedule/sound entrypoints
+запускают эти retirement gates; sound live/watch отказ2. Исторические Claude/Astra/
+партии ниже не текущий UI.
 
 Пул в `routing/agentrouter-sessions.json` (`[{email, name, api_key, active, status}]`),
 клик по ключу = активный. **Особенность agentrouter.org — WAF**, который пускает только

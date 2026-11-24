@@ -1,4 +1,4 @@
-/* Existing dashboard theme tokens only. Main window leads; subagent models stay secondary. */
+/* Existing dashboard theme tokens. Models lead; native compatibility stays optional. */
 #a6api-root { max-width: 1240px; margin: 0 auto; padding: 30px 24px; color: var(--color-ink); font-size: 13px; }
 #a6api-root * { box-sizing: border-box; }
 #a6api-root [hidden] { display: none !important; }
@@ -31,16 +31,18 @@
 .a6-connect-fields { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(150px, .4fr); gap: 12px; margin-top: 16px; }
 .a6-connect-fields input { width: 100%; }
 .a6-connect-actions { justify-content: flex-start; margin-top: 14px; }
-.a6-account { display: flex; align-items: center; flex-wrap: wrap; gap: 18px 32px; border-top: 1px solid var(--color-line-soft); border-bottom: 1px solid var(--color-line-soft); padding: 16px 0; margin-bottom: 20px; }
+.a6-account { display: flex; align-items: center; flex-wrap: wrap; gap: 18px 24px; padding: 0 2px 18px; }
 
 .a6-account > div { display: flex; flex-direction: column; gap: 5px; }
 .a6-account > div > .a6-muted { font-size: 11px; }
 .a6-balance { font-size: 25px; line-height: 1.1; font-weight: 500; letter-spacing: -.035em; }
 .a6-account-spend { align-self: center; }
-.a6-status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--color-muted); }
+.a6-status { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; color: var(--color-muted); }
 .a6-status::before { content: ''; flex: 0 0 7px; width: 7px; height: 7px; border: 1px solid var(--color-muted); border-radius: 50%; }
 .a6-status[data-active=true]::before { border-color: var(--color-emerald); background: var(--color-emerald); }
-.a6-layout { display: grid; grid-template-columns: minmax(240px, .8fr) minmax(0, 1.65fr); gap: 16px; }
+.a6-layout { display: grid; grid-template-columns: minmax(260px, .75fr) minmax(0, 1.65fr); gap: 20px; align-items: start; }
+.a6-provider-controls { min-width: 0; }
+.a6-provider-controls[hidden] + .a6-model-panel { grid-column: 1 / -1; }
 .a6-panel { min-width: 0; background: var(--color-surface); border: 1px solid var(--color-line-soft); border-radius: 10px; padding: 20px; }
 .a6-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .a6-field > span { font-size: 11px; color: var(--color-muted); }
@@ -52,12 +54,7 @@
 .a6-key-facts dt { color: var(--color-muted); font-size: 11px; }
 .a6-key-facts dd { margin: 0; text-align: right; font-size: 12px; overflow-wrap: anywhere; }
 #a6-key-note, #a6-active-key { font-size: 11px; overflow-wrap: anywhere; }
-.a6-main-field > span { color: var(--color-ink); font-size: 20px; line-height: 1.25; font-weight: 600; letter-spacing: -.02em; }
-.a6-select.a6-main-model { min-height: 54px; padding: 12px 14px; font-size: 16px; border-color: color-mix(in oklab, var(--color-azure) 45%, var(--color-line)); }
 #a6-model-note { font-size: 11px; }
-.a6-subagents { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--color-line-soft); }
-.a6-tier-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-.a6-tier-grid .a6-select { font-size: 11px; padding: 8px; }
 .a6-save-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
 #a6-draft-status { font-size: 11px; }
 .a6-route-note { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--color-line-soft); }
@@ -68,12 +65,42 @@
 .a6-command > span { font-size: 11px; }
 .a6-command .a6-btn { font-size: 12px; }
 .a6-route-focus { outline: 2px solid var(--color-azure); outline-offset: 3px; }
+.a6-key-head, .a6-models-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.a6-models-head h2 { font-size: 18px !important; letter-spacing: -.02em; }
+#a6-published-count { font-size: 11px; }
+.a6-model-search { margin-top: 18px; }
+#a6-catalog-note { min-height: 17px; font-size: 11px; margin-top: 10px !important; }
+.a6-model-list { display: grid; margin-top: 12px; }
+.a6-model-row { min-width: 0; border-top: 1px solid var(--color-line-soft); }
+.a6-model-row > .mp-chip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; width: 100%; padding: 14px 0; border: 0; border-radius: 0; background: transparent; gap: 7px 12px; }
+.a6-model-main, .a6-model-row .mp-choice { min-width: 0; padding: 0; }
+.a6-model-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.a6-model-title strong { font-size: 12px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.a6-model-state { color: var(--color-muted); font-size: 10px; white-space: nowrap; }
+.a6-model-state[data-published=true] { color: var(--color-emerald); }
+.a6-model-id, .a6-model-limits, .a6-model-unavailable { display: block; margin-top: 4px; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.a6-model-id { color: var(--color-muted); user-select: all; }
+.a6-model-unavailable { color: var(--color-amber); }
+.a6-model-copy { grid-column: 1; display: flex; gap: 6px; }
+.a6-model-copy .a6-btn { min-height: 28px; padding: 4px 8px; font-size: 10px; }
+.a6-model-row .mp-slot { grid-column: 2; grid-row: 1 / 3; align-items: flex-end; }
+.a6-model-row .mp-toggle { min-height: 40px; gap: 7px; }
+.a6-model-row .mp-caption { font-size: 10px; }
+.a6-model-row .mp-message { margin-top: 4px; max-width: 170px; }
+.a6-model-empty { padding: 20px 0; text-align: center; font-size: 12px; }
+#a6-model-more { width: 100%; margin-top: 8px; }
+.a6-gateway-link { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding-top: 14px; margin-top: 4px; border-top: 1px solid var(--color-line-soft); font-size: 11px; }
+.a6-compatibility { margin-top: 20px; padding: 0; }
+.a6-compatibility > summary { cursor: pointer; padding: 16px 20px; font-weight: 500; font-size: 12px; }
+.a6-compatibility > summary > span { font-size: 11px; font-weight: 400; margin-left: 8px; }
+.a6-compatibility > p { padding: 0 20px; font-size: 11px; }
+.a6-compatibility-body { padding: 16px 20px 20px; }
+.a6-compatibility-body > .a6-field { max-width: 640px; }
 /* Команда /model под селектором модели. Кликабельна целиком: владельцу нужна готовая
    строка для второго окна, а не инструкция «напиши сам». */
 .a6-cmd-row { margin-top: 6px; min-height: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .a6-cmd-row:empty { display: none; }
-/* Строка тиров чуть отступает от сетки селекторов и не раздувает панель: один ряд чипов. */
-.a6-cmd-tiers { margin-top: 8px; }
+
 .a6-cmd {
   display: inline-block; cursor: pointer; font-size: 11px; padding: 3px 8px; border-radius: 6px;
   border: 1px solid var(--color-line-soft); background: var(--color-elevated);
@@ -83,9 +110,7 @@
 .a6-cmd:hover, .a6-cmd:focus-visible { border-color: var(--color-azure); outline: none; }
 @media (max-width: 900px) {
   .a6-layout { grid-template-columns: 1fr; }
-  .a6-key-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .a6-key-facts > div { flex-direction: column; gap: 5px; }
-  .a6-key-facts dd { text-align: left; }
+  .a6-layout { gap: 16px; }
 }
 @media (max-width: 520px) {
   #a6api-root { padding: 18px 12px; }
@@ -95,17 +120,27 @@
   .a6-connect-fields { grid-template-columns: 1fr; }
   .a6-connect-actions .a6-btn { width: 100%; }
   .a6-account { gap: 16px 24px; }
-  .a6-status { margin-left: 0; flex-basis: 100%; }
+
   .a6-key-facts { grid-template-columns: 1fr; }
   .a6-key-facts > div { flex-direction: row; }
   .a6-key-facts dd { text-align: right; }
-  .a6-tier-grid { grid-template-columns: 1fr; }
-  .a6-tier-grid .a6-select { font-size: 12px; }
+
   .a6-btn, .a6-select { min-height: 42px; }
-  .a6-select.a6-main-model { min-height: 56px; font-size: 15px; }
+
   .a6-save-row { align-items: flex-start; }
   .a6-save-row .a6-btn { width: 100%; }
   .a6-route-note { align-items: flex-start; flex-direction: column; }
   .a6-activation > div { width: 100%; }
   #a6-activate { width: 100%; }
+  .a6-key-head { align-items: flex-start; }
+  .a6-model-row > .mp-chip { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 14px 0; }
+  .a6-model-row .mp-slot { grid-column: 1; grid-row: auto; align-items: flex-start; }
+  .a6-model-row .mp-toggle { min-height: 44px; }
+  .a6-model-copy { grid-column: 1; }
+  .a6-model-copy .a6-btn { min-height: 40px; padding: 6px 12px; }
+  .a6-model-row .mp-message { max-width: 100%; }
+  .a6-compatibility { padding: 0; }
+  .a6-compatibility > summary { padding: 16px; }
+  .a6-compatibility > p { padding: 0 16px; }
+  .a6-compatibility-body { padding: 16px; }
 }

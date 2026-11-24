@@ -11,7 +11,7 @@
 // что на странице на самом деле.
 
 const { chromium } = require('playwright');
-const { createEmail, openInbox, pollInbox } = require('./freemodel/lib/emailnator');
+const { createEmail, openInbox, pollInbox } = require('../../freemodel/lib/emailnator');
 
 const SITE = 'https://api.rumeng-ai.com';
 const t = () => new Date().toLocaleTimeString('ru-RU');

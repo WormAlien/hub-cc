@@ -964,15 +964,21 @@ function nestedEntries(text, entryRe) {
  */
 function checkHtmlStructure(text) {
     const problems = [];
+    // 🪤 id-вхождения внутри <script> — не разметка: вкладка Лиги рендерит один и тот же id
+    // из двух взаимоисключающих JS-функций (lgJoinHtml / lgReceiverNotAccepted), в статическом
+    // DOM дубля нет, но слепой скан файла видел «дубль» и отменял запись целиком
+    // (uncensoredlabs, 23.11.2026). Резка бэктиков не годится: в шаблонах есть ВЛОЖЕННЫЕ
+    // литералы через ${...}, и линейный regex рвётся. Сканируем только разметку вне <script>.
+    const htmlOnly = text.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script></script>');
     const ids = new Map();
-    for (const m of text.matchAll(/\sid="([^"]+)"/g)) {
+    for (const m of htmlOnly.matchAll(/\sid="([^"]+)"/g)) {
         if (/\$\{|<%|\{\{/.test(m[1])) continue;
         ids.set(m[1], (ids.get(m[1]) || 0) + 1);
     }
     for (const [id, n] of ids) if (n > 1) problems.push('дубль id «' + id + '» ×' + n);
-    const nav = [...text.matchAll(/<button[^>]*data-tab="[^"]+"/g)];
+    const nav = [...htmlOnly.matchAll(/<button[^>]*data-tab="[^"]+"/g)];
     if (nav.length) {
-        const seg = text.slice(nav[0].index, nav[nav.length - 1].index);
+        const seg = htmlOnly.slice(nav[0].index, nav[nav.length - 1].index);
         const parts = seg.split(/<button[^>]*data-tab="/).slice(1);
         parts.slice(0, -1).forEach((part, i) => {
             if (!part.includes('</button>')) problems.push('кнопка вкладки №' + (i + 1) + ' не закрыта до следующей');

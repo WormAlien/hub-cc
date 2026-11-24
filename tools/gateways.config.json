@@ -509,5 +509,28 @@
     "customPanel": true,
     "paidHedge": true,
     "hedgesTuned": false
+  },
+  "uncensoredlabs": {
+    "p": "uc",
+    "P": "UC",
+    "full": "uncensoredlabs",
+    "NAME": "UncensoredLabs",
+    "HOST": "uncensoredlabs.dev",
+    "PORT": 20193,
+    "FOLDER": "uncensoredlabs",
+    "ICON": "🩸",
+    "COLOR": "crimson",
+    "REF": "",
+    "github": false,
+    "ref": false,
+    "flatRate": false,
+    "anthropic": false,
+    "pool": true,
+    "shareScript": false,
+    "autoreg": true,
+    "customPanel": true,
+    "paidHedge": false,
+    "hedgesTuned": false,
+    "KEY_RE": "^ul_[0-9a-f]{64}$"
   }
 }

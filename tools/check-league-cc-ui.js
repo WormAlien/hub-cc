@@ -142,11 +142,19 @@ ok('свой срез без счётчика показывает прежни�
     assert.ok(/1 участник на старой версии/.test(notice), 'про соседа на старой версии тоже сказано: ' + notice);
 });
 
-ok('стрик берётся из канонической активности всех харнессов, а не из legacy-промптов', () => {
+ok('канонический стрик не заменяется legacy при нуле или отсутствии активности', () => {
     const a = api('cc', 'd7', {});
     assert.strictEqual(a.lgStreak(me({ ccStats: envelope() })), 50, 'стрик счётчика');
-    assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ activity: null }) })), 63,
-        'без активности падаем на прежний стрик, а не на ноль');
+    assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ activity: { streakCurrent: 0 } }) })), 0,
+        'канонический ноль не заменяется стриком63 только Claude Code');
+    assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ activity: null }) })), null,
+        'каноническая активность ещё неизвестна, legacy не подставляется');
+    assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ available: false }) })), null,
+        'холодный снимок не притворяется прежним счётчиком');
+    for (const n of [null, '', true, -1, 'broken']) {
+        assert.strictEqual(a.lgStreak(me({ ccStats: envelope({ activity: { streakCurrent: n } }) })), null,
+            'неизвестное/невалидное значение не становится нулём или legacy: ' + n);
+    }
     assert.strictEqual(a.lgStreak(stranger()), 7);
 });
 

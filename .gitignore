@@ -7,6 +7,11 @@ node_modules/
 /ag.json
 routing/github-spend.json
 
+# Atomic editor leftovers and per-installation UC probe/config state are not release files.
+.hermes-tmp.*
+routing/uc-converter-config.json
+routing/uncensoredlabs-availability.json*
+
 # Логи и данные
 logs/
 output/
@@ -453,7 +458,12 @@ kktoken/profiles/
 kktoken/sessions/
 kktoken/gh-sessions/
 routing/kktoken-sessions.json
+routing/uncensoredlabs-sessions.json
+uncensoredlabs/profiles/
+uncensoredlabs/sessions/
+uncensoredlabs/gh-sessions/
 routing/xingchi-sessions.json
+routing/xingchi-model-tests-cache.json*
 # Xingchi: профили браузера и снимки (куки, localStorage, тысячи файлов кеша).
 # Папки закрываем ДО первого прогона: там живая сессия кабинета.
 xingchi/profiles/

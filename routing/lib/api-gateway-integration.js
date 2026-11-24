@@ -17,6 +17,16 @@ const BODY_LIMIT = 64 * 1024;
 const START_COMMAND = 'hermes dashboard --no-open';
 const WINDOWS_INSTALL_COMMAND = 'iex (irm https://hermes-agent.nousresearch.com/install.ps1)';
 const POSIX_INSTALL_COMMAND = 'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash';
+// Literal messages only: never forward dependency/provider prose even with a known code.
+const PUBLICATION_ERRORS = Object.freeze({
+    a6api_key_not_selected: { status: 409, message: 'Сначала выберите и подготовьте ключ a6api кнопкой «Использовать ключ».' },
+    a6api_token_expired: { status: 409, message: 'Срок выбранного ключа a6api истёк. Измените срок в кабинете или используйте другой ключ.' },
+    a6api_token_disabled: { status: 409, message: 'Выбранный ключ a6api выключен или недоступен. Используйте рабочий ключ.' },
+    a6api_token_quota: { status: 409, message: 'Лимит выбранного ключа a6api исчерпан. Измените лимит в кабинете или используйте другой ключ.' },
+    a6api_catalog_unavailable: { status: 503, message: 'Не удалось проверить разрешённый каталог a6api. Публикации сохранены; повторите позже.' },
+    a6api_token_missing: { status: 409, message: 'Выбранный ключ a6api больше не найден в кабинете. Используйте другой ключ.' },
+    a6api_model_unavailable: { status: 409, message: 'Эта exact модель не разрешена выбранному ключу a6api или отсутствует в текстовом каталоге.' },
+});
 
 // Какие провайдеры смотреть: только те, чья вкладка видна в сайдбаре. Пустой список — фильтра нет
 // (так ходят пробы и старые клиенты); мусорные имена отсеиваются, иначе один кривой параметр
@@ -186,6 +196,11 @@ function readJsonObject(req) {
 }
 
 function publicError(error) {
+    const publication = Object.hasOwn(PUBLICATION_ERRORS, error && error.code) ? PUBLICATION_ERRORS[error.code] : null;
+    if (publication) return {
+        status: publication.status,
+        body: { ok: false, code: error.code, error: publication.message },
+    };
     const status = Number.isInteger(error && error.status)
         ? error.status
         : Number.isInteger(error && error.httpStatus) ? error.httpStatus : 500;
@@ -210,6 +225,7 @@ function createApiGatewayRoutes({ service, canWrite: writeGuard = canWrite } = {
     ]);
     const posts = new Map([
         [`${PREFIX}/model`, 'updateModel'],
+        [`${PREFIX}/publication`, 'setPublication'],
         [`${PREFIX}/opencode/sync`, 'openCodeSync'],
         [`${PREFIX}/hermes/sync`, 'hermesSync'],
     ]);
@@ -237,7 +253,9 @@ function createApiGatewayRoutes({ service, canWrite: writeGuard = canWrite } = {
                 return json(res, 415, { ok: false, code: 'json_required', error: 'Content-Type application/json is required.' });
             }
             const body = await readJsonObject(req);
-            const value = method === 'updateModel' ? await service[method](body) : await service[method]();
+            const value = method === 'updateModel' || method === 'setPublication'
+                ? await service[method](body)
+                : await service[method]();
             return json(res, 200, value);
         } catch (error) {
             const safe = publicError(error);
@@ -346,7 +364,9 @@ function createProductionApiGateway(options = {}) {
     });
     const dashboardService = dashboardFactory({
         readPublishedManifest: manifestApi.readPublishedManifest,
+        readCanonicalProviders: manifestApi.readCanonicalProviders,
         saveManifestAndPicker: manifestApi.saveManifestAndPicker,
+        validatePublication: options.validatePublication,
         resolveModelCandidates,
         readPassive: options.readPassive || (async () => ({})),
         readProbes: options.readProbes || (async () => ({})),

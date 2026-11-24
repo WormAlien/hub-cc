@@ -1,0 +1,5 @@
+{
+  "opus": "glm-5.3-uncensored",
+  "sonnet": "deepseek-v4.1-flash-fast",
+  "haiku": "deepseek-v4.1-flash-fast"
+}

@@ -58,13 +58,22 @@ const load = f => {
     return Array.isArray(j) ? j : (j.sessions || j.accounts || []);
   } catch { return []; }
 };
+// league-instance.js подключается в шапке файла, а блок лиги начинается позже.
+// В слепке его нет, поэтому даём стаб: проверке интересны счётчики, не запись файла.
+const leagueInstanceStub = {
+  DEFAULT_FILE: path.join(ROUTING, 'runtime', 'league-instance.json'),
+  known: () => null,
+  remember: () => true,
+  verdict: () => ({ state: 'unknown_prev', autoJoinAllowed: false }),
+};
 const api = new Function(
-  'fs', 'path', 'os', 'crypto', 'execFileSync', 'http', 'https', '__dirname', 'logLine', 'round2',
+  'fs', 'path', 'os', 'crypto', 'execFileSync', 'http', 'https', '__dirname', 'leagueInstance',
+  'logLine', 'round2',
   'jsonRes', 'readJsonBody', 'TOKEN_USAGE_FILE', 'FINANCE_HISTORY_FILE',
   'ghLoad', 'arLoad', 'goLoad', 'tbLoad', 'xpLoad', 'jwLoad', 'skLoad', 'tsLoad', 'kkLoad',
   `${block}\nreturn { leagueSelf, hubIdentity, financeAggregate, timeKeys, dayKey, leagueAccounts, leagueBalance, leagueNickClean };`
 )(
-  fsRO, path, os, crypto, execFileSync, require('http'), require('https'), ROUTING,
+  fsRO, path, os, crypto, execFileSync, require('http'), require('https'), ROUTING, leagueInstanceStub,
   () => {}, v => Math.round(v * 100) / 100,
   () => {}, async () => ({}),
   path.join(ROUTING, 'token-usage.jsonl'), path.join(ROUTING, 'finance-history.jsonl'),

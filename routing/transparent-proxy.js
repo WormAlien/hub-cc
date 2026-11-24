@@ -10734,6 +10734,37 @@ function newapiApplyBalance(target, bal, opts) {
                 src: bal.balanceSource || null,
             });
         }
+        // ── Первичная выдача ─────────────────────────────────────────────────
+        // Первый чек ключа писал дельту 0, и выдача, с которой ключ завели, не попадала
+        // в журнал НИКОГДА (канон «Деньги хаба» § Что дефект). Дописываем недостающее
+        // один раз на ключ: `granted` из панели минус уже записанное по нему. Считаем
+        // ПОСЛЕ обычной строки истории, иначе одна и та же дельта попала бы дважды.
+        // Это реконструкция (`est: true`), дата - день заведения ключа, а не «сейчас»:
+        // иначе старый пул давал бы пик в день подключения.
+        if (!target.grantReconciled) {
+            const expectedGrant = bal.granted != null
+                ? Number(bal.granted)
+                : (typeof bal.spent === 'number' && typeof bal.balance === 'number'
+                    ? Number(bal.spent) + Number(bal.balance) : NaN);
+            if (isFinite(expectedGrant) && expectedGrant > 0) {
+                const prov = (opts && opts.provider) || 'newapi';
+                const keyId = target.id || target.email || String(target.api_key || '').slice(-6);
+                // Только что дописанная строка истории ещё не в кеше - сбрасываем его,
+                // иначе её дельта посчиталась бы второй раз как «первичная выдача».
+                FIN_GRANT_CACHE = { n: -1, map: new Map() };
+                const logged = financeGrantedByKey().get(`${prov}|${keyId}`) || 0;
+                const missing = round2(expectedGrant - logged);
+                if (missing > 0.01) {
+                    const rawBorn = target.created;
+                    const born = typeof rawBorn === 'number' ? rawBorn : Date.parse(String(rawBorn || ''));
+                    const t = new Date(Number.isFinite(born) && born <= Date.now() ? born : Date.now()).toISOString();
+                    financeLog({ t, p: prov, id: keyId, dSpent: 0, dGrant: missing,
+                        spent: null, balance: null, src: 'initial', est: true });
+                    FIN_GRANT_CACHE = { n: -1, map: new Map() };   // пересобрать после дописанной строки
+                }
+                target.grantReconciled = true;
+            }
+        }
     } else {
         // Цифры оставляем прошлые (лучше устаревшие, чем нули), но помечаем причину.
         target.balanceError = bal.error || bal.status;
@@ -11020,6 +11051,23 @@ function financeEntries() {
             dG: Number(e.dGrant) || 0, spent: Number(e.spent) || 0, est: !!e.est });
     }
     return FIN_LOG;
+}
+// Сумма уже записанных наливок по каждому ключу. Нужна, чтобы при первом наблюдении
+// дописать недостающую ПЕРВИЧНУЮ выдачу ровно один раз: `granted` из панели минус то,
+// что журнал уже видел. Кеш привязан к числу строк (файл append-only): дописали
+// строку - следующий вызов пересоберёт карту.
+let FIN_GRANT_CACHE = { n: -1, map: new Map() };
+function financeGrantedByKey() {
+    const log = financeEntries();
+    if (FIN_GRANT_CACHE.n === log.list.length) return FIN_GRANT_CACHE.map;
+    const map = new Map();
+    for (const e of log.list) {
+        if (!e.dG) continue;
+        const k = `${e.p}|${e.id}`;
+        map.set(k, (map.get(k) || 0) + e.dG);
+    }
+    FIN_GRANT_CACHE = { n: log.list.length, map };
+    return map;
 }
 function financeAggregate(keys, hour) {
     const idx = new Map(keys.map((k, i) => [k, i]));

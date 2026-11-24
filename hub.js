@@ -78,10 +78,10 @@ exit 0`;
     try {
         const r = spawnSync('powershell.exe',
             ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-            // windowsHide НЕ ставим: с ним libuv даёт процессу CREATE_NO_WINDOW, то есть
-            // отдельную консоль, и SetConsoleMode включил бы VT не тому буферу. Без флага
-            // PowerShell наследует нашу консоль - новых окон не появляется.
-            { stdio: 'ignore', timeout: 5000 });
+            // stdout НАСЛЕДУЕМ: с `ignore` у ребёнка STD_OUTPUT_HANDLE - не консоль,
+            // и GetStdHandle(-11) в PowerShell не видит буфер, который надо переключить.
+            // windowsHide не ставим: он даёт CREATE_NO_WINDOW, то есть отдельную консоль.
+            { stdio: ['ignore', 'inherit', 'ignore'], timeout: 5000 });
         return r.status === 0;
     } catch { return false; }
 }

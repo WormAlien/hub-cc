@@ -146,18 +146,40 @@ npx playwright install chromium chromium-headless-shell \
 # только в него ставятся расширения из Chrome Web Store, и только он проходит капчу и
 # проверки Cloudflare. Шаг 5 ставит браузеры Playwright, то есть на чистой машине Chrome
 # может не оказаться - и кнопка «Открыть» ответит ошибкой Playwright, которую человек
-# прочитает как «поставь chromium» (он и так стоит). Поэтому говорим прямо и заранее.
+# прочитает как «поставь chromium» (он и так стоит). Поэтому не только предупреждаем,
+# но и ставим Chrome сами: иначе свежая установка упирается в это на первой же кнопке.
 step "5б. Системный Google Chrome (для окон аккаунтов)"
-CHROME_FOUND=""
-for _c in "${LOCALAPPDATA:-}/Google/Chrome/Application/chrome.exe"           "/c/Program Files/Google/Chrome/Application/chrome.exe"           "/c/Program Files (x86)/Google/Chrome/Application/chrome.exe"           "${LOCALAPPDATA:-}/BraveSoftware/Brave-Browser/Application/brave.exe"; do
-  if [ -n "$_c" ] && [ -f "$_c" ]; then CHROME_FOUND="$_c"; break; fi
-done
+find_chrome() {
+  for _c in "${LOCALAPPDATA:-}/Google/Chrome/Application/chrome.exe" \
+            "/c/Program Files/Google/Chrome/Application/chrome.exe" \
+            "/c/Program Files (x86)/Google/Chrome/Application/chrome.exe" \
+            "${LOCALAPPDATA:-}/BraveSoftware/Brave-Browser/Application/brave.exe"; do
+    if [ -n "$_c" ] && [ -f "$_c" ]; then echo "$_c"; return 0; fi
+  done
+  return 1
+}
+CHROME_FOUND="$(find_chrome || true)"
 if [ -n "$CHROME_FOUND" ]; then
   ok "Chrome на месте: $CHROME_FOUND"
 else
-  warn "системного Google Chrome не видно — кнопки «Открыть» окно НЕ поднимут:"
+  warn "системного Google Chrome не видно - кнопки «Открыть» окно НЕ поднимут:"
   warn "  комплектный chromium тут не замена (расширения и капча работают только в Chrome)."
-  warn "  Поставь Google Chrome и повтори - установка от этого не ломается."
+  if have winget && ask "Поставить Google Chrome сейчас?" Y; then
+    winget install -e --id Google.Chrome --accept-source-agreements --accept-package-agreements \
+      || warn "winget не смог поставить Chrome"
+  fi
+  CHROME_FOUND="$(find_chrome || true)"
+  if [ -z "$CHROME_FOUND" ] && have npx; then
+    warn "winget не помог - пробую npx playwright install chrome (может спросить права администратора)"
+    npx playwright install chrome || true
+    CHROME_FOUND="$(find_chrome || true)"
+  fi
+  if [ -n "$CHROME_FOUND" ]; then
+    ok "Chrome установлен: $CHROME_FOUND"
+  else
+    warn "Chrome не поставился - поставь вручную с google.com/chrome и повтори."
+    warn "  Установка хаба от этого не ломается, но окна аккаунтов не откроются."
+  fi
 fi
 
 # ── 6. Claude Code ──────────────────────────────────────────────────────────

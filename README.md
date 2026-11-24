@@ -189,11 +189,12 @@ macOS — то же, но `bash install-mac.sh`.
 2. Настраивает git identity и `credential.helper` (без них `git pull` падает на merge-коммите).
 3. Дописывает `Git\usr\bin` в user-PATH, если `cat` не виден из cmd — иначе `apiKeyHelper` молча отдаёт пустой ключ и Claude Code пишет «Authentication failed».
 4. `npm install` + `npx playwright install chromium chromium-headless-shell`.
-5. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает (пин не нужен; если зачем-то нужна конкретная — `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
-6. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет) и подключает статуслайн.
-7. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`, `tgbot/.env`).
-8. Зовёт `install-deps.sh` — тяжёлое и опциональное: Python-стек (Camoufox-автореги, grok-launcher, venv для ✈ Открыть TG), `sqlite3.exe`, **OmniRoute** в Docker на `:20128`, `.env` ТГ-бота. Запускается и отдельно: `bash install-deps.sh`.
-9. Запускает дашборд и печатает шпаргалку.
+5. Ставит системный **Google Chrome**, если его нет (`winget install Google.Chrome` / `brew install --cask google-chrome`, запасной путь - `npx playwright install chrome`). Без него кнопки 🌐 окно не поднимут, комплектный chromium их не заменяет.
+6. Ставит **Claude Code**, если его нет. Уже установленную версию не трогает (пин не нужен; если зачем-то нужна конкретная — `CLAUDE_CODE_VERSION=2.1.153 bash install.sh`).
+7. Создаёт `~/.claude/settings.json` из шаблона (если ещё нет) и подключает статуслайн.
+8. Копирует локальные конфиги из `*.example` (`routing/.env`, `al-sessions`, `video-keys`, `image-keys`, `tgbot/.env`).
+9. Зовёт `install-deps.sh` — тяжёлое и опциональное: Python-стек (Camoufox-автореги, grok-launcher, venv для ✈ Открыть TG), `sqlite3.exe`, **OmniRoute** в Docker на `:20128`, `.env` ТГ-бота. Запускается и отдельно: `bash install-deps.sh`.
+10. Запускает дашборд и печатает шпаргалку.
 
 > [!NOTE]
 > API-ключи и токены установщик **не спрашивает**: в терминале секрет остаётся в скроллбэке и в истории. Ключ шлюза вписывается в дашборде — вкладка шлюза → ключ → **Активировать**.
@@ -215,6 +216,7 @@ macOS — то же, но `bash install-mac.sh`.
 # 0. системные зависимости (winget)
 winget install OpenJS.NodeJS.LTS          # Node.js LTS (>=18) + npm
 winget install Git.Git                     # Git for Windows (git-bash)
+winget install Google.Chrome               # окна аккаунтов (🌐) требуют системный Chrome
 winget install Docker.DockerDesktop        # опц.: только под backend OmniRoute
 winget install Python.Python.3.11          # опц.: стабильнее для opentele/tgcrypto
 

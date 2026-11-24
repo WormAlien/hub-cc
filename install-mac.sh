@@ -177,13 +177,35 @@ fi
 # 5б. Системный Google Chrome - окна аккаунтов просят именно его (`channel: 'chrome'`):
 # расширения Web Store и проход капчи/Cloudflare работают только в нём. Шаг выше ставит
 # браузеры Playwright, поэтому на чистой машине Chrome может не оказаться. Не валим
-# установку, а говорим прямо: иначе человек прочитает ошибку Playwright как «поставь chromium».
+# установку, а ставим его сами: иначе первая же кнопка «Открыть» упирается в это.
 step "Системный Google Chrome (для окон аккаунтов)"
 if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
   ok "Chrome на месте"
 else
-  warn "системного Google Chrome не видно — кнопки «Открыть» окно НЕ поднимут."
-  warn "  Поставь Google Chrome (или Brave) и повтори: комплектный chromium тут не замена."
+  warn "системного Google Chrome не видно - кнопки «Открыть» окно НЕ поднимут."
+  warn "  комплектный chromium тут не замена (расширения и капча работают только в Chrome)."
+  if noask; then
+    do_install=Y
+  else
+    read -r -p "Поставить Google Chrome сейчас? [Y/n] " ans
+    do_install="${ans:-Y}"
+  fi
+  case "$do_install" in
+    y|Y|д|Д|yes|да)
+      if have brew; then
+        brew install --cask google-chrome || warn "brew не смог поставить Chrome"
+      else
+        warn "Homebrew нет - пробую npx playwright install chrome (может спросить пароль администратора)"
+        npx playwright install chrome || true
+      fi
+      ;;
+    *) echo "  Позже: поставь Google Chrome с google.com/chrome и повтори." ;;
+  esac
+  if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+    ok "Chrome установлен"
+  else
+    warn "Chrome не установлен - окна аккаунтов не откроются, пока его нет."
+  fi
 fi
 
 # 6. Claude Code

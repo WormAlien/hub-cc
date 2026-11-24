@@ -187,7 +187,7 @@ function renderOnboardingWrapper(gw) {
     return "'use strict';\n// Generated generic New API onboarding; no provider-specific browser code.\n"
         + "Promise.resolve().then(() => require('../routing/lib/newapi-onboarding').runProvider({\n"
         + `    provider: '${gw.full}', moduleDir: __dirname, label: process.argv[2], mode: process.argv[3] || 'auto',\n`
-        + "})).catch(() => { console.error('Onboarding failed; inspect the selected account locally.'); process.exitCode = 1; });\n";
+        + "})).catch(e => { console.error(String((e && (e.code || e.message)) || 'Onboarding failed; inspect the selected account locally.')); process.exitCode = 1; });\n";
 }
 
 function onboardingFileState(gw) {

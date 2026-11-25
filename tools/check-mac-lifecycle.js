@@ -391,6 +391,21 @@ test('mac ownership reads boundary-preserving kernel argv, never space-joined BS
     assert.equal(calls.some(([exe, args]) => exe === 'ps' && args.includes('command=')), false);
 });
 
+test('Linux identifies Node by its executable when comm is node-MainThread', { skip: process.platform !== 'linux' }, async () => {
+    const script = 'transparent-proxy.js';
+    const argv = ['/usr/bin/node', path.join(ROOT, 'routing', script)];
+    const adapters = {
+        pidImage: () => 'node-MainThread',
+        pidExecutable: () => '/usr/bin/node',
+        pidArguments: () => argv,
+    };
+    assert.equal(await L.verifyProcessOwnership({ script }, 123, adapters), true);
+    assert.equal(await L.verifyProcessOwnership({ script: 'other.js' }, 123, adapters), false);
+    assert.equal(await L.verifyProcessOwnership({ script }, 123, {
+        ...adapters, pidExecutable: () => '/usr/bin/bash',
+    }), false);
+});
+
 test('Node ownership refuses entrypoint spoofing by extra args, preload, eval, unknown flags, or relative paths', () => {
     const svc = { script: 'transparent-proxy.js' };
     const own = path.join(ROOT, 'routing', svc.script);

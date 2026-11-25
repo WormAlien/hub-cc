@@ -1493,8 +1493,8 @@ async function doHttpUpdate({ interactive }) {
     return p.status === 0;
 }
 
-// Фаза 2 git-free пути: зависимости через npm напрямую (без git-bash), рестарт.
-async function doPostUpdateNoGit({ interactive }) {
+// На Linux и при обновлении из архива зависимости ставим напрямую через npm.
+async function doNpmPostUpdate({ interactive }) {
     line();
     line(bold('  Доставляю зависимости (npm install, без git-bash)'));
     const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -1576,6 +1576,7 @@ async function doUpdate({ interactive }) {
 // тянуло код и разваливалось в чужом установщике: код уже новый, а человек читает
 // ошибку про Git for Windows и решает, что обновление не прошло.
 async function doPostUpdate({ interactive }) {
+    if (process.platform === 'linux') return doNpmPostUpdate({ interactive });
     const bash = findBash();
     const installer = process.platform === 'darwin' ? 'install-mac.sh' : 'install.sh';
     line();
@@ -2002,7 +2003,7 @@ async function main() {
     }
 
     if (argv.includes('--post-update-nogit')) {
-        process.exit((await doPostUpdateNoGit({ interactive: argv.includes('--interactive') })) ? 0 : 1);
+        process.exit((await doNpmPostUpdate({ interactive: argv.includes('--interactive') })) ? 0 : 1);
     }
     if (argv.includes('--post-update')) {
         process.exit((await doPostUpdate({ interactive: argv.includes('--interactive') })) ? 0 : 1);

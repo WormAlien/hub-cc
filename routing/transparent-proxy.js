@@ -18758,6 +18758,9 @@ async function fxKeepaliveSpawn() {
                 KEY_FILE: FX_ACTIVE_KEY_FILE,
                 SESSIONS_FILE: FX_SESSIONS_FILE,
                 MODELMAP_FILE: FX_MODELMAP_FILE,
+                // Дефолтный фолбэк пула — `[模型名称已隐藏]`, а он у fxqidian снят (503).
+                // Свой фолбэк ведёт в живую модель; на 402/квоту иначе некуда.
+                POOL_FALLBACK_MODEL: 'glm-5.3-flash',
                 ...(process.env.FX_PRE_COMMIT_MS ? { PRE_COMMIT_MS: process.env.FX_PRE_COMMIT_MS } : {}),
             },
         });

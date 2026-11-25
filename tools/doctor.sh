@@ -11,6 +11,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 mkdir -p logs
 R="logs/doctor-report.txt"
+OS="$(uname -s)"
 
 {
 echo "===== DOCTOR REPORT $(date +%F_%T) ====="
@@ -31,7 +32,7 @@ for d in /c /d; do
 done
 echo
 echo "--- 4. Python ---"
-if [ "$(uname -s)" = "Darwin" ]; then
+if [ "$OS" = "Darwin" ] || [ "$OS" = "Linux" ]; then
   python3 --version 2>&1 || echo "python3 в PATH нет"
 else
   py -0 2>&1 || echo "py launcher нет"
@@ -58,7 +59,7 @@ echo "--- 6. Лог последней сборки venv ---"
 tail -30 "${TEMP:-/tmp}/tg-venv-install.log" 2>/dev/null || echo "лога нет (сборка не запускалась?)"
 echo
 echo "--- 7. sqlite3 ---"
-if [ "$(uname -s)" = "Darwin" ]; then
+if [ "$OS" = "Darwin" ] || [ "$OS" = "Linux" ]; then
   command -v sqlite3 >/dev/null 2>&1 && sqlite3 --version 2>&1 || echo "sqlite3 в PATH нет"
 else
   for c in "${LOCALAPPDATA:-}/Microsoft/WinGet/Links/sqlite3.exe" "$HOME/bin/sqlite3.exe"; do
@@ -67,8 +68,16 @@ else
 fi
 echo
 echo "--- 8. Дашборд: кто слушает порты ---"
-if [ "$(uname -s)" = "Darwin" ]; then
+if [ "$OS" = "Linux" ] && command -v ss >/dev/null 2>&1; then
+  if listeners="$(ss -H -ltnp '( sport = :8200 or sport = :20126 or sport = :20128 )')"; then
+    echo "${listeners:-порты 8200/20126/20128 никто не слушает}"
+  else
+    echo "не удалось проверить порты через ss"
+  fi
+elif [ "$OS" = "Darwin" ] || { [ "$OS" = "Linux" ] && command -v lsof >/dev/null 2>&1; }; then
   lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -E ':(8200|20126|20128)( |$)' || echo "порты 8200/20126/20128 никто не слушает"
+elif [ "$OS" = "Linux" ]; then
+  echo "для проверки портов нужны ss или lsof"
 else
   netstat -ano 2>/dev/null | grep -E "LISTENING" | grep -E ":(8200|20126|20128) " || echo "порты 8200/20126/20128 никто не слушает"
 fi

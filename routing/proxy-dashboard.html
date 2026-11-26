@@ -21297,17 +21297,29 @@ async function ucCheckBalance(api_key) {
     if (s) {
       s.status = data.status;
       if (data.status === 'live') {
-        s.spent = data.spent; s.balance = data.balance;
+        // 🪤 Цифры может НЕ быть при живом ключе (403 trial_verification / 429):
+        // присвоение undefined затирало бы прежнюю цифру — пишем только реальные.
+        if (typeof data.balance === 'number') s.balance = data.balance;
+        else delete s.balance;
+        if (typeof data.spent === 'number') s.spent = data.spent;
         s.balanceSource = data.balanceSource; s.granted = data.granted; s.selfError = data.selfError;
+        if (data.trialBlocked) s.trialBlocked = true; else delete s.trialBlocked;
         applySelfSeen(s, data);
       }
       s.balanceCheckedAt = new Date().toISOString();
     }
     renderUc();
     renderUcGauge();
-    if (data.status === 'live') {
+    // 🪤 NaN рождало безусловное Number(data.balance).toFixed(2) при live без цифры.
+    if (data.status === 'live' && typeof data.balance === 'number') {
       const lbl = balSrcLabel(data);
       toast(`💰 баланс ${Number(data.balance).toFixed(2)} (${lbl} · потрачено ${Number(data.spent).toFixed(2)})`, 'success', 4000);
+    }
+    else if (data.status === 'live' && data.trialBlocked) {
+      toast('🟡 ключ жив, но email аккаунта не подтверждён: триал $0.10 не активирован. Подтверди в ЛК (🌐) или прогони ферму заново', 'warn', 6000);
+    }
+    else if (data.status === 'live') {
+      toast('🟢 ключ живой — цифры площадка не назвала (429 или ответ без credit), попробуй ещё раз', 'info', 5000);
     }
     else if (data.status === 'dead') toast('🔴 ключ мёртв', 'error', 3000);
     else toast('⚪ не удалось посчитать: ' + (data.error || 'неизвестно'), 'warn', 4000);

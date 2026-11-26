@@ -45,7 +45,7 @@ function createXingchiCheckinRunner(options = {}) {
     const run = state.runs.find(item => item.id === job.id && item.state === 'queued');
     if (!run) { save(); return schedulePump(0); }
     running = true; run.state = 'running'; run.startedAt = now().toISOString(); run.message = 'Claim выполняется';
-    nextStart = Date.now() + gapMs; save(); event('started', `${run.name}: запрос отправлен`, run.id);
+    nextStart = Date.now() + gapMs; save(); event('started', `${run.name}: проверка сессии и статуса Claim`, run.id);
     try {
       const result = await checkin.claim(run.id);
       run.state = 'done'; run.finishedAt = now().toISOString(); run.amount = Number(result.amount);

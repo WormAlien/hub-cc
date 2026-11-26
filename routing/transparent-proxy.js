@@ -17977,14 +17977,12 @@ function xcSave(arr) {
 // Daily Claim uses the Xingchi panel session, not the inference API key. The
 // browser profile is the source of the panel JWT; the key only identifies an
 // eligible provider account and is never sent to the panel endpoint.
-const { createXingchiCheckin, readProfileToken } = require('./lib/xingchi-checkin');
+const { createXingchiCheckin } = require('./lib/xingchi-checkin');
+const { createXingchiPanelSession } = require('./lib/xingchi-panel-session');
 const { createXingchiCheckinRunner } = require('./lib/xingchi-checkin-runner');
 const xcCheckin = createXingchiCheckin({
     accounts: xcLoad,
-    getToken: async account => {
-        const profile = newapiResolveProfile('xingchiapi.com', account);
-        return readProfileToken(profile && profile.dir);
-    },
+    withSession: createXingchiPanelSession({ profileDir: account => newapiResolveProfile('xingchiapi.com', account).dir }),
     saveAccounts: xcSave,
     stateFile: path.join(__dirname, 'runtime', 'xingchi-checkin.json'),
     log: event => logLine(`xingchi check-in ${event.kind}: ${event.text}`),
@@ -19335,6 +19333,9 @@ async function ucBalance(target, opts = {}) {
     const bal = { status: p.status, balanceSource: p.source || 'unknown',
                   balance: p.balance, spent: p.spent ?? 0,
                   ...(p.error ? { error: p.error } : {}) };
+    // 🪤 403 trial_verification: ключ жив, но триал не активирован — фронт должен
+    // показать это словами, а не NaN/«не удалось посчитать».
+    if (p.trialBlocked) bal.trialBlocked = true;
     if (p.balance == null) delete bal.balance;   // unknown-ветка не должна рисовать 0
     return bal;
 }

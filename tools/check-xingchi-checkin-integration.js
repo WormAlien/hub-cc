@@ -10,7 +10,7 @@ const requiredBackend = [
   '/__switch/api/xc/checkin-all', '/__switch/api/xc/checkin-cancel',
   '/__switch/api/xc/checkin-config', '/__switch/api/xc/checkin-mark',
   '/__switch/api/xc/checkin-events',
-  'createXingchiCheckin', 'createXingchiCheckinRunner', 'readProfileToken',
+  'createXingchiCheckin', 'createXingchiCheckinRunner', 'withSession: createXingchiPanelSession',
   'checkin-config',
 ];
 const requiredUi = [

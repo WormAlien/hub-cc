@@ -15,6 +15,11 @@ function safeAccount(accounts, id) {
   return account;
 }
 
+function loginRequired() {
+  return Object.assign(new Error('Сессия Xingchi недоступна: открой аккаунт кнопкой 🌐 и войди заново'), {
+    statusCode: 409, reason: 'XINGCHI_LOGIN_REQUIRED',
+  });
+}
 
 function readState(file) {
   try {
@@ -70,9 +75,7 @@ function createXingchiCheckin(options = {}) {
     return event;
   }
   async function call(token, method) {
-    if (typeof token !== 'string' || token.length < 20) {
-      throw Object.assign(new Error('Сессия панели Xingchi недоступна: открой аккаунт кнопкой 🌐 и войди'), { statusCode: 409, reason: 'XINGCHI_LOGIN_REQUIRED' });
-    }
+    if (typeof token !== 'string' || token.length < 20) throw loginRequired();
     const response = await request({
       method,
       url: `${PANEL_API}/user/checkin`,
@@ -84,16 +87,19 @@ function createXingchiCheckin(options = {}) {
   async function statusWithSession(session) {
     let token = session.token;
     let status;
-    if (!token && session.refresh) {
-      token = await session.refresh();
-      status = await call(token, 'GET');
-    } else {
+    let needsRefresh = !token || token.length < 20;
+    if (!needsRefresh) {
       try { status = await call(token, 'GET'); }
       catch (error) {
-        if (error.status !== 401 || !session.refresh) throw error;
-        token = await session.refresh();
-        status = await call(token, 'GET');
+        if (error.status !== 401) throw error;
+        needsRefresh = true;
       }
+    }
+    if (needsRefresh) {
+      if (!session.refresh) throw loginRequired();
+      token = await session.refresh();
+      try { status = await call(token, 'GET'); }
+      catch (error) { throw error.status === 401 ? loginRequired() : error; }
     }
     if (!status || typeof status !== 'object' || typeof status.enabled !== 'boolean') {
       throw Object.assign(new Error('Xingchi вернул неожиданный статус чек-ина'), { statusCode: 502 });
@@ -184,4 +190,4 @@ function createXingchiCheckin(options = {}) {
   return Object.freeze({ getStatus, claim, mark, configure, snapshot, setScheduleRun, note });
 }
 
-module.exports = { PANEL_API, createXingchiCheckin };
+module.exports = { PANEL_API, createXingchiCheckin, loginRequired };

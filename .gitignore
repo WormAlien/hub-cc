@@ -462,6 +462,20 @@ routing/uncensoredlabs-sessions.json
 uncensoredlabs/profiles/
 uncensoredlabs/sessions/
 uncensoredlabs/gh-sessions/
+# UC-ферма: профили Camoufox (куки сессий), живой банк ключей и socks-списки.
+# prof_* создаются на каждый аккаунт/ящик - тысячи файлов кеша браузера.
+uncensoredlabs/farm/prof_*/
+uncensoredlabs/farm/prof_full/
+uncensoredlabs/farm/bank.jsonl
+uncensoredlabs/farm/socks-alive.txt
+uncensoredlabs/farm/socks-fresh.txt
+uncensoredlabs/farm/smailpro_box.json
+uncensoredlabs/farm/mailprobe.log
+uncensoredlabs/farm/scrape*.log
+# PID-файл запущенной автореги - runtime-состояние, не код.
+routing/uncensoredlabs-autoreg.pid
+# SMailPro: дамп формы из отладки (почтовые тройки).
+smailpro/_tr_form_dump.json
 routing/xingchi-sessions.json
 routing/xingchi-model-tests-cache.json*
 # Xingchi: профили браузера и снимки (куки, localStorage, тысячи файлов кеша).

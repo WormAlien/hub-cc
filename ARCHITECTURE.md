@@ -642,6 +642,14 @@ regressions,190 assertions; prefix checks cover concurrent saves and HTTP failur
 Catalog/save fixtures are intercepted; real publication HTTP/readback remains
 `check-model-publication-http-ui.js`. These are source checks, not live inference.
 
+Xingchi daily Claim uses the existing per-account Chromium panel profile, not
+the inference key. `xingchi-panel-session.js` reads panel-origin localStorage
+through Chromium and saves the rotated pair to the same profile after a provider
+refresh. Same-profile operations are serialized. `xingchi-checkin.js` retries
+only the status GET after a 401; it does not retry a Claim POST. An open account
+browser may hold the profile; close it before retrying. The runner's schedule
+remains opt-in (`Asia/Shanghai`).
+
 Tabs Manager now partitions navigation into Visible/Hidden drag columns. Moving
 across columns changes sidebar visibility; moving inside Visible changes its
 order. The v1 localStorage key/schema/default whitelist, unknown saved IDs and

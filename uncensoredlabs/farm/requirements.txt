@@ -1,0 +1,23 @@
+# Зависимости фермы UncensoredLabs (кнопка «Авторега» на вкладке uc).
+#
+# Ставится в venv РЯДОМ С ЭТИМ КАТАЛОГОМ — хаб ищет его как
+# uncensoredlabs/farm/.venv/Scripts/python.exe (Windows) или
+# uncensoredlabs/farm/.venv/bin/python (иначе):
+#
+#   python -m venv .venv
+#   .venv/Scripts/python -m pip install -r requirements.txt
+#   .venv/Scripts/python -m camoufox fetch      # скачать сам браузер
+#
+# 🔴 Python 3.11–3.12. На 3.14 колёса Camoufox не собираются.
+#
+# Путь к интерпретатору можно переопределить: UC_FARM_PYTHON=<path>
+#
+# 🪤 extra `[geoip]` ОБЯЗАТЕЛЕН. Ферма поднимает Camoufox с `geoip=True`, а
+# без maxminddb он падает на КАЖДОМ аккаунте с «Please install the geoip
+# extra to use this feature» — аккаунт не создаётся вовсе. Проверка, что
+# extra на месте:
+#   .venv/Scripts/python -c "from camoufox.geolocation import geoip_allowed; geoip_allowed()"
+# База .mmdb качается один раз и лежит вне venv:
+#   %LOCALAPPDATA%\camoufox\camoufox\Cache\geoip\mmdb\
+
+camoufox[geoip]>=0.5.9

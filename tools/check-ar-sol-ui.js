@@ -116,12 +116,15 @@ if (stage === 'all' || stage === 'retirement') test('AgentRouter loads without q
     } finally { await f.context.close(); }
 });
 
-if (stage === 'all' || stage === 'models') test('AgentRouter shows only Sol from actual catalog and separates copy from selection', async () => {
+if (stage === 'all' || stage === 'models') test('AgentRouter shows the provider catalog as-is and separates copy from selection', async () => {
     const f = await fixture();
     try {
         const list = f.page.locator('#ar-models-list');
-        assert.doesNotMatch(await list.innerText(), /astra|claude-opus|deepseek/i, 'legacy cached models cannot reappear');
-        assert.equal(await list.locator('[data-publication-chip]').count(), 2, 'preserve one publication control per Sol');
+        // Каталог принадлежит провайдеру: что вернул шлюз, то и видно. Фикстура
+        // подмешивает снятые ID — они должны появиться как обычные строки каталога,
+        // а не вырезаться зашитым списком вкладки.
+        assert.match(await list.innerText(), /gpt-6-astra/);
+        assert.ok(await list.locator('[data-publication-chip]').count() >= 2, 'every catalog model has one publication control');
         await list.locator('[data-publication-chip="agentrouter/gpt-6.1-sol"] button[title^="Копировать"]').click();
         assert.deepEqual(await f.page.evaluate(() => window.__copied), ['/model agentrouter/gpt-6.1-sol[1m]']);
         assert.equal(f.record.requests.filter(r => r.path.endsWith('/set-model')).length, 0);
@@ -131,7 +134,7 @@ if (stage === 'all' || stage === 'models') test('AgentRouter shows only Sol from
         assert.equal(f.record.requests.filter(r => r.path.endsWith('/set-model')).length, 1);
         f.setMode('empty');
         await f.page.evaluate(() => loadArModels(true));
-        assert.match(await list.innerText(), /нет доступных Sol/i);
+        assert.match(await list.innerText(), /пустой каталог/i);
         assert.equal(await list.locator('[data-publication-chip]').count(), 0);
         f.setMode('error');
         await f.page.evaluate(() => loadArModels(true));
@@ -139,16 +142,17 @@ if (stage === 'all' || stage === 'models') test('AgentRouter shows only Sol from
     } finally { await f.context.close(); }
 });
 
-if (stage === 'all' || stage === 'legacy') test('stale saved tiers require an explicit Sol choice without showing retired models', async () => {
+if (stage === 'all' || stage === 'legacy') test('stale saved tiers stay visible as options until an explicit choice replaces them', async () => {
     const f = await fixture(1440, true);
     try {
         const detail = f.page.locator('#ar-modelmap');
         await detail.locator('summary').click();
-        assert.doesNotMatch(await detail.innerText(), /astra/i, 'retired models are not a visible choice or warning');
+        // Сохранённая цель, которой больше нет в каталоге, остаётся в списке селекта:
+        // карта владельца не врёт «как есть», но и не стирается молча.
+        assert.match(await detail.innerText(), /astra/i, 'saved off-catalog tier stays a visible option');
         await detail.locator('button[onclick="arSaveModelMap()"]').click();
-        assert.equal(f.record.requests.filter(r => r.method === 'POST' && r.path === '/__switch/api/ar/modelmap').length, 0,
-            'unavailable saved targets must not silently turn into an empty/default tier');
-        assert.equal(f.modelMap().opus, 'gpt-6-astra', 'owner state remains untouched until an explicit choice');
+        await f.page.waitForFunction(() => document.getElementById('toasts')?.textContent.includes('маппинг сохранён'));
+        assert.equal(f.modelMap().opus, 'gpt-6-astra', 'saving unchanged selects keeps the saved map, never blanks it');
         for (const tier of ['opus', 'sonnet', 'haiku']) await f.page.locator('#ar-mm-' + tier).selectOption(SOL[0]);
         await detail.locator('button[onclick="arSaveModelMap()"]').click();
         await f.page.waitForFunction(() => document.getElementById('toasts')?.textContent.includes('маппинг сохранён'));
@@ -178,11 +182,12 @@ if (stage === 'all' || stage === 'flow') for (const width of [1440, 393]) test('
             && document.getElementById('ar-list')?.textContent.includes('fixture@example'));
         await p.waitForFunction(() => !document.documentElement.classList.contains('tw-boot'));
         assert.equal(await detail.getAttribute('open'), null, 'F5 retains advanced default');
-        assert.equal(await p.locator('#ar-models-list [data-publication-chip]').count(), 2);
+        // Каталог фикстуры: 2 Sol + снятые gpt-6-astra/claude-opus-5-5/deepseek-v4-flash = 5 строк.
+        assert.ok(await p.locator('#ar-models-list [data-publication-chip]').count() >= 5);
         assert.match(await p.locator('#ar-checkin').innerText(), /Чек-ин/);
         assert.match(await p.locator('#ar-journal').innerText(), /Журнал/);
         assert.match(await p.locator('#ar-list').innerText(), /Sol fixture|fixture@example/);
-        assert.doesNotMatch(await p.locator('[data-tab-content="agentrouter"]').innerText(), /astra|расписание партий|сброса квоты|пул пуст/i);
+        assert.doesNotMatch(await p.locator('[data-tab-content="agentrouter"]').innerText(), /расписание партий|сброса квоты|пул пуст/i);
         await p.locator('#ar-keepalive').scrollIntoViewIfNeeded();
         const statusWidth = await p.locator('#ar-keepalive-status').evaluate(e => e.getBoundingClientRect().width);
         assert.ok(statusWidth >= 250, 'keepalive summary must be a readable full row, not a squeezed column');

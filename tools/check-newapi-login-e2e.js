@@ -11,6 +11,119 @@ const { runProvider } = require('../routing/lib/newapi-onboarding');
 const { totpCode } = require('../routing/lib/totp');
 const scratch = process.env.HERMES_TEST_SCRATCH || 'C:/Users/WormAlien/AppData/Local/hermes/cache/scratch';
 
+test('GitHub identity stored as an email still completes OAuth consent without reloading the login page', async () => {
+    // Живой регресс 24.11 (freegg/ciciaidiltaslim): в записи менеджера login=<почта>,
+    // GitHub в dotcom_user отдаёт имя пользователя. Проба личности отвергала успешный вход,
+    // и прогон вместо согласия дважды перезагружал /login. Здесь проверяется вся цепочка:
+    // пароль -> 2FA -> страница согласия -> колбэк панели -> ключ.
+    const root = fs.mkdtempSync(path.join(scratch, 'newapi-email-login-'));
+    const moduleDir = path.join(root, 'freegg');
+    fs.mkdirSync(moduleDir, { recursive: true });
+    const account = { id: 'gh_fixture', login: 'ciciaidiltaslim@gmail.com', nickname: 'ciciaidiltaslim',
+        password: 'fixture-password', totpSecret: 'JBSWY3DPEHPK3PXP' };
+    const rows = [{ id: 'fg_fixture', ghId: 'gh_fixture', api_key: 'no-key-fixture', active: false }];
+    let loginPageLoads = 0, consents = 0, keyWrites = 0, totpPosts = 0;
+    const hub = http.createServer((req, res) => {
+        let body = ''; req.on('data', c => body += c); req.on('end', () => {
+            res.setHeader('content-type', 'application/json');
+            // Штатный шов watchPanelAuth: завершение OAuth уходит на callback-транспорт.
+            if (req.url === '/callback') {
+                return res.end(JSON.stringify({ success: true, data: { id: 41, username: 'ciciaidiltaslim' } }));
+            }
+            const payload = JSON.parse(body);
+            rows[0].api_key = payload.api_key; keyWrites++;
+            res.end('{"ok":true}');
+        });
+    });
+    hub.listen(0, '127.0.0.1'); await once(hub, 'listening');
+    const logs = [];
+    const launch = async (dir, options) => {
+        const context = await chromium.launchPersistentContext(dir, { ...options, headless: true, channel: undefined });
+        const originalRoute = context.route.bind(context);
+        context.route = (matcher, handler) => {
+            if (typeof matcher !== 'function') return originalRoute(matcher, handler);
+            return originalRoute(matcher, route => handler({
+                request: () => route.request(),
+                fetch: options => route.fetch({ ...options, url: hubOrigin + '/callback' }),
+                fulfill: options => route.fulfill(options),
+                abort: () => route.abort(),
+            }));
+        };
+        await originalRoute('**/*', async route => {
+            const req = route.request();
+            const u = new URL(req.url());
+            if (u.hostname === 'github.com') {
+                if (u.pathname === '/login') {
+                    loginPageLoads++;
+                    return route.fulfill({ contentType: 'text/html', body:
+                        '<form action="/session" method="post"><input id="login_field" name="login"><input id="password" name="password" type="password"><input name="commit" type="submit" value="Sign in"></form>' });
+                }
+                if (u.pathname === '/session') {
+                    const form = new URLSearchParams(req.postData());
+                    assert.equal(form.get('login'), account.login, 'в GitHub уходит то, что в записи');
+                    // 🔴 Вход принят: GitHub кладёт в куку ИМЯ, а не адрес из формы.
+                    await context.addCookies([{ name: 'dotcom_user', value: 'ciciaidiltaslim', domain: '.github.com', path: '/' }]);
+                    return route.fulfill({ contentType: 'text/html', body:
+                        '<script>location.href="https://github.com/sessions/two-factor/app"</script>' });
+                }
+                if (u.pathname === '/sessions/two-factor/app') return route.fulfill({ contentType: 'text/html', body:
+                    '<form id="otp" action="/sessions/two-factor" method="post"><input id="app_totp" name="app_otp" oninput="if(this.value.length===6)document.getElementById(\'otp\').submit()"></form>' });
+                if (u.pathname === '/sessions/two-factor') {
+                    totpPosts++;
+                    await context.addCookies([{ name: 'user_session', value: 'fixture-session', domain: '.github.com', path: '/' },
+                        { name: 'dotcom_user', value: 'ciciaidiltaslim', domain: '.github.com', path: '/' }]);
+                    return route.fulfill({ contentType: 'text/html', body:
+                        '<script>location.href="https://github.com/login/oauth/authorize"</script>' });
+                }
+                if (u.pathname === '/login/oauth/authorize') return route.fulfill({ contentType: 'text/html', body:
+                    '<button name="authorize" value="1" onclick="location.href=\'https://freegg.app/oauth/github?code=fixture\'">Authorize</button>' });
+                throw new Error('unexpected GitHub route ' + u.pathname);
+            }
+            if (u.hostname !== 'freegg.app') throw new Error('unexpected network ' + u.hostname);
+            if (u.pathname === '/sign-up') return route.fulfill({ contentType: 'text/html', body:
+                '<script>localStorage.setItem("aff","nVhs")</script>'
+                + '<button onclick="location.href=\'https://github.com/login\'">Continue with GitHub</button>' });
+            if (u.pathname === '/oauth/github') {
+                consents++; localStorageMarker = true;
+                return route.fulfill({ contentType: 'text/html', body:
+                    '<script>fetch("/api/oauth/github?code=fixture").then(r=>r.json()).then(j=>{localStorage.setItem("user",JSON.stringify(j.data));location.href="/console/token"})</script>' });
+            }
+            if (u.pathname === '/console/token') return route.fulfill({ contentType: 'text/html', body: 'Token console' });
+            let data;
+            // Панель не знает этого GitHub, пока OAuth не завершён: иначе прогон
+            // «доказывает» сессию без входа и тест перестаёт проверять цепочку.
+            if (u.pathname === '/api/user/self') {
+                if (!totpPosts) return route.fulfill({ status: 401, contentType: 'application/json', body: '{"success":false}' });
+                data = { id: 41, username: 'ciciaidiltaslim' };
+            }
+            else if (u.pathname === '/api/token/' && req.method() === 'GET') data = { items: [{ id: 8, name: '1', status: 1, key: 'fixture-email-full-key' }] };
+            else throw new Error('unexpected panel route ' + u.pathname);
+            return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, data }) });
+        });
+        return context;
+    };
+    let localStorageMarker = false;
+    const hubOrigin = `http://127.0.0.1:${hub.address().port}`;
+    try {
+        const result = await runProvider({ provider: 'freegg', moduleDir, label: 'acct_fg_fixture', mode: 'provision',
+            config: { full: 'freegg', p: 'fg', HOST: 'freegg.app', github: true, ref: true,
+                onboarding: { kind: 'newapi-github', consolePath: '/console/token', callbackPath: '/api/oauth/github', tokenName: '1' } },
+            readPool: () => rows, account, launch, hubOrigin, timeoutMs: 60000,
+            log: line => logs.push(line),
+            // Сессия доказывается тем же способом, что в бою: кука + согласие.
+            githubLoginOptions: {} });
+        assert.equal(result.ok, true);
+        assert.equal(loginPageLoads, 1, 'страницу входа загружали РОВНО раз, без перезагрузок');
+        assert.equal(totpPosts, 1, '2FA принят с первого кода');
+        assert.equal(consents, 1, 'согласие GitHub пройдено');
+        assert.equal(keyWrites, 1);
+        assert.equal(rows[0].api_key, 'sk-' + 'fixture-email-full-key');
+        assert.ok(!logs.join('\n').includes('перезагружаю'), 'перезагрузки страницы входа не было');
+    } finally {
+        hub.closeAllConnections(); await new Promise(resolve => hub.close(resolve));
+    }
+});
+
 test('selected GitHub password and TOTP flow creates classic named key once and reuses it', async () => {
     const root = fs.mkdtempSync(path.join(scratch, 'newapi-login-e2e-'));
     const moduleDir = path.join(root, 'fxqidian');

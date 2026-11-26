@@ -209,9 +209,21 @@ FILL_FORM_JS = """(args) => {
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   };
+  // 🔴 Форма регистрации 25.11 имеет ДВА поля пароля: `#password` и
+  // `#confirmPassword` («Confirm your new password»). Прежний селектор
+  // `input[type="password"]` брал только первое, confirm оставался пустым -
+  // кнопка `Continue` при этом остаётся `disabled: true`, и прогон вставал
+  // на форме: снаружи это выглядело как «пароль не пишется».
+  // Берём каждое поле по своему id, а общий селектор - только фолбэк.
+  const okPass = setVal('#password', args.password)
+              || setVal('input[type="password"]', args.password);
+  const okConfirm = setVal('#confirmPassword', args.password)
+                 || setVal('input[name="confirmPassword"]', args.password)
+                 || okPass;
   return {
-    okEmail: setVal('#email, input[type="email"]', args.email),
-    okPass: setVal('#password, input[type="password"]', args.password),
+    okEmail: setVal('#email', args.email) || setVal('input[type="email"]', args.email),
+    okPass,
+    okConfirm,
   };
 }"""
 
@@ -766,6 +778,67 @@ async def tr_browser_ctx(use_proxy, tried, pin=None):
                 pass
 
 
+async def cf_ready(page, want=300, want_h=65):
+    """Кадр Turnstile отрисован и виден? Возвращает его bounding_box или None.
+
+    🔴 Замер 25.11: кадр CF появляется в `page.frames` ДО того, как виджет
+    готов принять клик. Ранний клик по пустому прямоугольнику Turnstile
+    проглатывает молча - снаружи это выглядит как «чекбокс не нажимается».
+    Поэтому ждём не «кадр в списке», а именно видимый прямоугольник нужного
+    размера (managed-виджет ~300x65); уменьшенный кадр - ещё не готов.
+    """
+    for f in page.frames:
+        if "challenges.cloudflare" not in (f.url or ""):
+            continue
+        try:
+            el = await f.frame_element()
+            bb = await el.bounding_box()
+        except Exception:
+            continue
+        if not bb or bb.get("width", 0) < 60 or bb.get("height", 0) < 20:
+            continue
+        return bb
+    return None
+
+
+async def click_turnstile(page, bb):
+    """Прожать чекбокс Cloudflare Turnstile настоящей мышью. True - клик ушёл.
+
+    🔴 Замер 25.11: smailpro больше НЕ создаёт ящик сам по загрузке страницы.
+    Сначала висит виджет «Verify you are human», и только после его прохождения
+    SPA сама делает `GET /app/create?username=random&type=alias&domain=gmail.com`
+    и подставляет адрес. Кнопку «Create» жать НЕ нужно - ящик приходит сам.
+
+    🪤 Признак успеха - НЕ `input[name="cf-turnstile-response"]`: он остаётся
+    пустым даже при пройденном челлендже (замер: живой ящик при tokLen=0).
+    Правду говорит только `input[name="limitEmail"].value` с реальным адресом.
+
+    🪤 Чекбокс живёт в iframe `challenges.cloudflare.com`, а не в главном
+    документе: `document.querySelectorAll('iframe')` из главной страницы его
+    не находит, поэтому координаты берём у самого кадра (`frame_element`).
+    Оранжевый квадрат сидит слева внутри виджета, ~30 px от края.
+
+    `bb` приходит из cf_ready(): там уже проверено, что виджет отрисован.
+    Появление кадра в `page.frames` само по себе готовности не значит.
+    """
+    try:
+        x = bb["x"] + 30
+        y = bb["y"] + bb["height"] / 2
+        # Человекоподобный подвод, но КОРОТКИЙ: Camoufox с `humanize=8.0`
+        # начисляет задержку на КАЖДЫЙ шаг `mouse.move`, и подвод в 37 шагов
+        # стоил ~7 с (живой замер 25.11: кадр готов на 0.05 с, клик на 7.4 с).
+        # 2+3 шага дают ту же траекторию за десятые доли секунды.
+        await page.mouse.move(x - 140, y - 70, steps=2)
+        await asyncio.sleep(0.1)
+        await page.mouse.move(x, y, steps=3)
+        await asyncio.sleep(0.12)
+        await page.mouse.click(x, y)
+        return True
+    except Exception as e:
+        log("mail", f"чекбокс CF: {str(e)[:70]}")
+        return False
+
+
 async def run_account(n, use_proxy=True, proxy_pin=None):
     log("main", f"--- аккаунт {n} ---")
     password = rand_password()
@@ -822,24 +895,56 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
         await mail.goto("https://smailpro.com/temporary-email",
                         wait_until="domcontentloaded", timeout=60000)
 
+        # 🔴 С 25.11 ящик САМ по загрузке не приходит: сначала Turnstile-чекбокс,
+        # после него SPA сама дёргает `/app/create` и подставляет адрес.
+        # Раньше здесь было пассивное ожидание 180 с - на новой странице оно
+        # выжигало таймаут и валило всю авторегу.
         addr = None
         t0 = time.time()
+        cf_clicks = 0
+        cf_pending_at = None       # когда начали ждать готовности кадра
+        st = {}
         while time.time() - t0 < MAILBOX_WAIT_S:
             try:
                 st = await mail.evaluate(MAILBOX_JS)
             except Exception as e:
                 log("mail", f"страница: {str(e)[:70]}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(1.5)
                 continue
             if st.get("limitN", 0) >= 1 and st.get("addr"):
                 addr = st["addr"]
                 break
-            await asyncio.sleep(3)
+
+            # Жать чекбокс надо ровно тогда, когда виджет отрисовался: и НЕ сразу
+            # по появлению кадра, и не по слепому таймеру. cf_ready() отдаёт bb
+            # только у готового виджета (managed ~300x65), поэтому здесь ждём
+            # лишь подтверждения на втором опросе - ~0.4 с на отрисовку формы.
+            # 🪤 Момент готовности НЕ сбрасываем, если на одном опросе кадр
+            # пропал: Turnstile перерисовывает iframe, и сброс возвращал ожидание
+            # в начало - живой замер давал клик на 8.4 с вместо ~2 с.
+            bb = await cf_ready(mail)
+            if bb is not None:
+                if cf_pending_at is None:
+                    cf_pending_at = time.time()
+                elif time.time() - cf_pending_at >= 0.4 and cf_clicks < 6:
+                    if await click_turnstile(mail, bb):
+                        cf_clicks += 1
+                        log("mail", f"чекбокс CF прожат (попытка {cf_clicks}, "
+                                    f"виджет {bb['width']:.0f}x{bb['height']:.0f}, "
+                                    f"{time.time()-t0:.1f} с)")
+                        stage("mail-cf")
+                        cf_pending_at = None
+                        await asyncio.sleep(2.5)
+                        continue
+            await asyncio.sleep(0.4)
+
         if not addr:
             if warm_task:
                 warm_task.cancel()
-            raise RuntimeError(f"smailpro не выдал ящик за {MAILBOX_WAIT_S} с")
-        log("mail", f"✅ ящик: {addr} ({st.get('limit')})")
+            raise RuntimeError(f"smailpro не выдал ящик за {MAILBOX_WAIT_S} с "
+                               f"(кликов по CF: {cf_clicks})")
+        log("mail", f"✅ ящик: {addr} ({st.get('limit')}) · {time.time()-t0:.0f} с "
+                    f"· кликов CF: {cf_clicks}")
 
         # ── 2. payload для чтения писем ──
         got = await mail.evaluate(GET_PAYLOAD_JS, addr)
@@ -931,13 +1036,13 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                     except Exception:
                         pass
                     filled = await tr.evaluate(FILL_FORM_JS, {"email": addr, "password": password})
-                    if filled.get("okEmail") and filled.get("okPass"):
+                    if filled.get("okEmail") and filled.get("okPass") and filled.get("okConfirm"):
                         break
                     log("tr", f"поля ещё не готовы (попытка {attempt}): {filled}")
                     await asyncio.sleep(2.5)
                 log("tr", f"форма: {filled}")
-                if not filled.get("okEmail") or not filled.get("okPass"):
-                    raise RuntimeError("поля формы не заполнились")
+                if not (filled.get("okEmail") and filled.get("okPass") and filled.get("okConfirm")):
+                    raise RuntimeError(f"поля формы не заполнились: {filled}")
 
                 started = await click_exact_button(tr, START_TEXTS)
                 log("tr", f"капча стартовала: {started or 'НЕТ - открой кнопкой сам'}")
@@ -996,6 +1101,24 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
                 # ключ) идёт через tools/tr-solver --call - окно панели вообще
                 # не нужно. Ветка дублирует шаги 5-7 из ручного пути ниже.
                 stage("send-code")
+                # 🔴 ПЕРЕД отправкой кода - проверить, что адрес свободен.
+                # Замер 25.11: все ящики из smailpro («Google Bonus Pool», адреса
+                # там переиспользуются чужими прогонами) отвечали
+                #   409 {"message":"email already exists","reason":"EMAIL_EXISTS"}
+                # на `POST /auth/registration/email-check {email, company_website}`.
+                # На занятый адрес письмо не уходит НИКОГДА, а прежний код слал
+                # send-verify-code, получал 200 и ждал письмо 300 с - три прогона
+                # подряд сгорели впустую. Фронт панели этот шаг делает всегда,
+                # до капчи и до отправки кода.
+                st_chk, chk = await tr_api_solver(
+                    tr_proxy_label, "/auth/registration/email-check", "POST",
+                    {"email": addr, "company_website": ""})
+                if st_chk == 409 or "EMAIL_EXISTS" in str(chk):
+                    raise RuntimeError(
+                        f"адрес занят на панели (EMAIL_EXISTS): {addr} - "
+                        f"нужен новый ящик, письмо на занятый не приходит")
+                log("tr", f"email-check: {st_chk} {str(chk)[:100]}")
+
                 st_code, resp = await tr_api_solver(
                     tr_proxy_label, "/auth/send-verify-code", "POST",
                     {"email": addr, "click_captcha_token": ctok})
@@ -1035,6 +1158,15 @@ async def run_account(n, use_proxy=True, proxy_pin=None):
 
                 # ── 5. код на почту ──
                 stage("send-code")
+                # Тот же шаг занятости адреса, что и в авто-ветке: на занятый
+                # адрес письмо не приходит вовсе (409 EMAIL_EXISTS).
+                st_chk, chk = await tr_api(tr, "/auth/registration/email-check", "POST",
+                                           {"email": addr, "company_website": ""})
+                if st_chk == 409 or "EMAIL_EXISTS" in str(chk):
+                    raise RuntimeError(
+                        f"адрес занят на панели (EMAIL_EXISTS): {addr} - "
+                        f"нужен новый ящик, письмо на занятый не приходит")
+                log("tr", f"email-check: {st_chk} {str(chk)[:100]}")
                 st_code, resp = await tr_api(tr, "/auth/send-verify-code", "POST",
                                             {"email": addr, "click_captcha_token": ctok})
                 log("tr", f"send-verify-code: {st_code} {str(resp)[:120]}")

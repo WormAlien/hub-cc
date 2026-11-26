@@ -589,7 +589,7 @@ test('catalogfailure', 'actual AgentRouter catalog HTTP failures are explicit er
     fs.writeFileSync(path.join(evidence, 'catalogfailure-reply.json'), JSON.stringify(outcome, null, 2) + '\n');
 });
 
-test('catalogsol', 'live and cached AgentRouter catalogs contain only exact Sol IDs and retain valid empty state', async () => {
+test('catalogpassthrough', 'live and cached AgentRouter catalogs pass provider rows through as-is and retain valid empty state', async () => {
     const rows = [
         { id: 'gpt-6.1-sol', owned_by: 'fixture', supported_endpoint_types: ['chat'] },
         { id: 'gpt-6-astra', owned_by: 'legacy' }, { id: 'claude-opus-5' },
@@ -602,7 +602,7 @@ test('catalogsol', 'live and cached AgentRouter catalogs contain only exact Sol 
     const evidenceRows = [];
     const cached = await withCatalog(cache, { status: 200, data: { data: rows } }, async (port) => {
         const reply = await request(port, '/__switch/api/ar/models?api_key=fixture-not-live');
-        assert.deepEqual(reply.body.models.map(({ id }) => id), ['gpt-6.1-sol', 'gpt-5.6-sol'], 'cached legacy catalog must be filtered, never normalize near-miss model IDs');
+        assert.deepEqual(reply.body.models.map(({ id }) => id), rows.map(({ id }) => id), 'cached catalog passes through exactly: no hardcoded allowlist, no ID normalization');
         assert.equal(reply.body.ok, true);
         assert.equal(reply.body.cached, true);
         assert.equal(reply.body.source, 'cache');
@@ -614,16 +614,16 @@ test('catalogsol', 'live and cached AgentRouter catalogs contain only exact Sol 
     evidenceRows.push(cached);
     const live = await withCatalog(cache, { status: 200, data: { data: rows } }, async (port) => {
         const reply = await request(port, '/__switch/api/ar/models?api_key=fixture-not-live&force=1');
-        assert.deepEqual(reply.body.models.map(({ id }) => id), ['gpt-6.1-sol', 'gpt-5.6-sol']);
+        assert.deepEqual(reply.body.models.map(({ id }) => id), rows.map(({ id }) => id));
         assert.equal(reply.body.cached, false);
         assert.equal(reply.body.source, 'live');
         assert.equal(reply.body.stale, false);
         assert.equal(reply.body.models[0].owned_by, 'fixture');
-        assert.deepEqual(reply.body.models[1].supported_endpoint_types, ['chat']);
+        assert.deepEqual(reply.body.models[3].supported_endpoint_types, ['chat']);
         return reply;
     });
     assert.equal(live.upstreamRequests.length, 1);
-    assert.deepEqual(cache.data.map(({ id }) => id), ['gpt-6.1-sol', 'gpt-5.6-sol']);
+    assert.deepEqual(cache.data.map(({ id }) => id), rows.map(({ id }) => id));
     evidenceRows.push(live);
     const empty = await withCatalog(cache, { status: 200, data: { data: [] } }, async (port) => {
         const reply = await request(port, '/__switch/api/ar/models?api_key=fixture-not-live&force=1');
@@ -660,7 +660,8 @@ test('catalogtransport', 'transport or invalid catalog responses report errors a
             assert.equal(reply.body.status, scenario.expectedStatus);
             assert.ok(reply.body.error);
             if (scenario.cache.data) {
-                assert.deepEqual(reply.body.models.map(({ id }) => id), ['gpt-6.1-sol', 'gpt-5.6-sol']);
+                assert.deepEqual(reply.body.models.map(({ id }) => id), scenario.cache.data.map(({ id }) => id),
+                    'stale cache keeps the full provider catalog, no hardcoded filtering');
                 assert.equal(reply.body.cached, true);
                 assert.equal(reply.body.stale, true);
                 assert.equal(reply.body.source, 'cache');

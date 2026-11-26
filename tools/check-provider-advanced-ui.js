@@ -609,15 +609,16 @@ async function regressionCase(width) {
       await f.models.locator('[data-publication-chip]').first().waitFor(); await settled(f);
     });
     if (!ready) return;
-    await checkpoint(f, 'ar-baseline-closed-two-sol', async () => {
+    await checkpoint(f, 'ar-baseline-closed-catalog', async () => {
       const data = await enumeration(f);
       assert.equal(data.tag, 'DETAILS'); assert.equal(data.open, false);
       assert.equal(data.summary, 'Дополнительно - маппинг тиров');
       assert.equal(data.belowInDOM && data.independent, true);
       assert.ok(data.detailRect.top >= data.modelRect.bottom - 1);
-      assert.deepEqual(data.catalogUnique, ['agentrouter/gpt-5.6-sol', 'agentrouter/gpt-6.1-sol']);
-      assert.equal(data.catalogCount, 2);
-      assert.doesNotMatch(await f.models.innerText(), /astra/i);
+      // Каталог вкладки — то, что вернул шлюз (фикстура подмешивает снятый ID),
+      // плюс один publication-чип на каждую модель каталога.
+      assert.deepEqual(data.catalogUnique, ['agentrouter/gpt-5.6-sol', 'agentrouter/gpt-6-astra', 'agentrouter/gpt-6.1-sol']);
+      assert.equal(data.catalogCount, 3);
       assert.equal(await f.page.locator('#arq-mini, #arq-big, #arq-sched, #ar-keepalive-pooldrop').count(), 0);
       await artifact(f, 'closed-full');
     });

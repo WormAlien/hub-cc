@@ -6494,7 +6494,7 @@ window.finNavCount = async () => {
           <div id="ar-models-list" class="flex flex-wrap gap-1.5">
             <span class="text-[10px] text-faint">загрузка…</span>
           </div>
-          <p class="text-[10px] text-faint mt-2">gpt-6.1-sol и gpt-5.6-sol из каталога шлюза. Клик - выбрать для новых сессий · 📋 - команда для открытого окна. Публикация в API Gateway не меняет выбранную модель.</p>
+          <p class="text-[10px] text-faint mt-2">Модели из живого каталога шлюза. Клик - выбрать для новых сессий · 📋 - команда для открытого окна. Публикация в API Gateway не меняет выбранную модель.</p>
         </div>
 
         <!-- Model map (настраиваемый маппинг claude-тиров, как в GoRouter/Custom) -->
@@ -7457,6 +7457,12 @@ window.finNavCount = async () => {
                 <option value="5">5</option><option value="10">10</option><option value="20">20</option>
               </select>
             </label>
+            <label class="flex items-center gap-1" title="сколько аккаунтов регистрируются ОДНОВРЕМЕННО; каждому достаётся свой прокси из списка (лимит 5/IP/24ч не нарушается)">параллельно:
+              <select id="uc-autoreg-parallel" class="bg-elevated border border-line-soft rounded px-2 py-1 text-xs">
+                <option value="1">1 (по очереди)</option><option value="2">2</option><option value="3">3</option>
+                <option value="4">4</option><option value="6">6</option><option value="8">8</option>
+              </select>
+            </label>
             <span>лимит площадки — 5/IP/24ч</span>
             <span id="uc-autoreg-stage" class="text-faint">—</span>
           </div>
@@ -7618,6 +7624,9 @@ window.finNavCount = async () => {
         </header>
 
         <div id="xc-energy" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+
+        <div id="xc-checkin" class="rounded-xl bg-surface border border-line-soft p-4"></div>
+        <div id="xc-checkin-journal" class="rounded-xl bg-surface border border-line-soft p-4"></div>
 
 
         <!-- xingchi: площадка отдаёт ТОЛЬКО /v1/responses и пускает только харнесс-клиенты
@@ -16697,8 +16706,9 @@ async function loadArSessionsLight() {
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 
-const AR_SOL_MODELS = new Set(['gpt-6.1-sol', 'gpt-5.6-sol']);
-
+// Каталог моделей вкладки — тот, что реально отдаёт шлюз. Раньше здесь лежал
+// зашитый набор из двух ID, и когда шлюз сменил линейку, вкладка показывала пусто
+// при живом каталоге. Список принадлежит провайдеру: приехал — показываем.
 async function loadArModels(force) {
   const keys = state.agentrouter
     .slice()
@@ -16722,14 +16732,13 @@ async function loadArModels(force) {
         continue;
       }
       sawCatalog = true;
-      const models = data.models.filter(m => m && AR_SOL_MODELS.has(m.id));
-      if (models.length) { await renderArModels(models); return; }
+      if (data.models.length) { await renderArModels(data.models); return; }
     } catch (e) { lastNote = e.message; }
   }
   state.arModels = [];
   renderArModelMap();
   $('ar-models-list').innerHTML = sawCatalog
-    ? '<span class="text-[10px] text-faint">нет доступных Sol в каталоге</span>'
+    ? '<span class="text-[10px] text-faint">шлюз вернул пустой каталог моделей</span>'
     : `<span class="text-[10px] text-amber">ошибка каталога: ${esc(lastNote)}</span>`;
 }
 
@@ -16739,7 +16748,7 @@ function arModelCommand(id) {
 }
 
 async function renderArModels(models) {
-  if (models) state.arModels = models.filter(m => m && AR_SOL_MODELS.has(m.id));
+  if (models) state.arModels = (models || []).filter(m => m && m.id);
   const list = state.arModels || [];
   let active = state.arActiveModel || '';
   try {
@@ -16837,13 +16846,16 @@ async function loadArModelMap() {
 
 async function renderArModelMap() {
   const mm = state.arModelMap || {};
-  const models = [...AR_SOL_MODELS];
-  const opts = ['', ...models];
+  // Цели тиров — весь каталог, который реально отдаёт шлюз (как на FreeGG/Xingchi).
+  // Сохранённые цели держим в опциях ВСЕГДА: modelmap с диска приезжает раньше/позже
+  // каталога, а select без своей option показывает «- как есть -», т.е. сохранённый
+  // тир выглядит выключенным, и 💾 Сохранить в этот момент затёр бы его пустотой.
+  const models = (state.arModels || []).map(m => m.id).filter(Boolean);
+  const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku, mm.gpt]
+    .filter(v => typeof v === 'string'))];
   const sel = (name, hint) => {
     const val = mm[name] || '';
-    const unresolved = !!val && !AR_SOL_MODELS.has(val);
-    const pending = unresolved ? '<option value="__choose_sol__" selected disabled>выберите Sol</option>' : '';
-    const o = pending + opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '- как есть -'}</option>`).join('');
+    const o = opts.map(id => `<option value="${esc(id)}"${id === val ? ' selected' : ''}>${id ? esc(id) : '- как есть -'}</option>`).join('');
     return `<label class="flex flex-col gap-1"><span class="text-[10px] text-faint">${name}${hint ? ` <span class="text-faint/60">${hint}</span>` : ''}</span>
       <select id="ar-mm-${name}" class="text-xs bg-elevated border border-line-soft rounded-lg px-2 py-1.5 w-full">${o}</select></label>`;
   };
@@ -16857,9 +16869,6 @@ async function renderArModelMap() {
 }
 
 async function arSaveModelMap() {
-  if (['opus', 'sonnet', 'haiku', 'gpt'].some(name => $('ar-mm-' + name)?.value === '__choose_sol__')) {
-    return toast('Выбери Sol для всех ненастроенных тиров - сохранённая карта не изменена', 'warn');
-  }
   const mm = {
     opus: $('ar-mm-opus')?.value || '',
     sonnet: $('ar-mm-sonnet')?.value || '',
@@ -20931,10 +20940,11 @@ function ucAutoregLog(lines) {
 async function ucAutoregStart() {
   const perIp = document.getElementById('uc-autoreg-perip')?.value || '1';
   const rounds = document.getElementById('uc-autoreg-rounds')?.value || '1';
+  const parallel = document.getElementById('uc-autoreg-parallel')?.value || '1';
   try {
     const res = await fetch('/__switch/api/uc/autoreg/start', { method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ perIp: Number(perIp), rounds: Number(rounds) }) });
+      body: JSON.stringify({ perIp: Number(perIp), rounds: Number(rounds), parallel: Number(parallel) }) });
     const d = await res.json();
     if (!res.ok) { toast('авторега: ' + (d.error || res.status), 'error'); ucAutoregStatus(); return; }
     toast('🤖 авторега запущена (pid ' + d.pid + ')', 'success');
@@ -21461,6 +21471,25 @@ function renderXcGauge() {
   });
 }
 
+let xcCheckinState = { config: { enabled: false, time: '09:00', timezone: 'Asia/Shanghai' }, accounts: [], runs: [], events: [], batch: {} };
+let xcCheckinPollTimer = null;
+function xcCheckinAccountState(id) { return (xcCheckinState.accounts || []).find(a => String(a.id) === String(id)) || {}; }
+function xcCheckinRunState(id) { return (xcCheckinState.runs || []).find(r => String(r.id) === String(id) && (r.state === 'queued' || r.state === 'running')) || null; }
+function xcCheckinRender() {
+  const box = $('xc-checkin'), journal = $('xc-checkin-journal'); if (!box || !journal) return;
+  const accounts = (state.xingchi || []).filter(s => isRealKey(s.api_key));
+  const ready = accounts.filter(s => !xcCheckinAccountState(s.id).status?.claimed_today && !xcCheckinAccountState(s.id).marked).length;
+  const cfg = xcCheckinState.config || {}, batch = xcCheckinState.batch || {};
+  box.innerHTML = `<div class="flex items-center justify-between gap-3 flex-wrap"><div><h2 class="text-sm font-semibold">🎁 Ежедневный Xingchi Claim</h2><p class="text-[11px] text-muted mt-1">Готовы: ${ready} · Asia/Shanghai</p></div><div class="flex gap-2 text-xs"><button onclick="xcCheckinAll()" ${ready && !batch.running && !batch.queued ? '' : 'disabled'} class="px-2 py-1 bg-purple/10 border border-purple/50 text-purple rounded disabled:opacity-40">🎁 Claim у всех</button><button onclick="xcCheckinCancel()" ${(batch.running || batch.queued) ? '' : 'disabled'} class="px-2 py-1 bg-rose/10 border border-rose/50 text-rose rounded disabled:opacity-40">⏹ Стоп</button><button onclick="xcCheckinLoad(true)" class="px-2 py-1 bg-surface border border-line-soft rounded">↻</button></div></div><div class="mt-3 flex gap-2 items-center flex-wrap text-xs"><label><input id="xc-checkin-enabled" type="checkbox" ${cfg.enabled ? 'checked' : ''}> авто</label><input id="xc-checkin-time" value="${esc(cfg.time || '09:00')}" maxlength="5" class="w-16 bg-elevated border border-line-soft rounded px-2 py-1 font-mono"><span>Asia/Shanghai</span><button onclick="xcCheckinSaveConfig()" class="px-2 py-1 bg-sky/10 border border-sky/50 text-sky rounded">💾 расписание</button><span class="text-faint">в очереди: ${batch.queued || 0} · выполняется: ${batch.running || 0}</span></div><div class="mt-3 overflow-x-auto"><table class="w-full text-xs"><tbody>${accounts.map(s => { const status=xcCheckinAccountState(s.id), run=xcCheckinRunState(s.id); const done=!!(status.status?.claimed_today||status.marked); const label=run?(run.state==='running'?'⏳ Claim…':'⏳ очередь'):status.error?'⚠ ошибка':status.marked?'📦 отмечено вручную':status.status?.claimed_today?'✓ Claim сегодня':'🎁 готов'; return `<tr class="border-t border-line-soft"><td class="py-2">${esc(s.email||s.name||s.id)}</td><td>${esc(label)}</td><td class="text-right"><button onclick='xcCheckinClaim(${JSON.stringify(s.id)})' ${run||done?'disabled':''} class="px-2 py-1 bg-purple/10 border border-purple/40 text-purple rounded disabled:opacity-40">Claim</button><button onclick='xcCheckinMark(${JSON.stringify(s.id)}, ${status.marked?'false':'true'})' class="ml-1 px-2 py-1 bg-surface border border-line-soft rounded">${status.marked?'снять отметку':'отметить'}</button></td></tr>`; }).join('')}</tbody></table></div>`;
+  const events=(xcCheckinState.events||[]).slice(-80).reverse(); journal.innerHTML=`<div class="text-sm font-semibold">🎁 Журнал Xingchi <span class="text-faint text-xs">${events.length}</span></div><div class="mt-2 max-h-48 overflow-y-auto bg-bg rounded border border-line-soft p-2 font-mono text-[10px]">${events.length?events.map(e=>`<div>${esc(new Date(e.at).toLocaleTimeString('ru-RU'))} ${esc(e.text)}</div>`).join(''):'<span class="text-faint">Пока тихо.</span>'}</div>`;
+}
+async function xcCheckinLoad(probe=false) { try { const res=await fetch('/__switch/api/xc/checkin-status'+(probe?'?probe=1':'')); const data=await res.json(); if(!res.ok||data.error)throw new Error(data.error||'ошибка'); xcCheckinState={...xcCheckinState,...data}; xcCheckinRender(); } catch(e) { const box=$('xc-checkin'); if(box)box.innerHTML=`<span class="text-xs text-crimson">Claim: ${esc(e.message)}</span>`; } finally { if(xcCheckinPollTimer)clearTimeout(xcCheckinPollTimer); const busy=(xcCheckinState.batch?.queued||0)+(xcCheckinState.batch?.running||0)>0; xcCheckinPollTimer=setTimeout(()=>xcCheckinLoad(false),busy?1500:15000); } }
+async function xcCheckinClaim(id) { try { const r=await fetch('/__switch/api/xc/checkin-claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); const d=await r.json(); if(!r.ok||d.error)throw new Error(d.error||'ошибка'); toast(`🎁 Claim в очереди: ${d.queued}`,'success'); } catch(e){toast('Claim: '+e.message,'error');} finally{await xcCheckinLoad(false);} }
+async function xcCheckinAll() { try { const r=await fetch('/__switch/api/xc/checkin-all',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const d=await r.json(); if(!r.ok||d.error)throw new Error(d.error||'ошибка'); toast(`🎁 Xingchi: ${d.queued} аккаунтов в очереди`,'success'); } catch(e){toast('Claim у всех: '+e.message,'error');} finally{await xcCheckinLoad(false);} }
+async function xcCheckinCancel() { try { const r=await fetch('/__switch/api/xc/checkin-cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const d=await r.json(); if(!r.ok||d.error)throw new Error(d.error||'ошибка'); toast(`⏹ снято с очереди: ${d.cancelled}`,'info'); } catch(e){toast('Стоп Claim: '+e.message,'error');} finally{await xcCheckinLoad(false);} }
+async function xcCheckinSaveConfig() { const time=($('xc-checkin-time')?.value||'').trim(), enabled=!!$('xc-checkin-enabled')?.checked; try { const r=await fetch('/__switch/api/xc/checkin-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled,time,timezone:'Asia/Shanghai'})}); const d=await r.json(); if(!r.ok||d.error)throw new Error(d.error||'ошибка'); toast('✓ расписание Claim сохранено','success'); await xcCheckinLoad(false); } catch(e){toast('Расписание Claim: '+e.message,'error');} }
+async function xcCheckinMark(id,on) { try { const r=await fetch('/__switch/api/xc/checkin-mark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,on})}); const d=await r.json(); if(!r.ok||d.error)throw new Error(d.error||'ошибка'); toast('✓ отметка Claim сохранена','success'); await xcCheckinLoad(false); } catch(e){toast('Отметка Claim: '+e.message,'error');} }
+
 async function loadXcSessions(probe) {
   if (probe) $('xc-list').innerHTML = `<div class="p-12 text-center text-sky text-xs">📡 пингую ключи…</div>`;
   try {
@@ -21475,6 +21504,7 @@ async function loadXcSessions(probe) {
     renderXcGauge();
     loadXcModels();
     loadXcModelMap();
+    xcCheckinLoad(false);
     if (probe) toast('✓ Xingchi: статусы обновлены', 'success');
   } catch (e) {
     $('xc-list').innerHTML = `<div class="p-6 text-crimson text-xs">${esc(e.message)}</div>`;
@@ -21492,6 +21522,7 @@ async function loadXcSessionsLight() {
     renderXc();
     renderXcGauge();
     paintSideBalance();   // сайдбар: цифра активного аккаунта и пул — из тех же данных
+    xcCheckinLoad(false);
   } catch (e) { /* молча — следующий тик повторит */ }
 }
 async function loadXcModels(force) {
@@ -27193,20 +27224,32 @@ async function renderFxModels(models) {
   $('fx-models-list').innerHTML = list.map(m => {
     const id = m.id;
     const isActive = active && id === active;
+    // Каталог врёт: снятые модели (410/503) остаются в /v1/models. На «Обновить»
+    // сервер проверяет каждую живым запросом и ставит alive:false — такую модель
+    // не выбираем и не публикуем (живой случай 25.11).
+    const dead = m.alive === false;
+    const why = dead ? `снята у провайдера: ${esc(m.probeReason || ('HTTP ' + (m.probeStatus || '?')))}` : '';
+    const mark = dead
+      ? `<span class="text-crimson" title="${why}">☠ ${m.probeStatus || ''}</span>`
+      : (m.alive === true ? '<span class="text-emerald" title="проверено живым запросом: 200">✓</span>' : '');
     // 🪤 Акцент вкладки — rose, а rose же во всём дашборде значит «активно».
     // Красить неактивные чипы в акцент, как это делают go/jw/sk, здесь нельзя: активная
     // модель перестала бы отличаться от остальных. Неактивные — нейтральные.
-    return modelPublicationChip("fxqidian", id, `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono cursor-pointer ${isActive ? 'bg-rose/15 border border-rose/50 text-rose' : 'bg-elevated border border-line-soft text-muted hover:border-line'}"
-      onclick='fxSelectModel(${JSON.stringify(id)})'
-      title="клик = применить модель (settings.json + fxqidian-active-model.txt) · 📋 = копия">
-      ${esc(id)}
-      <button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "fxqidian")' title="Копировать /model id[1m]"
-        class="text-faint hover:text-ink px-1">📋</button>
-    </span>`);
+    const chip = `<span class="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-mono ${dead ? 'cursor-not-allowed opacity-60 bg-crimson/5 border border-crimson/40 text-crimson/80' : `cursor-pointer ${isActive ? 'bg-rose/15 border border-rose/50 text-rose' : 'bg-elevated border border-line-soft text-muted hover:border-line'}`}"
+      onclick='${dead ? 'fxDeadModel()' : `fxSelectModel(${JSON.stringify(id)})`}'
+      title="${dead ? why : 'клик = применить модель (settings.json + fxqidian-active-model.txt) · 📋 = копия'}">
+      ${esc(id)} ${mark}
+      ${dead ? '' : `<button onclick='event.stopPropagation();copyModelCmd(${JSON.stringify(id)}, "fxqidian")' title="Копировать /model id[1m]"
+        class="text-faint hover:text-ink px-1">📋</button>`}
+    </span>`;
+    return dead ? chip : modelPublicationChip("fxqidian", id, chip);
   }).join('');
   // как в renderArModels: список моделей приехал — перерисовать селекты маппинга,
   // иначе они остаются с одной опцией «— как есть —» и выбрать цель нечем.
   renderFxModelMap();
+}
+function fxDeadModel() {
+  toast('модель снята у провайдера — выбери живую (или нажми ↻, чтобы перепроверить)', 'error', 5000);
 }
 async function fxSelectModel(id) {
   if (!id) return toast('нет model id', 'warn');
@@ -27586,7 +27629,8 @@ async function loadFxModelMap() {
 async function renderFxModelMap() {
   const draft = fxCaptureModelMapDraft();
   const mm = state.fxModelMap || {};
-  const models = (state.fxModels || []).map(m => m.id);
+  // Снятые модели не предлагаем в тир-карте: та же ошибка, что давала 410.
+  const models = (state.fxModels || []).filter(m => m.alive !== false).map(m => m.id);
   // Сохранённая или изменённая цель вне каталога остаётся видимой, а не пустой option.
   const opts = [...new Set(['', ...models, mm.opus, mm.sonnet, mm.haiku, ...Object.values(draft)].filter(v => typeof v === 'string'))];
   const sel = (name) => {

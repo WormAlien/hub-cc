@@ -15827,10 +15827,14 @@ async function handleArActivate(req, res) {
 
 // Модели: кэш 5 минут, к любому живому ключу (каталог общий, WAF не пустит без ключа).
 async function handleArModels(req, res) {
-    // Filter the provider's actual catalog, never manufacture availability or
-    // rewrite owner model/tier settings. Cached legacy catalogs need the same gate.
-    const solOnly = rows => (Array.isArray(rows) ? rows : []).filter(m => m
-        && (m.id === 'gpt-6.1-sol' || m.id === 'gpt-5.6-sol'));
+    // Отдаём ФАКТИЧЕСКИЙ каталог шлюза, как на остальных вкладках: список моделей
+    // принадлежит провайдеру, а не нашему представлению о нём. Раньше здесь стоял
+    // жёсткий фильтр двух ID (`gpt-6.1-sol`/`gpt-5.6-sol`), и когда шлюз сменил линейку,
+    // вкладка показывала «нет доступных Sol в каталоге» при живом каталоге: список был
+    // пуст не потому, что моделей нет, а потому что их не было В НАШЕМ списке.
+    // Ничего не выдумываем и не нормализуем: отдаём ровно то, что вернул апстрим.
+    const catalogRows = rows => (Array.isArray(rows) ? rows : [])
+        .filter(m => m && typeof m.id === 'string' && m.id);
     let timeout = null;
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -15839,7 +15843,7 @@ async function handleArModels(req, res) {
         if (!api_key) return jsonRes(res, 400, { error: 'api_key required' });
 
         if (AR_MODELS_CACHE.data && Date.now() - AR_MODELS_CACHE.ts < AR_MODELS_CACHE.TTL && !force) {
-            return jsonRes(res, 200, { ok: true, models: solOnly(AR_MODELS_CACHE.data),
+            return jsonRes(res, 200, { ok: true, models: catalogRows(AR_MODELS_CACHE.data),
                                        cached: true, source: 'cache', stale: false });
         }
         const controller = new AbortController();
@@ -15853,7 +15857,7 @@ async function handleArModels(req, res) {
         }
         const data = await resp.json();
         if (!data || !Array.isArray(data.data)) throw new Error('AgentRouter catalog response is not a model list');
-        const models = solOnly(data.data).map(m => ({
+        const models = catalogRows(data.data).map(m => ({
             id: m.id,
             owned_by: m.owned_by,
             supported_endpoint_types: m.supported_endpoint_types || [],
@@ -15863,7 +15867,7 @@ async function handleArModels(req, res) {
         jsonRes(res, 200, { ok: true, models, cached: false, source: 'live', stale: false });
     } catch (e) {
         const cached = Array.isArray(AR_MODELS_CACHE.data);
-        jsonRes(res, 502, { ok: false, models: cached ? solOnly(AR_MODELS_CACHE.data) : [],
+        jsonRes(res, 502, { ok: false, models: cached ? catalogRows(AR_MODELS_CACHE.data) : [],
                            cached, stale: cached, source: cached ? 'cache' : 'none',
                            status: Number(e.status) || null, error: e.message,
                            ...(cached ? { note: 'Stale cached catalog; refresh failed' } : {}) });
@@ -17969,6 +17973,32 @@ function ucSave(arr) {
 function xcSave(arr) {
     durableWriteJson(XC_SESSIONS_FILE, arr);
 }
+
+// Daily Claim uses the Xingchi panel session, not the inference API key. The
+// browser profile is the source of the panel JWT; the key only identifies an
+// eligible provider account and is never sent to the panel endpoint.
+const { createXingchiCheckin, readProfileToken } = require('./lib/xingchi-checkin');
+const { createXingchiCheckinRunner } = require('./lib/xingchi-checkin-runner');
+const xcCheckin = createXingchiCheckin({
+    accounts: xcLoad,
+    getToken: async account => {
+        const profile = newapiResolveProfile('xingchiapi.com', account);
+        return readProfileToken(profile && profile.dir);
+    },
+    saveAccounts: xcSave,
+    stateFile: path.join(__dirname, 'runtime', 'xingchi-checkin.json'),
+    log: event => logLine(`xingchi check-in ${event.kind}: ${event.text}`),
+});
+const xcCheckinRunner = createXingchiCheckinRunner({
+    checkin: xcCheckin,
+    accounts: xcLoad,
+    stateFile: path.join(__dirname, 'runtime', 'xingchi-checkin-runner.json'),
+    log: event => logLine(`xingchi check-in queue ${event.kind}: ${event.text}`),
+});
+const XC_CHECKIN_SCHEDULER = setInterval(() => {
+    try { xcCheckinRunner.scheduleTick(); } catch (e) { logLine(`xingchi check-in schedule: ${e.message}`); }
+}, 30_000);
+if (XC_CHECKIN_SCHEDULER.unref) XC_CHECKIN_SCHEDULER.unref();
 function fgSave(arr) {
     durableWriteJson(FG_SESSIONS_FILE, arr);
 }
@@ -18255,6 +18285,12 @@ async function ucKeepaliveSpawn() {
                 LOCAL_EXACT_ADAPTER: '1',
                 ABUSE_HUB_LOCAL_HOP_KEY_FILE: LOCAL_HOP_SECRET_FILE,
                 CUSTOM_PROVIDER_ID: 'uncensoredlabs', CUSTOM_PROVIDER_NAME: 'UncensoredLabs',
+                // 🪤 Провайдер ротации выводится из ХОСТА апстрима (GW_BY_HOST), а у этого
+                // keepalive апстрим — свой конвертер 127.0.0.1:20194. Для петли в таблице
+                // хостов записи нет, поэтому `ROTATE_ON` был false и авторотация молча
+                // спала при пяти аккаунтах в пуле (живой случай 24.11: 21×402 подряд).
+                // Явный env — тот же приём, что у тестового пути ROTATE_PROVIDER.
+                ROTATE_PROVIDER: 'uc',
                 GPT_PROXY_FORCE: '0', HAIKU_REMAP: '1', HAIKU_TO_MODEL: '',
                 HAIKU_GPT_PROXY: UC_CONVERTER_URL,
                 MAX_HEDGES: '0',
@@ -19223,16 +19259,84 @@ async function kkBalance(target, opts = {}) {
         force: !!opts.force,
     });
 }
+// ── uc: точный баланс ключа бесплатной пробой ──────────────────────────────
+// 🪤 Прежний ucBalance ходил в `/v1/dashboard/billing/usage` — у площадки этого
+// эндпоинта НЕТ (замер 26.11: 404 на каждом ключе), все чеки падали в
+// «usage HTTP 404» и балансы не считались вовсе.
+//
+// Рабочий источник найден живой пробой 26.11: отказ шлюза НА БОЛЬШОЙ резерв
+// сам называет точный остаток. Запрос kimi-k3.1-pro с max_tokens=32000 требует
+// предоплату $0.34+; если её нет, шлюз отвечает
+//   402 {error:{code:"insufficient_credit", credit:{required_nano, available_nano}}}
+// и НЕ резервирует ничего («No credit was reserved») — запрос бесплатный.
+// available_nano/1e9 = точный баланс аккаунта в долларах (совпал с $0.10
+// триалом: 100000000 nano). Если ключ всё же влезает в резерв — 200: аккаунт
+// жив, баланса мы не узнали, но статус поставить обязаны.
+// 403 trial_verification_required — ключ жив, но email не подтверждён (триал
+// не активирован): не «мёртв», отдельный статус не нужен — это тот же «live
+// без цифры». 429 — rate-limit площадки, не смерть ключа.
+const UC_PROBE_MODEL = 'kimi-k3.1-pro';   // самый дорогой резерв в каталоге 26.11
+const UC_PROBE_RESERVE_USD = 0.34;
+const UC_PROBE_TTL_MS = 30 * 60_000;      // бесплатных проб не жалко, но и долбить незачем
+const UC_PROBE_LAST = new Map();          // api_key -> ts последней пробы
+
+async function ucKeyBalanceProbe(apiKey) {
+    let d = null;
+    try {
+        const r = await fetch(`${UC_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: { ...UC_CC_HEADERS, 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: UC_PROBE_MODEL, max_tokens: 32000, messages: [{ role: 'user', content: 'hi' }] }),
+            signal: AbortSignal.timeout(60000),
+        });
+        const text = await r.text().catch(() => '');
+        try { d = JSON.parse(text); } catch { d = null; }
+        if (r.status === 402 && d && d.error && d.error.credit) {
+            const nano = Number(d.error.credit.available_nano);
+            if (Number.isFinite(nano) && nano >= 0) {
+                return { status: 'live', balance: nano / 1e9, source: 'key',
+                         spent: null, spentDelta: null };
+            }
+            // 402 без credit — необычный формат, считаем живым без цифры
+            return { status: 'live', balance: null, source: null };
+        }
+        if (r.status === 200) return { status: 'live', balance: null, source: null };
+        if (r.status === 403) {
+            const msg = String((d && d.error && d.error.code) || '');
+            // Неподтверждённый email: ключ работает, триала нет — не dead.
+            if (msg === 'trial_verification_required') return { status: 'live', balance: null, source: null, trialBlocked: true };
+            return { status: 'dead', balance: null, source: null };
+        }
+        if (r.status === 401) return { status: 'dead', balance: null, source: null };
+        if (r.status === 429) return { status: 'live', balance: null, source: null };
+        return { status: 'unknown', balance: null, source: null, error: `HTTP ${r.status}` };
+    } catch (e) { return { status: 'unknown', balance: null, source: null, error: e.message }; }
+}
+
 async function ucBalance(target, opts = {}) {
-    return newapiBalance({
-        target: typeof target === 'string' ? { api_key: target } : (target || {}),
-        host: 'uncensoredlabs.dev',
-        ccHeaders: UC_CC_HEADERS,
-        usageUrl: 'https://uncensoredlabs.dev/v1/dashboard/billing/usage',
-        subUrl: null,
-        guessGrant: spent => Math.max(UC_DEFAULT_GRANT, Math.ceil(spent / UC_GRANT_STEP) * UC_GRANT_STEP),
-        force: !!opts.force,
-    });
+    const t = typeof target === 'string' ? { api_key: target } : (target || {});
+    const apiKey = t.api_key;
+    if (!isRealKey(apiKey)) return { status: 'no_key', error: 'ключа ещё нет' };
+    // 🪤 Проба бесплатна, но НЕ мгновенна (до 6с на ответ площадки) и её не должно
+    // быть пачкой от 10-секундного тика статусбара: троттл 30мин на ключ. Явный
+    // клик (force) троттл обходит — человек сам попросил цифру.
+    const last = UC_PROBE_LAST.get(apiKey) || 0;
+    if (!opts.force && Date.now() - last < UC_PROBE_TTL_MS) {
+        // Кеш-ответ: отдаём то, что записано в пуле, не ходя в сеть.
+        if (typeof t.balance === 'number' && t.balanceSource === 'key') {
+            return { status: 'live', balance: t.balance, spent: t.spent ?? 0,
+                     balanceSource: 'key', cached: true };
+        }
+        return { status: (t.status === 'dead' ? 'dead' : 'live'), balance: null,
+                 spent: 0, balanceSource: 'unknown', cached: true };
+    }
+    UC_PROBE_LAST.set(apiKey, Date.now());
+    const p = await ucKeyBalanceProbe(apiKey);
+    const bal = { status: p.status, balanceSource: p.source || 'unknown',
+                  balance: p.balance, spent: p.spent ?? 0,
+                  ...(p.error ? { error: p.error } : {}) };
+    if (p.balance == null) delete bal.balance;   // unknown-ветка не должна рисовать 0
+    return bal;
 }
 // Xingchi — своя панель (не New API): ручек `/api/user/self`, `/api/status`,
 // `/v1/dashboard/billing/*` у площадки НЕТ (замер 21.11.2026: всё это 404). Но баланс
@@ -20223,6 +20327,104 @@ async function handleXcSessions(req, res) {
         jsonRes(res, 200, { sessions, activeModel: xcReadActiveModel() });
     } catch (e) { jsonRes(res, 500, { error: e.message }); }
     finally { stopKeepalive(); }
+}
+
+async function handleXcCheckinStatus(req, res) {
+    try {
+        const url = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const id = url.searchParams.get('id');
+        const probe = url.searchParams.get('probe') === '1';
+        const sessions = xcLoad();
+        const targets = id ? sessions.filter(s => String(s.id) === String(id)) : sessions;
+        if (id && !targets.length) return jsonRes(res, 404, { ok: false, error: 'аккаунт не найден' });
+        if (probe || id) {
+            for (const target of targets) {
+                try {
+                    target.checkinStatus = await xcCheckin.getStatus(target.id);
+                    target.checkinCheckedAt = new Date().toISOString();
+                    delete target.checkinError;
+                } catch (e) {
+                    target.checkinStatus = null;
+                    target.checkinCheckedAt = new Date().toISOString();
+                    target.checkinError = String(e.message || 'ошибка статуса').slice(0, 240);
+                }
+            }
+            xcSave(sessions);
+        }
+        const snapshot = xcCheckinRunner.snapshot();
+        return jsonRes(res, 200, {
+            ok: true,
+            config: snapshot.config,
+            runs: snapshot.runs,
+            batch: snapshot.batch,
+            events: snapshot.events,
+            scheduleLastRun: snapshot.scheduleLastRun,
+            accounts: sessions.map(s => ({
+                id: s.id,
+                status: s.checkinStatus || null,
+                checkedAt: s.checkinCheckedAt || null,
+                error: s.checkinError || null,
+                marked: s.checkinFrom === 'manual' && !!s.checkinAt,
+            })),
+        });
+    } catch (e) { return jsonRes(res, e.statusCode || 500, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinClaim(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { ok: false, error: 'id обязателен' });
+        const result = xcCheckinRunner.enqueue([id], 'manual');
+        return jsonRes(res, 200, { ok: true, ...result, snapshot: xcCheckinRunner.snapshot() });
+    } catch (e) { return jsonRes(res, e.statusCode || 500, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinAll(req, res) {
+    try {
+        const result = xcCheckinRunner.enqueue(xcLoad().map(s => s.id), 'manual-all');
+        return jsonRes(res, 200, { ok: true, ...result, snapshot: xcCheckinRunner.snapshot() });
+    } catch (e) { return jsonRes(res, e.statusCode || 500, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinCancel(req, res) {
+    try { return jsonRes(res, 200, { ok: true, ...xcCheckinRunner.cancel(), snapshot: xcCheckinRunner.snapshot() }); }
+    catch (e) { return jsonRes(res, e.statusCode || 500, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinConfig(req, res) {
+    try {
+        if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            return jsonRes(res, 200, { ok: true, config: xcCheckinRunner.configure(body) });
+        }
+        return jsonRes(res, 200, { ok: true, config: xcCheckinRunner.snapshot().config });
+    } catch (e) { return jsonRes(res, e.statusCode || 400, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinMark(req, res) {
+    try {
+        const body = await readJsonBody(req);
+        const id = String(body.id || '').trim();
+        if (!id) return jsonRes(res, 400, { ok: false, error: 'id обязателен' });
+        return jsonRes(res, 200, { ok: true, ...xcCheckin.mark(id, body.on !== false) });
+    } catch (e) { return jsonRes(res, e.statusCode || 500, { ok: false, error: e.message }); }
+}
+
+async function handleXcCheckinEvents(req, res) {
+    try {
+        const url = new URL(req.url, `http://localhost:${LISTEN_PORT}`);
+        const since = Number(url.searchParams.get('since') || 0);
+        const snapshot = xcCheckinRunner.snapshot();
+        return jsonRes(res, 200, {
+            ok: true,
+            events: snapshot.events.filter(event => Number(event.seq || 0) > since),
+            runs: snapshot.runs,
+            batch: snapshot.batch,
+            config: snapshot.config,
+            scheduleLastRun: snapshot.scheduleLastRun,
+        });
+    } catch (e) { return jsonRes(res, 500, { ok: false, error: e.message }); }
 }
 async function handleFgSessions(req, res) {
     const stopKeepalive = jsonKeepalive(res);
@@ -26623,9 +26825,15 @@ function trMergeProxyLines(fresh, old) {
 // Прецедент — threerouter: python-скрипт фермы, PID-файл, статус-опрос, стоп по PID.
 // 🔴 Почта обязательна: триал $0.10 начисляется только после verify-email → claim
 // (замер 23.11: без claim баланс 0). Скрипт делает это сам — почта mail.tm.
-const UC_AUTOREG_PID = path.join(__dirname, '..', 'routing', 'uncensoredlabs-autoreg.pid');
-const UC_FARM_SCRIPT = path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'cache', 'scratch', 'uc-labs-autoreg', 'uc_farm_full.py');
-const UC_FARM_PROXIES = path.join(os.homedir(), 'AppData', 'Local', 'hermes', 'cache', 'scratch', 'uc-labs-autoreg', 'socks-alive.txt');
+const UC_AUTOREG_PID = path.join(__dirname, 'uncensoredlabs-autoreg.pid');
+// 🪤 Скрипты фермы лежат В РЕПОЗИТОРИИ, как smailpro/auto-add.py, и путь
+// считается от __dirname. Прежний вариант брал их из Windows-specific
+// Hermes scratch (%LOCALAPPDATA%\hermes\cache\scratch\...), поэтому кнопка
+// ломалась на любой другой машине или при чистом клоне — известный
+// portability gap (Known Issues 23.11). UC_FARM_DIR переопределяет каталог.
+const UC_FARM_DIR = process.env.UC_FARM_DIR || path.join(__dirname, '..', 'uncensoredlabs', 'farm');
+const UC_FARM_SCRIPT = path.join(UC_FARM_DIR, 'uc_farm_full.py');
+const UC_FARM_PROXIES = path.join(UC_FARM_DIR, 'socks-alive.txt');
 const ucAutoreg = { proc: null, pid: null, running: false, startedAt: null, count: 0,
                     stdout: [], stderr: [], exitCode: null, stage: null };
 function ucAutoregPublic() {
@@ -26640,15 +26848,63 @@ async function handleUcAutoregStart(req, res) {
         // rounds — сколько прогонов по списку прокси: всего ≈ per_ip × rounds × len(прокси).
         // Ограничение 5/IP/24ч соблюдается самим скриптом (per_ip ≤ 5).
         const rounds = Math.max(1, Math.min(20, parseInt(body.rounds, 10) || 1));
+        // parallel — сколько аккаунтов ОДНОВРЕМЕННО (каждому свой прокси из списка).
+        // Ферма сама клампит до 8: больше = риск CF-банящей IP и бардак в логах.
+        const parallel = Math.max(1, Math.min(8, parseInt(body.parallel, 10) || 1));
         if (ucAutoreg.running && ucAutoreg.proc) {
             return jsonRes(res, 409, { error: 'авторега UncensoredLabs уже идёт', ...ucAutoregPublic() });
         }
         if (!fs.existsSync(UC_FARM_SCRIPT)) return jsonRes(res, 404, { error: 'uc_farm_full.py не найден: ' + UC_FARM_SCRIPT });
-        const py = process.env.PYTHON || 'python';
-        const proc = spawn(py, ['-u', UC_FARM_SCRIPT, '--per-ip', String(perIp), '--rounds', String(rounds), '--proxies', UC_FARM_PROXIES], {
+        // 🪤 Интерпретатор: Camoufox нужен рабочий venv, у системного `python`
+        // его обычно нет. Порядок: UC_FARM_PYTHON → venv рядом с фермой
+        // (<UC_FARM_DIR>/.venv) → PYTHON из окружения → системный python.
+        // Хардкод C:/Users/<user>/... убран: он ломался на любой другой машине
+        // и вообще не работал у коллеги. Держим venv с Camoufox рядом с фермой.
+        const ucVenvWin = path.join(UC_FARM_DIR, '.venv', 'Scripts', 'python.exe');
+        const ucVenvNix = path.join(UC_FARM_DIR, '.venv', 'bin', 'python');
+        const py = process.env.UC_FARM_PYTHON
+            || (fs.existsSync(ucVenvWin) ? ucVenvWin
+                : (fs.existsSync(ucVenvNix) ? ucVenvNix
+                    : (process.env.PYTHON || 'python')));
+        // 🪤 Прокси-файл кнопки устаревает: 25.11 в нём лежали 16 адресов от
+        // 23 ноября, все мёртвые. Перед запуском поднимаем свежие и кладём в
+        // тот же файл — иначе прогон упирается в signup_ip_limit или падает
+        // на соединении. Скрап best-effort: не поднялся — идём с тем, что есть
+        // (старый файл лучше, чем ничего, и это видно в логе).
+        // 🔴 Скрап АСИНХРОННЫЙ: он ходит в сеть до трёх минут, а `execFileSync`
+        // остановил бы event loop дашборда целиком — панель, front-door и
+        // проксирование Claude Code встали бы на всё это время.
+        let scrapeNote = '';
+        try {
+            const vd = path.join(__dirname, '..', 'tools', 'proxy-validator');
+            await execFileAsync('python', ['-m', 'proxy_scraper.find_for_host',
+                '--host', 'uncensoredlabs.dev', '--path', '/v1/models',
+                '--want', '8', '--json', '--out', UC_FARM_PROXIES],
+                { cwd: vd, timeout: 180000, windowsHide: true });
+            scrapeNote = 'proxies: свежие';
+        } catch (e) {
+            scrapeNote = 'proxies: скрап не удался, беру прежний файл';
+        }
+        logLine(`uncensoredlabs autoreg ${scrapeNote}`);
+        if (!fs.existsSync(UC_FARM_PROXIES)) {
+            return jsonRes(res, 409, { error: 'нет списка прокси: ' + UC_FARM_PROXIES, note: scrapeNote });
+        }
+        // 🔴 Скрап делает САМА ферма (scrape_proxies): она кладёт свежие в
+        // <UC_FARM_DIR>/socks-fresh.txt и падает на --proxies только если
+        // скрап не дал ничего. Прежний `--no-scrape` здесь был ошибкой: он
+        // запрещал единственный работающий источник, и прогон брал СТАРЫЙ
+        // socks-alive.txt (8 адресов) — ровно то, на что жаловался владелец.
+        // Предварительный скрап кнопкой оставлен как прогрев файла: он же
+        // обновляет UC_FARM_PROXIES для случая, когда ферма стартует с --no-scrape
+        // по отладке.
+        const proc = spawn(py, ['-u', UC_FARM_SCRIPT, '--per-ip', String(perIp), '--rounds', String(rounds), '--parallel', String(parallel), '--proxies', UC_FARM_PROXIES], {
             cwd: path.dirname(UC_FARM_SCRIPT),
             windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8', UL_BANK: path.join(path.dirname(UC_FARM_SCRIPT), 'bank.jsonl') },
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8',
+                   UL_BANK: path.join(path.dirname(UC_FARM_SCRIPT), 'bank.jsonl'),
+                   // 🪤 UL_POOL обязателен: без него ключ уходит только в банк,
+                   // а хаб читает пул — аккаунт создаётся и не появляется в UI.
+                   UL_POOL: path.join(__dirname, 'uncensoredlabs-sessions.json') },
         });
         fs.writeFileSync(UC_AUTOREG_PID, String(proc.pid));
         Object.assign(ucAutoreg, { proc, pid: proc.pid, running: true, startedAt: new Date().toISOString(),
@@ -27942,6 +28198,54 @@ async function handleAbModels(req, res) {
         else jsonRes(res, 200, { ok: true, models: [], note: e.message });
     }
 }
+// Каталог fxqidian (`GET /v1/models`) отдаёт ИСТОРИЧЕСКИЙ список: снятые модели
+// (410 EOL, 503 «нет канала») в нём остаются. Поэтому «Обновить модели» показывал
+// deepseek, на который уже нельзя ходить (живой случай 25.11). На force=1 проверяем
+// каждую модель настоящим минимальным запросом; результат держим 10 минут, чтобы
+// повторное нажатие не стоило денег.
+const FX_MODELS_PROBE = { data: new Map(), TTL: 600_000, WORKERS: 4 };
+// Что уже проверено и мертво - помним в памяти процесса, чтобы обычная перечитка
+// вкладки тоже помечала снятые модели, а не только нажатие «Обновить».
+const FX_MODELS_DEAD = new Map();
+async function probeFxModelAlive(model, api_key) {
+    const hit = FX_MODELS_PROBE.data.get(model);
+    if (hit && Date.now() - hit.ts < FX_MODELS_PROBE.TTL) return hit;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    let out;
+    try {
+        const resp = await fetch(`${FX_BASE_URL}/messages`, {
+            method: 'POST',
+            signal: ctrl.signal,
+            headers: { ...FX_CC_HEADERS, 'Authorization': `Bearer ${api_key}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ model, max_tokens: 8, messages: [{ role: 'user', content: 'ping' }] }),
+        });
+        const text = await resp.text();
+        let json = null; try { json = JSON.parse(text); } catch { /* не JSON — оставим текст */ }
+        const msg = String((json && (json.error && json.error.message || json.message)) || text || '').slice(0, 200);
+        out = { alive: resp.status === 200, status: resp.status,
+            reason: resp.status === 200 ? null : (msg || `HTTP ${resp.status}`), ts: Date.now() };
+    } catch (e) {
+        out = { alive: false, status: 0, reason: e.name === 'AbortError' ? 'probe timeout' : e.message, ts: Date.now() };
+    } finally { clearTimeout(timer); }
+    FX_MODELS_PROBE.data.set(model, out);
+    return out;
+}
+async function probeFxModels(models, api_key) {
+    const out = models.slice();
+    let next = 0;
+    const worker = async () => {
+        while (next < out.length) {
+            const i = next++;
+            const p = await probeFxModelAlive(out[i].id, api_key);
+            if (p.alive) FX_MODELS_DEAD.delete(out[i].id);
+            else FX_MODELS_DEAD.set(out[i].id, { probeStatus: p.status, probeReason: p.reason });
+            out[i] = { ...out[i], alive: p.alive, probeStatus: p.status, probeReason: p.reason };
+        }
+    };
+    await Promise.all(Array.from({ length: FX_MODELS_PROBE.WORKERS }, worker));
+    return out;
+}
 async function handleFxModels(req, res) {
     try {
         const url = new URL(req.url, `http://${req.headers.host}`);
@@ -27963,13 +28267,18 @@ async function handleFxModels(req, res) {
             return jsonRes(res, 200, { ok: true, models: [], note: `HTTP ${resp.status}` });
         }
         const data = await resp.json();
-        const models = (data.data || []).map(m => ({
+        let models = (data.data || []).map(m => ({
             id: m.id,
             owned_by: m.owned_by,
             supported_endpoint_types: m.supported_endpoint_types || [],
         }));
+        models = models.map(m => FX_MODELS_DEAD.has(m.id)
+            ? { ...m, alive: false, ...FX_MODELS_DEAD.get(m.id) } : m);
         FX_MODELS_CACHE.data = models;
         FX_MODELS_CACHE.ts = Date.now();
+        // force = человек нажал «Обновить»: каталог врёт, проверяем каждую модель живым
+        // минимальным запросом. Результат (и метки мёртвых) уходит в ответ.
+        if (force) models = await probeFxModels(models, api_key);
         jsonRes(res, 200, { ok: true, models, cached: false });
     } catch (e) {
         if (FX_MODELS_CACHE.data) jsonRes(res, 200, { ok: true, models: FX_MODELS_CACHE.data, cached: true, note: e.message });
@@ -38344,7 +38653,11 @@ const MONEY_GW = {
     // 🪤 У kktoken host — сам домен: панель и API на одном `kktoken.cc`. Эту же строку
     // keepalive-proxy ищет в GW_BY_HOST по Host апстрима, поэтому байт в байт.
     kk: { tag: 'kktoken',     label: 'KKtoken',     host: 'kktoken.cc',     keyFile: KK_ACTIVE_KEY_FILE, load: kkLoad, save: kkSave, balanceFn: kkBalance, applyFn: kkApplyBalance },
-    uc: { tag: 'uncensoredlabs',     label: 'UncensoredLabs',     host: 'uncensoredlabs.dev',     keyFile: UC_ACTIVE_KEY_FILE, load: ucLoad, save: ucSave, balanceFn: ucBalance, applyFn: ucApplyBalance },
+    // 🪤 `minBal`: у площадки аккаунты по $0.10 — это норма её онбординга, а общая планка
+    // MONEY_MIN_BAL = $2.0 объявляла их непригодными («pool-dry» при пяти живых аккаунтах,
+    // живой случай 24.11). Настоящую планку здесь задаёт `need` из текста отказа (шлюз сам
+    // называет резерв под запрос), поэтому кеш-пол берём символический: решает need, а не $2.
+    uc: { tag: 'uncensoredlabs',     label: 'UncensoredLabs',     host: 'uncensoredlabs.dev',     keyFile: UC_ACTIVE_KEY_FILE, load: ucLoad, save: ucSave, balanceFn: ucBalance, applyFn: ucApplyBalance, minBal: 0.01 },
     xc: { tag: 'xingchi',     label: 'Xingchi',     host: 'api.xingchiapi.com',     keyFile: XC_ACTIVE_KEY_FILE, load: xcLoad, save: xcSave, balanceFn: xcBalance, applyFn: xcApplyBalance },
     fg: { tag: 'freegg',     label: 'FreeGG',     host: 'freegg.app',     keyFile: FG_ACTIVE_KEY_FILE, load: fgLoad, save: fgSave, balanceFn: fgBalance, applyFn: fgApplyBalance },
     ax: { tag: 'apinex',     label: 'APINEX',     host: 'api.apinex.bond',     keyFile: AX_ACTIVE_KEY_FILE, load: axLoad, save: axSave, balanceFn: axBalance, applyFn: axApplyBalance },
@@ -40177,6 +40490,14 @@ const server = http.createServer((req, res) => {
     if (req.method === 'GET'  && req.url === '/__switch/api/ar/checkin-status') return handleArCheckinStatus(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-all')    return handleArCheckinAll(req, res);
     if (req.method === 'POST' && req.url === '/__switch/api/ar/checkin-cancel') return handleArCheckinCancel(req, res);
+    if (req.method === 'GET'  && req.url.startsWith('/__switch/api/xc/checkin-status')) return handleXcCheckinStatus(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/xc/checkin-events') return handleXcCheckinEvents(req, res);
+    if (req.method === 'GET'  && req.url === '/__switch/api/xc/checkin-config') return handleXcCheckinConfig(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/checkin-claim') return handleXcCheckinClaim(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/checkin-all') return handleXcCheckinAll(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/checkin-cancel') return handleXcCheckinCancel(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/checkin-config') return handleXcCheckinConfig(req, res);
+    if (req.method === 'POST' && req.url === '/__switch/api/xc/checkin-mark') return handleXcCheckinMark(req, res);
 
     // История финансов для вкладки «Финансы»: расход и наливка по бакетам.
     if (req.method === 'GET'  && req.url.startsWith('/__switch/api/finance/history')) return handleFinanceHistory(req, res);

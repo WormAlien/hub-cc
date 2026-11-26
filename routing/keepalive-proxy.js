@@ -2044,7 +2044,12 @@ function isFastFail5xx(status, buf, elapsedMs) {
 // как «авторотация не работает»: пул из шести аккаунтов стоял нетронутым, хотя у четырёх квота
 // была живой (замер tools/probe-premier-reasoning.js --accounts). Отбор по смыслу сохранён:
 // обычный «too many requests» по-прежнему аккаунт не меняет.
-const OUT_OF_BALANCE_RE = /insufficient (?:account |user )?(?:balance|quota|credit)|exceeds your available credit|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|daily free limit(?:\s*\([^)]*\))?\s+is\s+used\s+up|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
+// 🪤 `insufficient available credit` — формулировка UncensoredLabs (24.11): «Insufficient
+// available credit for this request. Available credit: $0.014398906. This request needs
+// $0.016115400 reserved for input and up to 32000 output tokens». Прежний шаблон требовал
+// сразу `balance|quota|credit` после `insufficient `, слово `available` его рвало, и отказ
+// по деньгам уезжал клиенту как чужая ошибка запроса.
+const OUT_OF_BALANCE_RE = /insufficient (?:account |user |available )?(?:balance|quota|credit)|existing requests are holding enough credit|exceeds your available credit|credit balance is empty|credit balance is empty|pre[- ]?consumed?\s+quota\s+failed|user\s+quota\s+is\s+not\s+enough|余额不足|额度不足|预扣费额度失败|额度已用完|欠费|(?:day|week|month)'?s allowance|need(?:s)? a paid plan|daily message limit|message limit reached|daily free limit(?:\s*\([^)]*\))?\s+is\s+used\s+up|сообщения\s+(?:на сегодня\s+)?закончились|недостаточно\s+средств/i;
 // Ключ отозван/забанен — деньги на нём не помогут, аккаунт надо пометить мёртвым.
 // `无效的令牌` = «недействительный токен», `令牌已过期` = «токен истёк».
 const DEAD_KEY_RE = /has been banned|account (?:is )?(?:banned|disabled|suspended)|无效的令牌|令牌已过期|令牌不存在|用户已被封禁|token has expired|invalid (?:api[ _-]?key|token|access token)/i;
@@ -2065,8 +2070,13 @@ function moneyNum(s, ...labels) {
   }
   return null;
 }
-function neededUsd(s) { return moneyNum(s, '需要预扣费额度', 'need\\s+quota'); }
-function leftUsd(s) { return moneyNum(s, '用户剩余额度', 'user\\s+quota'); }
+// 🪤 Площадка может называть те же две цифры своими словами, и метка обязана их знать:
+// UncensoredLabs на 402 пишет «This request needs $0.016115400 reserved for input and up to
+// 32000 output tokens … Available credit: $0.014398906». Без этих меток need/left оставались
+// null: планка кандидата падала до MONEY_MIN_BAL, а ушедший аккаунт не получал настоящий
+// остаток из текста отказа и возвращался в кандидаты со старой цифрой.
+function neededUsd(s) { return moneyNum(s, '需要预扣费额度', 'need\\s+quota', 'needs?\\s+\\$'); }
+function leftUsd(s) { return moneyNum(s, '用户剩余额度', 'user\\s+quota', 'available\\s+credit'); }
 // Причина ротации по ответу шлюза: 'out-of-balance' | 'dead' | null.
 // Статус проверяем, чтобы фраза из чужого контекста (эхо тела в 200) не считалась
 // отказом. 402 сюда добавлен на будущее: в HTTP это и есть Payment Required.
@@ -2131,12 +2141,33 @@ const GW_BY_HOST = {
   // реально ходит keepalive, иначе авторотация промолчит.
   'api.wisdomsatan.club': 'ws',
 };
+// 🪤 Таблица хостов не видит ЛОКАЛЬНЫХ апстримов: у шлюзов со своим конвертером
+// (uncensoredlabs, xingchi, freegg, kvotum, odyssey…) `upstream.hostname` — `127.0.0.1`,
+// записи о петле в GW_BY_HOST нет, и `ROTATE_ON` оставался false. Снаружи это выглядело
+// как «авторотация не работает»: пул аккаунтов стоял нетронутым, а клиент получал 402
+// (живой случай 24.11: 21×402 на uncensoredlabs при пяти аккаунтах по $0.10 в пуле).
+// Поэтому вторым источником стал `CUSTOM_PROVIDER_ID` — тот же самый идентификатор,
+// которым спавн уже называет шлюз для rate-balance и публикации. Он едет в env ЛЮБЫМ
+// путём спавна, а значит не разъезжается между дашбордом, keepalive-spawn.js и ps1.
+// `ROTATE_PROVIDER` остаётся перебивкой (тесты и смена домена у площадки).
+const CUSTOM_IDS_WITH_MONEY_GW = new Set([
+  'uncensoredlabs', 'xingchi', 'freegg', 'kvotum', 'odyssey', 'premier', 'vani', 'dacall',
+  'cleanapis', 'artbloom', 'fxqidian', 'lsapi', 'budsin', 'nova', 'threerouter', 'apinex',
+  'aipm', 'aikeysapi', 'hcnsec', 'getunikey', 'bai',
+]);
+const PROVIDER_KEY_BY_CUSTOM_ID = {
+  uncensoredlabs: 'uc', xingchi: 'xc', freegg: 'fg', kvotum: 'kv', odyssey: 'od',
+  premier: 'pm', vani: 'vn', dacall: 'dc', cleanapis: 'cp', artbloom: 'ab',
+  fxqidian: 'fx', lsapi: 'ls', budsin: 'bd', nova: 'nv', threerouter: 'tr',
+  apinex: 'ax', aipm: 'ap', aikeysapi: 'ak', hcnsec: 'hn', getunikey: 'uk', bai: 'bai',
+};
 const ROTATE_P = GW_BY_HOST[upstream.hostname] || '';
+const ROTATE_FROM_CUSTOM_ID = PROVIDER_KEY_BY_CUSTOM_ID[String(process.env.CUSTOM_PROVIDER_ID || '')] || '';
 // ROTATE_PROVIDER — только для тестов (routing/test-rotate.js прогоняет весь путь
 // против фейкового шлюза на 127.0.0.1, которого в таблице хостов нет) и как аварийный
 // ход, если шлюз сменит домен. Основной путь остаётся выводом из апстрима: env,
 // который надо помнить в трёх местах спавна, уже разъезжался.
-const ROTATE_PROVIDER = process.env.ROTATE_PROVIDER || ROTATE_P;
+const ROTATE_PROVIDER = process.env.ROTATE_PROVIDER || ROTATE_P || ROTATE_FROM_CUSTOM_ID;
 const DASH_URL = process.env.DASHBOARD_URL || `http://127.0.0.1:${process.env.SWITCHER_PORT || 8200}`;
 // Не наш шлюз (или AUTOROTATE=0) → фича спит, поведение прежнее.
 const ROTATE_ON = !PAID_SINGLE_KEY && process.env.AUTOROTATE !== '0' && !!ROTATE_PROVIDER;
@@ -3791,7 +3822,13 @@ const server = http.createServer((req, res) => {
       // умирала на `API Error: 402` (живой случай 15.09 04:52 МСК).
       // Тело читаем ЦЕЛИКОМ на каждом 402 — иначе китайская формулировка того же смысла
       // опять была бы невидимой: тела постоянных ошибок сейчас не логируются вовсе.
-      if (status === 402 && !exactMode) {
+      // 🪤 Exact-режим НЕ отменяет подмену АККАУНТА: контракт «exact» держит неизменными
+      // модель и тело запроса, а ключ в заголовке меняет наш же keepalive на каждой попытке
+      // (`activeKeyNow()` читается заново). Подмена аккаунта поэтому exact-контракт не рвёт —
+      // и без неё пул из пяти аккаунтов по $0.10 стоял нетронутым, а клиент получал 402
+      // (живой случай 24.11: 21×402 на uncensoredlabs при четырёх живых аккаунтах в пуле).
+      // Подмена МОДЕЛИ (pool fallback) остаётся запрещённой в exact — она меняет тело.
+      if (status === 402) {
         drain(() => {
           if (finished || aborted) return;
           const buf = Buffer.concat(chunks, size);
@@ -3841,6 +3878,14 @@ const server = http.createServer((req, res) => {
               log(`${req.method} ${reqPath} 402 и на фолбэке «${cfg.poolFallbackModel}» — отдаю ошибку клиенту`);
               forwardBuffered(buf, headers);
             }
+            return;
+          }
+          // Exact-маршрут обещает клиенту ровно ту модель, что он назвал: уход из пула
+          // подменой модели — изменение тела, поэтому здесь он запрещён. Подмена АККАУНТА
+          // выше уже отработала; если и она не помогла, честный ответ — ошибка клиенту.
+          if (exactMode) {
+            log(`${req.method} ${reqPath} 402 в exact-маршруте: подмены модели нет, отдаю ошибку клиенту`);
+            forwardBuffered(buf, headers);
             return;
           }
           const fb = cfg.poolFallbackModel ? poolFallbackFor(wasModel, true) : null;
@@ -4879,8 +4924,16 @@ if (process.argv[2] === 'selftest') {
   // assertions in tools/check-pool-fallback.js no longer describe AgentRouter policy.
   assert.ok(evStore.EVENTS.includes('pooldrop'),
     'событие зарегистрировано в закрытом списке event-store — иначе ev.note молча ничего не пишет');
-  assert.ok(/if \(status === 402 && !exactMode\) \{/.test(holdSrc),
+  assert.ok(/if \(status === 402\) \{/.test(holdSrc),
     '402 перехватывается отдельной веткой (в shouldRetryStatus его нет и быть не должно)');
+  // 🪤 Exact-маршрут держит неизменными модель и тело, но НЕ аккаунт: ключ в заголовке
+  // меняет наш же keepalive. Пока ветка 402 была закрыта `!exactMode`, пул из пяти
+  // аккаунтов по $0.10 стоял нетронутым, а клиент получал 402 (живой случай 24.11).
+  // Подмена МОДЕЛИ в exact запрещена и проверяется отдельным утверждением ниже.
+  assert.ok(/if \(status === 402\) \{[\s\S]{0,4000}?const rotReason = ROTATE_ON \? rotateReason\(status, buf\) : null;/.test(holdSrc),
+    'ветка 402 достижима и в exact-маршруте: иначе авторотация аккаунта молча не работает');
+  assert.ok(/if \(exactMode\) \{[\s\S]{0,300}?подмены модели нет, отдаю ошибку клиенту/.test(holdSrc),
+    'уход из пула подменой модели в exact запрещён: он меняет тело запроса');
   assert.ok(/let poolDropTried = false;/.test(holdSrc),
     'уход из пула — ровно один раз за запрос: фолбэк, сам давший 402, отдаёт честную ошибку');
   assert.ok(/if \(poolDropTried\) \{[\s\S]{0,700}?forwardBuffered\(buf, headers\);[\s\S]{0,120}?return;/.test(holdSrc),

@@ -74,7 +74,12 @@ async function solve() {
     if (!exitLine) {
         return emit({ ok: false, error: 'no --exit: напрямую не ходим (лимит 1 IP/сутки, токен привязан к exit)' });
     }
-    const tries = Number(process.env.TR_CAPTCHA_TRIES || 6);
+    // 🔴 Панель отдаёт ТРИ режима капчи (slider | image_click | rotation), выбор
+    // случайный: замер серии 25.11 - 4/3/3 на 10 запросов. Солвер умеет два, а
+    // `rotation` честно отказывает, поэтому попытки - это и есть рефреш капчи до
+    // решаемого вида. Шесть попыток при равномерном распределении дают ~0.14 %
+    // шанса не найти решаемый режим; десять - заведомо безопасно.
+    const tries = Number(process.env.TR_CAPTCHA_TRIES || 10);
     const res = await upstream.solveCaptcha({
         type: 'auto',
         proxy: exitLine,

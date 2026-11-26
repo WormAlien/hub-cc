@@ -297,7 +297,15 @@ async function fillGithubLogin(page, creds = {}, opts = {}) {
         // GitHub иногда отвечает на POST /session ошибкой 500 (живой случай 04.11:
         // greedybelieve - Sign in нажат, /session отдал «Server Error», модуль ждал до конца
         // бюджета). Ровно две перезагрузки, дальше действительно сдаёмся.
-        if (!loginF && !passF && !totpF && filledLogin && retriesAfterSubmit < 2) {
+        //
+        // 🔴 Но НЕ на странице согласия OAuth. Живой случай 24.11 (freegg/ciciaidiltaslim):
+        // пароль и 2FA приняты, GitHub увёл на `/login/oauth/authorize`, полей входа там нет -
+        // и эта ветка дважды перезагружала `/login`, выбрасывая готовый вход. Со стороны это
+        // выглядело как «GitHub вошёл, но страница крутится и на freegg не идёт». Согласие
+        // обрабатывает вызывающий; на нём перезагрузка запрещена.
+        const atCompletion = (completionUrl && completionUrl(page.url()))
+            || (current && current.pathname === '/login/oauth/authorize');
+        if (!loginF && !passF && !totpF && filledLogin && !atCompletion && retriesAfterSubmit < 2) {
             retriesAfterSubmit++;
             log(`   ↻ поля исчезли после submit (попытка ${retriesAfterSubmit}/2) - перезагружаю /login`);
             await page.goto('https://github.com/login', { waitUntil: 'domcontentloaded' }).catch(() => {});

@@ -280,6 +280,45 @@ const clicks = (p, sel) => p._log.filter(l => l[0] === 'click' && l[1] === sel).
         }
     }
 
+    // ── 13. 🔴 страница согласия OAuth не считается «поля исчезли» ──
+    // Живой случай 24.11 (freegg/ciciaidiltaslim): пароль и 2FA приняты, GitHub увёл на
+    // /login/oauth/authorize, полей входа там нет - ветка «поля исчезли после submit»
+    // дважды перезагружала /login и выбрасывала готовый вход. Владелец видел «GitHub вошёл,
+    // но страница обновляется и на freegg не идёт».
+    console.log('\n13. страница согласия OAuth не перезагружается как «исчезнувшая форма»');
+    {
+        const visited = [];
+        const p = makePage([
+            { fields: ['login', 'password'], submit: true, url: 'https://github.com/login' },
+            { fields: [], submit: true, url: 'https://github.com/login/oauth/authorize' },
+        ]);
+        // Считаем переходы: только по ним видно, перезагружали страницу или нет.
+        const goto = async (url) => { visited.push(url); };
+        p.goto = goto;
+        let probe = 0;
+        const res = await fillGithubLogin(p, CREDS, { ...RUN, budgetMs: 6000,
+            completionUrl: () => false, sessionProbe: async () => (++probe > 6) });
+        check(visited.filter(u => u === 'https://github.com/login').length === 0,
+            `страница входа не перезагружалась (перезагрузок: ${visited.length})`);
+        check(res.ok === true, 'вход досчитан без выбрасывания готового согласия');
+    }
+
+    // ── 14. молчаливый 500 на POST /session по-прежнему лечится перезагрузкой ──
+    console.log('\n14. исчезнувшая форма НЕ на согласии всё ещё перезагружается');
+    {
+        const visited = [];
+        const p = makePage([
+            { fields: ['login', 'password'], submit: true, url: 'https://github.com/login' },
+            { fields: [], submit: false, url: 'https://github.com/sessions' },
+            { fields: ['login', 'password'], submit: true, url: 'https://github.com/login' },
+        ]);
+        p.goto = async (url) => { visited.push(url); };
+        await fillGithubLogin(p, CREDS, { ...RUN, budgetMs: 5000, completionUrl: () => false,
+            sessionProbe: async () => false });
+        check(visited.filter(u => u === 'https://github.com/login').length >= 1,
+            `после молчаливого submit страницу входа перезагрузили (раз: ${visited.length})`);
+    }
+
     console.log(fail ? `\n× провалено проверок: ${fail}\n` : '\n· все проверки пройдены\n');
     process.exit(fail ? 1 : 0);
 })();

@@ -403,6 +403,31 @@ test('wrong GitHub identity is rejected before granting OAuth consent', async ()
     const { verifyGithubIdentity } = require(runtimePath);
     const context = { cookies: async () => [{ name: 'dotcom_user', value: 'bob', domain: '.github.com' }] };
     await assert.rejects(verifyGithubIdentity(context, 'alice'), /github_identity_mismatch/);
+    await assert.rejects(verifyGithubIdentity(context, { login: 'alice' }), /github_identity_mismatch/);
+});
+
+test('GitHub identity accepts the account nickname when the stored login is an email', async () => {
+    // Живой случай 24.11: 11 записей менеджера заведены с login=<почта>, а GitHub отдаёт в
+    // dotcom_user имя пользователя. Сравнение только по login отвергало УСПЕШНЫЙ вход:
+    // ciciaidiltaslim прошёл пароль и 2FA, а проба личности сказала github_identity_mismatch.
+    const { verifyGithubIdentity, githubIdentityMatches } = require(runtimePath);
+    const account = { id: 'gh_fixture', login: 'ciciaidiltaslim@gmail.com', nickname: 'ciciaidiltaslim' };
+    const as = login => ({ cookies: async () => [{ name: 'dotcom_user', value: login, domain: '.github.com' }] });
+    assert.equal(await verifyGithubIdentity(as('ciciaidiltaslim'), account), 'ciciaidiltaslim');
+    assert.equal(githubIdentityMatches(account, 'CICIAIDILTASLIM'), true, 'регистр не важен');
+    assert.equal(githubIdentityMatches(account, 'ciciaidiltaslim@gmail.com'), true, 'почта из записи тоже принимается');
+    assert.equal(githubIdentityMatches(account, 'ciciaidiltaslimx'), false, 'похожий логин не пускается');
+    assert.equal(githubIdentityMatches(account, ''), false, 'пустая кука не пускается');
+    await assert.rejects(verifyGithubIdentity(as('someoneelse'), account), /github_identity_mismatch/);
+    // Запись без nickname: имя пользователя берётся из локальной части почты.
+    assert.equal(githubIdentityMatches({ login: 'ciciferryibnu@gmail.com' }, 'ciciferryibnu'), true);
+});
+
+test('a GitHub seed snapshot bound by email login is not a foreign identity', async () => {
+    const { githubIdentityMatches } = require(runtimePath);
+    const account = { login: 'ciciaidiltaslim@gmail.com', nickname: 'ciciaidiltaslim' };
+    assert.equal(githubIdentityMatches(account, 'ciciaidiltaslim'), true, 'seed ghLogin = username записи');
+    assert.equal(githubIdentityMatches(account, 'cyclopswormnight'), false, 'чужой seed по-прежнему отвергается');
 });
 
 test('browser cookie list is converted to the common jar dictionary', () => {
@@ -411,11 +436,16 @@ test('browser cookie list is converted to the common jar dictionary', () => {
         { name: 'user_session', value: 'fixture-github', domain: '.github.com' }], 'freegg.app'), { new_api_refresh: 'fixture-refresh' });
 });
 
-test('an unrelated existing panel session cannot be attributed to the selected GitHub', () => {
+test('an unrelated existing panel session cannot be attributed to the selected GitHub', async () => {
     const { verifyPanelIdentity } = require(runtimePath);
     assert.throws(() => verifyPanelIdentity({ id: 41, username: 'bob' }, { login: 'alice' }, null), /panel_identity_mismatch/);
     assert.throws(() => verifyPanelIdentity({ id: 41, username: 'bob' }, { login: 'alice' }, { id: 41, source: 'refresh' }), /panel_identity_mismatch/);
     assert.doesNotThrow(() => verifyPanelIdentity({ id: 41, username: 'alice' }, { login: 'alice' }, null));
+    // Панель заводит пользователя по имени GitHub, а запись бывает с почтой в login.
+    assert.doesNotThrow(() => verifyPanelIdentity({ id: 41, username: 'ciciaidiltaslim' },
+        { login: 'ciciaidiltaslim@gmail.com', nickname: 'ciciaidiltaslim' }, null));
+    assert.throws(() => verifyPanelIdentity({ id: 41, username: 'cyclopswormnight' },
+        { login: 'ciciaidiltaslim@gmail.com', nickname: 'ciciaidiltaslim' }, null), /panel_identity_mismatch/);
 });
 
 test('new named token is created once, persisted only after reveal readback', async () => {

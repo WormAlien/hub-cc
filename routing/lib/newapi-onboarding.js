@@ -85,10 +85,40 @@ async function saveSelectedKey({ id, key, p, hubOrigin = 'http://127.0.0.1:8200'
     if (target?.api_key !== key) throw safeFailure('hub_key_readback_failed');
     return { ok: true, id };
 }
+// Допустимые имена GitHub для одной записи менеджера.
+//
+// Зачем набором, а не одним `login`. Часть записей заведена с `login=<почта>`, а GitHub
+// кладёт в куку `dotcom_user` имя пользователя: `ciciaidiltaslim@gmail.com` против
+// `ciciaidiltaslim`. Сравнение только по `login` отвергало УСПЕШНЫЙ вход - живой случай
+// 24.11: пароль и 2FA приняты, а проба личности сказала `github_identity_mismatch`, и
+// прогон вернулся на `github.com/login` вместо страницы freegg. Проверено на всех 11
+// записях с почтой: `nickname` совпал с `dotcom_user` в снимке 11/11.
+//
+// Локальная часть почты добавляется ТОЛЬКО когда nickname не заполнен. Пока он есть, он и
+// является источником имени, и почта не расширяет список допустимых логинов.
+function githubIdentityAliases(account = {}) {
+    const aliases = new Set();
+    const add = value => {
+        const name = String(value || '').trim().toLowerCase();
+        if (name) aliases.add(name);
+    };
+    add(account.nickname); add(account.nick); add(account.login);
+    if (!String(account.nickname || account.nick || '').trim()) {
+        const login = String(account.login || '').trim();
+        if (login.includes('@')) add(login.split('@')[0]);
+    }
+    return aliases;
+}
+function githubIdentityMatches(account, live) {
+    const name = String(live || '').trim().toLowerCase();
+    if (!name) return false;
+    return githubIdentityAliases(account).has(name);
+}
 async function verifyGithubIdentity(context, expected) {
     const cookies = await context.cookies('https://github.com');
     const login = cookies.find(c => c.name === 'dotcom_user')?.value || '';
-    if (!login || login.toLowerCase() !== expected.toLowerCase()) throw safeFailure('github_identity_mismatch');
+    const account = typeof expected === 'string' ? { login: expected } : expected;
+    if (!githubIdentityMatches(account, login)) throw safeFailure('github_identity_mismatch');
     return login;
 }
 function readJson(file) {
@@ -102,7 +132,10 @@ function cookieDictionary(cookies, host) {
 }
 function verifyPanelIdentity(me, account, oauthUser) {
     if (oauthUser?.source === 'oauth' && oauthUser.id && Number(oauthUser.id) === Number(me.id)) return;
-    if (String(me.username || '').toLowerCase() === String(account.login).toLowerCase()) return;
+    // Та же причина, что и у verifyGithubIdentity: панель заводит пользователя по имени
+    // GitHub, а `account.login` у части записей - почта. Повторный прогон на уже открытой
+    // сессии не проходит ветку OAuth, и сравнение по одному `login` отвергало бы свой же аккаунт.
+    if (githubIdentityMatches(account, me.username)) return;
     throw safeFailure('panel_identity_mismatch');
 }
 async function fetchJson(url, options) {
@@ -245,7 +278,9 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
         const seedFile = path.join(moduleDir, 'sessions', label + '.json');
         if (fs.existsSync(seedFile)) {
             const seed = readJson(seedFile);
-            if (seed.seed === 'github' && seed.ghLogin && seed.ghLogin.toLowerCase() !== account.login.toLowerCase()) {
+            // Снимок связан именем пользователя GitHub, а `account.login` у части записей -
+            // почта. Сравнение по одному `login` объявляло свой же снимок чужим.
+            if (seed.seed === 'github' && seed.ghLogin && !githubIdentityMatches(account, seed.ghLogin)) {
                 throw safeFailure('github_seed_identity_mismatch');
             }
             // Import only into a profile without a live site session; never overwrite a current login.
@@ -309,7 +344,7 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
                     const url = new URL(ghPage.url());
                     if (url.pathname === '/login/oauth/authorize') {
                         if (!await stableGithubAuthorize(ghPage,
-                            () => verifyGithubIdentity(context, account.login).then(() => true))) {
+                            () => verifyGithubIdentity(context, account).then(() => true))) {
                             throw safeFailure('github_origin_rejected');
                         }
                         const consent = ghPage.locator('button[name="authorize"][value="1"]');
@@ -333,9 +368,9 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
                             completionUrl: value => providerOAuthCompletion(value, origin,
                                 config.onboarding.callbackPath, config.onboarding.browserCallbackPath),
                             sessionProbe: async () => {
-                                try { await verifyGithubIdentity(context, account.login);
-                                    return (await context.cookies('https://github.com')).some(c => c.name === 'user_session' && c.value); }
-                                catch { return false; }
+                                try { await verifyGithubIdentity(context, account);
+                                    return (await context.cookies('https://github.com')).some(c => c.name === 'user_session' && c.value);
+                                } catch { return false; }
                             } });
                         if (result.wall === 'totp_exhausted') throw safeFailure('github_totp_exhausted');
                         if (!result.ok) throw safeFailure('github_login_requires_user');
@@ -381,5 +416,6 @@ async function runProvider({ provider, moduleDir, label, mode = 'auto', config, 
     } finally { await context.close().catch(() => {}); }
 }
 module.exports = { createPanelClient, ensurePanelKey, safeFailure, watchPanelAuth, saveSelectedKey,
-    runProvider, verifyGithubIdentity, verifyPanelIdentity, cookieDictionary, githubRecoveryKind,
+    runProvider, verifyGithubIdentity, githubIdentityMatches, githubIdentityAliases, verifyPanelIdentity,
+    cookieDictionary, githubRecoveryKind,
     canRecoverGithubLogin, providerOAuthCompletion, stableGithubAuthorize, recoverGithubLogin, persistReferral };

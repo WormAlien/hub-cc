@@ -141,17 +141,28 @@ function makeWorld(opts = {}) {
         active: false,
         status: 'live',
     }, s));
+    // UncensoredLabs (24.11): у площадки аккаунты по $0.10, поэтому у неё СВОЯ планка
+    // (`minBal: 0.01`) и свой пул. Общая $2.0 объявляла живые аккаунты непригодными —
+    // ротация отвечала `pool-dry` при полном пуле.
+    const ucPool = (opts.ucPool || []).map((s, i) => Object.assign({
+        id: 'uc_' + i,
+        email: s.name,
+        api_key: s.key || ('sk-uc-' + s.name),
+        active: false,
+        status: 'live',
+    }, s));
     const world = {
-        pool, pmPool, saves: 0, probes: [], logs: [],
+        pool, pmPool, ucPool, saves: 0, probes: [], logs: [],
         keyFile: {
             'go.txt': opts.activeKey || (pool.find(s => s.active) || {}).api_key || '',
             'pm.txt': opts.activePmKey || (pmPool.find(s => s.active) || {}).api_key || '',
+            'uc.txt': opts.activeUcKey || (ucPool.find(s => s.active) || {}).api_key || '',
         },
     };
     const deps = {
         fs: {
             readFileSync: (f) => {
-                if (f !== 'go.txt' && f !== 'pm.txt') throw new Error('ENOENT ' + f);
+                if (f !== 'go.txt' && f !== 'pm.txt' && f !== 'uc.txt') throw new Error('ENOENT ' + f);
                 return world.keyFile[f];
             },
             writeFileSync: (f, v) => { world.keyFile[f] = v; },
@@ -172,6 +183,20 @@ function makeWorld(opts = {}) {
                 balanceFn: async (target) => {
                     world.probes.push(target.email);
                     const live = (opts.live || {})[target.email];
+                    return { status: 'live', balance: live === undefined ? target.balance : live };
+                },
+                applyFn: (target, bal) => { target.balance = bal.balance; target.status = bal.status; },
+            },
+            // UncensoredLabs (24.11): свой пул и своя планка $0.01 — у площадки аккаунты
+            // по $0.10, и настоящую планку задаёт `need` из текста отказа.
+            uc: {
+                tag: 'uncensoredlabs', label: 'UncensoredLabs', host: 'uncensoredlabs.dev',
+                keyFile: 'uc.txt', minBal: 0.01,
+                load: () => world.ucPool,
+                save: () => { world.saves += 1; },
+                balanceFn: async (target) => {
+                    world.probes.push(target.email);
+                    const live = (opts.liveUc || {})[target.email];
                     return { status: 'live', balance: live === undefined ? target.balance : live };
                 },
                 applyFn: (target, bal) => { target.balance = bal.balance; target.status = bal.status; },
@@ -918,6 +943,78 @@ async function main() {
         await off.api.moneyRotate('pm', { reason: 'manual', fromKey: 'prm_a' });
         check(off.api.moneyState('pm').enabled === false,
             'premier: тумблер остаётся выключенным по умолчанию, ротация не включает его сама');
+    }
+
+    // 21. UncensoredLabs (24.11): 402 «Insufficient available credit» обязан ротировать
+    //     аккаунт, хотя площадка говорит не теми словами, что New-API. Три тихие поломки
+    //     сложились в одну живую: 21×402 подряд при пяти живых аккаунтах по $0.10 в пуле.
+    //     (а) `insufficient ` + `available ` рвало OUT_OF_BALANCE_RE — отказ уезжал клиенту;
+    //     (б) в exact-маршруте ветка 402 была закрыта `!exactMode`, то есть авторотация
+    //         не спала, а была НЕДОСТИЖИМА на том единственном пути, которым ходит Hermes;
+    //     (в) планка MONEY_MIN_BAL = $2.0 объявляла аккаунт с $0.10 непригодным — ротация
+    //         отвечала `pool-dry` при полном пуле.
+    {
+        const UC402 = JSON.stringify({ error: { message: 'Existing requests are holding enough credit to cover this request. Wait for settlement or automatic release before retrying. Insufficient available credit for this request. Available credit: $0.014398906. This request needs $0.016115400 reserved for input and up to 32000 output tokens. Lower max_tokens or add credit. No credit was reserved.', type: 'invalid_request_error', code: 'insufficient_credit' } });
+        const rotate = new Function('deps', `
+            ${cutConst(kaSrc, 'OUT_OF_BALANCE_RE')}
+            ${cutConst(kaSrc, 'DEAD_KEY_RE')}
+            ${cutFn(kaSrc, 'function rotateReason(')}
+            return rotateReason;
+        `)({});
+        check(rotate(402, Buffer.from(UC402)) === 'out-of-balance',
+            'uncensoredlabs: «Insufficient available credit» распознан как «кончились деньги»');
+
+        // Обе цифры из текста обязаны читаться: need задаёт планку кандидата, left —
+        // настоящий остаток ушедшего аккаунта (иначе он вернётся в кандидаты со старым).
+        const nums = new Function('deps', `
+            ${cutFn(kaSrc, 'function moneyNum(')}
+            ${cutFn(kaSrc, 'function neededUsd(')}
+            ${cutFn(kaSrc, 'function leftUsd(')}
+            return { neededUsd, leftUsd };
+        `)({});
+        check(nums.neededUsd(UC402) === 0.0161154 && nums.leftUsd(UC402) === 0.014398906,
+            `uncensoredlabs: need и left читаются из текста отказа (${nums.neededUsd(UC402)} / ${nums.leftUsd(UC402)})`);
+
+        // Exact-маршрут: подмена АККАУНТА разрешена, подмена МОДЕЛИ — нет.
+        check(/if \(status === 402\) \{/.test(kaSrc) && !/if \(status === 402 && !exactMode\) \{/.test(kaSrc),
+            'ветка 402 достижима в exact-маршруте — иначе авторотация аккаунта спит на пути Hermes');
+        check(/if \(exactMode\) \{[\s\S]{0,300}?подмены модели нет, отдаю ошибку клиенту/.test(kaSrc),
+            'в exact-маршруте подмена модели запрещена: контракт держит тело неизменным');
+
+        // Команда спавна обязана сообщать провайдера ротации: для этого keepalive апстрим —
+        // петля на свой конвертер, а GW_BY_HOST выводит префикс из ХОСТА и петли не знает.
+        check(/CUSTOM_PROVIDER_ID: 'uncensoredlabs'[\s\S]{0,600}?ROTATE_PROVIDER: 'uc'/.test(src),
+            'спавн uncensoredlabs передаёт ROTATE_PROVIDER=uc — иначе rotate.on остаётся false');
+        // 🪤 Главный путь: провайдер ротации выводится ещё и из CUSTOM_PROVIDER_ID, а не
+        // только из хоста апстрима. У шлюзов со своим конвертером апстрим — петля, записи
+        // в GW_BY_HOST у неё нет, и env, забытый в одном из трёх путей спавна, молча
+        // выключал ротацию. Живой случай 24.11: правка spawn-env не подхватилась, потому
+        // что дашборд держал старый код, а proxy читал только хост.
+        check(/ROTATE_FROM_CUSTOM_ID/.test(kaSrc) && /ROTATE_PROVIDER \|\| ROTATE_P \|\| ROTATE_FROM_CUSTOM_ID/.test(kaSrc),
+            'провайдер ротации выводится из CUSTOM_PROVIDER_ID — иначе локальный апстрим её выключает');
+        check(/uncensoredlabs: 'uc'/.test(kaSrc) && /xingchi: 'xc'/.test(kaSrc) && /freegg: 'fg'/.test(kaSrc),
+            'карта CUSTOM_PROVIDER_ID → префикс пула знает шлюзы со своим конвертером');
+
+        // $0.10 на аккаунте — норма онбординга этой площадки, а не «пул пуст».
+        check(/uc: \{[^}]*minBal: 0\.01/.test(src),
+            'у uncensoredlabs в MONEY_GW своя планка: общая $2.0 объявляла живые аккаунты непригодными');
+
+        // Поведение: аккаунт с $0.10 годится под need $0.016 и ротация его выбирает.
+        const w = makeWorld({
+            ucPool: [
+                { name: 'dry', balance: 0.014, active: true },
+                { name: 'small', balance: 0.10 },
+            ],
+        });
+        w.api.moneyState('uc').enabled = true;
+        const r = await w.api.moneyRotate('uc', { reason: 'out-of-balance', fromKey: 'sk-uc-dry', needUsd: 0.0161154, leftUsd: 0.014398906 });
+        check(r.ok && w.keyFile['uc.txt'] === 'sk-uc-small',
+            `uncensoredlabs: кандидат с $0.10 выбран под need $0.016 (получили ${r.ok ? r.email : r.error})`);
+        // Баланс хранится округлённым до центов (round2, как у всех денежных шлюзов),
+        // поэтому $0.014398906 записывается как $0.01 — важно, что цифра ВЗЯТА из текста
+        // отказа, а не осталась прежней (0.014 по кешу не отличить от «не записали»).
+        check(w.ucPool.find(s => s.email === 'dry').balance === 0.01,
+            `uncensoredlabs: ушедшему записан остаток из текста отказа (получили ${w.ucPool.find(s => s.email === 'dry').balance})`);
     }
 
     // Итог

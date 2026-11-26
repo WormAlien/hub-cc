@@ -542,7 +542,9 @@ async function verifyProcessOwnership(svc, pid, {
     if (!svc || !svc.executable) {
         const executable = executableOf(pid);
         if (process.platform === 'darwin' && !/^node$/i.test(path.basename(executable))) return false;
-        return isOursForService(svc || {}, imageOf(pid), executable, argumentsOf(pid));
+        // На Linux comm может вернуть имя потока Node (node-MainThread).
+        const image = process.platform === 'linux' ? path.basename(executable) : imageOf(pid);
+        return isOursForService(svc || {}, image, executable, argumentsOf(pid));
     }
     const runningPath = executableOf(pid);
     if (!isOursForService(svc, imageOf(pid), runningPath)) return false;

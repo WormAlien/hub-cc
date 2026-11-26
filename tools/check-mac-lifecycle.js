@@ -178,25 +178,35 @@ test('startup cannot report success when a foreign listener replaces the owned P
     assert.deepEqual(stopped, [111]);
 });
 
-test('doctor completes its report without LOCALAPPDATA on a simulated Mac', () => {
+test('doctor reports listening ports without LOCALAPPDATA on macOS and Linux', () => {
     const { spawnSync } = require('node:child_process');
     const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'mac-doctor-'));
     const tools = path.join(dir, 'tools');
     const bin = path.join(dir, 'bin');
     fs.mkdirSync(tools); fs.mkdirSync(bin);
     fs.copyFileSync(path.join(ROOT, 'tools', 'doctor.sh'), path.join(tools, 'doctor.sh'));
-    for (const cmd of ['uname', 'git', 'node', 'npm', 'py', 'python', 'python3', 'curl', 'lsof', 'sqlite3', 'cmd.exe', 'find', 'open', 'notepad']) {
-        fs.writeFileSync(path.join(bin, cmd), '#!/usr/bin/env bash\n' + (cmd === 'uname' ? 'printf "Darwin\\n"\n' : 'exit 0\n'));
+    const commands = {
+        uname: 'printf "%s\\n" "$DOCTOR_OS"\n',
+        ss: 'echo "LISTEN 0 511 *:8200 *:* LINUX_FIXTURE"\n',
+        lsof: 'echo "MAC_FIXTURE TCP *:8200 (LISTEN)"\n',
+    };
+    for (const cmd of ['uname', 'git', 'node', 'npm', 'py', 'python', 'python3', 'curl', 'ss', 'lsof', 'sqlite3', 'cmd.exe', 'find', 'open', 'notepad']) {
+        fs.writeFileSync(path.join(bin, cmd), '#!/usr/bin/env bash\n' + (commands[cmd] || 'exit 0\n'));
         fs.chmodSync(path.join(bin, cmd), 0o755);
     }
     const env = { ...process.env, HOME: dir, USERPROFILE: dir, PATH: `${bin.replace(/\\/g, '/')}:${process.env.PATH}` };
     delete env.LOCALAPPDATA;
     try {
-        const result = spawnSync('bash', [path.join(tools, 'doctor.sh').replace(/\\/g, '/')], { env, encoding: 'utf8', timeout: 15000 });
-        assert.equal(result.status, 0, result.stderr);
-        const report = fs.readFileSync(path.join(dir, 'logs', 'doctor-report.txt'), 'utf8');
-        assert.match(report, /===== КОНЕЦ =====/);
-        assert.doesNotMatch(report, /unbound variable/);
+        for (const [platform, marker] of [['Darwin', 'MAC_FIXTURE'], ['Linux', 'LINUX_FIXTURE']]) {
+            const result = spawnSync('bash', [path.join(tools, 'doctor.sh').replace(/\\/g, '/')], {
+                env: { ...env, DOCTOR_OS: platform }, encoding: 'utf8', timeout: 15000,
+            });
+            assert.equal(result.status, 0, result.stderr);
+            const report = fs.readFileSync(path.join(dir, 'logs', 'doctor-report.txt'), 'utf8');
+            assert.ok(report.includes(marker), platform);
+            assert.match(report, /===== КОНЕЦ =====/);
+            assert.doesNotMatch(report, /unbound variable/);
+        }
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -389,6 +399,21 @@ test('mac ownership reads boundary-preserving kernel argv, never space-joined BS
     assert.equal(await mac.verifyProcessOwnership({ script }, 123), true);
     assert.equal(mac.isOursForService({ script }, 'node', '/opt/homebrew/bin/node', `/opt/homebrew/bin/node ${script}`), false);
     assert.equal(calls.some(([exe, args]) => exe === 'ps' && args.includes('command=')), false);
+});
+
+test('Linux identifies Node by its executable when comm is node-MainThread', { skip: process.platform !== 'linux' }, async () => {
+    const script = 'transparent-proxy.js';
+    const argv = ['/usr/bin/node', path.join(ROOT, 'routing', script)];
+    const adapters = {
+        pidImage: () => 'node-MainThread',
+        pidExecutable: () => '/usr/bin/node',
+        pidArguments: () => argv,
+    };
+    assert.equal(await L.verifyProcessOwnership({ script }, 123, adapters), true);
+    assert.equal(await L.verifyProcessOwnership({ script: 'other.js' }, 123, adapters), false);
+    assert.equal(await L.verifyProcessOwnership({ script }, 123, {
+        ...adapters, pidExecutable: () => '/usr/bin/bash',
+    }), false);
 });
 
 test('Node ownership refuses entrypoint spoofing by extra args, preload, eval, unknown flags, or relative paths', () => {

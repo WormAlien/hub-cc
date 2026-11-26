@@ -11,22 +11,34 @@ const { test } = require('node:test');
 const ROOT = path.resolve(__dirname, '..');
 function postUpdateFixture(platform, status = 0) {
     const source = fs.readFileSync(path.join(ROOT, 'hub.js'), 'utf8');
+    const npmStart = source.indexOf('async function doNpmPostUpdate({');
+    const npmEnd = source.indexOf('async function doUpdate({', npmStart);
     const start = source.indexOf('async function doPostUpdate({');
     const end = source.indexOf('// ── Ввод', start);
     assert.ok(start >= 0 && end > start, 'production post-update body must be found');
     const calls = [], restarts = [];
     const context = {
         process: { platform, env: { FIXTURE_SENTINEL: 'preserved' } },
-        L: { ROOT: '/fixture/hub' }, findBash: () => '/fixture/bash',
+        L: { ROOT: '/fixture/hub' }, SAFE: false, findBash: () => '/fixture/bash',
         line: () => {}, bold: value => value, red: value => value,
         dim: value => value, NO: () => 'no', OK: () => 'ok',
         spawnSync: (executable, args, options) => { calls.push({ executable, args, options }); return { status }; },
         doRestart: async options => { restarts.push(options); return true; },
     };
     vm.createContext(context);
-    const run = vm.runInContext(source.slice(start, end) + '\ndoPostUpdate;', context);
+    const run = vm.runInContext(source.slice(npmStart, npmEnd) + source.slice(start, end) + '\ndoPostUpdate;', context);
     return { run, calls, restarts };
 }
+test('Linux post-update uses npm and only restarts after a successful install', async () => {
+    for (const status of [0, 1]) {
+        const f = postUpdateFixture('linux', status);
+        assert.equal(await f.run({ interactive: false }), status === 0);
+        assert.equal(f.calls.length, 1);
+        assert.equal(f.calls[0].executable, 'npm');
+        assert.deepEqual(Array.from(f.calls[0].args), ['install', '--no-audit', '--no-fund']);
+        assert.equal(f.restarts.length, status === 0 ? 1 : 0);
+    }
+});
 for (const platform of ['darwin', 'win32']) {
     test(`post-update delegates dependency-only installation and restarts once (${platform})`, async () => {
         const f = postUpdateFixture(platform);

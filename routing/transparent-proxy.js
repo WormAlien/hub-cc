@@ -10563,13 +10563,15 @@ function newapiApplyBalance(target, bal, opts) {
         if (isFinite(nextGranted)) target.grantedSelf = nextGranted;
     }
     if (bal.status === 'live') {
-        // Дельты считаем ДО записи новых цифр: расход за интервал — это прирост
-        // spent, наливка — прирост granted (новый аккаунт, реф-бонус, чек-ин).
-        const prevSpent = Number(target.spent), prevGrant = Number(target.granted);
-        target.spent = bal.spent;
-        target.balance = bal.balance;
-        target.balanceSource = bal.balanceSource;
-        if (bal.granted != null) target.granted = bal.granted; else delete target.granted;
+            // Дельты считаем ДО записи новых цифр: расход за интервал — это прирост
+            // spent, наливка — прирост granted (новый аккаунт, реф-бонус, чек-ин).
+            // 🪤 У UC цифры при live может НЕ быть (403 trial_verification / 429):
+            // bal.balance == null означает «цифру не назвали», а не «ноль на счету» —
+            // затирать ей прежнюю цифру нельзя, иначе пул теряет известное.
+            const prevSpent = Number(target.spent), prevGrant = Number(target.granted);
+            if (typeof bal.spent === 'number') target.spent = bal.spent;
+            if (typeof bal.balance === 'number') { target.balance = bal.balance; target.balanceSource = bal.balanceSource; }
+            if (bal.granted != null) target.granted = bal.granted; else delete target.granted;
         // Валюта показа панели, если она НЕ доллар (у api.hcnsec.cn это юани, курс 7.3
         // из /api/status). Поля добавочные: `balance`/`spent`/`granted` остаются
         // долларовыми, потому что на них стоят сортировка таблиц, сумма шапки хаба и
@@ -10716,6 +10718,9 @@ function newapiApplyBalance(target, bal, opts) {
                 + `вердикт «${wasKind}» смягчён до «не переспрошен»`);
         }
         if (bal.selfCached) target.selfCached = true; else delete target.selfCached;
+        // 403 trial_verification: ключ жив, триал не активирован. Показывается
+        // в таблице как «жив без триала», а не как ошибка чека.
+        if (bal.trialBlocked) target.trialBlocked = true; else delete target.trialBlocked;
         delete target.balanceError;
         // Пишем историю только когда цифры реально сдвинулись. Первый чек аккаунта
         // (prev === NaN) даёт дельту 0, а не весь накопленный расход: иначе в день
